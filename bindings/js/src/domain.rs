@@ -173,8 +173,9 @@ fn number_to_u64(
 }
 
 /// Parses a JavaScript `number` as an exact non-negative integer bounded by
-/// `max`. This is used instead of wasm-bindgen's narrowing integer ABI, which
-/// otherwise wraps/truncates values before Rust can validate them.
+/// `max`. This avoids wasm-bindgen's narrowing integer ABI, which can wrap or
+/// truncate before binding code sees the value. Validation therefore happens
+/// at the JS/WASM boundary before conversion to the integer passed into core.
 pub fn parse_bounded_number(value: JsValue, max: u64, label: &str) -> Result<u64, JsValue> {
     let Some(number) = value.as_f64() else {
         return Err(make_error(
@@ -528,7 +529,7 @@ where
 }
 
 /// Collects an iterable of exported wasm classes without moving any caller-
-/// owned wrapper. Every element is cloned before the owned Rust conversion.
+/// owned wrapper. Every element is cloned before owned conversion.
 ///
 /// # Errors
 ///
@@ -645,15 +646,18 @@ pub fn read_optional_bool(value: &JsValue, field: &str) -> Result<Option<bool>, 
 // through the matching resolver above.
 #[wasm_bindgen]
 extern "C" {
-    /// A JS `number` validated in Rust before narrowing to an integer.
+    /// A JS `number` validated at the JS/WASM boundary before integer
+    /// conversion for core.
     #[wasm_bindgen(typescript_type = "number")]
     pub type IntegerNumber;
 
-    /// An optional JS `number` validated before integer narrowing.
+    /// An optional JS `number` validated at the JS/WASM boundary before
+    /// integer conversion for core.
     #[wasm_bindgen(typescript_type = "number | null | undefined")]
     pub type OptionalIntegerNumber;
 
-    /// An exact JS `bigint` validated in Rust before narrowing to 64 bits.
+    /// An exact JS `bigint` validated at the JS/WASM boundary before conversion
+    /// to the 64-bit integer used by core.
     #[wasm_bindgen(typescript_type = "bigint")]
     pub type BigIntLike;
 

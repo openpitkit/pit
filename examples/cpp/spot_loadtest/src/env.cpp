@@ -71,7 +71,7 @@ int CloseCommandPipe(FILE *pipe) {
 }
 
 // Runs `cmd` and returns its trimmed stdout, or empty on failure. Used only for
-// the diagnostic git commands, exactly like the Go env package shells out.
+// diagnostic git commands.
 [[nodiscard]] std::string RunCommand(const std::string &cmd) {
   std::array<char, 256> buffer{};
   std::string result;

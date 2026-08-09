@@ -22,8 +22,6 @@
 // Captures the host, runtime, pit repository, and core build profile for the
 // load-test environment block.
 //
-// Mirror of: examples/go/spot_loadtest/internal/env/env.go
-//
 // Every field that cannot be read on the current platform becomes "unknown"
 // rather than hard-failing; the debug-core guard is the only operation that can
 // refuse to proceed.
@@ -39,7 +37,7 @@ struct Host {
   std::string kernel = "unknown"; // e.g. "Darwin 24.5.0"
 };
 
-// Summarizes the C++ toolchain (the analogue of the Go runtime block).
+// Summarizes the C++ toolchain used for the Environment block.
 struct Toolchain {
   std::string compiler; // e.g. "Clang 17.0.0"
   std::string cppStd;   // e.g. "C++17"

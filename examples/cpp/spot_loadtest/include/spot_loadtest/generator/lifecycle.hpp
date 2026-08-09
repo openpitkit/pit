@@ -26,8 +26,6 @@
 
 // Position lifecycle state machine.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/lifecycle.go
-//
 // Chooses the next action from the current state so transitions are always
 // valid (no close beyond the position, no add to a flat book).
 

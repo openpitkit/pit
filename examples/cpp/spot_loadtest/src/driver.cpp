@@ -34,6 +34,7 @@
 #include "openpit/engine.hpp"
 #include "openpit/pretrade/policies.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -41,14 +42,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <exception>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ratio>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -68,6 +74,101 @@ constexpr int kDefaultCollectors = 16;
 constexpr int kDefaultFinalizers = 16;
 // Capacity of the FAST channel feeding the finalizer pool.
 constexpr std::size_t kFinalizeBuffer = 8192;
+
+template <typename TargetDuration>
+[[nodiscard]] constexpr std::optional<std::uintmax_t>
+ExactCeilDurationTicks(std::chrono::nanoseconds relativeTime) noexcept {
+  if (relativeTime < std::chrono::nanoseconds::zero()) {
+    return std::nullopt;
+  }
+
+  using Conversion = std::ratio_divide<std::chrono::nanoseconds::period,
+                                       typename TargetDuration::period>;
+  static_assert(Conversion::num > 0 && Conversion::den > 0);
+  constexpr std::uintmax_t numerator =
+      static_cast<std::uintmax_t>(Conversion::num);
+  constexpr std::uintmax_t denominator =
+      static_cast<std::uintmax_t>(Conversion::den);
+  constexpr std::uintmax_t uintMax = std::numeric_limits<std::uintmax_t>::max();
+
+  const std::uintmax_t source =
+      static_cast<std::uintmax_t>(relativeTime.count());
+  const std::uintmax_t whole = source / denominator;
+  const std::uintmax_t remainder = source % denominator;
+  if (whole > uintMax / numerator) {
+    return std::nullopt;
+  }
+  std::uintmax_t ticks = whole * numerator;
+
+  if (remainder != 0) {
+    // The final quotient could fit even when this product does not. Rejecting
+    // that rare duration ratio is conservative and never schedules early.
+    if (remainder > uintMax / numerator) {
+      return std::nullopt;
+    }
+    const std::uintmax_t scaledRemainder = remainder * numerator;
+    std::uintmax_t fractionalTicks = scaledRemainder / denominator;
+    if (scaledRemainder % denominator != 0) {
+      if (fractionalTicks == uintMax) {
+        return std::nullopt;
+      }
+      ++fractionalTicks;
+    }
+    if (ticks > uintMax - fractionalTicks) {
+      return std::nullopt;
+    }
+    ticks += fractionalTicks;
+  }
+  return ticks;
+}
+
+constexpr std::uintmax_t kIntegerPrecisionRegression = 9'007'199'254'740'993ULL;
+constexpr auto kIntegerPrecisionRegressionTicks =
+    ExactCeilDurationTicks<std::chrono::microseconds>(
+        std::chrono::nanoseconds{kIntegerPrecisionRegression});
+static_assert(kIntegerPrecisionRegressionTicks.has_value() &&
+                  *kIntegerPrecisionRegressionTicks == 9'007'199'254'741ULL,
+              "deadline conversion must not round beyond integer precision");
+
+[[nodiscard]] Clock::time_point
+CheckedDeadline(Clock::time_point start, std::chrono::nanoseconds relativeTime,
+                std::uint64_t eventSeq) {
+  if (relativeTime < std::chrono::nanoseconds::zero()) {
+    throw std::invalid_argument("driver: event seq " +
+                                std::to_string(eventSeq) +
+                                " has a negative virtualT0");
+  }
+
+  using ClockDuration = Clock::duration;
+  using ClockRep = ClockDuration::rep;
+  static_assert(std::numeric_limits<ClockRep>::is_integer &&
+                    std::numeric_limits<ClockRep>::is_bounded &&
+                    !std::is_same_v<ClockRep, bool>,
+                "spot_loadtest requires a bounded integral clock rep");
+
+  const std::optional<std::uintmax_t> converted =
+      ExactCeilDurationTicks<ClockDuration>(relativeTime);
+  if (!converted.has_value()) {
+    throw std::overflow_error("driver: event seq " + std::to_string(eventSeq) +
+                              " virtualT0 exceeds the clock duration range");
+  }
+  if constexpr (std::numeric_limits<ClockRep>::digits <
+                std::numeric_limits<std::uintmax_t>::digits) {
+    if (*converted >
+        static_cast<std::uintmax_t>(std::numeric_limits<ClockRep>::max())) {
+      throw std::overflow_error(
+          "driver: event seq " + std::to_string(eventSeq) +
+          " virtualT0 exceeds the clock representation range");
+    }
+  }
+
+  const ClockDuration offset{static_cast<ClockRep>(*converted)};
+  if (start > Clock::time_point::max() - offset) {
+    throw std::overflow_error("driver: event seq " + std::to_string(eventSeq) +
+                              " deadline exceeds the clock time-point range");
+  }
+  return start + offset;
+}
 
 // An unbounded FIFO used as the spill path behind a bounded fast channel so a
 // momentarily-full buffer never blocks the producer. Safe for concurrent
@@ -97,7 +198,7 @@ private:
 };
 
 // A bounded MPMC channel with non-blocking try-send and a blocking receive,
-// plus a close signal. Mirrors a Go buffered channel used by the work handoff.
+// plus a close signal for the work handoff.
 template <typename T> class Channel {
 public:
   explicit Channel(std::size_t capacity) : m_capacity(capacity) {}
@@ -142,7 +243,7 @@ private:
   bool m_closed = false;
 };
 
-// The async observer adapter (mirror of observer.go). Records queue-wait and
+// The async observer adapter records queue-wait and
 // engine-compute durations into the measurement ObserverSink and tracks queue
 // lifecycle counts.
 class MetricsObserver final : public ae::Observer {
@@ -185,20 +286,20 @@ struct InFlight {
   std::optional<OrderFuture> orderFut;
   std::optional<SettleFuture> settleFut;
   std::optional<FundingFuture> fundingFut;
-  // The submit acknowledgement for a settlement: the lock-bearing report is
-  // applied via a Submit closure, so a failed submit (stop / queue limit)
-  // surfaces here while the result future would otherwise block forever.
-  std::shared_ptr<ae::Future<std::monostate>> settleSubmitAck;
 };
 
 using ReservationPtr = std::shared_ptr<ae::AsyncReservation<Driver>>;
 
+using EventChain = std::vector<const generator::Event *>;
+using EventChains = std::vector<EventChain>;
+using SubmitterShard = std::vector<const EventChain *>;
+
 // Splits the stream into one ordered slice per account, preserving each
 // account's relative (emission) order, excluding seeds (applied synchronously).
-[[nodiscard]] std::vector<std::vector<const generator::Event *>>
+[[nodiscard]] EventChains
 PartitionChains(const std::vector<generator::Event> &events) {
   std::vector<std::string> order;
-  std::map<std::string, std::vector<const generator::Event *>> byAccount;
+  std::map<std::string, EventChain> byAccount;
   for (const generator::Event &ev : events) {
     if (ev.kind == generator::EventKind::Funding && ev.fundingIsSeed) {
       continue;
@@ -208,12 +309,27 @@ PartitionChains(const std::vector<generator::Event> &events) {
     }
     byAccount[ev.account].push_back(&ev);
   }
-  std::vector<std::vector<const generator::Event *>> chains;
+  EventChains chains;
   chains.reserve(order.size());
   for (const std::string &acc : order) {
     chains.push_back(byAccount[acc]);
   }
   return chains;
+}
+
+[[nodiscard]] std::vector<SubmitterShard>
+PartitionSubmitterShards(const EventChains &chains,
+                         std::size_t submitterWorkers) {
+  if (!chains.empty() && submitterWorkers == 0) {
+    throw std::invalid_argument(
+        "driver: submitterWorkers must be positive for account chains");
+  }
+  const std::size_t threadCount = std::min(chains.size(), submitterWorkers);
+  std::vector<SubmitterShard> shards(threadCount);
+  for (std::size_t chainIndex = 0; chainIndex < chains.size(); ++chainIndex) {
+    shards[chainIndex % threadCount].push_back(&chains[chainIndex]);
+  }
+  return shards;
 }
 
 // Reports whether the carried error is a dispatch-capacity backpressure signal
@@ -240,8 +356,8 @@ private:
   void ApplySeeds();
   void StartCollectors();
   void StartFinalizers();
-  void SubmitChain(Clock::time_point start,
-                   const std::vector<const generator::Event *> &events);
+  void SubmitShard(Clock::time_point start, const SubmitterShard &chains);
+  void SubmitEvent(Clock::time_point start, const generator::Event &event);
 
   void HandOffWork(InFlight item);
   void HandOffFinalize(ReservationPtr reservation);
@@ -256,7 +372,10 @@ private:
 
   [[nodiscard]] std::chrono::nanoseconds OverheadProbe();
 
-  static void SleepUntil(Clock::time_point deadline);
+  [[nodiscard]] bool SleepUntil(Clock::time_point deadline);
+  void RecordThreadFailure(const char *context,
+                           std::exception_ptr failure) noexcept;
+  void RethrowThreadFailure();
 
   const generator::Stream &m_stream;
   Config m_cfg;
@@ -279,6 +398,14 @@ private:
   int m_collectors = 0;
   int m_finalizers = 0;
   std::atomic<int> m_sampleCount{0};
+
+  std::atomic<bool> m_stop{false};
+  std::mutex m_stopMutex;
+  std::condition_variable m_stopCv;
+
+  std::mutex m_failureMutex;
+  std::exception_ptr m_threadFailure;
+  const char *m_failureContext = nullptr;
 };
 
 void RunState::BuildEngine() {
@@ -350,114 +477,121 @@ std::chrono::nanoseconds RunState::OverheadProbe() {
   return Clock::now() - t0;
 }
 
-void RunState::SleepUntil(Clock::time_point deadline) {
+bool RunState::SleepUntil(Clock::time_point deadline) {
+  if (m_stop.load(std::memory_order_acquire)) {
+    return false;
+  }
   const auto now = Clock::now();
   if (deadline <= now) {
-    return; // virtual arrival already past: submit as fast as we can issue.
+    return true; // virtual arrival already past: submit as fast as possible.
   }
-  std::this_thread::sleep_until(deadline);
+  std::unique_lock<std::mutex> lock(m_stopMutex);
+  return !m_stopCv.wait_until(lock, deadline, [this] {
+    return m_stop.load(std::memory_order_acquire);
+  });
 }
 
-void RunState::SubmitChain(
-    Clock::time_point start,
-    const std::vector<const generator::Event *> &events) {
-  for (const generator::Event *ev : events) {
-    const Clock::time_point deadline = start + ev->virtualT0;
-    SleepUntil(deadline);
-    switch (ev->kind) {
-    case generator::EventKind::OrderCheck: {
-      ::openpit::param::AccountId account;
-      ::openpit::model::Order order;
-      try {
-        order = detail::BuildOrder(*ev, account);
-      } catch (const std::exception &e) {
-        m_oracle.FailExternal(std::string("driver: build order: ") + e.what());
-        return;
+void RunState::SubmitEvent(Clock::time_point start,
+                           const generator::Event &event) {
+  const Clock::time_point deadline =
+      CheckedDeadline(start, event.virtualT0, event.seq);
+  if (!SleepUntil(deadline)) {
+    return;
+  }
+  switch (event.kind) {
+  case generator::EventKind::OrderCheck: {
+    ::openpit::param::AccountId account;
+    ::openpit::model::Order order = detail::BuildOrder(event, account);
+    m_sink->RecordSubmit();
+    const Clock::time_point actualSubmit = Clock::now();
+    OrderFuture fut = m_async->ExecutePreTrade(std::move(order));
+    InFlight item;
+    item.event = &event;
+    item.intendedT0 = deadline;
+    item.actualSubmit = actualSubmit;
+    item.kind = OpKind::OrderCheck;
+    item.orderFut = std::move(fut);
+    HandOffWork(std::move(item));
+    m_sink->RecordSubmitLag(actualSubmit - deadline, m_cfg.maxSubmitLag);
+    break;
+  }
+  case generator::EventKind::Settlement: {
+    ::openpit::param::AccountId account;
+    ::openpit::model::ExecutionReport report =
+        detail::BuildReport(event, account);
+    m_sink->RecordSubmit();
+    const Clock::time_point actualSubmit = Clock::now();
+    SettleFuture fut = m_async->ApplyExecutionReport(std::move(report));
+    InFlight item;
+    item.event = &event;
+    item.intendedT0 = deadline;
+    item.actualSubmit = actualSubmit;
+    item.kind = OpKind::Settlement;
+    item.settleFut = std::move(fut);
+    HandOffWork(std::move(item));
+    m_sink->RecordSubmitLag(actualSubmit - deadline, m_cfg.maxSubmitLag);
+    break;
+  }
+  case generator::EventKind::Funding: {
+    if (event.fundingIsSeed) {
+      throw std::logic_error("driver: submitter received a seed funding");
+    }
+    ::openpit::param::AccountId account;
+    ::openpit::accountadjustment::AccountAdjustment adj =
+        detail::BuildAdjustment(event, account);
+    m_sink->RecordSubmit();
+    const Clock::time_point actualSubmit = Clock::now();
+    FundingFuture fut =
+        m_async->ApplyAccountAdjustment(account, std::vector{adj});
+    InFlight item;
+    item.event = &event;
+    item.intendedT0 = deadline;
+    item.actualSubmit = actualSubmit;
+    item.kind = OpKind::Funding;
+    item.fundingFut = std::move(fut);
+    HandOffWork(std::move(item));
+    m_sink->RecordSubmitLag(actualSubmit - deadline, m_cfg.maxSubmitLag);
+    break;
+  }
+  }
+}
+
+void RunState::SubmitShard(Clock::time_point start,
+                           const SubmitterShard &chains) {
+  std::vector<std::size_t> next(chains.size(), 0);
+  std::optional<std::chrono::nanoseconds> previousVirtualT0;
+  while (!m_stop.load(std::memory_order_acquire)) {
+    std::optional<std::size_t> selected;
+    for (std::size_t chainIndex = 0; chainIndex < chains.size(); ++chainIndex) {
+      const EventChain &chain = *chains[chainIndex];
+      if (next[chainIndex] >= chain.size()) {
+        continue;
       }
-      m_sink->RecordSubmit();
-      const Clock::time_point actualSubmit = Clock::now();
-      OrderFuture fut = m_async->ExecutePreTrade(std::move(order));
-      InFlight item;
-      item.event = ev;
-      item.intendedT0 = deadline;
-      item.actualSubmit = actualSubmit;
-      item.kind = OpKind::OrderCheck;
-      item.orderFut = std::move(fut);
-      HandOffWork(std::move(item));
-      break;
-    }
-    case generator::EventKind::Settlement: {
-      ::openpit::param::AccountId account;
-      detail::ReportWithLock report = detail::BuildReport(*ev, account);
-      m_sink->RecordSubmit();
-      const Clock::time_point actualSubmit = Clock::now();
-      // Route the lock-bearing report through the generic per-account queue so
-      // the AccountSync invariant holds; the typed ApplyExecutionReport takes
-      // model::ExecutionReport (no lock), so we submit a closure that applies
-      // our lock-bearing report on the worker thread and resolves a future.
-      ae::Promise<::openpit::PostTradeResult> promise;
-      SettleFuture fut = promise.GetFuture();
-      const Driver *driver = m_driverImpl.get();
-      auto report_ptr =
-          std::make_shared<detail::ReportWithLock>(std::move(report));
-      ae::Future<std::monostate> submitted =
-          m_async->Submit(account, [promise, driver, report_ptr]() {
-            try {
-              promise.Resolve(driver->ApplyExecutionReport(*report_ptr));
-            } catch (const std::exception &ex) {
-              promise.Fail(ae::Error(ae::ErrorCode::TaskFailed, ex.what()));
-            }
-          });
-      // If the submit itself failed (stop / queue limit), forward that error
-      // so the collector records backpressure rather than hanging on the
-      // result future.
-      InFlight item;
-      item.event = ev;
-      item.intendedT0 = deadline;
-      item.actualSubmit = actualSubmit;
-      item.kind = OpKind::Settlement;
-      // Bridge the submit error onto the result future: a background-free
-      // check at collection time. We piggy-back by storing the result future;
-      // submit errors surface through `submitted` which we await first.
-      item.settleFut = std::move(fut);
-      // Stash the submit ack so the collector can detect a failed submit.
-      // We resolve it by awaiting submitted in the collector via a wrapper:
-      // simplest faithful behaviour is to await the result future, which the
-      // closure resolves on success; on a submit failure the closure never
-      // runs, so we must observe `submitted`. Await it here non-blockingly is
-      // wrong (open-loop), so we fold the submit ack into the work item.
-      item.settleSubmitAck =
-          std::make_shared<ae::Future<std::monostate>>(std::move(submitted));
-      HandOffWork(std::move(item));
-      break;
-    }
-    case generator::EventKind::Funding: {
-      if (ev->fundingIsSeed) {
-        continue; // seeds applied synchronously; defensive guard.
+      if (!selected) {
+        selected = chainIndex;
+        continue;
       }
-      ::openpit::param::AccountId account;
-      ::openpit::accountadjustment::AccountAdjustment adj;
-      try {
-        adj = detail::BuildAdjustment(*ev, account);
-      } catch (const std::exception &e) {
-        m_oracle.FailExternal(std::string("driver: build adjustment: ") +
-                              e.what());
-        return;
+      const generator::Event &candidate = *chain[next[chainIndex]];
+      const EventChain &selectedChain = *chains[*selected];
+      const generator::Event &current = *selectedChain[next[*selected]];
+      if (std::tie(candidate.virtualT0, candidate.seq, chainIndex) <
+          std::tie(current.virtualT0, current.seq, *selected)) {
+        selected = chainIndex;
       }
-      m_sink->RecordSubmit();
-      const Clock::time_point actualSubmit = Clock::now();
-      FundingFuture fut =
-          m_async->ApplyAccountAdjustment(account, std::vector{adj});
-      InFlight item;
-      item.event = ev;
-      item.intendedT0 = deadline;
-      item.actualSubmit = actualSubmit;
-      item.kind = OpKind::Funding;
-      item.fundingFut = std::move(fut);
-      HandOffWork(std::move(item));
-      break;
     }
+    if (!selected) {
+      return;
     }
+    const generator::Event &event = *chains[*selected]->at(next[*selected]);
+    // A deadline regression makes open-loop latency depend on avoidable harness
+    // serialization, so reject the run instead of publishing invalid numbers.
+    if (previousVirtualT0 && event.virtualT0 < *previousVirtualT0) {
+      throw std::logic_error(
+          "driver: submitter shard selected a regressing virtual deadline");
+    }
+    previousVirtualT0 = event.virtualT0;
+    ++next[*selected];
+    SubmitEvent(start, event);
   }
 }
 
@@ -518,25 +652,6 @@ void RunState::CollectOrder(InFlight &item) {
 }
 
 void RunState::CollectSettlement(InFlight &item) {
-  // First observe the submit ack: a failed submit (stop / queue limit) means
-  // the closure never ran, so the result future would block forever.
-  try {
-    (void)item.settleSubmitAck->Await();
-  } catch (const ae::Error &err) {
-    const Clock::time_point resolve = Clock::now();
-    const auto latency = resolve - item.intendedT0;
-    if (IsQueueLimit(err)) {
-      m_sink->RecordBackpressure(latency);
-      return;
-    }
-    m_sink->RecordSettlement(latency, false);
-    m_sampleCount.fetch_add(1, std::memory_order_relaxed);
-    m_oracle.FailExternal(
-        std::string("driver: ApplyExecutionReport submit error (account ") +
-        item.event->account + "): " + err.what());
-    return;
-  }
-
   SettleFuture &fut = *item.settleFut;
   try {
     ::openpit::PostTradeResult result = fut.Await();
@@ -645,18 +760,65 @@ void RunState::FinalizeLoop() {
   }
 }
 
+void RunState::RecordThreadFailure(const char *context,
+                                   std::exception_ptr failure) noexcept {
+  {
+    std::lock_guard<std::mutex> lock(m_failureMutex);
+    if (!m_threadFailure) {
+      m_threadFailure = failure;
+      m_failureContext = context;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(m_stopMutex);
+    m_stop.store(true, std::memory_order_release);
+  }
+  m_stopCv.notify_all();
+}
+
+void RunState::RethrowThreadFailure() {
+  std::exception_ptr failure;
+  const char *context = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(m_failureMutex);
+    failure = m_threadFailure;
+    context = m_failureContext;
+  }
+  if (!failure) {
+    return;
+  }
+  try {
+    std::rethrow_exception(failure);
+  } catch (const std::exception &error) {
+    throw std::runtime_error(std::string("driver: ") + context + ": " +
+                             error.what());
+  } catch (...) {
+    throw std::runtime_error(std::string("driver: ") + context +
+                             ": unknown exception");
+  }
+}
+
 RunResult RunState::Execute(std::string &invalidReason) {
   invalidReason.clear();
+
+  if (!m_stream.events.empty() && m_cfg.submitterWorkers == 0) {
+    throw std::invalid_argument(
+        "driver: submitterWorkers must be positive for a non-empty stream");
+  }
+  if (m_cfg.windowSize <= 0) {
+    throw std::invalid_argument("driver: windowSize must be positive");
+  }
+  if (m_cfg.maxSubmitLag.count() <= 0) {
+    throw std::invalid_argument("driver: maxSubmitLag must be positive");
+  }
 
   BuildEngine();
 
   m_collectors = m_cfg.collectors > 0 ? m_cfg.collectors : kDefaultCollectors;
   m_finalizers = m_cfg.finalizers > 0 ? m_cfg.finalizers : kDefaultFinalizers;
-  std::int64_t windowSize = m_cfg.windowSize > 0 ? m_cfg.windowSize : 10'000;
+  const std::int64_t windowSize = m_cfg.windowSize;
 
-  measurement::WindowUnit unit = m_cfg.windowUnit;
-  m_windows = std::make_unique<measurement::Windows>(unit, windowSize,
-                                                     m_cfg.wallWindow);
+  m_windows = std::make_unique<measurement::Windows>(windowSize);
   m_sink = std::make_unique<measurement::Sink>(m_windows.get());
 
   // Publish the live-counter accessor before any thread starts.
@@ -677,42 +839,103 @@ RunResult RunState::Execute(std::string &invalidReason) {
                                             [this] { return OverheadProbe(); });
   }
 
-  const auto chains = PartitionChains(m_stream.events);
+  const EventChains chains = PartitionChains(m_stream.events);
+  const std::vector<SubmitterShard> submitterShards =
+      PartitionSubmitterShards(chains, m_cfg.submitterWorkers);
 
   std::vector<std::thread> collectorThreads;
   collectorThreads.reserve(static_cast<std::size_t>(m_collectors));
-  for (int i = 0; i < m_collectors; ++i) {
-    collectorThreads.emplace_back([this] { Collect(); });
-  }
   std::vector<std::thread> finalizerThreads;
   finalizerThreads.reserve(static_cast<std::size_t>(m_finalizers));
-  for (int i = 0; i < m_finalizers; ++i) {
-    finalizerThreads.emplace_back([this] { FinalizeLoop(); });
-  }
-
-  const Clock::time_point start = Clock::now();
   std::vector<std::thread> submitterThreads;
-  submitterThreads.reserve(chains.size());
-  for (const auto &chain : chains) {
-    submitterThreads.emplace_back(
-        [this, start, &chain] { SubmitChain(start, chain); });
+  submitterThreads.reserve(submitterShards.size());
+
+  try {
+    for (int i = 0; i < m_collectors; ++i) {
+      collectorThreads.emplace_back([this] {
+        try {
+          Collect();
+        } catch (...) {
+          RecordThreadFailure("collector worker", std::current_exception());
+        }
+      });
+    }
+    for (int i = 0; i < m_finalizers; ++i) {
+      finalizerThreads.emplace_back([this] {
+        try {
+          FinalizeLoop();
+        } catch (...) {
+          RecordThreadFailure("finalizer worker", std::current_exception());
+        }
+      });
+    }
+
+    const Clock::time_point start = Clock::now();
+    for (const SubmitterShard &shard : submitterShards) {
+      const SubmitterShard *shardPtr = &shard;
+      submitterThreads.emplace_back([this, start, shardPtr] {
+        try {
+          SubmitShard(start, *shardPtr);
+        } catch (...) {
+          RecordThreadFailure("submitter worker", std::current_exception());
+        }
+      });
+    }
+  } catch (...) {
+    RecordThreadFailure("thread setup", std::current_exception());
   }
 
-  for (std::thread &t : submitterThreads) {
-    t.join();
-  }
+  const auto joinAll = [](std::vector<std::thread> &threads) {
+    for (std::thread &thread : threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+  };
+
+  joinAll(submitterThreads);
   m_work->Close();
-  for (std::thread &t : collectorThreads) {
-    t.join();
-  }
+  joinAll(collectorThreads);
   m_finalize->Close();
-  for (std::thread &t : finalizerThreads) {
-    t.join();
-  }
+  joinAll(finalizerThreads);
 
-  // Shutdown: drain the dispatcher gracefully, then stop the engine.
-  (void)m_async->StopGraceful(kStopTimeout);
-  m_engine.reset(); // releases the engine after the dispatcher has drained.
+  // Stop the dispatcher while its borrowed driver and engine are alive.
+  bool gracefulStopped = false;
+  std::exception_ptr gracefulFailure;
+  try {
+    gracefulStopped = m_async->StopGraceful(kStopTimeout);
+    if (!gracefulStopped) {
+      gracefulFailure = std::make_exception_ptr(std::runtime_error(
+          "graceful dispatcher shutdown timed out after 30 seconds"));
+    }
+  } catch (...) {
+    gracefulFailure = std::current_exception();
+  }
+  if (!gracefulStopped) {
+    try {
+      (void)m_async->StopHard();
+    } catch (...) {
+      // Preserve the original graceful failure. Destroying the owning facade
+      // below is the guaranteed hard-stop-and-join backstop.
+    }
+  }
+  m_async.reset();
+  m_driverImpl.reset();
+  m_engine.reset();
+
+  // A workload/thread failure remains the primary run failure after shutdown.
+  RethrowThreadFailure();
+  if (gracefulFailure) {
+    try {
+      std::rethrow_exception(gracefulFailure);
+    } catch (const std::exception &ex) {
+      throw std::runtime_error(std::string("driver: dispatcher shutdown: ") +
+                               ex.what());
+    } catch (...) {
+      throw std::runtime_error(
+          "driver: dispatcher shutdown: non-standard exception");
+    }
+  }
 
   if (auto err = m_oracle.Err()) {
     throw std::runtime_error(*err);
@@ -734,17 +957,23 @@ RunResult RunState::Execute(std::string &invalidReason) {
   stats.fundings = msStats.fundings;
   stats.fundingAccepts = msStats.fundingAccepts;
   stats.fundingRejects = msStats.fundingRejects;
+  stats.submitLagBreaches = msStats.submitLagBreaches;
   stats.backpressure = msStats.backpressure;
   stats.handoffStalls = msStats.handoffStalls;
   stats.maxWorkOverflow = msStats.maxWorkOverflow;
   stats.checksum = msStats.checksum;
   stats.maxInFlight = msStats.maxInFlight;
+  stats.submitterThreads = submitterShards.size();
   stats.sampleCount = m_sampleCount.load(std::memory_order_relaxed);
 
   result.stats = stats;
 
   // Methodology invariants: publish ONLY when it is a valid latency
   // measurement.
+  if (stats.submitLagBreaches > 0) {
+    invalidReason = "submit-lag";
+    return result;
+  }
   if (stats.backpressure > 0) {
     invalidReason = "backpressure";
     return result;
@@ -764,6 +993,18 @@ Config FromAppConfig(const config::Config &cfg) {
   Config out;
   out.observer = cfg.run.observer;
   out.activeAccounts = cfg.concurrency.activeAccounts;
+  if (cfg.concurrency.submitterWorkers >
+      static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    throw std::invalid_argument(
+        "driver: concurrency.submitter_workers exceeds platform size_t");
+  }
+  out.submitterWorkers =
+      static_cast<std::size_t>(cfg.concurrency.submitterWorkers);
+  if (cfg.concurrency.maxSubmitLag.count() <= 0) {
+    throw std::invalid_argument(
+        "driver: concurrency.max_submit_lag must be positive");
+  }
+  out.maxSubmitLag = cfg.concurrency.maxSubmitLag;
   out.dispatchStrategy =
       cfg.asyncEngine.strategy == config::AsyncEngineStrategy::Sharded
           ? DispatchStrategy::Sharded
@@ -773,14 +1014,13 @@ Config FromAppConfig(const config::Config &cfg) {
   out.shardedWorkers = cfg.asyncEngine.shardedWorkers;
   out.queueCapacity = cfg.asyncEngine.queueCapacity;
   out.slowSubmitThreshold = cfg.asyncEngine.slowSubmitThreshold;
-  std::int64_t windowSize = static_cast<std::int64_t>(cfg.run.window);
-  if (windowSize <= 0) {
-    windowSize = 10'000;
+  if (cfg.run.window == 0 ||
+      cfg.run.window > static_cast<std::uint64_t>(
+                           std::numeric_limits<std::int64_t>::max())) {
+    throw std::invalid_argument(
+        "driver: run.window must be between 1 and INT64_MAX");
   }
-  out.windowSize = windowSize;
-  out.windowUnit = cfg.run.windowUnit == config::WindowUnit::Wall
-                       ? measurement::WindowUnit::Wall
-                       : measurement::WindowUnit::Ops;
+  out.windowSize = static_cast<std::int64_t>(cfg.run.window);
   out.overheadProbes = kDefaultOverheadProbes;
   return out;
 }
@@ -794,6 +1034,9 @@ RunResult RunCollecting(const generator::Stream &stream, const Config &cfg,
 RunResult Run(const generator::Stream &stream, const Config &cfg) {
   std::string invalidReason;
   RunResult result = RunCollecting(stream, cfg, invalidReason);
+  if (invalidReason == "submit-lag") {
+    throw SubmitLagInvalidRun();
+  }
   if (invalidReason == "backpressure") {
     throw BackpressureInvalidRun();
   }

@@ -22,13 +22,12 @@
 #include "spot_loadtest/generator/event.hpp"
 #include "spot_loadtest/measurement/snapshot.hpp"
 
+#include <cstddef>
 #include <ostream>
 #include <string>
 
 // Writes a plain-text load-test report to an std::ostream (typically
 // std::cout).
-//
-// Mirror of: examples/go/spot_loadtest/internal/reporter/reporter.go
 //
 // Block order: Headline, Environment, Workload, Trajectory, Distribution,
 // Diagnostics, Disclaimer.
@@ -46,6 +45,7 @@ namespace spot_loadtest::reporter {
 // Prints the full post-run report to `out`. Use ONLY for a VALID run.
 void Write(std::ostream &out, const env::Env &e, const config::Config &cfg,
            const std::string &configFlag, const measurement::Snapshot &snap,
+           std::size_t actualSubmitterThreads,
            const generator::StreamStats &streamStats);
 
 // Prints the INVALID-RUN report for a run that is not a valid measurement (for
@@ -55,6 +55,7 @@ void Write(std::ostream &out, const env::Env &e, const config::Config &cfg,
 void WriteInvalid(std::ostream &out, const env::Env &e,
                   const config::Config &cfg, const std::string &configFlag,
                   const measurement::Snapshot &snap,
+                  std::size_t actualSubmitterThreads,
                   const generator::StreamStats &streamStats);
 
 } // namespace spot_loadtest::reporter

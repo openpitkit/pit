@@ -32,8 +32,8 @@
 // A `Reject` is an expected business outcome of a pre-trade check, not an
 // error, so it is a value type and never thrown.
 //
-// The canonical definitions live in `openpit::reject`, matching the engine and
-// the other language bindings.
+// The canonical definitions live in `openpit::reject`, matching the engine's
+// reject taxonomy.
 
 namespace openpit::reject {
 

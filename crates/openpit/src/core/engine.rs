@@ -116,10 +116,6 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 ///   is `Send + !Sync`. Ownership may move between OS threads sequentially, but
 ///   concurrent invocation on the same handle is not supported.
 ///
-/// Language bindings (Python, Go, C) may narrow this contract for their public
-/// API surface - see the binding documentation for the exact rules each binding
-/// offers.
-///
 /// # Examples
 ///
 /// ```rust

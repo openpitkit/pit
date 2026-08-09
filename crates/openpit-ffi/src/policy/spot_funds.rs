@@ -108,8 +108,7 @@ fn parse_configure_optional_pnl(
 
 /// Tagged target variants for a spot-funds slippage override.
 ///
-/// Spot funds overrides use an explicit tagged hierarchy matching the Rust
-/// [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) variants:
+/// Spot funds overrides use an explicit tagged hierarchy with the variants
 /// `Instrument`, `InstrumentAccount`, and `InstrumentAccountGroup`.
 pub type OpenPitPretradePoliciesSpotFundsOverrideTargetTag = u8;
 
@@ -180,8 +179,8 @@ pub struct OpenPitPretradePoliciesSpotFundsOverrideTarget {
 
 /// Slippage override entry for the spot funds policy.
 ///
-/// `target` mirrors the three variants of
-/// [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget). When
+/// `target` selects one of three tagged variants: `Instrument`,
+/// `InstrumentAccount`, or `InstrumentAccountGroup`. When
 /// `has_slippage_bps` is `true`, `slippage_bps` is used for the selected
 /// target. When it is `false`, construction ignores the entry and runtime
 /// configuration clears the selected override. Slippage resolves account ->

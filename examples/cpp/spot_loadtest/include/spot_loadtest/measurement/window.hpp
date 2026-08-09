@@ -27,20 +27,13 @@
 
 // Sliding-window HdrHistogram management.
 //
-// Mirror of: examples/go/spot_loadtest/internal/measurement/window.go
-//
-// Every sample is recorded into BOTH the current window histogram AND a
-// run-level merged histogram. Windows are sized by operation count (default;
-// reproducible boundaries) or by wall-clock duration. Each window holds its own
-// order-check and settlement histograms; a merged histogram accumulates the
-// full run for the headline percentiles.
+// Every headline sample is recorded into BOTH the current window histogram AND
+// a run-level merged histogram. Windows use reproducible operation-count
+// boundaries. Run-level diagnostic histograms are kept separately.
 
 namespace spot_loadtest::measurement {
 
 using Clock = std::chrono::steady_clock;
-
-// Mirrors config::WindowUnit to avoid a dependency cycle (the driver maps it).
-enum class WindowUnit { Ops, Wall };
 
 // The immutable record of one completed window. OrderCheckHist / SettlementHist
 // are independent raw-histogram copies so callers can perform a lossless Merge
@@ -66,8 +59,7 @@ struct WindowSnapshot {
 // latencies. Safe for concurrent use from multiple collector threads.
 class Windows {
 public:
-  Windows(WindowUnit unit, std::int64_t opsSize,
-          std::chrono::nanoseconds wallDur);
+  explicit Windows(std::int64_t opsSize);
 
   // Records one order-check latency, advancing the window on a boundary.
   void RecordOrderCheck(std::chrono::nanoseconds d);
@@ -75,6 +67,8 @@ public:
   void RecordSettlement(std::chrono::nanoseconds d);
   // Records one order-check SERVICE-TIME diagnostic (run-level merged only).
   void RecordServiceTime(std::chrono::nanoseconds d);
+  // Records one submit scheduling-lag diagnostic (run-level merged only).
+  void RecordSubmitLag(std::chrono::nanoseconds d);
 
   // Seals the trailing partial window and returns the full picture: per-window
   // history and the merged percentiles for each stream. Call once after drain.
@@ -83,6 +77,8 @@ public:
 
   // The merged order-check service-time diagnostic percentiles.
   [[nodiscard]] Percentiles ServiceTime();
+  // The merged submit scheduling-lag diagnostic percentiles.
+  [[nodiscard]] Percentiles SubmitLag();
 
   // Samples saturated to the ceiling rather than dropped, across all windowed
   // streams.
@@ -100,9 +96,7 @@ private:
   void MaybeRotate(); // called with m_mutex held.
 
   std::mutex m_mutex;
-  WindowUnit m_unit;
   std::int64_t m_opsSize;
-  std::chrono::nanoseconds m_wallDur;
 
   WindowState m_current;
   std::vector<WindowSnapshot> m_completed;
@@ -111,6 +105,7 @@ private:
   Histogram m_mergedOrderCheck;
   Histogram m_mergedSettlement;
   Histogram m_mergedServiceTime;
+  Histogram m_mergedSubmitLag;
   std::int64_t m_clamped = 0;
 };
 

@@ -15,7 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// coverage scenario through both engines once and asserts every row's verdict.
+// Runs the coverage scenario through both engines and asserts every row's
+// verdict.
 // The scenario uses every feature of the runner, so a green run covers the
 // whole tool end to end in well under a second.
 
@@ -36,14 +37,14 @@ using spot_table::Report;
 using spot_table::Row;
 using spot_table::Table;
 
-// Bounds a single pass of the scenario, matching the CLI's defaultTimeout.
+// Bounds a scenario pass with the CLI's default timeout.
 constexpr std::chrono::seconds kDefaultTimeout{30};
 
-// The scenario both engines run. The absolute path is injected by CMake so the
-// `coverageTable` constant.
+// Returns the CMake-injected absolute path to the coverage scenario.
 const char *CoverageTable() { return SPOT_TABLE_COVERAGE_PATH; }
 
-// Runs the table on one engine, failing on any transport error or verdict
+// Runs one engine and records test failures for exceptions or verdict
+// mismatches.
 Report RunAndAssert(
     spot_table::Deadline deadline, const std::string &name, const Table &table,
     const std::function<Report(spot_table::Deadline, const Frontmatter &,
@@ -66,7 +67,7 @@ Report RunAndAssert(
   return report;
 }
 
-// `assertScenario`.
+// Runs the coverage table through both engine modes with a shared deadline.
 void AssertScenario(const Table &table, std::chrono::nanoseconds timeout) {
   const spot_table::Deadline deadline =
       std::chrono::steady_clock::now() + timeout;
@@ -74,7 +75,7 @@ void AssertScenario(const Table &table, std::chrono::nanoseconds timeout) {
   RunAndAssert(deadline, "async", table, spot_table::RunAsync);
 }
 
-// The quick check: runs the coverage scenario through both engines once and
+// Runs the coverage scenario through both engines once.
 TEST(SpotTable, Fast) {
   Table table;
   ASSERT_NO_THROW({ table = spot_table::ParseFile(CoverageTable()); })

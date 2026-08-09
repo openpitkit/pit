@@ -52,8 +52,8 @@ void Pf(std::ostream &out, const char *fmt, Args... args) {
   return std::string(static_cast<std::size_t>(n), c);
 }
 
-// Renders a duration compactly for the report table (the analogue of Go's
-// fmtDur): seconds / ms / µs / ns boundaries with the same precision.
+// Renders a compact duration for the report table at seconds, ms, µs, and
+// ns boundaries.
 [[nodiscard]] std::string FmtDur(nanoseconds d) {
   const std::int64_t ns = d.count();
   char buf[32];
@@ -80,15 +80,11 @@ void Pf(std::ostream &out, const char *fmt, Args... args) {
   return FmtDur(d);
 }
 
-// Renders a duration exactly as Go's time.Duration.String() does, so config
-// duration knobs (idle_cleanup, slow_submit_threshold) print byte-for-byte
-// identically across the C++ and Go reports. Distinct from FmtDur, which is the
-// terser report-table latency renderer (FmtDur would print 2500ms -> "2.500s"
-// and a minute -> "60.000s"; this prints "2.5s" and "1m0s" like Go). The
-// algorithm mirrors the Go stdlib: sub-second durations carry a single
-// fractional unit (ns/µs/ms); from one second up it composes h/m/s with a
-// trailing fractional-second part.
-[[nodiscard]] std::string FmtGoDuration(nanoseconds dur) {
+// Renders configuration durations in their compact canonical form. It differs
+// from FmtDur, the report-table latency renderer: 2500ms becomes "2.5s" and a
+// minute becomes "1m0s". Below one second it uses one fractional unit
+// (ns/µs/ms); from one second it composes h/m/s with a fractional-second part.
+[[nodiscard]] std::string FmtConfigDuration(nanoseconds dur) {
   std::int64_t d = dur.count();
   if (d == 0) {
     return "0s";
@@ -101,9 +97,8 @@ void Pf(std::ostream &out, const char *fmt, Args... args) {
   auto prepend = [&buf](char c) { buf.insert(buf.begin(), c); };
   auto prependStr = [&buf](const std::string &s) { buf.insert(0, s); };
 
-  // Emits the fractional digits of u in the chosen unit (prec digits), trimming
-  // trailing zeros; returns the remaining integer-unit value. Mirrors Go's
-  // fmtFrac.
+  // Emits fractional digits in the chosen unit, trims trailing zeros, and
+  // returns the remaining integer-unit value.
   auto fmtFrac = [&](std::uint64_t v, int prec) -> std::uint64_t {
     bool print = false;
     std::string frac;
@@ -173,10 +168,8 @@ void Pf(std::ostream &out, const char *fmt, Args... args) {
   return buf;
 }
 
-// Renders a window's wall interval as elapsed seconds from the run start. The
-// Go harness prints clock times (HH:MM:SS); we use a monotonic clock for
-// accurate latencies, so we render the interval relative to the run start
-// instead.
+// Renders a window interval as elapsed seconds from the monotonic run start,
+// preserving the clock used for latency measurement.
 [[nodiscard]] std::string FmtWallRange(measurement::Clock::time_point runStart,
                                        const measurement::WindowSnapshot &win) {
   if (win.wallStart == measurement::Clock::time_point{}) {
@@ -204,6 +197,13 @@ void Pf(std::ostream &out, const char *fmt, Args... args) {
 [[nodiscard]] std::vector<std::string>
 InvalidReasons(const measurement::Snapshot &snap) {
   std::vector<std::string> reasons;
+  if (snap.submitLagBreaches > 0) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf),
+                  "submit scheduling lag limit exceeded x %llu",
+                  static_cast<unsigned long long>(snap.submitLagBreaches));
+    reasons.emplace_back(buf);
+  }
   if (snap.backpressure > 0) {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "dispatch backpressure (QueueLimit x %llu)",
@@ -323,26 +323,30 @@ void WriteEnvironment(std::ostream &out, const env::Env &e,
   Pf(out, "  config hash: %s (SHA-256)", cfg.hash.c_str());
   Pf(out, "  seed       : 0x%llX",
      static_cast<unsigned long long>(cfg.run.seed));
-  if (cfg.run.totalOps > 0) {
-    Pf(out, "  total_ops  : %llu",
-       static_cast<unsigned long long>(cfg.run.totalOps));
-  } else {
-    Pf(out, "  duration   : %s", cfg.run.duration.c_str());
-  }
-  Pf(out, "  window     : %llu %s",
-     static_cast<unsigned long long>(cfg.run.window),
-     config::ToString(cfg.run.windowUnit).c_str());
+  Pf(out, "  total_ops  : %llu",
+     static_cast<unsigned long long>(cfg.run.totalOps));
+  Pf(out, "  window     : %llu ops",
+     static_cast<unsigned long long>(cfg.run.window));
   Pf(out, "  observer   : %s", cfg.run.observer ? "true" : "false");
   P(out, "");
 }
 
 void WriteConcurrency(std::ostream &out, const measurement::Snapshot &snap,
-                      const config::Config &cfg) {
+                      const config::Config &cfg,
+                      std::size_t actualSubmitterThreads) {
   P(out, "  Concurrency model (bounded active working set):");
   Pf(out, "    population (total accounts)   : %llu",
      static_cast<unsigned long long>(cfg.accounts.count));
   Pf(out, "    active working set (max hot)  : %llu",
      static_cast<unsigned long long>(cfg.concurrency.activeAccounts));
+  Pf(out, "    configured submitter cap      : %llu",
+     static_cast<unsigned long long>(cfg.concurrency.submitterWorkers));
+  Pf(out, "    actual submitter threads      : %llu",
+     static_cast<unsigned long long>(actualSubmitterThreads));
+  Pf(out, "    maximum submit scheduling lag : %s",
+     FmtConfigDuration(cfg.concurrency.maxSubmitLag).c_str());
+  Pf(out, "    submit-lag limit breaches     : %llu",
+     static_cast<unsigned long long>(snap.submitLagBreaches));
   if (cfg.accounts.count > 0) {
     Pf(out, "    active fraction of population : %.1f%%",
        static_cast<double>(cfg.concurrency.activeAccounts) /
@@ -367,7 +371,7 @@ void WriteConcurrency(std::ostream &out, const measurement::Snapshot &snap,
       P(out, "    idle_cleanup (queue retire)   : disabled (0)");
     } else {
       Pf(out, "    idle_cleanup (queue retire)   : %s",
-         FmtGoDuration(engineCfg.idleCleanup).c_str());
+         FmtConfigDuration(engineCfg.idleCleanup).c_str());
     }
   }
   if (engineCfg.queueCapacity == 0) {
@@ -379,7 +383,7 @@ void WriteConcurrency(std::ostream &out, const measurement::Snapshot &snap,
     P(out, "    slow_submit_threshold         : default (1m)");
   } else {
     Pf(out, "    slow_submit_threshold         : %s",
-       FmtGoDuration(engineCfg.slowSubmitThreshold).c_str());
+       FmtConfigDuration(engineCfg.slowSubmitThreshold).c_str());
   }
   P(out, "");
 
@@ -423,7 +427,8 @@ void WriteConcurrency(std::ostream &out, const measurement::Snapshot &snap,
 
 void WriteWorkload(std::ostream &out, const measurement::Snapshot &snap,
                    const generator::StreamStats &streamStats,
-                   const config::Config &cfg) {
+                   const config::Config &cfg,
+                   std::size_t actualSubmitterThreads) {
   P(out, "=== Workload ===");
   P(out, "");
   const std::uint64_t total = snap.totalOrderChecks + snap.totalSettlements;
@@ -449,7 +454,7 @@ void WriteWorkload(std::ostream &out, const measurement::Snapshot &snap,
   }
   P(out, "");
 
-  WriteConcurrency(out, snap, cfg);
+  WriteConcurrency(out, snap, cfg, actualSubmitterThreads);
 
   Pf(out, "  Achieved reject rate    : %.4f (%.2f%%)", snap.achievedRejectRate,
      snap.achievedRejectRate * kPctScale);
@@ -630,10 +635,31 @@ void WriteServiceTime(std::ostream &out, const measurement::Snapshot &snap) {
   P(out, "");
 }
 
+void WriteSubmitLag(std::ostream &out, const measurement::Snapshot &snap) {
+  const measurement::Percentiles &lag = snap.submitLag;
+  P(out, "  Submit scheduling lag (ACTUAL submit - intended arrival):");
+  P(out,
+    "    HARNESS VALIDITY metric. A limit breach invalidates the run because");
+  P(out, "    the configured open-loop arrival schedule was not sustained.");
+  if (lag.count == 0) {
+    P(out, "    no samples");
+  } else {
+    Pf(out, "    samples : %lld", static_cast<long long>(lag.count));
+    Pf(out, "    p50     : %s", FmtDur(lag.p50).c_str());
+    Pf(out, "    p99     : %s", FmtDur(lag.p99).c_str());
+    Pf(out, "    p99.9   : %s", FmtDur(lag.p999).c_str());
+    Pf(out, "    max     : %s", FmtDur(lag.max).c_str());
+    Pf(out, "    breaches: %llu",
+       static_cast<unsigned long long>(snap.submitLagBreaches));
+  }
+  P(out, "");
+}
+
 void WriteDiagnostics(std::ostream &out, const measurement::Snapshot &snap,
                       const config::Config &cfg) {
   P(out, "=== Diagnostics (decomposition, NOT the headline) ===");
   P(out, "");
+  WriteSubmitLag(out, snap);
   WriteServiceTime(out, snap);
 
   if (!cfg.run.observer) {
@@ -764,10 +790,17 @@ void WriteDisclaimer(std::ostream &out, const std::string &configFlag) {
 void WriteInvalidBanner(std::ostream &out, const measurement::Snapshot &snap) {
   const auto reasons = InvalidReasons(snap);
   Pf(out,
-     "*** RUN INVALID: %s; latency numbers suppressed — this is not a valid "
+     "*** RUN INVALID: %s; latency numbers suppressed - this is not a valid "
      "measurement. ***",
      Join(reasons, "; ").c_str());
   P(out, "");
+  if (snap.submitLagBreaches > 0) {
+    P(out, "  Submit lag: the bounded submitter pool missed the configured");
+    P(out,
+      "  open-loop schedule. The observed latency no longer represents the");
+    P(out, "  requested arrival rate, so the headline is suppressed.");
+    P(out, "");
+  }
   if (snap.backpressure > 0) {
     P(out,
       "  Backpressure: the engine refused one or more submits because the");
@@ -788,11 +821,15 @@ void WriteInvalidBanner(std::ostream &out, const measurement::Snapshot &snap) {
     P(out, "  trusted and the headline is suppressed.");
     P(out, "");
   }
-  Pf(out, "  Backpressure (QueueLimit submits)    : %llu",
+  Pf(out, "  Submit-lag limit breaches            : %llu",
+     static_cast<unsigned long long>(snap.submitLagBreaches));
+  Pf(out, "  Maximum submit scheduling lag        : %s",
+     FmtDur(snap.submitLag.max).c_str());
+  Pf(out, "  Backpressure (QueueLimit submits)     : %llu",
      static_cast<unsigned long long>(snap.backpressure));
-  Pf(out, "  Handoff stalls (harness starvation)  : %llu",
+  Pf(out, "  Handoff stalls (harness starvation)   : %llu",
      static_cast<unsigned long long>(snap.handoffStalls));
-  Pf(out, "  Anti-DCE checksum                    : 0x%016llX",
+  Pf(out, "  Anti-DCE checksum                     : 0x%016llX",
      static_cast<unsigned long long>(snap.checksum));
   P(out, "");
 }
@@ -819,10 +856,11 @@ void WriteInvalidFooter(std::ostream &out, const measurement::Snapshot &snap,
 
 void Write(std::ostream &out, const env::Env &e, const config::Config &cfg,
            const std::string &configFlag, const measurement::Snapshot &snap,
+           std::size_t actualSubmitterThreads,
            const generator::StreamStats &streamStats) {
   WriteHeadline(out, snap);
   WriteEnvironment(out, e, cfg);
-  WriteWorkload(out, snap, streamStats, cfg);
+  WriteWorkload(out, snap, streamStats, cfg, actualSubmitterThreads);
   WriteTrajectory(out, snap);
   WriteDistribution(out, snap);
   WriteDiagnostics(out, snap, cfg);
@@ -832,10 +870,12 @@ void Write(std::ostream &out, const env::Env &e, const config::Config &cfg,
 void WriteInvalid(std::ostream &out, const env::Env &e,
                   const config::Config &cfg, const std::string &configFlag,
                   const measurement::Snapshot &snap,
+                  std::size_t actualSubmitterThreads,
                   const generator::StreamStats &streamStats) {
   WriteInvalidBanner(out, snap);
   WriteEnvironment(out, e, cfg);
-  WriteWorkload(out, snap, streamStats, cfg);
+  WriteWorkload(out, snap, streamStats, cfg, actualSubmitterThreads);
+  WriteSubmitLag(out, snap);
   WriteInvalidFooter(out, snap, configFlag);
 }
 

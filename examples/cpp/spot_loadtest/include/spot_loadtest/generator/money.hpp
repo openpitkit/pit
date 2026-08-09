@@ -23,8 +23,6 @@
 
 // Pinned money/quantity/price precision.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/money.go
-//
 // v1 (limit + quantity-denominated) deliberately restricts the value space so
 // the only charge formula, q*p (Buy), is exact with no rounding: quantity is an
 // integer lot count (scale 0) and price has at most priceScale (= 2) fractional

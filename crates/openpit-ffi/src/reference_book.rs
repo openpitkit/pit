@@ -30,8 +30,7 @@ use crate::marketdata::OpenPitInstrumentId;
 
 /// Raw settlement-unit code for FFI payloads.
 ///
-/// The value is validated before it is converted into the Rust
-/// [`SettlementUnit`].
+/// The value is validated before conversion to a settlement-unit value.
 pub type OpenPitSettlementUnit = u8;
 
 /// Business-day settlement delay.

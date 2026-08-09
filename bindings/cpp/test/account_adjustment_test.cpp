@@ -20,6 +20,7 @@
 #include "openpit/engine.hpp"
 #include "openpit/model/model.hpp"
 #include "openpit/param/param.hpp"
+#include "openpit/pretrade/custom_policy.hpp"
 #include "openpit/pretrade/policies.hpp"
 
 #include <gtest/gtest.h>
@@ -29,6 +30,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -39,6 +41,32 @@ namespace aa = openpit::accountadjustment;
 namespace param = openpit::param;
 namespace model = openpit::model;
 namespace policies = openpit::pretrade::policies;
+
+class RejectingAdjustmentPolicy {
+ public:
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "RejectingAdjustmentPolicy";
+  }
+
+  [[nodiscard]] openpit::pretrade::PolicyAccountAdjustmentResult
+  ApplyAccountAdjustment(const aa::Context& context, param::AccountId accountId,
+                         const aa::AccountAdjustment& adjustment,
+                         openpit::tx::Mutations& mutations,
+                         openpit::pretrade::AccountOutcomes& outcomes) const {
+    static_cast<void>(context);
+    static_cast<void>(accountId);
+    static_cast<void>(adjustment);
+    static_cast<void>(mutations);
+    static_cast<void>(outcomes);
+
+    openpit::pretrade::PolicyAccountAdjustmentResult result;
+    result.decision.Push(openpit::pretrade::Reject(
+        std::string(Name()), openpit::pretrade::RejectScope::Account,
+        openpit::pretrade::RejectCode::RiskLimitExceeded, "adjustment rejected",
+        "reject every adjustment for this test"));
+    return result;
+  }
+};
 
 //------------------------------------------------------------------------------
 // BalanceOperation
@@ -404,11 +432,39 @@ TEST(AccountAdjustmentOutcomeList, DefaultIsEmptyAndNull) {
   EXPECT_TRUE(list.ToVector().empty());
 }
 
-TEST(AccountAdjustmentBatchError, DefaultIsNullWithNoRejects) {
-  const aa::BatchError error;
-  EXPECT_FALSE(static_cast<bool>(error));
-  EXPECT_EQ(error.FailedAdjustmentIndex(), 0u);
-  EXPECT_TRUE(error.Rejects().empty());
+TEST(AccountAdjustmentBatchError, MovedFromAccessorsThrow) {
+  static_assert(!std::is_default_constructible_v<aa::BatchError>);
+
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  openpit::pretrade::CustomPolicy<RejectingAdjustmentPolicy> policy(
+      "RejectingAdjustmentPolicy", RejectingAdjustmentPolicy{});
+  builder.Add(policy);
+  const openpit::Engine engine = builder.Build();
+
+  openpit::AdjustmentResult result = engine.ApplyAccountAdjustment(
+      param::AccountId::FromUint64(1),
+      std::vector<aa::AccountAdjustment>{aa::AccountAdjustment{}});
+  ASSERT_FALSE(result.Passed());
+  ASSERT_TRUE(result.batchError.has_value());
+
+  aa::BatchError owned = std::move(*result.batchError);
+  ASSERT_TRUE(owned);
+  const aa::BatchError& movedFrom = *result.batchError;
+  EXPECT_FALSE(static_cast<bool>(movedFrom));
+
+  try {
+    static_cast<void>(movedFrom.FailedAdjustmentIndex());
+    FAIL() << "expected a moved-from batch error to throw";
+  } catch (const openpit::Error& exception) {
+    EXPECT_STREQ(exception.what(), "batch error is empty");
+  }
+
+  try {
+    static_cast<void>(movedFrom.Rejects());
+    FAIL() << "expected an empty batch error to throw";
+  } catch (const openpit::Error& exception) {
+    EXPECT_STREQ(exception.what(), "batch error is empty");
+  }
 }
 
 }  // namespace

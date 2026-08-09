@@ -19,14 +19,11 @@
 
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/handle.hpp"
+#include "openpit/fwd.hpp"
 
 #include <openpit.h>
 
 #include <memory>
-
-namespace openpit {
-class Order;
-}  // namespace openpit
 
 namespace openpit::pretrade::detail {
 
@@ -37,7 +34,7 @@ using RawDropCopyOperation = ::OpenPitPretradeDropCopyOperation;
 
 struct RequestInit {
   RawRequest* handle;
-  std::shared_ptr<const ::openpit::Order> order;
+  std::unique_ptr<const ::openpit::Order> order;
 };
 
 struct PreTradeRequestDeleter {

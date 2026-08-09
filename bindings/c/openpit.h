@@ -336,8 +336,7 @@ typedef uint8_t OpenPitPretradePoliciesSpotFundsLimitMode;
 /**
  * Tagged target variants for a spot-funds slippage override.
  *
- * Spot funds overrides use an explicit tagged hierarchy matching the Rust
- * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) variants:
+ * Spot funds overrides use an explicit tagged hierarchy with the variants
  * `Instrument`, `InstrumentAccount`, and `InstrumentAccountGroup`.
  */
 typedef uint8_t OpenPitPretradePoliciesSpotFundsOverrideTargetTag;
@@ -360,10 +359,9 @@ typedef uint32_t OpenPitParamAccountGroupId;
 /**
  * Raw reason code for a realized-PnL calculation halt.
  *
- * This is a primitive rather than a Rust enum so callers can pass arbitrary
- * bytes without creating an invalid Rust enum discriminant at the FFI
- * boundary. Inbound values are validated before conversion to
- * `OpenPitPnlHaltReason` values.
+ * This is a primitive rather than an enum so callers can pass arbitrary bytes
+ * without creating an invalid discriminant at the FFI boundary. Inbound values
+ * are validated before conversion to `OpenPitPnlHaltReason` values.
  *
  * When failures coincide, SpotFunds uses this priority from highest to lowest:
  * `OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW`,
@@ -400,8 +398,7 @@ typedef uint8_t OpenPitMarketDataQuoteResolution;
 /**
  * Raw settlement-unit code for FFI payloads.
  *
- * The value is validated before it is converted into the Rust
- * [`SettlementUnit`].
+ * The value is validated before conversion to a settlement-unit value.
  */
 typedef uint8_t OpenPitSettlementUnit;
 
@@ -997,7 +994,7 @@ typedef uint8_t OpenPitSettlementUnit;
 /**
  * The reserved default account-group identifier. Every account belongs to this
  * group until it is registered into another one, so no constructor may produce
- * it. Mirrors `openpit::param::DEFAULT_ACCOUNT_GROUP`.
+ * it.
  */
 #define OPENPIT_DEFAULT_ACCOUNT_GROUP ((OpenPitParamAccountGroupId) 0)
 
@@ -1044,7 +1041,7 @@ typedef uint8_t OpenPitSettlementUnit;
 
 /**
  * The default policy-group identifier used when a caller does not assign a
- * policy to a specific group. Mirrors `openpit::DEFAULT_POLICY_GROUP_ID`.
+ * policy to a specific group.
  */
 #define OPENPIT_DEFAULT_POLICY_GROUP_ID ((uint16_t) 0)
 
@@ -1858,12 +1855,12 @@ struct OpenPitPretradePoliciesSpotFundsOverrideTarget {
 /**
  * Slippage override entry for the spot funds policy.
  *
- * `target` mirrors the three variants of
- * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget). When
- * `has_slippage_bps` is `true`, `slippage_bps` is used for the selected
- * target. When it is `false`, construction ignores the entry and runtime
- * configuration clears the selected override. Slippage resolves account ->
- * account group -> instrument -> global for each order.
+ * `target` selects one of three tagged variants: `Instrument`,
+ * `InstrumentAccount`, or `InstrumentAccountGroup`. When `has_slippage_bps` is
+ * `true`, `slippage_bps` is used for the selected target. When it is `false`,
+ * construction ignores the entry and runtime configuration clears the selected
+ * override. Slippage resolves account -> account group -> instrument -> global
+ * for each order.
  */
 struct OpenPitPretradePoliciesSpotFundsOverride {
     /**
@@ -4806,7 +4803,9 @@ bool openpit_create_param_account_id_from_string(
  * Validates and copies an asset identifier into a caller-owned shared-string
  * handle.
  *
- * The returned handle must be destroyed with `openpit_destroy_param_asset`.
+ * The asset handle is an `OpenPitSharedString`. Release it exactly once with
+ * either `openpit_destroy_param_asset` or `openpit_destroy_shared_string`;
+ * both functions deallocate the same handle.
  */
 OpenPitSharedString * openpit_create_param_asset_from_string(
     OpenPitStringView value,
@@ -4816,6 +4815,9 @@ OpenPitSharedString * openpit_create_param_asset_from_string(
 /**
  * Destroys a caller-owned asset handle created by
  * `openpit_create_param_asset_from_string`.
+ *
+ * This is the same deallocation as `openpit_destroy_shared_string` because
+ * asset handles are `OpenPitSharedString` handles.
  */
 void openpit_destroy_param_asset(
     OpenPitSharedString * handle
@@ -6754,9 +6756,8 @@ OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(
  * - A null `check_pre_trade_start_dry_run_fn` or
  *   `perform_pre_trade_check_dry_run_fn` leaves that dry-run hook delegating
  *   to its normal counterpart (`check_pre_trade_start_fn` /
- *   `perform_pre_trade_check_fn` respectively), exactly matching the Rust
- *   trait default; pass non-null to install an explicit read-only dry-run
- *   variant.
+ *   `perform_pre_trade_check_fn` respectively); pass non-null to install an
+ *   explicit read-only dry-run variant.
  * - Non-null callbacks and `free_user_data_fn` must remain callable for as
  *   long as the policy may still be used by either the caller pointer or the
  *   engine.

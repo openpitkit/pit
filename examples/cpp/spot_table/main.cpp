@@ -23,7 +23,6 @@
 // wall-clock has elapsed (a repeat run), printing a periodic progress block
 // with each engine's running order/report latency, then a final per-engine
 // aggregate summary. The scenario tables live under examples/tables/spot/.
-//
 
 #include "duration.hpp"
 #include "platform.hpp"
@@ -53,10 +52,10 @@ using namespace std::chrono_literals;
 using spot_table::Mode;
 using spot_table::Report;
 
-// `defaultTimeout`.
+// Default per-run deadline.
 constexpr std::chrono::seconds kDefaultTimeout{30};
 
-// `repeatLogInterval`.
+// Interval between repeat-run progress reports.
 constexpr std::chrono::seconds kRepeatLogInterval{10};
 
 //------------------------------------------------------------------------------
@@ -74,8 +73,7 @@ constexpr std::chrono::seconds kRepeatLogInterval{10};
   return "?";
 }
 
-// Looks for the requested file first as-is, then alongside the running binary,
-// so a relative table path resolves whether the example is run from the repo
+// Resolves table paths directly or relative to the running binary's directory.
 [[nodiscard]] std::optional<std::string>
 ResolveTablePath(const std::string &argv0, const std::string &p) {
   if (FileExists(p)) {
@@ -93,7 +91,7 @@ ResolveTablePath(const std::string &argv0, const std::string &p) {
 }
 
 //------------------------------------------------------------------------------
-// `engineTitle`.
+// Report formatting and output.
 
 [[nodiscard]] std::string EngineTitle(Mode m) {
   switch (m) {
@@ -136,7 +134,7 @@ void PrintLatency(const std::string &label, const spot_table::LatencyStats &s) {
             << "  max=" << spot_table::FormatDuration(s.max) << "\n";
 }
 
-// `printReport`.
+// Prints one engine report and its latency summary.
 void PrintReport(const Report &r) {
   std::cout << "== " << EngineTitle(r.mode) << " ==\n";
   std::cout << "  operations  : " << r.total << "\n";
@@ -158,7 +156,7 @@ void PrintReport(const Report &r) {
 
 //------------------------------------------------------------------------------
 
-// `engineAggregate`.
+// Accumulates report totals and latencies across repeat iterations.
 struct EngineAggregate {
   Mode mode = Mode::Sync;
   int accounts = 0;
@@ -239,7 +237,7 @@ struct PairResult {
   std::optional<std::string> asyncErr;
 };
 
-// Runs the scenario through both engines concurrently and returns each engine's
+// Runs both engines concurrently and captures each report or exception.
 [[nodiscard]] PairResult RunPair(spot_table::Deadline deadline,
                                  const spot_table::Table &table) {
   auto syncFuture = std::async(std::launch::async, [&]() {
@@ -263,7 +261,8 @@ struct PairResult {
   return out;
 }
 
-// Turns the two engines' outcomes into a single error message (empty on
+// Returns a failure message when an engine errors or reports a verdict
+// mismatch.
 [[nodiscard]] std::optional<std::string> Verdict(const PairResult &pair) {
   if (pair.syncErr.has_value() || pair.asyncErr.has_value()) {
     return "one or more engines errored";
@@ -320,7 +319,8 @@ void PrintRepeatSummary(int iterations, std::chrono::nanoseconds elapsed,
   PrintAggregate(asyncAgg, elapsed);
 }
 
-// Re-runs the scenario until at least minDuration of wall-clock has elapsed,
+// Repeats the scenario until the minimum duration elapses, printing progress
+// and a final summary.
 [[nodiscard]] std::optional<std::string>
 RunRepeat(const std::string &tablePath, const spot_table::Table &table,
           std::chrono::nanoseconds timeout,
@@ -381,8 +381,7 @@ struct Args {
   std::chrono::nanoseconds minDuration{0};
 };
 
-// Parses --flag=value and --flag value forms for the three recognized flags.
-// `flag.Parse` for this program's flag set.
+// Parses the supported flags in --name=value or --name value form.
 [[nodiscard]] bool ParseArgs(int argc, char **argv, Args &args,
                              std::string &err) {
   const auto take = [&](int &i, const std::string &inlineValue,

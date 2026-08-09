@@ -28,8 +28,11 @@
 namespace spot_table {
 namespace {
 
-// The column headers a table must declare, in any order. Every other recognized
-// `requiredHeaders`.
+// Headers every table must declare, in any order and case. The remaining
+// recognized columns are not checked here; a missing one reads as an empty
+// cell, so per-action validation still rejects a row whose action needs it -
+// a TICK without an instrument or price column, a SEED without asset or
+// amount.
 const std::vector<std::string> kRequiredHeaders = {"account", "action",
                                                    "expect"};
 
@@ -157,7 +160,7 @@ void CheckHeaders(const std::vector<std::string> &got) {
   }
 }
 
-// One column the action does not allow to carry a value. Mirrors the entries of
+// A column/value pair that an action must leave empty.
 struct ForbidCell {
   std::string column;
   std::string value;
@@ -173,7 +176,7 @@ void Forbid(const std::string &action,
   }
 }
 
-// `requireExpect`.
+// Validates a row's expected outcome against the values allowed for its action.
 void RequireExpect(const Row &row, const std::string &action,
                    std::initializer_list<const char *> allowed) {
   for (const char *a : allowed) {
@@ -288,7 +291,7 @@ void ValidateGroup(const Row &row) {
                    {"reject", row.reject}});
 }
 
-// `validateRow`.
+// Dispatches validation to the handler for the row's action.
 void ValidateRow(const Row &row) {
   if (row.action == "SEED") {
     ValidateSeed(row);
@@ -305,7 +308,7 @@ void ValidateRow(const Row &row) {
   }
 }
 
-// `buildRow`.
+// Builds a row from named fields, normalizes values, then validates it.
 [[nodiscard]] Row BuildRow(const std::vector<std::string> &fields,
                            const std::vector<std::string> &headers,
                            int lineNo) {
@@ -339,7 +342,9 @@ void ValidateRow(const Row &row) {
   return row;
 }
 
-// `parseFMLine`.
+// Skips empty and #-prefixed front-matter lines; applies `name` and
+// `slippage_bps`. Missing colons, invalid slippage values, and unknown keys
+// throw `ParseError`.
 void ParseFrontMatterLine(Frontmatter &fm, const std::string &line, int lineNo,
                           const std::string &name) {
   if (line.empty() || HasPrefix(line, "#")) {

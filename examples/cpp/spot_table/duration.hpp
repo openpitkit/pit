@@ -17,25 +17,24 @@
 
 #pragma once
 
-// (`time.Duration.String`, `time.Duration.Round`, `time.ParseDuration`); this
-// small module reproduces them for the parts the CLI uses (`-timeout`,
-// `-min-duration`, and the report's latency / wall-clock fields).
+// Formats, rounds, and parses durations for the CLI's `-timeout`,
+// `-min-duration`, and report latency and wall-clock fields.
 
 #include <chrono>
 #include <string>
 
 namespace spot_table {
 
-// "1m30s", "1h2m3s", with sub-second units (ns/µs/ms) for short durations.
+// Formats durations as "1m30s" or "1h2m3s", using ns/µs/ms below one second.
 [[nodiscard]] std::string FormatDuration(std::chrono::nanoseconds d);
 
-// `time.Duration.Round`. A non-positive `unit` returns `d` unchanged.
+// Rounds `d` to the nearest multiple of `unit`, with ties away from zero.
+// A non-positive `unit` returns `d` unchanged.
 [[nodiscard]] std::chrono::nanoseconds
 RoundDuration(std::chrono::nanoseconds d, std::chrono::nanoseconds unit);
 
-// Returns false and writes `err` on a malformed string. Mirrors
-// `time.ParseDuration` for the unit set the CLI accepts (ns, us/µs, ms, s, m,
-// h).
+// Parses the CLI duration units ns, us/µs, ms, s, m, and h.
+// Returns false and writes `err` for malformed input.
 [[nodiscard]] bool ParseDuration(const std::string &text,
                                  std::chrono::nanoseconds &out,
                                  std::string &err);

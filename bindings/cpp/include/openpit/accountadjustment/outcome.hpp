@@ -20,6 +20,7 @@
 #include "openpit/accountadjustment/pnl.hpp"
 #include "openpit/detail/handle.hpp"
 #include "openpit/detail/native_access.hpp"
+#include "openpit/error.hpp"
 #include "openpit/param/param.hpp"
 #include "openpit/string.hpp"
 
@@ -298,10 +299,12 @@ class OutcomeList {
     out.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
       OpenPitAccountAdjustmentOutcome raw{};
-      if (openpit_account_adjustment_outcome_list_get(m_handle.Get(), i,
-                                                      &raw)) {
-        out.push_back(::openpit::detail::FromNative<Outcome>(raw));
+      if (!openpit_account_adjustment_outcome_list_get(m_handle.Get(), i,
+                                                       &raw)) {
+        throw ::openpit::Error(
+            "openpit_account_adjustment_outcome_list_get failed");
       }
+      out.push_back(::openpit::detail::FromNative<Outcome>(raw));
     }
     return out;
   }

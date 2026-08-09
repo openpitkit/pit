@@ -85,37 +85,9 @@ BuildOrder(const generator::Event &ev,
   return order;
 }
 
-// An execution-report payload carrying its pre-trade lock. The lock pins the
-// reserved price under the default policy group so the spot-funds policy
-// resolves a BUY fill's held leg.
-//
-// Move-only because it owns the `PreTradeLock` handle.
-class ReportWithLock {
-public:
-  ReportWithLock(::openpit::model::ExecutionReport report,
-                 ::openpit::pretrade::PreTradeLock lock)
-      : m_report(std::move(report)) {
-    m_report.fill->lock =
-        std::make_shared<::openpit::pretrade::PreTradeLock>(std::move(lock));
-  }
-
-  ReportWithLock(ReportWithLock &&) noexcept = default;
-  ReportWithLock &operator=(ReportWithLock &&) noexcept = default;
-  ReportWithLock(const ReportWithLock &) = delete;
-  ReportWithLock &operator=(const ReportWithLock &) = delete;
-
-  [[nodiscard]] const ::openpit::model::ExecutionReport &
-  Report() const noexcept {
-    return m_report;
-  }
-
-private:
-  ::openpit::model::ExecutionReport m_report;
-};
-
 // Maps a Settlement event to a full-fill (leaves = 0, is_final = true) report
 // plus the matching reserved-price lock under the default policy group.
-[[nodiscard]] inline ReportWithLock
+[[nodiscard]] inline ::openpit::model::ExecutionReport
 BuildReport(const generator::Event &ev,
             ::openpit::param::AccountId &outAccount) {
   outAccount = ::openpit::param::AccountId::FromString(ev.account);
@@ -150,8 +122,8 @@ BuildReport(const generator::Event &ev,
   // one entry under the default policy group at the reserved price.
   ::openpit::pretrade::PreTradeLock lock;
   lock.Push(::openpit::param::DefaultPolicyGroupId, price);
-
-  return ReportWithLock(std::move(report), std::move(lock));
+  report.fill->lock = std::move(lock);
+  return report;
 }
 
 // Maps a Funding event to a balance-operation adjustment on the funded asset's
@@ -198,8 +170,7 @@ BuildProbeAdjustment() {
   return adj;
 }
 
-// An engine driver mirroring asyncengine::EngineAdapter but routing settlement
-// through ReportWithLock so the lock reaches the policy. It satisfies the
+// An engine driver mirroring asyncengine::EngineAdapter. It satisfies the
 // TypedAsyncEngine driver seam (the five members) used by the harness:
 // ExecutePreTrade, ApplyExecutionReport, ApplyAccountAdjustment (plus the
 // unused StartPreTrade / Accounts to complete the seam).
@@ -209,19 +180,26 @@ public:
       : m_engine(&engine) {}
 
   [[nodiscard]] ::openpit::pretrade::StartResult
-  StartPreTrade(const ::openpit::model::Order &order) const {
-    return m_engine->StartPreTrade(order);
+  StartPreTrade(std::unique_ptr<const ::openpit::Order> order) const {
+    return m_engine->StartPreTrade(std::move(order));
   }
 
   [[nodiscard]] ::openpit::pretrade::ExecuteResult
-  ExecutePreTrade(const ::openpit::model::Order &order) const {
-    return m_engine->ExecutePreTrade(order);
+  ExecutePreTrade(std::unique_ptr<const ::openpit::Order> order) const {
+    if (!order) {
+      throw ::openpit::Error("ExecutePreTrade requires a non-null order");
+    }
+    return m_engine->ExecutePreTrade(*order);
   }
 
   // Applies a report carrying a fill lock, so a BUY fill's held leg resolves.
-  [[nodiscard]] ::openpit::PostTradeResult
-  ApplyExecutionReport(const ReportWithLock &report) const {
-    return m_engine->ApplyExecutionReport(report.Report());
+  [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
+      std::unique_ptr<const ::openpit::ExecutionReport> report) const {
+    if (!report) {
+      throw ::openpit::Error(
+          "ApplyExecutionReport requires a non-null execution report");
+    }
+    return m_engine->ApplyExecutionReport(*report);
   }
 
   template <typename Adjustment>

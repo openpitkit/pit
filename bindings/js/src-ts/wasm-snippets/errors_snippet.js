@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 //
-// wasm-bindgen snippet imported by the Rust boundary (src/error.rs) via
+// wasm-bindgen snippet imported by the binding boundary via
 // `#[wasm_bindgen(module = "/src-ts/wasm-snippets/errors_snippet.js")]`.
 //
 // wasm-bindgen copies this file verbatim into

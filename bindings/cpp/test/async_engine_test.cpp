@@ -29,12 +29,15 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -59,13 +62,81 @@ const AccountId kAccountC = AccountId::FromUint64(kAccountCRaw);
 // the suite. Every Await uses it; correct code resolves well within it.
 constexpr seconds kAwaitCap{5};
 
+static_assert(std::is_copy_constructible_v<ae::Result<int>> &&
+                  std::is_copy_assignable_v<ae::Result<int>> &&
+                  std::is_move_constructible_v<ae::Result<int>> &&
+                  std::is_move_assignable_v<ae::Result<int>>,
+              "Result<T> must preserve value semantics for a copyable T");
+static_assert(
+    !std::is_copy_constructible_v<ae::Result<std::unique_ptr<int>>> &&
+        !std::is_copy_assignable_v<ae::Result<std::unique_ptr<int>>> &&
+        std::is_move_constructible_v<ae::Result<std::unique_ptr<int>>> &&
+        std::is_move_assignable_v<ae::Result<std::unique_ptr<int>>>,
+    "Result<T> must preserve move-only semantics for a move-only T");
+
+TEST(AsyncFuture, MoveOnlyValueCanOnlyBeConsumedOnce) {
+  ae::Promise<std::unique_ptr<int>> promise;
+  const ae::Future<std::unique_ptr<int>> first = promise.GetFuture();
+  const ae::Future<std::unique_ptr<int>> second = first;
+  const ae::Future<std::unique_ptr<int>> third = first;
+  promise.Resolve(std::make_unique<int>(42));
+
+  const std::unique_ptr<int> value = first.Await();
+  ASSERT_NE(value, nullptr);
+  EXPECT_EQ(*value, 42);
+
+  try {
+    static_cast<void>(second.Await(kAwaitCap));
+    FAIL() << "expected a ValueConsumed error";
+  } catch (const ae::Error& error) {
+    EXPECT_EQ(error.Code(), ae::ErrorCode::ValueConsumed);
+  }
+
+  try {
+    static_cast<void>(third.Await());
+    FAIL() << "expected a ValueConsumed error";
+  } catch (const ae::Error& error) {
+    EXPECT_EQ(error.Code(), ae::ErrorCode::ValueConsumed);
+  }
+}
+
+TEST(AsyncFuture, MovedFromMoveOnlyResultCannotBeConsumed) {
+  const auto FutureFrom = [](ae::Result<std::unique_ptr<int>> result) {
+    std::promise<ae::Payload<std::unique_ptr<int>>> promise;
+    const ae::Future<std::unique_ptr<int>> future(promise.get_future().share());
+    promise.set_value(
+        std::make_unique<ae::Result<std::unique_ptr<int>>>(std::move(result)));
+    return future;
+  };
+  const auto ExpectValueConsumed =
+      [](const ae::Future<std::unique_ptr<int>>& future) {
+        try {
+          static_cast<void>(future.Await());
+          FAIL() << "expected a ValueConsumed error";
+        } catch (const ae::Error& error) {
+          EXPECT_EQ(error.Code(), ae::ErrorCode::ValueConsumed);
+        }
+      };
+
+  ae::Result<std::unique_ptr<int>> source(std::make_unique<int>(42));
+  ae::Result<std::unique_ptr<int>> moved(std::move(source));
+  ASSERT_TRUE(moved.HasValue());
+  ExpectValueConsumed(FutureFrom(std::move(source)));
+
+  ae::Result<std::unique_ptr<int>> assignmentSource(std::make_unique<int>(7));
+  ae::Result<std::unique_ptr<int>> assigned(std::make_unique<int>(0));
+  assigned = std::move(assignmentSource);
+  ASSERT_TRUE(assigned.HasValue());
+  ExpectValueConsumed(FutureFrom(std::move(assignmentSource)));
+}
+
 //------------------------------------------------------------------------------
 // Mock driver
 //
-// The async layer is generic over a driver (the engine-call seam), exactly like
-// the Go `asyncengine.Driver` interface. Tests inject this stand-in so the
-// dispatch/threading/future machinery is exercised without a live engine. Each
-// method records the thread it ran on so per-account serialization is testable.
+// The async layer is generic over a driver (the engine-call seam).
+// Tests inject this stand-in so the dispatch/threading/future machinery is
+// exercised without a live engine. Each method records the thread it ran on so
+// per-account serialization is testable.
 
 // Tracks the peak number of simultaneously-active driver calls per account, so
 // any per-account overlap (a threading-contract violation) is observable.

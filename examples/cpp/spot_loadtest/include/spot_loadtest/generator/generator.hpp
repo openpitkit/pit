@@ -25,8 +25,6 @@
 // Builds a seeded, deterministic, pre-materialised stream of abstract load-test
 // events for the spot-limit harness.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/generator.go
-//
 // It is an INDEPENDENT reimplementation of the spot-funds arithmetic — it
 // never imports the engine — which is what makes the per-op oracle
 // non-circular. The generator maintains a shadow ledger and a position

@@ -474,16 +474,15 @@ export class LifecycleError extends OpenpitError {
 }
 
 /**
- * A defect inside the engine surfaced at the WebAssembly boundary.
+ * A native Rust/WASM module panic surfaced at the WebAssembly boundary.
  *
- * The message carries the Rust panic text and its source location. The wasm
- * module is poisoned after this error: every later call that would reach core
- * state returns an `InternalError` instead of touching it. That covers every
+ * The message carries the panic text and its source location. The wasm module
+ * is poisoned after this error: every later call that would reach core state
+ * returns an `InternalError` instead of touching it. The guard covers every
  * `Engine` method and the `Request`, `Reservation`, `Accounts`, `Configurator`,
  * `AccountControl`, `Context`, `MarketDataService`, and `ReferenceBook` handles
- * - the whole surface that reads or writes engine state. Report the message,
- * discard all handles from that module instance, and reload the module before
- * continuing.
+ * that read or write engine state. Report the message, discard all handles from
+ * that module instance, and reload the module before continuing.
  */
 export class InternalError extends OpenpitError {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -562,7 +561,7 @@ export class PolicyConfigureError extends OpenpitError {
  * the completed post-trade or account-adjustment result when that operation has
  * one, and is undefined for other pre-trade, drop-copy, or mutation calls.
  * Any thrown value reaches `cause` unchanged, whatever its class or `name`. An
- * operation that an engine defect abandoned reports that `InternalError`
+ * operation that a module panic abandoned reports that `InternalError`
  * instead of this class, so callers cannot miss the module-reload rule.
  */
 export class PolicyCallbackError extends OpenpitError {

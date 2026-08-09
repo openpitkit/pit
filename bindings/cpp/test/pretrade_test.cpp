@@ -39,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -51,7 +52,6 @@ using openpit::pretrade::Context;
 using openpit::pretrade::ContextOrder;
 using openpit::pretrade::CustomPolicy;
 using openpit::pretrade::LockEntry;
-using openpit::pretrade::MakeTypeMismatchReject;
 using openpit::pretrade::PolicyDecision;
 using openpit::pretrade::PreTradeLock;
 using openpit::pretrade::PushReject;
@@ -83,6 +83,28 @@ constexpr std::uint16_t kGroupSeven = 7;
 
 //------------------------------------------------------------------------------
 // PreTradeLock
+
+void ExpectHandlelessLockOperationsThrow(PreTradeLock& lock) {
+  EXPECT_NO_THROW(static_cast<void>(static_cast<bool>(lock)));
+  EXPECT_FALSE(lock);
+  EXPECT_THROW(static_cast<void>(lock.Clone()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.Len()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.IsEmpty()), openpit::Error);
+  EXPECT_THROW(lock.Push(kDefaultGroup, Price::FromString("1")),
+               openpit::Error);
+  const std::vector<LockEntry> entries = {
+      LockEntry(kDefaultGroup, Price::FromString("1")),
+  };
+  EXPECT_THROW(lock.PushMany(entries), openpit::Error);
+  PreTradeLock src;
+  EXPECT_THROW(lock.Merge(src), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.Entries()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.Prices()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.PricesOf(kDefaultGroup)), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.ToMsgpack()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.ToCbor()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(lock.ToJson()), openpit::Error);
+}
 
 TEST(PreTradeLock, NewLockIsEmpty) {
   const PreTradeLock lock;
@@ -174,6 +196,115 @@ TEST(PreTradeLock, CloneIsIndependent) {
   EXPECT_EQ(copy.Len(), 2u);
 }
 
+TEST(PreTradeLock, CopyConstructionIsIndependent) {
+  PreTradeLock source;
+  source.Push(kDefaultGroup, Price::FromString("5"));
+
+  PreTradeLock copy(source);
+  copy.Push(kDefaultGroup, Price::FromString("6"));
+
+  EXPECT_EQ(source.Len(), 1u);
+  EXPECT_EQ(copy.Len(), 2u);
+}
+
+TEST(PreTradeLock, CopyAssignmentReplacesContentsIndependently) {
+  PreTradeLock source;
+  source.Push(kDefaultGroup, Price::FromString("5"));
+
+  PreTradeLock copy;
+  copy.Push(kDefaultGroup, Price::FromString("99"));
+  copy = source;
+  copy.Push(kDefaultGroup, Price::FromString("6"));
+
+  const std::vector<Price> prices = copy.PricesOf(kDefaultGroup);
+  ASSERT_EQ(prices.size(), 2u);
+  EXPECT_EQ(prices[0].ToString(), "5");
+  EXPECT_EQ(prices[1].ToString(), "6");
+  EXPECT_EQ(source.Len(), 1u);
+}
+
+TEST(PreTradeLock, SelfAssignmentKeepsContents) {
+  PreTradeLock lock;
+  lock.Push(kDefaultGroup, Price::FromString("5"));
+
+  PreTradeLock* const sameLock = &lock;
+  lock = *sameLock;
+
+  const std::vector<Price> prices = lock.PricesOf(kDefaultGroup);
+  ASSERT_EQ(prices.size(), 1u);
+  EXPECT_EQ(prices.front().ToString(), "5");
+}
+
+TEST(PreTradeLock, CopyingMovedFromLockYieldsMovedFromLock) {
+  PreTradeLock lock;
+  PreTradeLock moved = std::move(lock);
+
+  ASSERT_TRUE(moved);
+  EXPECT_NO_THROW({
+    const PreTradeLock copy(lock);
+    EXPECT_FALSE(copy);
+  });
+}
+
+TEST(PreTradeLock, MovedFromOperationsThrow) {
+  PreTradeLock lock;
+  PreTradeLock moved = std::move(lock);
+
+  ASSERT_TRUE(moved);
+  ExpectHandlelessLockOperationsThrow(lock);
+}
+
+TEST(PreTradeLock, CopiedMovedFromOperationsThrow) {
+  PreTradeLock lock;
+  PreTradeLock moved = std::move(lock);
+  PreTradeLock copy(lock);
+
+  ASSERT_TRUE(moved);
+  ASSERT_FALSE(copy);
+  ExpectHandlelessLockOperationsThrow(copy);
+}
+
+TEST(PreTradeLock, HandlelessMergeSourceThrows) {
+  PreTradeLock source;
+  PreTradeLock moved = std::move(source);
+  PreTradeLock target;
+
+  ASSERT_TRUE(moved);
+  ASSERT_FALSE(source);
+  EXPECT_THROW(target.Merge(source), openpit::Error);
+}
+
+TEST(ExecutionReport, CopyWithFillLockIsIndependent) {
+  openpit::model::ExecutionReport report;
+  report.fill.emplace();
+  report.fill->lock.emplace();
+  report.fill->lock->Push(kDefaultGroup, Price::FromString("5"));
+
+  openpit::model::ExecutionReport copy = report;
+  copy.fill->lock->Push(kDefaultGroup, Price::FromString("6"));
+
+  EXPECT_EQ(report.fill->lock->Len(), 1u);
+  EXPECT_EQ(copy.fill->lock->Len(), 2u);
+}
+
+TEST(FillSerialization, MovedFromLockFailsBeforeEngineSubmission) {
+  openpit::model::Fill fill;
+  fill.lock.emplace();
+  PreTradeLock detached = std::move(*fill.lock);
+  ASSERT_TRUE(detached);
+  ASSERT_TRUE(fill.lock.has_value());
+  EXPECT_FALSE(*fill.lock);
+
+  openpit::model::ExecutionReport report;
+  report.fill = std::move(fill);
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::OrderValidationPolicy{});
+  const openpit::Engine engine = builder.Build();
+
+  EXPECT_THROW(static_cast<void>(engine.ApplyExecutionReport(report)),
+               openpit::Error);
+}
+
 TEST(Reservation, EmptyHandleOperationsThrow) {
   openpit::pretrade::Reservation reservation;
 
@@ -241,24 +372,12 @@ TEST(PolicyDecision, EmptyDecisionAccepts) {
 
 TEST(PolicyDecision, PushRejectMakesItRejected) {
   PolicyDecision decision;
-  PushReject(decision,
-             MakeTypeMismatchReject("p", RejectScope::Order, RejectCode::Other,
-                                    "reason", "Expected"));
+  PushReject(decision, Reject("p", RejectScope::Order, RejectCode::Other,
+                              "reason", "Expected"));
   ASSERT_TRUE(decision.IsRejected());
   ASSERT_EQ(decision.rejects.size(), 1u);
   EXPECT_EQ(decision.rejects.front().policy, "p");
   EXPECT_EQ(decision.rejects.front().details, "Expected");
-}
-
-TEST(Reject, MakeTypeMismatchRejectCarriesFields) {
-  const Reject reject = MakeTypeMismatchReject(
-      "LossGuard", RejectScope::Account, RejectCode::InvalidFieldValue, "bad",
-      "BrokerOrder");
-  EXPECT_EQ(reject.policy, "LossGuard");
-  EXPECT_EQ(reject.scope, RejectScope::Account);
-  EXPECT_EQ(reject.code, RejectCode::InvalidFieldValue);
-  EXPECT_EQ(reject.reason, "bad");
-  EXPECT_EQ(reject.details, "BrokerOrder");
 }
 
 //------------------------------------------------------------------------------
@@ -285,12 +404,12 @@ TEST(Context, AccountGroupIsAbsentWithoutNativeContext) {
 //------------------------------------------------------------------------------
 // Custom policy via the adapter templates (SafeSlow).
 //
-// A client order payload deriving from openpit::Order, a client policy with the
-// adapter-expected surface, and the PolicyAdapter / StartPolicyAdapter bridging
-// them. The adapter produces a deterministic type-mismatch reject when the
-// order is not the client type, and the happy path otherwise.
+// A client order payload deriving from openpit::model::Order, a client policy
+// with the adapter-expected surface, and the PolicyAdapter / StartPolicyAdapter
+// bridging them. The adapter throws on a type mismatch and accepts the happy
+// path otherwise.
 
-struct DeskOrder : public openpit::Order {
+struct DeskOrder : public openpit::model::Order {
   std::uint32_t lots = 0;
 };
 
@@ -301,9 +420,9 @@ class DeskPolicy {
   [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
       const DeskOrder& order) const {
     if (order.lots == 0) {
-      return MakeTypeMismatchReject(Name(), RejectScope::Order,
-                                    RejectCode::InvalidFieldValue,
-                                    "lots must be non-zero", "non-zero lots");
+      return Reject(std::string(Name()), RejectScope::Order,
+                    RejectCode::InvalidFieldValue, "lots must be non-zero",
+                    "non-zero lots");
     }
     return std::nullopt;
   }
@@ -312,10 +431,9 @@ class DeskPolicy {
                             PolicyDecision& decision) const {
     static_cast<void>(context);
     if (order.lots > 100) {
-      PushReject(decision,
-                 MakeTypeMismatchReject(Name(), RejectScope::Order,
-                                        RejectCode::OrderQtyExceedsLimit,
-                                        "lots exceed limit", "max 100 lots"));
+      PushReject(decision, Reject(std::string(Name()), RejectScope::Order,
+                                  RejectCode::OrderQtyExceedsLimit,
+                                  "lots exceed limit", "max 100 lots"));
     }
   }
 
@@ -355,19 +473,23 @@ TEST(PolicyAdapter, SafeSlowMainStageRejectsOnBusinessRule) {
   EXPECT_EQ(decision.rejects.front().code, RejectCode::OrderQtyExceedsLimit);
 }
 
-TEST(PolicyAdapter, SafeSlowMainStageRejectsOnTypeMismatch) {
+TEST(PolicyAdapter, SafeSlowMainStageThrowsOnTypeMismatch) {
   DeskMainAdapter adapter{DeskPolicy{}};
-  // A plain model::Order is NOT a DeskOrder, so SafeSlow must produce a
-  // deterministic type-mismatch reject rather than dispatch to the policy.
+  // A plain model::Order is not a DeskOrder, so SafeSlow must fail before the
+  // policy can run.
   openpit::model::Order foreign;
   const Context context(foreign);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
-  ASSERT_TRUE(decision.IsRejected());
-  EXPECT_EQ(decision.rejects.front().scope, RejectScope::Order);
-  EXPECT_EQ(decision.rejects.front().code, RejectCode::Other);
-  EXPECT_EQ(decision.rejects.front().policy, "DeskPolicy");
+  try {
+    adapter.PerformPreTradeCheck(context, decision);
+    FAIL() << "expected the mismatched policy adapter to throw";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.what(), testing::HasSubstr("DeskPolicy"));
+    EXPECT_THAT(error.what(), testing::HasSubstr(typeid(DeskOrder).name()));
+    EXPECT_THAT(error.what(), testing::HasSubstr(typeid(foreign).name()));
+  }
+  EXPECT_FALSE(decision.IsRejected());
 }
 
 TEST(StartPolicyAdapter, SafeSlowStartStageHappyPathAndTypeMismatch) {
@@ -378,9 +500,60 @@ TEST(StartPolicyAdapter, SafeSlowStartStageHappyPathAndTypeMismatch) {
   EXPECT_FALSE(adapter.CheckPreTradeStart(order).has_value());
 
   openpit::model::Order foreign;
-  const std::optional<Reject> reject = adapter.CheckPreTradeStart(foreign);
-  ASSERT_TRUE(reject.has_value());
-  EXPECT_EQ(reject->code, RejectCode::Other);
+  try {
+    static_cast<void>(adapter.CheckPreTradeStart(foreign));
+    FAIL() << "expected the mismatched policy adapter to throw";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.what(), testing::HasSubstr("DeskPolicy"));
+    EXPECT_THAT(error.what(), testing::HasSubstr(typeid(DeskOrder).name()));
+    EXPECT_THAT(error.what(), testing::HasSubstr(typeid(foreign).name()));
+  }
+}
+
+struct DeskReport : public openpit::model::ExecutionReport {};
+
+class DeskReportPolicy {
+ public:
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "DeskReportPolicy";
+  }
+
+  void PerformPreTradeCheck(const openpit::model::Order& order,
+                            const Context& context,
+                            PolicyDecision& decision) const {
+    static_cast<void>(order);
+    static_cast<void>(context);
+    static_cast<void>(decision);
+  }
+
+  [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
+  ApplyExecutionReport(const openpit::pretrade::PostTradeContext&,
+                       const DeskReport&,
+                       openpit::pretrade::PostTradeAdjustments&,
+                       openpit::pretrade::PostTradePnls&) const {
+    return {};
+  }
+};
+
+using DeskReportAdapter = openpit::pretrade::PolicyAdapterWithSafeSlowArgType<
+    DeskReportPolicy, openpit::model::Order, DeskReport>;
+
+TEST(PolicyAdapter, SafeSlowPostTradeMismatchRethrowsThroughEngine) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  CustomPolicy<DeskReportAdapter> policy("DeskReportPolicy",
+                                         DeskReportAdapter{DeskReportPolicy{}});
+  builder.Add(policy);
+  const openpit::Engine engine = builder.Build();
+  const openpit::model::ExecutionReport foreign;
+
+  try {
+    static_cast<void>(engine.ApplyExecutionReport(foreign));
+    FAIL() << "expected the mismatched policy adapter to throw";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.what(), testing::HasSubstr("DeskReportPolicy"));
+    EXPECT_THAT(error.what(), testing::HasSubstr(typeid(DeskReport).name()));
+    EXPECT_THAT(error.what(), testing::HasSubstr(typeid(foreign).name()));
+  }
 }
 
 TEST(PolicyAdapter, UnifiedAdapterDelegatesOptionalStartHook) {
@@ -563,10 +736,9 @@ class DryRunHookPolicy {
                             PolicyDecision& decision) const {
     static_cast<void>(context);
     ++m_counters->main;
-    PushReject(decision,
-               MakeTypeMismatchReject("DryRunHookPolicy", RejectScope::Order,
-                                      RejectCode::Custom, "real path rejects",
-                                      "dry-run should not use this hook"));
+    PushReject(decision, Reject("DryRunHookPolicy", RejectScope::Order,
+                                RejectCode::Custom, "real path rejects",
+                                "dry-run should not use this hook"));
   }
 
   void PerformPreTradeCheckDryRun(const Context& context,
@@ -593,10 +765,9 @@ class DropCopyBlockingPolicy {
         ::openpit::accountadjustment::AccountOutcomeEntry(
             ::openpit::param::Asset("USD")));
     PushReject(decision,
-               MakeTypeMismatchReject(
-                   "DropCopyBlockingPolicy", RejectScope::Account,
-                   RejectCode::RiskLimitExceeded, "forced account block",
-                   "drop-copy must retain the block"));
+               Reject("DropCopyBlockingPolicy", RejectScope::Account,
+                      RejectCode::RiskLimitExceeded, "forced account block",
+                      "drop-copy must retain the block"));
   }
 };
 
@@ -616,10 +787,9 @@ class MissingFieldPolicy {
                             PolicyDecision& decision) const {
     static_cast<void>(context);
     PushReject(decision,
-               MakeTypeMismatchReject("MissingFieldPolicy", RejectScope::Order,
-                                      RejectCode::MissingRequiredField,
-                                      "missing limit price",
-                                      "policy needs a limit price"));
+               Reject("MissingFieldPolicy", RejectScope::Order,
+                      RejectCode::MissingRequiredField, "missing limit price",
+                      "policy needs a limit price"));
   }
 };
 
@@ -639,10 +809,9 @@ class DropCopyStartMutationPolicy {
     if (!m_fatal) {
       return std::nullopt;
     }
-    return MakeTypeMismatchReject(
-        "DropCopyStartMutationPolicy", RejectScope::Order,
-        RejectCode::MissingRequiredField, "missing field",
-        "forced after start-stage mutation");
+    return Reject("DropCopyStartMutationPolicy", RejectScope::Order,
+                  RejectCode::MissingRequiredField, "missing field",
+                  "forced after start-stage mutation");
   }
 
  private:
@@ -975,6 +1144,16 @@ void SeedSpotFundsLifecycleAccount(const openpit::Engine& engine,
   ASSERT_TRUE(result.Passed());
 }
 
+[[nodiscard]] openpit::model::Order SpotFundsSellLifecycleOrder(
+    const openpit::param::AccountId accountId) {
+  return openpit::model::Order::Limit(
+      openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                 ::openpit::param::Asset("USD")),
+      accountId, openpit::model::Side::Sell,
+      openpit::model::TradeAmount::OfQuantity(Quantity::FromString("2")),
+      Price::FromString("150"));
+}
+
 [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
 ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
                             const openpit::param::AccountId accountId) {
@@ -997,8 +1176,7 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   operation.side = openpit::model::Side::Buy;
 
   openpit::model::Fill fill;
-  fill.lock =
-      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
+  fill.lock = std::move(lock);
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
                                          Quantity::FromString("1"));
   fill.leavesQuantity = Quantity::FromString("0");
@@ -1008,6 +1186,54 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   report.operation = std::move(operation);
   report.fill = std::move(fill);
   return engine.ApplyExecutionReport(report).accountBlocks;
+}
+
+struct SpotFundsBlockedFillSetup {
+  openpit::Engine engine;
+  openpit::model::ExecutionReportOperation operation;
+};
+
+[[nodiscard]] std::optional<SpotFundsBlockedFillSetup>
+MakeSpotFundsBlockedFillSetup() {
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83023);
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  openpit::Engine engine = builder.Build();
+  engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
+
+  openpit::accountadjustment::AccountAdjustment seed;
+  openpit::accountadjustment::BalanceOperation balance;
+  balance.asset = ::openpit::param::Asset("AAPL");
+  seed.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(balance));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = openpit::param::AdjustmentAmount::Absolute(
+      openpit::param::PositionSize::FromString("5"));
+  seed.amount = std::move(amount);
+  const openpit::AdjustmentResult adjustment = engine.ApplyAccountAdjustment(
+      account,
+      std::vector<openpit::accountadjustment::AccountAdjustment>{seed});
+  if (!adjustment.Passed()) {
+    ADD_FAILURE() << "ApplyAccountAdjustment() failed";
+    return std::nullopt;
+  }
+
+  openpit::pretrade::ExecuteResult execution =
+      engine.ExecutePreTrade(SpotFundsSellLifecycleOrder(account));
+  if (!execution.Passed()) {
+    ADD_FAILURE() << "ExecutePreTrade() rejects = " << execution.rejects.size()
+                  << ", want none";
+    return std::nullopt;
+  }
+  execution.reservation->Commit();
+
+  openpit::model::ExecutionReportOperation operation;
+  operation.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
+  operation.accountId = account;
+  operation.side = openpit::model::Side::Sell;
+  return SpotFundsBlockedFillSetup{std::move(engine), std::move(operation)};
 }
 
 void ExpectSpotFundsPnlPreTradeReject(
@@ -1080,6 +1306,54 @@ TEST(BuiltinPolicy, SpotFundsWithoutPnlBarriersExecutesNormalOrder) {
 
   SeedSpotFundsLifecycleAccount(engine, account);
   EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, account).empty());
+}
+
+TEST(BuiltinPolicy, SpotFundsAbsentFillLockBlocksAccount) {
+  std::optional<SpotFundsBlockedFillSetup> setup =
+      MakeSpotFundsBlockedFillSetup();
+  ASSERT_TRUE(setup.has_value());
+
+  openpit::model::Fill fill;
+  EXPECT_FALSE(fill.lock.has_value());
+  fill.lastTrade = openpit::model::Trade(Price::FromString("150"),
+                                         Quantity::FromString("2"));
+  fill.leavesQuantity = Quantity::FromString("0");
+  fill.isFinal = true;
+
+  openpit::model::ExecutionReport report;
+  report.operation = std::move(setup->operation);
+  report.fill = std::move(fill);
+
+  const openpit::PostTradeResult result =
+      setup->engine.ApplyExecutionReport(report);
+  ASSERT_EQ(result.accountBlocks.size(), 1u);
+  EXPECT_EQ(result.accountBlocks.front().code,
+            RejectCode::MissingRequiredField);
+}
+
+TEST(BuiltinPolicy, SpotFundsEmptyFillLockBlocksAccount) {
+  std::optional<SpotFundsBlockedFillSetup> setup =
+      MakeSpotFundsBlockedFillSetup();
+  ASSERT_TRUE(setup.has_value());
+
+  openpit::model::Fill fill;
+  fill.lock.emplace();
+  ASSERT_TRUE(fill.lock.has_value());
+  EXPECT_TRUE(fill.lock->IsEmpty());
+  fill.lastTrade = openpit::model::Trade(Price::FromString("150"),
+                                         Quantity::FromString("2"));
+  fill.leavesQuantity = Quantity::FromString("0");
+  fill.isFinal = true;
+
+  openpit::model::ExecutionReport report;
+  report.operation = std::move(setup->operation);
+  report.fill = std::move(fill);
+
+  const openpit::PostTradeResult result =
+      setup->engine.ApplyExecutionReport(report);
+  ASSERT_EQ(result.accountBlocks.size(), 1u);
+  EXPECT_EQ(result.accountBlocks.front().code,
+            RejectCode::MissingRequiredField);
 }
 
 TEST(BuiltinPolicy, SpotFundsOverridesBuildWithInstrumentIdWrapper) {
@@ -1270,8 +1544,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
       openpit::param::Fee::FromString("0.25"), openpit::param::Asset("USD"));
   fill.leavesQuantity = Quantity::FromString("0");
   fill.isFinal = true;
-  fill.lock =
-      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
+  fill.lock = std::move(lock);
   openpit::model::ExecutionReport report;
   report.operation = std::move(operation);
   report.fill = std::move(fill);
@@ -1350,8 +1623,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeBarrierRechecksChangedCurrency) {
   operation.accountId = accountId;
   operation.side = openpit::model::Side::Buy;
   openpit::model::Fill fill;
-  fill.lock =
-      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
+  fill.lock = std::move(lock);
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
                                          Quantity::FromString("1"));
   fill.fee = fee;
@@ -1637,7 +1909,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl) {
 //------------------------------------------------------------------------------
 // A gmock seam over the policy callback: confirms the adapter dispatches the
 // main-stage check to the underlying policy object exactly once on the happy
-// path, and not at all on a type mismatch (SafeSlow short-circuits).
+// path, and not at all on a type mismatch (SafeSlow throws first).
 //
 // gmock mock objects are neither copyable nor movable, while the adapter stores
 // its policy by value, so the policy stored in the adapter is a thin movable
@@ -1694,8 +1966,7 @@ TEST(PolicyAdapterMock, DoesNotDispatchOnTypeMismatch) {
   openpit::model::Order foreign;
   const Context context(foreign);
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
-  EXPECT_TRUE(decision.IsRejected());
+  EXPECT_THROW(adapter.PerformPreTradeCheck(context, decision), openpit::Error);
 }
 
 }  // namespace

@@ -62,10 +62,9 @@ define_optional!(
 
 /// Raw reason code for a realized-PnL calculation halt.
 ///
-/// This is a primitive rather than a Rust enum so callers can pass arbitrary
-/// bytes without creating an invalid Rust enum discriminant at the FFI
-/// boundary. Inbound values are validated before conversion to
-/// `OpenPitPnlHaltReason` values.
+/// This is a primitive rather than an enum so callers can pass arbitrary bytes
+/// without creating an invalid discriminant at the FFI boundary. Inbound
+/// values are validated before conversion to `OpenPitPnlHaltReason` values.
 ///
 /// When failures coincide, SpotFunds uses this priority from highest to lowest:
 /// `OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW`,
@@ -127,16 +126,16 @@ define_optional!(
 /// Account-level realized-PnL result for one account.
 ///
 /// When `halt_reason` is `OPENPIT_PNL_HALT_REASON_NONE`, `amount` is
-/// authoritative. Otherwise
-/// `halt_reason` explains why `amount` is not authoritative; do not interpret
-/// it as zero or read any stored PnL value as current. Position accumulators
-/// are independent. SpotFunds engages the account line only for a realizing
-/// fill or a nonzero fee. Opening, same-direction, and zero-quantity fills
-/// without a nonzero fee, plus zero fees alone, emit no outcome and require no
-/// account currency or FX for this line. A nonzero fee engages both position
-/// and account rows regardless of fill quantity. SpotFunds emits a halted
-/// account outcome only for the operation that transitions the accumulator to
-/// halted; later operations omit the unchanged halt.
+/// authoritative. Otherwise `halt_reason` explains why `amount` is not
+/// authoritative; do not interpret it as zero or read any stored PnL value as
+/// current. Position accumulators are independent. SpotFunds engages the
+/// account line only for a realizing fill or a nonzero fee. Opening,
+/// same-direction, and zero-quantity fills without a nonzero fee, plus zero
+/// fees alone, emit no outcome and require no account currency or FX for this
+/// line. A nonzero fee engages both position and account rows regardless of
+/// fill quantity. SpotFunds emits a halted account outcome only for the
+/// operation that transitions the accumulator to halted; later
+/// operations omit the unchanged halt.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct OpenPitAccountPnlOutcome {

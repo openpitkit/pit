@@ -21,8 +21,7 @@
 #include <cmath>
 #include <cstdint>
 
-// HdrHistogram bucketing reproduced from the canonical reference algorithm (the
-// same one HdrHistogram/hdrhistogram-go uses): a unit-magnitude floor plus
+// HdrHistogram bucketing uses a unit-magnitude floor plus
 // log-linear sub-buckets sized for the requested significant figures, so two
 // values within the resolution band map to the same bucket. The index math
 // follows the reference implementation directly (countsIndexFor,

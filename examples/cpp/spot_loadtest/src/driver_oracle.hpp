@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 
-// The strict per-op oracle (mirror of oracle.go).
+// The strict per-operation oracle.
 //
 // Checks every engine response against the generator's prediction and (at end
 // of run) the aggregate fund-conservation / no-oversell invariants. Safe for

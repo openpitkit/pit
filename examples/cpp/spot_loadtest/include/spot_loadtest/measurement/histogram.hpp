@@ -23,12 +23,9 @@
 
 // HdrHistogram-backed latency recording.
 //
-// Mirror of: examples/go/spot_loadtest/internal/measurement/histogram.go
-//
-// A faithful, self-contained HdrHistogram (log-linear bucketed histogram with a
-// configurable number of significant figures) reproducing the semantics of the
-// vendored HdrHistogram/hdrhistogram-go the harness uses. Every latency
-// histogram uses [1 µs .. 60 s] at 3 significant figures.
+// A self-contained HdrHistogram uses log-linear buckets with configurable
+// significant figures. Every latency histogram uses [1 µs .. 60 s] at three
+// significant figures.
 //
 // # Out-of-range clamping (methodology invariant)
 //
@@ -60,7 +57,7 @@ struct Percentiles {
   std::int64_t count = 0;
 };
 
-// A faithful HdrHistogram over [lowest, highest] at `sigFig` significant
+// An HdrHistogram over [lowest, highest] at `sigFig` significant
 // figures, recording int64 nanosecond values.
 class Histogram {
 public:

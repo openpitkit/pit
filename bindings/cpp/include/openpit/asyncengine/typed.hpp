@@ -51,7 +51,9 @@
 //
 // DRIVER. `EngineAdapter` adapts a borrowed `openpit::Engine&` to the driver
 // seam and is the default driver of `TypedAsyncEngine`; a test or interposing
-// layer can supply any type exposing the same members.
+// layer can supply any type exposing the same members. The borrowed engine
+// object must remain alive at the same address and must not be moved while an
+// adapter or async wrapper refers to it.
 //
 // ACCOUNT PINNING. Every named method routes through the per-account queue
 // keyed by the order/report account id (read without mutating the caller's
@@ -73,12 +75,18 @@
 // model rather than a copy or a raw move.
 //
 // ERROR MODEL. A missing account id resolves the future with the value
-// `ErrorCode::MissingAccountId`. Stop/limit/cancel are the same value-typed
-// dispatch errors the generic layer uses. Pre-trade rejects and adjustment
-// batch rejects are values in the accepted-or-rejected tuple, not errors. A
-// runtime failure inside a driver call surfaces as `ErrorCode::TaskFailed`
-// carrying the thrown message. An exception from the engine never crosses the
-// worker boundary.
+// `ErrorCode::MissingAccountId`. Stop, queue-limit, and dispatch errors,
+// including `ErrorCode::SubmitCancelled`, are the same value-typed errors the
+// generic layer uses. `SubmitCancelled` means the task was never enqueued. For
+// a post-trade call, the already-occurred fact remains unregistered: a
+// reservation is not released and spot funds are not settled, so the caller
+// MUST retry. Pre-trade rejects and adjustment batch rejects are values in the
+// accepted-or-rejected tuple, not errors. A runtime failure inside a driver
+// call surfaces as `ErrorCode::TaskFailed` carrying the thrown message. An
+// exception from the engine never crosses the worker boundary.
+// A null payload is a precondition violation reported synchronously as
+// `openpit::Error` before work is queued, distinct from value-typed dispatch
+// errors.
 
 namespace openpit::asyncengine {
 
@@ -88,33 +96,47 @@ namespace openpit::asyncengine {
 /// \brief Adapter that exposes `openpit::Engine` methods to `TypedAsyncEngine`.
 //
 // Adapts a borrowed `openpit::Engine&` to the async driver seam. Non-owning:
-// the engine must outlive every async engine built over this driver. Copyable
-// and cheap (one pointer); the typed layer borrows it by reference like the
-// generic `AsyncEngine`. Each member is just the corresponding synchronous
-// engine call; the async layer supplies all concurrency.
+// the same engine object must remain alive at its original address and must not
+// be moved while any adapter or async engine built over it exists. Rvalue
+// engines are rejected at compile time. Copyable and cheap (one pointer); the
+// typed layer borrows it by reference like the generic `AsyncEngine`. Each
+// member is just the corresponding synchronous engine call; the async layer
+// supplies all concurrency.
 class EngineAdapter {
  public:
   explicit EngineAdapter(const ::openpit::Engine& engine) noexcept
       : m_engine(&engine) {}
+  EngineAdapter(::openpit::Engine&&) = delete;
+  EngineAdapter(const ::openpit::Engine&&) = delete;
 
   [[nodiscard]] ::openpit::pretrade::StartResult StartPreTrade(
-      const ::openpit::model::Order& order) const {
-    return m_engine->StartPreTrade(order);
+      std::unique_ptr<const ::openpit::Order> order) const {
+    return m_engine->StartPreTrade(std::move(order));
   }
 
   [[nodiscard]] ::openpit::pretrade::ExecuteResult ExecutePreTrade(
-      const ::openpit::model::Order& order) const {
-    return m_engine->ExecutePreTrade(order);
+      std::unique_ptr<const ::openpit::Order> order) const {
+    if (!order) {
+      throw ::openpit::Error("ExecutePreTrade requires a non-null order");
+    }
+    return m_engine->ExecutePreTrade(*order);
   }
 
   [[nodiscard]] ::openpit::pretrade::DropCopyResult ApplyDropCopy(
-      const ::openpit::model::Order& order) const {
-    return m_engine->ApplyDropCopy(order);
+      std::unique_ptr<const ::openpit::Order> order) const {
+    if (!order) {
+      throw ::openpit::Error("ApplyDropCopy requires a non-null order");
+    }
+    return m_engine->ApplyDropCopy(*order);
   }
 
   [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
-      const ::openpit::model::ExecutionReport& report) const {
-    return m_engine->ApplyExecutionReport(report);
+      std::unique_ptr<const ::openpit::ExecutionReport> report) const {
+    if (!report) {
+      throw ::openpit::Error(
+          "ApplyExecutionReport requires a non-null execution report");
+    }
+    return m_engine->ApplyExecutionReport(*report);
   }
 
   // Applies a batch adjustment, returning the (batch-reject-or-none, outcomes)
@@ -207,26 +229,33 @@ namespace detail {
 
 // Reads the account id off an order's operation view without mutating it.
 [[nodiscard]] inline std::optional<::openpit::param::AccountId> OrderAccountId(
-    const ::openpit::model::Order& order) {
-  if (!order.operation.has_value()) {
+    const ::openpit::Order& order) {
+  // Every client payload derives from `model::Order`; the base constructor is
+  // private. `nullopt` therefore means only that the account id is absent.
+  const auto& modelOrder = static_cast<const ::openpit::model::Order&>(order);
+  if (!modelOrder.operation.has_value()) {
     return std::nullopt;
   }
-  if (!order.operation->accountId.has_value()) {
+  if (!modelOrder.operation->accountId.has_value()) {
     return std::nullopt;
   }
-  return order.operation->accountId;
+  return modelOrder.operation->accountId;
 }
 
 // `extractReportAccountID`.
 [[nodiscard]] inline std::optional<::openpit::param::AccountId> ReportAccountId(
-    const ::openpit::model::ExecutionReport& report) {
-  if (!report.operation.has_value()) {
+    const ::openpit::ExecutionReport& report) {
+  // Every client payload derives from `model::ExecutionReport`; the base
+  // constructor is private. `nullopt` therefore means only no account id.
+  const auto& modelReport =
+      static_cast<const ::openpit::model::ExecutionReport&>(report);
+  if (!modelReport.operation.has_value()) {
     return std::nullopt;
   }
-  if (!report.operation->accountId.has_value()) {
+  if (!modelReport.operation->accountId.has_value()) {
     return std::nullopt;
   }
-  return report.operation->accountId;
+  return modelReport.operation->accountId;
 }
 
 // The shared "account id is not set on the order or report" failure, matching
@@ -705,10 +734,13 @@ class TypedAsyncEngine {
   // rejects on a policy reject. Resolves immediately with `MissingAccountId`
   // when the order carries no account id.
   [[nodiscard]] Future<StartOutcome<Driver>> StartPreTrade(
-      ::openpit::model::Order order,
+      std::unique_ptr<const ::openpit::Order> order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    if (!order) {
+      throw ::openpit::Error("StartPreTrade requires a non-null order");
+    }
     const std::optional<::openpit::param::AccountId> accountId =
-        detail::OrderAccountId(order);
+        detail::OrderAccountId(*order);
     if (!accountId.has_value()) {
       Promise<StartOutcome<Driver>> promise;
       Future<StartOutcome<Driver>> future = promise.GetFuture();
@@ -722,8 +754,9 @@ class TypedAsyncEngine {
     // so the returned future is always resolved exactly once.
     return m_engine->Call(
         pinned,
-        [engine, pinned, order = std::move(order)](Driver& driver) {
-          ::openpit::pretrade::StartResult result = driver.StartPreTrade(order);
+        [engine, pinned, order = std::move(order)](Driver& driver) mutable {
+          ::openpit::pretrade::StartResult result =
+              driver.StartPreTrade(std::move(order));
           if (!result.Passed()) {
             return StartOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
@@ -734,15 +767,33 @@ class TypedAsyncEngine {
         timeout);
   }
 
+  template <
+      typename OrderT,
+      std::enable_if_t<
+          std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>>, int> = 0>
+  [[nodiscard]] Future<StartOutcome<Driver>> StartPreTrade(
+      OrderT&& order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return StartPreTrade(
+        ::openpit::detail::OwnExactPolymorphic<::openpit::Order>(
+            std::forward<OrderT>(order),
+            "StartPreTrade cannot own a base-typed reference to a derived "
+            "order; pass std::unique_ptr<const openpit::Order> instead"),
+        timeout);
+  }
+
   // Enqueues a full pre-trade pipeline call for `order`, pinned to its account.
   // The future resolves with an `ExecuteOutcome`: a non-null reservation on
   // accept, populated rejects on a policy reject. Resolves immediately with
   // `MissingAccountId` when the order carries no account id.
   [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTrade(
-      ::openpit::model::Order order,
+      std::unique_ptr<const ::openpit::Order> order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    if (!order) {
+      throw ::openpit::Error("ExecutePreTrade requires a non-null order");
+    }
     const std::optional<::openpit::param::AccountId> accountId =
-        detail::OrderAccountId(order);
+        detail::OrderAccountId(*order);
     if (!accountId.has_value()) {
       Promise<ExecuteOutcome<Driver>> promise;
       Future<ExecuteOutcome<Driver>> future = promise.GetFuture();
@@ -753,9 +804,9 @@ class TypedAsyncEngine {
     AsyncEngine<Driver>* engine = m_engine.get();
     return m_engine->Call(
         pinned,
-        [engine, pinned, order = std::move(order)](Driver& driver) {
+        [engine, pinned, order = std::move(order)](Driver& driver) mutable {
           ::openpit::pretrade::ExecuteResult result =
-              driver.ExecutePreTrade(order);
+              driver.ExecutePreTrade(std::move(order));
           if (!result.Passed()) {
             return ExecuteOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
@@ -766,6 +817,21 @@ class TypedAsyncEngine {
         timeout);
   }
 
+  template <
+      typename OrderT,
+      std::enable_if_t<
+          std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>>, int> = 0>
+  [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTrade(
+      OrderT&& order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return ExecutePreTrade(
+        ::openpit::detail::OwnExactPolymorphic<::openpit::Order>(
+            std::forward<OrderT>(order),
+            "ExecutePreTrade cannot own a base-typed reference to a derived "
+            "order; pass std::unique_ptr<const openpit::Order> instead"),
+        timeout);
+  }
+
   // Enqueues a drop-copy call for `order`, pinned to its account. The future
   // resolves with a `DropCopyOutcome`: a non-null operation on accept,
   // populated rejects on a fatal evaluation failure. Resolves immediately with
@@ -773,11 +839,24 @@ class TypedAsyncEngine {
   // requires one, and the engine rejects an unreadable one with
   // `MissingRequiredField` before any policy runs, so there is nothing to gain
   // by queueing such an order.
+  //
+  // `timeout` bounds only the wait for queue space. Before enqueue, a positive
+  // timeout can fail with `ErrorCode::SubmitCancelled`, and a dynamic strategy
+  // can fail with `ErrorCode::QueueLimit`. A hard stop can fail an enqueued or
+  // waiting call with `ErrorCode::Stopped`. The drop-copy fact is then
+  // unregistered, so the caller MUST retry.
+  //
+  // This overload always transfers ownership. Whenever a retry may be required,
+  // retain the upstream payload or an independent copy of the exact concrete
+  // order before submission; otherwise a failure consumes the only payload.
   [[nodiscard]] Future<DropCopyOutcome<Driver>> ApplyDropCopy(
-      ::openpit::model::Order order,
+      std::unique_ptr<const ::openpit::Order> order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    if (!order) {
+      throw ::openpit::Error("ApplyDropCopy requires a non-null order");
+    }
     const std::optional<::openpit::param::AccountId> accountId =
-        detail::OrderAccountId(order);
+        detail::OrderAccountId(*order);
     if (!accountId.has_value()) {
       Promise<DropCopyOutcome<Driver>> promise;
       Future<DropCopyOutcome<Driver>> future = promise.GetFuture();
@@ -788,9 +867,9 @@ class TypedAsyncEngine {
     AsyncEngine<Driver>* engine = m_engine.get();
     return m_engine->Call(
         pinned,
-        [engine, pinned, order = std::move(order)](Driver& driver) {
+        [engine, pinned, order = std::move(order)](Driver& driver) mutable {
           ::openpit::pretrade::DropCopyResult result =
-              driver.ApplyDropCopy(order);
+              driver.ApplyDropCopy(std::move(order));
           if (!result.Passed()) {
             return DropCopyOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
@@ -801,14 +880,61 @@ class TypedAsyncEngine {
         timeout);
   }
 
+  // A non-const rvalue order is moved; an lvalue or const rvalue is copied.
+  // Pass an lvalue to retain a retry payload. A named const object cast to an
+  // rvalue is copied, but only the named original survives for retry; an
+  // unnamed const rvalue temporary does not leave a caller-owned payload.
+  //
+  // The decayed static type of `order` must be a concrete subclass of
+  // `openpit::Order` and match the dynamic type. A payload whose decayed static
+  // type is exactly `openpit::Order` is rejected at compile time. A reference
+  // whose static type is a concrete intermediate base such as
+  // `openpit::model::Order`, but whose dynamic type is more derived, throws
+  // `openpit::Error` synchronously before ownership transfer. Type-erased
+  // callers must use the
+  // `std::unique_ptr<const openpit::Order>` overload and retain an upstream
+  // payload or independent concrete copy before transferring ownership.
+  //
+  // This overload has the same mandatory retry contract for
+  // `SubmitCancelled`, `QueueLimit`, and `Stopped` as the pointer overload.
+  template <
+      typename OrderT,
+      std::enable_if_t<
+          std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>>, int> = 0>
+  [[nodiscard]] Future<DropCopyOutcome<Driver>> ApplyDropCopy(
+      OrderT&& order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return ApplyDropCopy(
+        ::openpit::detail::OwnExactPolymorphic<::openpit::Order>(
+            std::forward<OrderT>(order),
+            "ApplyDropCopy cannot own a base-typed reference to a derived "
+            "order; pass std::unique_ptr<const openpit::Order> instead"),
+        timeout);
+  }
+
   // Enqueues a post-trade call for `report`, pinned to its account. Resolves
   // with the `PostTradeResult`, or immediately with `MissingAccountId` when the
   // report carries no account id.
+  //
+  // `timeout` bounds only the wait for queue space. Before enqueue, a positive
+  // timeout can fail with `ErrorCode::SubmitCancelled`, and a dynamic strategy
+  // can fail with `ErrorCode::QueueLimit`. A hard stop can fail an enqueued or
+  // waiting call with `ErrorCode::Stopped`. An execution that already occurred
+  // then remains unregistered: its reservation is not released and its spot
+  // funds are not settled. The caller MUST retry.
+  //
+  // This overload always transfers ownership. Whenever a retry may be required,
+  // retain the upstream message or an independent copy of the exact concrete
+  // report before submission; otherwise a failure consumes the only payload.
   [[nodiscard]] Future<::openpit::PostTradeResult> ApplyExecutionReport(
-      ::openpit::model::ExecutionReport report,
+      std::unique_ptr<const ::openpit::ExecutionReport> report,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    if (!report) {
+      throw ::openpit::Error(
+          "ApplyExecutionReport requires a non-null execution report");
+    }
     const std::optional<::openpit::param::AccountId> accountId =
-        detail::ReportAccountId(report);
+        detail::ReportAccountId(*report);
     if (!accountId.has_value()) {
       Promise<::openpit::PostTradeResult> promise;
       Future<::openpit::PostTradeResult> future = promise.GetFuture();
@@ -817,15 +943,62 @@ class TypedAsyncEngine {
     }
     return m_engine->Call(
         *accountId,
-        [report = std::move(report)](Driver& driver) {
-          return driver.ApplyExecutionReport(report);
+        [report = std::move(report)](Driver& driver) mutable {
+          return driver.ApplyExecutionReport(std::move(report));
         },
+        timeout);
+  }
+
+  // A non-const rvalue report is moved; an lvalue or const rvalue is copied.
+  // Copying deep-clones the pre-trade lock through the C ABI when the fill
+  // carries one, so it can throw. Pass an lvalue to retain a retry payload. A
+  // named const object cast to an rvalue is copied, but only the named original
+  // survives for retry; an unnamed const rvalue temporary does not leave a
+  // caller-owned payload.
+  //
+  // The decayed static type of `report` must be a concrete subclass of
+  // `openpit::ExecutionReport` and match the dynamic type. A payload whose
+  // decayed static type is exactly `openpit::ExecutionReport` is rejected at
+  // compile time. A reference whose static type is the concrete intermediate
+  // base `openpit::model::ExecutionReport`, but whose dynamic type is more
+  // derived, throws `openpit::Error` synchronously before this call creates a
+  // `Future`. The check precedes the copy or move, leaving the caller's report
+  // unchanged. Type-erased callers must use the
+  // `std::unique_ptr<const openpit::ExecutionReport>` overload and retain the
+  // upstream message or an independent concrete copy before ownership transfer.
+  //
+  // This overload has the same mandatory retry contract for
+  // `SubmitCancelled`, `QueueLimit`, and `Stopped` as the pointer overload.
+  template <typename ExecutionReportT,
+            std::enable_if_t<std::is_base_of_v<::openpit::ExecutionReport,
+                                               std::decay_t<ExecutionReportT>>,
+                             int> = 0>
+  [[nodiscard]] Future<::openpit::PostTradeResult> ApplyExecutionReport(
+      ExecutionReportT&& report,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return ApplyExecutionReport(
+        ::openpit::detail::OwnExactPolymorphic<::openpit::ExecutionReport>(
+            std::forward<ExecutionReportT>(report),
+            "ApplyExecutionReport cannot own a base-typed reference to a "
+            "derived execution report; pass std::unique_ptr<const "
+            "openpit::ExecutionReport> instead"),
         timeout);
   }
 
   // Enqueues a batch adjustment for `accountId` (supplied explicitly because
   // adjustments carry no account). Resolves with an `AdjustmentOutcome`: a
   // non-null batch error on reject, or outcomes and account blocks on accept.
+  //
+  // `timeout` bounds only the wait for queue space. A positive timeout can
+  // return `ErrorCode::SubmitCancelled` before enqueue, leaving an adjustment
+  // for an already-occurred fact unregistered. The caller MUST retry.
+  // `adjustments` is by value: passing an lvalue copies it and preserves the
+  // caller's batch for retry. Passing `std::move(...)` consumes it, so it
+  // cannot be resubmitted after `SubmitCancelled`, `QueueLimit`, or `Stopped`.
+  // The default non-positive timeout waits indefinitely; a hard stop returns
+  // `ErrorCode::Stopped`. A hard stop can abort an enqueued task before it
+  // starts, so a non-positive timeout does not remove the need to retain the
+  // batch.
   template <typename Adjustment>
   [[nodiscard]] Future<AdjustmentOutcome> ApplyAccountAdjustment(
       ::openpit::param::AccountId accountId,
@@ -1294,7 +1467,8 @@ class TypedBuilder {
 //
 // Convenience wrapper returned by `MakeTypedAsyncEngine`. It owns the adapter
 // object that the typed engine borrows, so callers do not need to manage a
-// separate driver lifetime for the common `openpit::Engine` case.
+// separate driver lifetime for the common `openpit::Engine` case. It does not
+// own the source engine, whose stable-address requirement still applies.
 class OwnedTypedAsyncEngine {
  public:
   using Driver = EngineAdapter;
@@ -1306,29 +1480,103 @@ class OwnedTypedAsyncEngine {
   ~OwnedTypedAsyncEngine() = default;
 
   [[nodiscard]] Future<StartOutcome<Driver>> StartPreTrade(
-      ::openpit::model::Order order,
+      std::unique_ptr<const ::openpit::Order> order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     return m_engine.StartPreTrade(std::move(order), timeout);
   }
 
+  template <
+      typename OrderT,
+      std::enable_if_t<
+          std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>>, int> = 0>
+  [[nodiscard]] Future<StartOutcome<Driver>> StartPreTrade(
+      OrderT&& order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return m_engine.StartPreTrade(std::forward<OrderT>(order), timeout);
+  }
+
   [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTrade(
-      ::openpit::model::Order order,
+      std::unique_ptr<const ::openpit::Order> order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     return m_engine.ExecutePreTrade(std::move(order), timeout);
   }
 
+  template <
+      typename OrderT,
+      std::enable_if_t<
+          std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>>, int> = 0>
+  [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTrade(
+      OrderT&& order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return m_engine.ExecutePreTrade(std::forward<OrderT>(order), timeout);
+  }
+
+  // Transfers ownership of `order`. On `SubmitCancelled`, `QueueLimit`, or
+  // `Stopped`, the caller MUST retry from a retained upstream payload or an
+  // independent copy of the exact concrete order.
   [[nodiscard]] Future<DropCopyOutcome<Driver>> ApplyDropCopy(
-      ::openpit::model::Order order,
+      std::unique_ptr<const ::openpit::Order> order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     return m_engine.ApplyDropCopy(std::move(order), timeout);
   }
 
+  // A non-const rvalue order is moved; an lvalue or const rvalue is copied.
+  // Pass an lvalue to retain a retry payload. An unnamed const rvalue temporary
+  // leaves no caller-owned payload. A payload whose decayed static type is
+  // exactly `openpit::Order` is rejected at compile time. A reference whose
+  // static type is a concrete intermediate base such as
+  // `openpit::model::Order`, but whose dynamic type is more derived, throws
+  // `openpit::Error` synchronously. Type-erased callers use the pointer
+  // overload and retain an independent payload before transferring ownership.
+  // On `SubmitCancelled`, `QueueLimit`, or `Stopped`, the caller MUST retry.
+  template <
+      typename OrderT,
+      std::enable_if_t<
+          std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>>, int> = 0>
+  [[nodiscard]] Future<DropCopyOutcome<Driver>> ApplyDropCopy(
+      OrderT&& order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return m_engine.ApplyDropCopy(std::forward<OrderT>(order), timeout);
+  }
+
+  // Transfers ownership of `report`. On `SubmitCancelled`, `QueueLimit`, or
+  // `Stopped`, the caller MUST retry from a retained upstream message or an
+  // independent copy of the exact concrete report.
   [[nodiscard]] Future<::openpit::PostTradeResult> ApplyExecutionReport(
-      ::openpit::model::ExecutionReport report,
+      std::unique_ptr<const ::openpit::ExecutionReport> report,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     return m_engine.ApplyExecutionReport(std::move(report), timeout);
   }
 
+  // A non-const rvalue report is moved; an lvalue or const rvalue is copied.
+  // Copying deep-clones a fill's pre-trade lock and can throw. Pass an lvalue
+  // to retain a retry payload. A named const object cast to an rvalue is
+  // copied, but only the named original survives for retry; an unnamed const
+  // rvalue temporary leaves no caller-owned payload.
+  //
+  // A payload whose decayed static type is exactly `openpit::ExecutionReport`
+  // is rejected at compile time. A reference whose static type is the concrete
+  // intermediate base `openpit::model::ExecutionReport`, but whose dynamic type
+  // is more derived, throws `openpit::Error` synchronously before ownership
+  // transfer. Type-erased callers must use the pointer overload and retain an
+  // upstream message or independent concrete copy before transfer.
+  //
+  // On `SubmitCancelled`, `QueueLimit`, or `Stopped`, the caller MUST retry.
+  template <typename ExecutionReportT,
+            std::enable_if_t<std::is_base_of_v<::openpit::ExecutionReport,
+                                               std::decay_t<ExecutionReportT>>,
+                             int> = 0>
+  [[nodiscard]] Future<::openpit::PostTradeResult> ApplyExecutionReport(
+      ExecutionReportT&& report,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return m_engine.ApplyExecutionReport(std::forward<ExecutionReportT>(report),
+                                         timeout);
+  }
+
+  // `adjustments` is by value: passing an lvalue copies it and keeps the
+  // caller's batch available, while passing an rvalue consumes it. The local
+  // batch is moved into the queued task. On `SubmitCancelled`, `QueueLimit`,
+  // or `Stopped`, the caller MUST retry from a retained batch.
   template <typename Adjustment>
   [[nodiscard]] Future<AdjustmentOutcome> ApplyAccountAdjustment(
       ::openpit::param::AccountId accountId,
@@ -1378,11 +1626,18 @@ class OwnedTypedAsyncEngine {
 /// \brief Builds a sharded typed async engine over `openpit::Engine`.
 //
 // Shortcut for the common production path. The returned wrapper owns the
-// `EngineAdapter`; the source engine must still outlive the async wrapper.
+// `EngineAdapter`; the same source engine object must outlive the async wrapper
+// at its original address and must not be moved. Rvalue engines are rejected at
+// compile time.
 [[nodiscard]] inline OwnedTypedAsyncEngine MakeTypedAsyncEngine(
     const ::openpit::Engine& engine, std::size_t workers) {
   auto driver = std::make_unique<EngineAdapter>(engine);
   return OwnedTypedAsyncEngine(std::move(driver), workers);
 }
+
+OwnedTypedAsyncEngine MakeTypedAsyncEngine(::openpit::Engine&&,
+                                           std::size_t) = delete;
+OwnedTypedAsyncEngine MakeTypedAsyncEngine(const ::openpit::Engine&&,
+                                           std::size_t) = delete;
 
 }  // namespace openpit::asyncengine

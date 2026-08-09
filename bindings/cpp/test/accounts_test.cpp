@@ -428,8 +428,8 @@ class ThrowingCommitPolicy {
 // Drives one order for `accountId` to a commit whose mutation callback throws:
 // the exception reaches this caller and the engine-wide block is armed.
 void ArmGlobalBlock(const Engine& engine, std::uint64_t accountId) {
-  openpit::pretrade::StartResult start =
-      engine.StartPreTrade(TestOrder(accountId));
+  const openpit::model::Order order = TestOrder(accountId);
+  openpit::pretrade::StartResult start = engine.StartPreTrade(order);
   ASSERT_TRUE(start.request.has_value());
   openpit::pretrade::ExecuteResult execute = start.request->Execute();
   ASSERT_TRUE(execute.reservation.has_value());

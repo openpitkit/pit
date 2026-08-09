@@ -29,11 +29,9 @@
 namespace spot_loadtest::measurement {
 
 //------------------------------------------------------------------------------
-// Windows (mirror of window.go)
+// Windows
 
-Windows::Windows(WindowUnit unit, std::int64_t opsSize,
-                 std::chrono::nanoseconds wallDur)
-    : m_unit(unit), m_opsSize(opsSize), m_wallDur(wallDur) {
+Windows::Windows(std::int64_t opsSize) : m_opsSize(opsSize) {
   m_current.start = Clock::now();
 }
 
@@ -52,17 +50,7 @@ WindowSnapshot Windows::SealCurrent(int index) {
 }
 
 void Windows::MaybeRotate() {
-  bool rotate = false;
-  switch (m_unit) {
-  case WindowUnit::Ops:
-    rotate = m_opsSize > 0 && m_current.opCount >= m_opsSize;
-    break;
-  case WindowUnit::Wall:
-    rotate =
-        m_wallDur.count() > 0 && (Clock::now() - m_current.start) >= m_wallDur;
-    break;
-  }
-  if (!rotate) {
+  if (m_opsSize <= 0 || m_current.opCount < m_opsSize) {
     return;
   }
   m_completed.push_back(SealCurrent(m_index));
@@ -99,6 +87,14 @@ void Windows::RecordServiceTime(std::chrono::nanoseconds d) {
   }
 }
 
+void Windows::RecordSubmitLag(std::chrono::nanoseconds d) {
+  const std::int64_t ns = ToNs(d);
+  std::lock_guard<std::mutex> lock(m_mutex);
+  if (m_mergedSubmitLag.RecordClamped(ns)) {
+    ++m_clamped;
+  }
+}
+
 void Windows::Snapshot(std::vector<WindowSnapshot> &outWindows,
                        Percentiles &outOrderCheck, Percentiles &outSettlement) {
   std::lock_guard<std::mutex> lock(m_mutex);
@@ -116,13 +112,18 @@ Percentiles Windows::ServiceTime() {
   return m_mergedServiceTime.Extract();
 }
 
+Percentiles Windows::SubmitLag() {
+  std::lock_guard<std::mutex> lock(m_mutex);
+  return m_mergedSubmitLag.Extract();
+}
+
 std::int64_t Windows::ClampedSamples() {
   std::lock_guard<std::mutex> lock(m_mutex);
   return m_clamped;
 }
 
 //------------------------------------------------------------------------------
-// Sink (mirror of sink.go)
+// Sink
 
 namespace {
 // 64-bit golden-ratio odd constant used to spread bits through the checksum.
@@ -182,6 +183,16 @@ void Sink::RecordServiceTime(std::chrono::nanoseconds latency) {
   m_windows->RecordServiceTime(latency);
 }
 
+void Sink::RecordSubmitLag(std::chrono::nanoseconds lag,
+                           std::chrono::nanoseconds maxLag) {
+  m_windows->RecordSubmitLag(lag);
+  if (lag <= maxLag) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(m_mutex);
+  ++m_submitLagBreaches;
+}
+
 void Sink::RecordFunding(bool accepted) {
   std::lock_guard<std::mutex> lock(m_mutex);
   --m_inFlight;
@@ -231,6 +242,7 @@ SinkStats Sink::Stats() {
   s.fundings = m_fundings;
   s.fundingAccepts = m_fundingAccepts;
   s.fundingRejects = m_fundingRejects;
+  s.submitLagBreaches = m_submitLagBreaches;
   s.backpressure = m_backpressure;
   s.handoffStalls = m_handoffStalls;
   s.maxWorkOverflow = m_maxWorkOverflow;
@@ -253,7 +265,7 @@ LiveCounters Sink::Live() {
 }
 
 //------------------------------------------------------------------------------
-// Snapshot (mirror of snapshot.go)
+// Snapshot
 
 namespace {
 // 1 warmup window when there is more than one window, 0 otherwise.
@@ -319,6 +331,7 @@ Snapshot Build(Windows &windows, Sink &sink, ObserverSink *observer,
   snap.steadyStateSettlement = ssSet;
   snap.warmupWindows = warmup;
   snap.serviceTime = windows.ServiceTime();
+  snap.submitLag = windows.SubmitLag();
   snap.throughput = throughput;
   snap.totalOrderChecks = stats.orderChecks;
   snap.totalSettlements = stats.settlements;
@@ -331,6 +344,7 @@ Snapshot Build(Windows &windows, Sink &sink, ObserverSink *observer,
   snap.totalFundingRejects = stats.fundingRejects;
   snap.achievedRejectRate = achieved;
   snap.maxInFlight = stats.maxInFlight;
+  snap.submitLagBreaches = stats.submitLagBreaches;
   snap.backpressure = stats.backpressure;
   snap.handoffStalls = stats.handoffStalls;
   snap.maxWorkOverflow = stats.maxWorkOverflow;

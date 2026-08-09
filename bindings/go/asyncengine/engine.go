@@ -208,6 +208,11 @@ func (t *applyDropCopyTask) abort(err error) { t.f.Resolve(nil, nil, err) }
 
 // ApplyExecutionReport enqueues a post-trade call for the report's
 // account. The report must have an operation with an account ID set.
+//
+// ctx bounds only the wait for queue space. If it is canceled or expires
+// before enqueue, the report is unapplied. For an execution that already
+// occurred, its reservation remains unreleased and its spot funds unsettled.
+// The caller MUST retry.
 func (e *AsyncEngine) ApplyExecutionReport(
 	ctx context.Context,
 	report model.ExecutionReport,
@@ -243,6 +248,8 @@ func (t *applyReportTask) abort(err error) {
 
 // ApplyAccountAdjustment enqueues a batch adjustment call. The account
 // ID is supplied explicitly because adjustments do not carry it.
+// If ctx is canceled or expires before queue space is available, the
+// adjustment is not enqueued and remains unapplied. The caller MUST retry.
 //
 // The future resolves with the synchronous batch result.
 func (e *AsyncEngine) ApplyAccountAdjustment(

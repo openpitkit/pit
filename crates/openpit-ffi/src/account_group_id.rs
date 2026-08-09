@@ -41,7 +41,7 @@ define_optional!(
 
 /// The reserved default account-group identifier. Every account belongs to this
 /// group until it is registered into another one, so no constructor may produce
-/// it. Mirrors `openpit::param::DEFAULT_ACCOUNT_GROUP`.
+/// it.
 pub const OPENPIT_DEFAULT_ACCOUNT_GROUP: OpenPitParamAccountGroupId = 0;
 
 const _: () =

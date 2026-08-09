@@ -26,10 +26,11 @@
 //! failures the `code` field carries a stable [`openpit::param::ErrorCode`]; for
 //! account-block failures it carries the `AccountBlockErrorKind` discriminant.
 //!
-//! Expected failures flow out as a `JsValue` from a `Result`. A Rust panic is
-//! not an expected failure but is still possible, so the panic boundary
-//! installed by [`crate::start`] converts it into an [`ErrorKind::Internal`]
-//! error built by the same factory (see [`internal_error`]).
+//! Expected failures flow out as a `JsValue` from a `Result`. A native panic in
+//! the Rust/WASM module is not an expected failure but is still possible, so
+//! the module-global panic boundary installed by [`crate::start`] converts it
+//! into an [`ErrorKind::Internal`] error built by the same factory (see
+//! [`internal_error`]).
 
 use js_sys::{Object, Reflect};
 use openpit::param::{Error as ParamError, ErrorCode};
@@ -103,7 +104,7 @@ pub enum ErrorKind {
     Type,
     /// JavaScript range/value validation failure.
     Range,
-    /// Rust panic caught at the WebAssembly boundary.
+    /// Native Rust/WASM module panic observed at the WebAssembly boundary.
     Internal,
 }
 
@@ -194,7 +195,8 @@ pub(crate) fn policy_callback_error(cause: JsValue, result: JsValue) -> JsValue 
     )
 }
 
-/// Builds the `InternalError` thrown when a Rust panic reaches the boundary.
+/// Builds the `InternalError` thrown when a native module panic reaches the
+/// boundary.
 ///
 /// `message` is the panic message together with its source location, so the
 /// JavaScript caller keeps a diagnosable report instead of a bare wasm trap.

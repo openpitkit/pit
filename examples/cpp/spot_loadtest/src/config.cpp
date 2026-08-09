@@ -22,12 +22,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace spot_loadtest::config {
@@ -37,6 +41,8 @@ namespace {
 struct Section {
   std::string name;
   std::map<std::string, std::string> keys;
+  std::map<std::string, std::size_t> keyLines;
+  std::size_t line = 0;
 };
 
 struct IniFile {
@@ -64,8 +70,8 @@ struct IniFile {
   return s.substr(a, b - a);
 }
 
-// Strips an inline ';' comment from a value (gopkg.in/ini.v1 semantics: ';' and
-// '#' start a comment). The baseline config relies on inline ';' comments.
+// Strips an inline ';' or '#' comment from a value. The baseline config
+// relies on inline ';' comments.
 [[nodiscard]] std::string StripInlineComment(const std::string &s) {
   for (std::size_t i = 0; i < s.size(); ++i) {
     if (s[i] == ';' || s[i] == '#') {
@@ -75,14 +81,73 @@ struct IniFile {
   return s;
 }
 
-[[nodiscard]] IniFile ParseIni(const std::string &content) {
+[[nodiscard]] std::string LineLabel(const std::string &path, std::size_t line) {
+  return "config " + path + " line " + std::to_string(line);
+}
+
+[[nodiscard]] const std::set<std::string> *
+AllowedKeys(const std::string &section) {
+  static const std::map<std::string, std::set<std::string>> kSchema = {
+      {"run",
+       {"seed", "total_ops", "duration", "window", "window_unit", "observer"}},
+      {"arrival", {"offered_rate"}},
+      {"report_delay", {"distribution", "mean", "sigma"}},
+      {"reject", {"target_rate", "tolerance"}},
+      {"accounts", {"count"}},
+      {"concurrency",
+       {"active_accounts", "submitter_workers", "max_submit_lag"}},
+      {"async_engine",
+       {"strategy", "max_queues", "idle_cleanup", "sharded_workers",
+        "queue_capacity", "slow_submit_threshold"}},
+      {"instruments", {"symbols", "settlement"}},
+      {"lifecycle", {"p_open", "p_add", "p_partial_close", "p_full_close"}},
+      {"funding", {"trigger", "amount", "seed", "top_up"}},
+  };
+  static const std::set<std::string> kCohortKeys = {
+      "weight",    "activity",     "reject_propensity",
+      "burst_len", "size_weights", "symbol_skew",
+      "zipf_s",
+  };
+
+  const auto schema = kSchema.find(section);
+  if (schema != kSchema.end()) {
+    return &schema->second;
+  }
+  constexpr const char *kCohortPrefix = "cohort.";
+  if (section.rfind(kCohortPrefix, 0) == 0 &&
+      section.size() > std::char_traits<char>::length(kCohortPrefix)) {
+    return &kCohortKeys;
+  }
+  return nullptr;
+}
+
+void ValidateSchema(const IniFile &file, const std::string &path) {
+  for (const Section &section : file.sections) {
+    const std::set<std::string> *allowed = AllowedKeys(section.name);
+    if (allowed == nullptr) {
+      throw ConfigError(LineLabel(path, section.line) + ": unknown section [" +
+                        section.name + "]");
+    }
+    for (const auto &[key, line] : section.keyLines) {
+      if (allowed->count(key) == 0) {
+        throw ConfigError(LineLabel(path, line) + " [" + section.name +
+                          "]: unknown key " + key);
+      }
+    }
+  }
+}
+
+[[nodiscard]] IniFile ParseIni(const std::string &content,
+                               const std::string &path) {
   IniFile file;
   Section current;
-  current.name = ""; // the unnamed default section.
   bool haveCurrent = false;
+  std::map<std::string, std::size_t> sectionLines;
   std::istringstream in(content);
   std::string line;
+  std::size_t lineNumber = 0;
   while (std::getline(in, line)) {
+    ++lineNumber;
     std::string trimmed = Trim(line);
     if (trimmed.empty() || trimmed[0] == ';' || trimmed[0] == '#') {
       continue;
@@ -93,29 +158,55 @@ struct IniFile {
       }
       current = Section{};
       current.name = Trim(trimmed.substr(1, trimmed.size() - 2));
+      current.line = lineNumber;
+      if (current.name.empty()) {
+        throw ConfigError(LineLabel(path, lineNumber) +
+                          ": section name must not be empty");
+      }
+      const auto [first, inserted] =
+          sectionLines.emplace(current.name, lineNumber);
+      if (!inserted) {
+        throw ConfigError(LineLabel(path, lineNumber) +
+                          ": duplicate section [" + current.name +
+                          "] first defined at line " +
+                          std::to_string(first->second));
+      }
       haveCurrent = true;
       continue;
     }
     const std::size_t eq = trimmed.find('=');
     if (eq == std::string::npos) {
-      continue;
+      throw ConfigError(LineLabel(path, lineNumber) +
+                        ": expected key = value or [section]");
+    }
+    if (!haveCurrent) {
+      throw ConfigError(LineLabel(path, lineNumber) +
+                        ": key appears before any section");
     }
     std::string key = Trim(trimmed.substr(0, eq));
     std::string value = Trim(StripInlineComment(trimmed.substr(eq + 1)));
-    if (!haveCurrent) {
-      haveCurrent = true;
+    if (key.empty()) {
+      throw ConfigError(LineLabel(path, lineNumber) + " [" + current.name +
+                        "]: key name must not be empty");
     }
-    current.keys[key] = value;
+    const auto [first, inserted] = current.keyLines.emplace(key, lineNumber);
+    if (!inserted) {
+      throw ConfigError(LineLabel(path, lineNumber) + " [" + current.name +
+                        "]: duplicate key " + key + " first defined at line " +
+                        std::to_string(first->second));
+    }
+    current.keys.emplace(std::move(key), std::move(value));
   }
   if (haveCurrent) {
     file.sections.push_back(std::move(current));
   }
+  ValidateSchema(file, path);
   return file;
 }
 
-// Parses an unsigned integer the way gopkg.in/ini.v1 Uint64 does: a leading
-// "0x"/"0X" is hex, "0o" octal, "0b" binary, otherwise base 10. Returns nullopt
-// on any malformed input.
+// Parses an unsigned integer: a leading "0x" or "0X" is hexadecimal,
+// "0o" is octal, "0b" is binary, and every other value is decimal. Returns
+// nullopt on malformed input.
 [[nodiscard]] std::optional<std::uint64_t> ParseUint(const std::string &raw) {
   std::string s = Trim(raw);
   if (s.empty()) {
@@ -155,8 +246,13 @@ struct IniFile {
     if (digit >= base) {
       return std::nullopt;
     }
-    value = value * static_cast<std::uint64_t>(base) +
-            static_cast<std::uint64_t>(digit);
+    const std::uint64_t unsignedDigit = static_cast<std::uint64_t>(digit);
+    const std::uint64_t unsignedBase = static_cast<std::uint64_t>(base);
+    if (value > (std::numeric_limits<std::uint64_t>::max() - unsignedDigit) /
+                    unsignedBase) {
+      return std::nullopt;
+    }
+    value = value * unsignedBase + unsignedDigit;
   }
   return value;
 }
@@ -175,14 +271,30 @@ struct IniFile {
   if (i >= s.size()) {
     return std::nullopt;
   }
-  std::int64_t value = 0;
+  const std::uint64_t limit =
+      negative ? static_cast<std::uint64_t>(
+                     std::numeric_limits<std::int64_t>::max()) +
+                     1
+               : static_cast<std::uint64_t>(
+                     std::numeric_limits<std::int64_t>::max());
+  std::uint64_t value = 0;
   for (; i < s.size(); ++i) {
     if (s[i] < '0' || s[i] > '9') {
       return std::nullopt;
     }
-    value = value * 10 + (s[i] - '0');
+    const std::uint64_t digit = static_cast<std::uint64_t>(s[i] - '0');
+    if (value > (limit - digit) / 10) {
+      return std::nullopt;
+    }
+    value = value * 10 + digit;
   }
-  return negative ? -value : value;
+  if (!negative) {
+    return static_cast<std::int64_t>(value);
+  }
+  if (value == limit) {
+    return std::numeric_limits<std::int64_t>::min();
+  }
+  return -static_cast<std::int64_t>(value);
 }
 
 [[nodiscard]] std::optional<double> ParseDouble(const std::string &raw) {
@@ -193,7 +305,7 @@ struct IniFile {
   try {
     std::size_t pos = 0;
     const double v = std::stod(s, &pos);
-    if (pos != s.size()) {
+    if (pos != s.size() || !std::isfinite(v)) {
       return std::nullopt;
     }
     return v;
@@ -202,10 +314,118 @@ struct IniFile {
   }
 }
 
-// Parses a Go-style duration string (e.g. "5s", "2ms", "1m", "250ms", "-1s",
-// "0s"). Supports ns/us/µs/ms/s/m/h units and a leading sign. Returns nullopt
-// on malformed input. Matches time.ParseDuration closely enough for the
-// harness.
+struct DecimalNanoseconds {
+  std::vector<unsigned char> fractionalDigits;
+  std::uint64_t whole = 0;
+};
+
+[[nodiscard]] std::optional<std::pair<std::string, std::size_t>>
+ParseDecimalDigits(const std::string &number) {
+  std::string digits;
+  digits.reserve(number.size());
+  std::size_t scale = 0;
+  bool sawDecimalPoint = false;
+  for (char c : number) {
+    if (c >= '0' && c <= '9') {
+      digits.push_back(c);
+      if (sawDecimalPoint) {
+        ++scale;
+      }
+    } else if (c == '.' && !sawDecimalPoint) {
+      sawDecimalPoint = true;
+    } else {
+      return std::nullopt;
+    }
+  }
+  if (digits.empty()) {
+    return std::nullopt;
+  }
+  return std::make_pair(std::move(digits), scale);
+}
+
+[[nodiscard]] std::string MultiplyDecimalDigits(const std::string &digits,
+                                                std::uint64_t multiplier) {
+  std::string product;
+  product.reserve(digits.size() + 16);
+  std::uint64_t carry = 0;
+  for (auto it = digits.rbegin(); it != digits.rend(); ++it) {
+    const std::uint64_t value =
+        static_cast<std::uint64_t>(*it - '0') * multiplier + carry;
+    product.push_back(static_cast<char>('0' + value % 10));
+    carry = value / 10;
+  }
+  while (carry != 0) {
+    product.push_back(static_cast<char>('0' + carry % 10));
+    carry /= 10;
+  }
+  std::reverse(product.begin(), product.end());
+  const std::size_t firstNonzero = product.find_first_not_of('0');
+  return firstNonzero == std::string::npos ? "0" : product.substr(firstNonzero);
+}
+
+[[nodiscard]] bool AddDecimalNanoseconds(DecimalNanoseconds &total,
+                                         const std::string &number,
+                                         std::uint64_t unitNanoseconds,
+                                         std::uint64_t limit) {
+  const auto parsed = ParseDecimalDigits(number);
+  if (!parsed) {
+    return false;
+  }
+  const std::string product =
+      MultiplyDecimalDigits(parsed->first, unitNanoseconds);
+  const std::size_t scale = parsed->second;
+  const std::size_t wholeDigits =
+      product.size() > scale ? product.size() - scale : 0;
+
+  const std::uint64_t remaining = limit - total.whole;
+  std::uint64_t componentWhole = 0;
+  for (std::size_t i = 0; i < wholeDigits; ++i) {
+    const std::uint64_t digit = static_cast<std::uint64_t>(product[i] - '0');
+    if (componentWhole > remaining / 10 ||
+        (componentWhole == remaining / 10 && digit > remaining % 10)) {
+      return false;
+    }
+    componentWhole = componentWhole * 10 + digit;
+  }
+  total.whole += componentWhole;
+
+  if (scale == 0) {
+    return true;
+  }
+  std::vector<unsigned char> componentFraction(scale, 0);
+  const std::size_t copiedDigits = std::min(scale, product.size());
+  const std::size_t productStart = product.size() - copiedDigits;
+  const std::size_t fractionStart = scale - copiedDigits;
+  for (std::size_t i = 0; i < copiedDigits; ++i) {
+    componentFraction[fractionStart + i] =
+        static_cast<unsigned char>(product[productStart + i] - '0');
+  }
+
+  total.fractionalDigits.resize(
+      std::max(total.fractionalDigits.size(), componentFraction.size()), 0);
+  unsigned int carry = 0;
+  for (std::size_t i = total.fractionalDigits.size(); i > 0; --i) {
+    const std::size_t index = i - 1;
+    unsigned int digit = total.fractionalDigits[index] + carry;
+    if (index < componentFraction.size()) {
+      digit += componentFraction[index];
+    }
+    total.fractionalDigits[index] = static_cast<unsigned char>(digit % 10);
+    carry = digit / 10;
+  }
+  if (carry != 0) {
+    if (total.whole == limit) {
+      return false;
+    }
+    ++total.whole;
+  }
+  return true;
+}
+
+// Parses an optional-sign sequence of decimal number/unit components. Units
+// are ns, us, µ or µs, ms, s, m, and h; components may be combined. A bare 0
+// is accepted, but every nonzero number needs a unit. Malformed input or a
+// total outside the int64 nanosecond range returns nullopt.
 [[nodiscard]] std::optional<std::chrono::nanoseconds>
 ParseDuration(const std::string &raw) {
   std::string s = Trim(raw);
@@ -224,7 +444,11 @@ ParseDuration(const std::string &raw) {
   if (s.substr(i) == "0") {
     return std::chrono::nanoseconds(0);
   }
-  long double totalNs = 0.0L;
+  constexpr std::uint64_t kPositiveLimit =
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+  constexpr std::uint64_t kNegativeLimit = kPositiveLimit + 1;
+  const std::uint64_t limit = negative ? kNegativeLimit : kPositiveLimit;
+  DecimalNanoseconds total;
   bool sawComponent = false;
   while (i < s.size()) {
     // Number (integer or decimal).
@@ -236,16 +460,6 @@ ParseDuration(const std::string &raw) {
       return std::nullopt;
     }
     const std::string numStr = s.substr(numStart, i - numStart);
-    double num = 0.0;
-    try {
-      std::size_t pos = 0;
-      num = std::stod(numStr, &pos);
-      if (pos != numStr.size()) {
-        return std::nullopt;
-      }
-    } catch (...) {
-      return std::nullopt;
-    }
     // Unit.
     const std::size_t unitStart = i;
     // Multi-byte 'µ' (U+00B5, bytes 0xC2 0xB5) for microseconds.
@@ -266,32 +480,43 @@ ParseDuration(const std::string &raw) {
     if (i == unitStart && unit.empty()) {
       return std::nullopt;
     }
-    double unitNs = 0.0;
+    std::uint64_t unitNs = 0;
     if (unit == "ns") {
-      unitNs = 1.0;
+      unitNs = 1;
     } else if (unit == "us" || unit == "µs") {
-      unitNs = 1e3;
+      unitNs = 1'000;
     } else if (unit == "ms") {
-      unitNs = 1e6;
+      unitNs = 1'000'000;
     } else if (unit == "s") {
-      unitNs = 1e9;
+      unitNs = 1'000'000'000;
     } else if (unit == "m") {
-      unitNs = 60.0 * 1e9;
+      unitNs = 60'000'000'000;
     } else if (unit == "h") {
-      unitNs = 3600.0 * 1e9;
+      unitNs = 3'600'000'000'000;
     } else {
       return std::nullopt;
     }
-    totalNs += static_cast<long double>(num) * unitNs;
+    if (!AddDecimalNanoseconds(total, numStr, unitNs, limit)) {
+      return std::nullopt;
+    }
     sawComponent = true;
   }
   if (!sawComponent) {
     return std::nullopt;
   }
-  if (negative) {
-    totalNs = -totalNs;
+  const bool hasFraction =
+      std::any_of(total.fractionalDigits.begin(), total.fractionalDigits.end(),
+                  [](unsigned char digit) { return digit != 0; });
+  if (!negative) {
+    return std::chrono::nanoseconds(static_cast<std::int64_t>(total.whole));
   }
-  return std::chrono::nanoseconds(static_cast<std::int64_t>(totalNs));
+  if (total.whole == kNegativeLimit) {
+    if (hasFraction) {
+      return std::nullopt;
+    }
+    return std::chrono::nanoseconds(std::numeric_limits<std::int64_t>::min());
+  }
+  return std::chrono::nanoseconds(-static_cast<std::int64_t>(total.whole));
 }
 
 [[nodiscard]] std::optional<Decimal>
@@ -370,44 +595,35 @@ void LoadRun(const IniFile &file, const std::string &path, Run &r) {
   }
   r.seed = *seed;
 
-  const bool hasTotalOps = sec.keys.count("total_ops") != 0;
-  const bool hasDuration = sec.keys.count("duration") != 0;
-  if (hasTotalOps && hasDuration) {
-    throw ConfigError(label +
-                      ": total_ops and duration are mutually exclusive; "
-                      "provide exactly one");
+  if (sec.keys.count("duration") != 0) {
+    throw ConfigError(
+        label + ": duration: unsupported; use total_ops as the run bound");
   }
-  if (hasTotalOps) {
-    std::optional<std::uint64_t> n = ParseUint(sec.keys.at("total_ops"));
-    if (!n || *n == 0) {
-      throw ConfigError(label + ": total_ops: must be a positive integer");
-    }
-    r.totalOps = *n;
-  } else if (hasDuration) {
-    const std::string d = Trim(sec.keys.at("duration"));
-    if (d.empty()) {
-      throw ConfigError(label + ": duration: must be a non-empty duration");
-    }
-    r.duration = d;
-  } else {
-    throw ConfigError(label +
-                      ": exactly one of total_ops or duration is required");
+  std::optional<std::uint64_t> totalOps =
+      ParseUint(RequireKey(sec, label, "total_ops"));
+  if (!totalOps || *totalOps == 0) {
+    throw ConfigError(label + ": total_ops: must be a positive integer");
   }
+  r.totalOps = *totalOps;
 
   std::optional<std::uint64_t> window =
       ParseUint(RequireKey(sec, label, "window"));
   if (!window || *window == 0) {
     throw ConfigError(label + ": window: must be a positive integer");
   }
+  if (*window >
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    throw ConfigError(label + ": window: must be <= " +
+                      std::to_string(std::numeric_limits<std::int64_t>::max()));
+  }
   r.window = *window;
 
   const std::string wu = Trim(RequireKey(sec, label, "window_unit"));
-  if (wu == "ops") {
-    r.windowUnit = WindowUnit::Ops;
-  } else if (wu == "wall") {
-    r.windowUnit = WindowUnit::Wall;
-  } else {
-    throw ConfigError(label + ": window_unit: must be ops or wall");
+  if (wu == "wall") {
+    throw ConfigError(label + ": window_unit: wall is unsupported; use ops");
+  }
+  if (wu != "ops") {
+    throw ConfigError(label + ": window_unit: must be ops");
   }
 
   const std::string obs = Trim(RequireKey(sec, label, "observer"));
@@ -420,39 +636,88 @@ void LoadRun(const IniFile &file, const std::string &path, Run &r) {
   }
 }
 
-void LoadArrival(const IniFile &file, Arrival &a) {
+void LoadArrival(const IniFile &file, const std::string &path, Arrival &a) {
   const Section *sec = file.Find("arrival");
   if (sec == nullptr) {
     return;
   }
+  const std::string label = "config " + path + " [arrival]";
   auto it = sec->keys.find("offered_rate");
   if (it != sec->keys.end()) {
-    if (std::optional<std::uint64_t> n = ParseUint(it->second)) {
-      a.offeredRate = *n;
+    const std::optional<std::uint64_t> n = ParseUint(it->second);
+    if (!n) {
+      throw ConfigError(label +
+                        ": offered_rate: must be a non-negative integer");
     }
+    a.offeredRate = *n;
   }
 }
 
-void LoadReportDelay(const IniFile &file, ReportDelay &d) {
+void LoadReportDelay(const IniFile &file, const std::string &path,
+                     ReportDelay &d) {
   const Section *sec = file.Find("report_delay");
   if (sec == nullptr) {
     return;
   }
-  if (auto it = sec->keys.find("distribution"); it != sec->keys.end()) {
-    const std::string v = Trim(it->second);
-    if (v == "lognormal") {
+  const std::string label = "config " + path + " [report_delay]";
+  const auto distributionIt = sec->keys.find("distribution");
+  const auto meanIt = sec->keys.find("mean");
+  const auto sigmaIt = sec->keys.find("sigma");
+  const bool hasDistribution = distributionIt != sec->keys.end();
+  const bool hasMean = meanIt != sec->keys.end();
+  const bool hasSigma = sigmaIt != sec->keys.end();
+  if (!hasDistribution && (hasMean || hasSigma)) {
+    throw ConfigError(label +
+                      ": distribution: required when mean or sigma is set");
+  }
+  if (hasDistribution) {
+    const std::string v = Trim(distributionIt->second);
+    if (v == "none") {
+      d.distribution = ReportDelayDistribution::None;
+    } else if (v == "lognormal") {
       d.distribution = ReportDelayDistribution::Lognormal;
     } else if (v == "fixed") {
       d.distribution = ReportDelayDistribution::Fixed;
+    } else {
+      throw ConfigError(label +
+                        ": distribution: must be none, lognormal, or fixed");
     }
   }
-  if (auto it = sec->keys.find("mean"); it != sec->keys.end()) {
-    d.mean = Trim(it->second);
-  }
-  if (auto it = sec->keys.find("sigma"); it != sec->keys.end()) {
-    if (std::optional<double> v = ParseDouble(it->second)) {
-      d.sigma = *v;
+  if (hasMean) {
+    const std::optional<std::chrono::nanoseconds> parsedMean =
+        ParseDuration(meanIt->second);
+    if (!parsedMean) {
+      throw ConfigError(label +
+                        ": mean: must be a non-negative duration (e.g. 2ms)");
     }
+    if (parsedMean->count() < 0) {
+      throw ConfigError(label + ": mean: must be >= 0");
+    }
+    d.mean = *parsedMean;
+  }
+  if (hasSigma) {
+    const std::optional<double> parsedSigma = ParseDouble(sigmaIt->second);
+    if (!parsedSigma) {
+      throw ConfigError(label + ": sigma: must be a finite number >= 0");
+    }
+    if (*parsedSigma < 0) {
+      throw ConfigError(label + ": sigma: must be >= 0");
+    }
+    d.sigma = *parsedSigma;
+  }
+  if (d.distribution == ReportDelayDistribution::None &&
+      (hasMean || hasSigma)) {
+    throw ConfigError(
+        label + ": mean and sigma: must be omitted when distribution is none");
+  }
+  if (d.distribution == ReportDelayDistribution::Fixed && hasSigma) {
+    throw ConfigError(label +
+                      ": sigma: must be omitted when distribution is fixed");
+  }
+  if (d.distribution == ReportDelayDistribution::Lognormal && hasSigma &&
+      d.mean.count() == 0) {
+    throw ConfigError(label +
+                      ": sigma: must be omitted when lognormal mean is zero");
   }
 }
 
@@ -496,6 +761,27 @@ void LoadConcurrency(const IniFile &file, const std::string &path,
                       " (active set cannot exceed the population)");
   }
   c.activeAccounts = *n;
+
+  std::optional<std::uint64_t> submitterWorkers =
+      ParseUint(RequireKey(sec, label, "submitter_workers"));
+  if (!submitterWorkers || *submitterWorkers == 0) {
+    throw ConfigError(label +
+                      ": submitter_workers: must be a positive integer");
+  }
+  if (*submitterWorkers > c.activeAccounts) {
+    throw ConfigError(
+        label + ": submitter_workers: " + std::to_string(*submitterWorkers) +
+        " exceeds active_accounts " + std::to_string(c.activeAccounts));
+  }
+  c.submitterWorkers = *submitterWorkers;
+
+  std::optional<std::chrono::nanoseconds> maxSubmitLag =
+      ParseDuration(RequireKey(sec, label, "max_submit_lag"));
+  if (!maxSubmitLag || maxSubmitLag->count() <= 0) {
+    throw ConfigError(label +
+                      ": max_submit_lag: must be a positive finite duration");
+  }
+  c.maxSubmitLag = *maxSubmitLag;
 }
 
 void LoadAsyncEngine(const IniFile &file, const std::string &path,
@@ -544,6 +830,10 @@ void LoadAsyncEngine(const IniFile &file, const std::string &path,
     throw ConfigError(label +
                       ": sharded_workers: must be a non-negative integer");
   }
+  if (*sw < 0 ||
+      *sw > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+    throw ConfigError(label + ": sharded_workers: must fit a non-negative int");
+  }
   if (e.strategy == AsyncEngineStrategy::Sharded && *sw <= 0) {
     throw ConfigError(label +
                       ": sharded_workers: must be > 0 when strategy = sharded");
@@ -559,6 +849,9 @@ void LoadAsyncEngine(const IniFile &file, const std::string &path,
   }
   if (*qc < 0) {
     throw ConfigError(label + ": queue_capacity: must be >= 0");
+  }
+  if (*qc > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+    throw ConfigError(label + ": queue_capacity: must fit an int");
   }
   e.queueCapacity = static_cast<int>(*qc);
 
@@ -630,6 +923,13 @@ void LoadLifecycle(const IniFile &file, const std::string &path,
   lc.pAdd = RequireUnitFloat(sec, label, "p_add");
   lc.pPartialClose = RequireUnitFloat(sec, label, "p_partial_close");
   lc.pFullClose = RequireUnitFloat(sec, label, "p_full_close");
+
+  constexpr double kSumTolerance = 4.0 * std::numeric_limits<double>::epsilon();
+  const double transitionSum = lc.pAdd + lc.pPartialClose + lc.pFullClose;
+  if (transitionSum > 1.0 + kSumTolerance) {
+    throw ConfigError(label +
+                      ": p_add + p_partial_close + p_full_close: must be <= 1");
+  }
 }
 
 void LoadFunding(const IniFile &file, const std::string &path, Funding &fd) {
@@ -763,25 +1063,21 @@ void LoadCohorts(const IniFile &file, const std::string &path, Config &cfg) {
 
 } // namespace
 
-std::string ToString(WindowUnit unit) {
-  return unit == WindowUnit::Ops ? "ops" : "wall";
-}
-
 std::string ToString(AsyncEngineStrategy strategy) {
   return strategy == AsyncEngineStrategy::Dynamic ? "dynamic" : "sharded";
 }
 
 Config LoadFromString(const std::string &content, const std::string &path,
                       const std::string &hash) {
-  const IniFile file = ParseIni(content);
+  const IniFile file = ParseIni(content, path);
 
   Config cfg;
   cfg.path = path;
   cfg.hash = hash;
 
   LoadRun(file, path, cfg.run);
-  LoadArrival(file, cfg.arrival);
-  LoadReportDelay(file, cfg.reportDelay);
+  LoadArrival(file, path, cfg.arrival);
+  LoadReportDelay(file, path, cfg.reportDelay);
   LoadReject(file, path, cfg.reject);
   LoadAccounts(file, path, cfg.accounts);
   LoadConcurrency(file, path, cfg.concurrency, cfg.accounts.count);

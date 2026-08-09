@@ -71,8 +71,9 @@ int CloseCommandPipe(FILE *pipe) {
   return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
 
-// Runs a fixed diagnostic command and returns trimmed stdout, or "" on any
-// (here via popen rather than exec.Command).
+// Runs a fixed diagnostic command and returns trimmed stdout. Returns "" when
+// the pipe cannot be opened or the command yields no non-whitespace stdout, as
+// with an unavailable or failing diagnostic tool.
 [[nodiscard]] std::string RunOut(const std::string &command) {
   std::array<char, 256> buffer{};
   std::string output;
@@ -124,7 +125,7 @@ ReadFirstLine(const std::string &path) {
   return std::string(buf.data());
 }
 
-// runtime.Version().
+// Reports the C++ compiler and version used to build this binary.
 [[nodiscard]] std::string CompilerToolchain() {
 #if defined(__clang__)
   return "clang " + std::string(__clang_version__);
@@ -159,10 +160,10 @@ ReadFirstLine(const std::string &path) {
   return os + "/" + arch;
 }
 
-// The OS-specific gatherers are compiled only for their host, the C++ analogue
+// Compile OS-specific gatherers only on their corresponding hosts.
 #if defined(__APPLE__)
 
-// `darwinDiskInterface`.
+// Reads the root volume's transport from `diskutil info /`.
 [[nodiscard]] std::string DarwinDiskInterface() {
   std::istringstream stream(RunOut("diskutil info /"));
   std::string line;
@@ -252,6 +253,7 @@ void GatherDarwin(PlatformInfo &p) {
 }
 
 // Reports the transport (nvme/sata/usb/...) of the disk backing the root
+// filesystem.
 [[nodiscard]] std::string LinuxDiskInterface() {
   const std::string src = RunOut("findmnt -no SOURCE /");
   if (src.empty()) {

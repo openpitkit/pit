@@ -35,9 +35,7 @@ import (
 // NewFeeFromString / NewFeeFromDecimal / NewFeeFromHandle.
 //
 // This cost exists because the SDK guarantees that the same input produces
-// bit-for-bit identical results across all language bindings (Rust, Go,
-// Python). Running arithmetic through the core is the mechanism that
-// enforces that determinism.
+// the same bit-for-bit result: all arithmetic runs inside the native core.
 type Fee struct {
 	native native.ParamFee
 }

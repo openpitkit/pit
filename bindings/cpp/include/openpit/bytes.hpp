@@ -19,6 +19,7 @@
 
 #include "openpit/detail/handle.hpp"
 #include "openpit/detail/native_access.hpp"
+#include "openpit/error.hpp"
 
 #include <openpit.h>
 
@@ -87,13 +88,19 @@ class SharedBytes {
     return static_cast<bool>(m_handle);
   }
 
-  // Borrows the handle's bytes; valid only while this object is alive.
+  // Borrows the handle's bytes; valid only while this object is alive. Returns
+  // an empty view when this object has no live handle.
   [[nodiscard]] BytesView View() const noexcept {
     return detail::FromNative<BytesView>(
         openpit_shared_bytes_view(m_handle.Get()));
   }
 
+  // Copies the bytes into an owning vector. Throws `Error` when this object has
+  // no live handle.
   [[nodiscard]] std::vector<std::uint8_t> ToVector() const {
+    if (!m_handle) {
+      throw Error("shared bytes are empty");
+    }
     return View().ToVector();
   }
 

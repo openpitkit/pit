@@ -162,7 +162,7 @@ struct DetachedFromGil<T>(T);
 
 // SAFETY: `Python::detach` runs the closure synchronously on the current
 // OS thread and returns before Python-visible objects are constructed. This
-// wrapper is used only for Rust-owned SDK result handles that do not borrow the
+// wrapper is used only for native SDK result handles that do not borrow the
 // Python token but are intentionally `!Send` as public SDK values.
 unsafe impl<T> Send for DetachedFromGil<T> {}
 
@@ -318,8 +318,8 @@ fn convert_account_block_error(error: openpit::AccountBlockError) -> PyErr {
     from_py_object
 )]
 #[derive(Clone, Copy, PartialEq, Eq)]
-// Integer values mirror the C `OpenPitConfigureErrorKind` so the Python,
-// Go, and C bindings agree on the discriminants.
+// Integer values are stable and match the C `OpenPitConfigureErrorKind`
+// discriminants.
 enum PyConfigureErrorKind {
     /// No registered policy carries the requested name.
     #[pyo3(name = "UNKNOWN")]
@@ -3049,7 +3049,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
         Python::attach(|py| {
             // Optional: if the Python policy defines check_pre_trade_start_dry_run,
             // call it; otherwise fall back to the normal start check, which matches
-            // the Rust trait default.
+            // the native default behavior.
             let policy_bound = self.policy.bind(py);
             let has_dry_run = policy_bound
                 .hasattr("check_pre_trade_start_dry_run")
@@ -3090,7 +3090,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
         Python::attach(|py| {
             // Optional: if the Python policy defines perform_pre_trade_check_dry_run,
             // call it; otherwise fall back to the normal check, which matches
-            // the Rust trait default.
+            // the native default behavior.
             let policy_bound = self.policy.bind(py);
             let has_dry_run = policy_bound
                 .hasattr("perform_pre_trade_check_dry_run")
@@ -3295,8 +3295,8 @@ fn python_callback_rejects(policy_name: &str) -> Rejects {
 fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<Order> {
     let py = obj.py();
     // Aggregate wrapper/type contract is enforced on Python constructors.
-    // Rust still validates entry-point object kind here because engine APIs can
-    // receive arbitrary Python objects.
+    // The native layer still validates the entry-point object kind because
+    // engine APIs can receive arbitrary Python objects.
     let order = obj
         .extract::<PyRef<'_, PyOrder>>()
         .map_err(|_| PyTypeError::new_err("order must inherit from openpit.Order"))?;
@@ -3359,8 +3359,8 @@ fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<Order> {
 fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<ExecutionReport> {
     let py = obj.py();
     // Aggregate wrapper/type contract is enforced on Python constructors.
-    // Rust still validates entry-point object kind here because engine APIs can
-    // receive arbitrary Python objects.
+    // The native layer still validates the entry-point object kind because
+    // engine APIs can receive arbitrary Python objects.
     let report = obj
         .extract::<PyRef<'_, PyExecutionReport>>()
         .map_err(|_| PyTypeError::new_err("report must inherit from openpit.ExecutionReport"))?;
@@ -3434,8 +3434,8 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<Execution
 fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<AccountAdjustment> {
     let py = obj.py();
     // Aggregate wrapper/type contract is enforced on Python constructors.
-    // Rust still validates entry-point object kind here because engine APIs can
-    // receive arbitrary Python objects.
+    // The native layer still validates the entry-point object kind because
+    // engine APIs can receive arbitrary Python objects.
     let adjustment = obj
         .extract::<PyRef<'_, PyAccountAdjustment>>()
         .map_err(|_| {
@@ -5698,7 +5698,7 @@ impl PyInstrument {
     }
 }
 
-// Capability traits and generic wrapper combinators stay Rust-only because
+// Capability traits and generic wrapper combinators stay internal because
 // they encode compile-time guarantees that do not map to Python runtime APIs.
 
 #[pymethods]

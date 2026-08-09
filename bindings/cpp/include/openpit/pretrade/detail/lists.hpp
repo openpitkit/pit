@@ -20,6 +20,7 @@
 #include "openpit/accounts/accounts.hpp"
 #include "openpit/detail/handle.hpp"
 #include "openpit/detail/native_access.hpp"
+#include "openpit/error.hpp"
 #include "openpit/pretrade/decision.hpp"
 
 #include <openpit.h>
@@ -54,6 +55,10 @@ class ListAccess final {
  private:
   [[nodiscard]] static std::vector<::openpit::pretrade::Reject> DrainRejects(
       OpenPitPretradeRejectList* list) {
+    if (list == nullptr) {
+      throw ::openpit::Error(
+          "openpit_pretrade_reject_list getter returned null");
+    }
     ::openpit::detail::Handle<OpenPitPretradeRejectList, RejectListDeleter>
         owner(list);
     std::vector<::openpit::pretrade::Reject> rejects;
@@ -61,16 +66,21 @@ class ListAccess final {
     rejects.reserve(count);
     for (std::size_t index = 0; index < count; ++index) {
       OpenPitPretradeReject raw{};
-      if (openpit_pretrade_reject_list_get(owner.Get(), index, &raw)) {
-        rejects.push_back(
-            ::openpit::detail::FromNative<::openpit::pretrade::Reject>(raw));
+      if (!openpit_pretrade_reject_list_get(owner.Get(), index, &raw)) {
+        throw ::openpit::Error("openpit_pretrade_reject_list_get failed");
       }
+      rejects.push_back(
+          ::openpit::detail::FromNative<::openpit::pretrade::Reject>(raw));
     }
     return rejects;
   }
 
   [[nodiscard]] static std::vector<::openpit::accounts::AccountBlock>
   DrainAccountBlocks(OpenPitPretradeAccountBlockList* list) {
+    if (list == nullptr) {
+      throw ::openpit::Error(
+          "openpit_pretrade_account_block_list getter returned null");
+    }
     ::openpit::detail::Handle<OpenPitPretradeAccountBlockList,
                               AccountBlockListDeleter>
         owner(list);
@@ -80,17 +90,23 @@ class ListAccess final {
     blocks.reserve(count);
     for (std::size_t index = 0; index < count; ++index) {
       OpenPitPretradeAccountBlock raw{};
-      if (openpit_pretrade_account_block_list_get(owner.Get(), index, &raw)) {
-        blocks.push_back(
-            ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
-                raw));
+      if (!openpit_pretrade_account_block_list_get(owner.Get(), index, &raw)) {
+        throw ::openpit::Error(
+            "openpit_pretrade_account_block_list_get failed");
       }
+      blocks.push_back(
+          ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
+              raw));
     }
     return blocks;
   }
 
   [[nodiscard]] static std::vector<::openpit::accounts::AccountBlockOutcome>
   DrainAccountBlockOutcomes(OpenPitPretradeAccountBlockOutcomeList* list) {
+    if (list == nullptr) {
+      throw ::openpit::Error(
+          "openpit_pretrade_account_block_outcome_list getter returned null");
+    }
     ::openpit::detail::Handle<OpenPitPretradeAccountBlockOutcomeList,
                               AccountBlockOutcomeListDeleter>
         owner(list);
@@ -100,14 +116,16 @@ class ListAccess final {
     outcomes.reserve(count);
     for (std::size_t index = 0; index < count; ++index) {
       OpenPitPretradeAccountBlockOutcome raw{};
-      if (openpit_pretrade_account_block_outcome_list_get(owner.Get(), index,
-                                                          &raw)) {
-        outcomes.push_back({
-            ::openpit::param::AccountId::FromUint64(raw.account_id),
-            ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
-                raw.block),
-        });
+      if (!openpit_pretrade_account_block_outcome_list_get(owner.Get(), index,
+                                                           &raw)) {
+        throw ::openpit::Error(
+            "openpit_pretrade_account_block_outcome_list_get failed");
       }
+      outcomes.push_back({
+          ::openpit::param::AccountId::FromUint64(raw.account_id),
+          ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
+              raw.block),
+      });
     }
     return outcomes;
   }

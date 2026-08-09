@@ -22,16 +22,9 @@
 
 // Deterministic, reproducible RNG.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/rng.go
-//
-// The Go harness uses math/rand/v2's PCG so the same seed yields the same
-// stream (the basis of its determinism guarantee). This C++ port keeps the same
-// property: a self-contained PCG64 (the canonical algorithm with a fixed bit
-// layout) drives every draw, consumed in a fixed order, so the emitted stream
-// and every prediction are reproducible for a given (seed, config). The exact
-// numeric stream is not byte-identical to Go's — that is impossible across
-// languages — but the determinism and convergence invariants the harness
-// relies on hold within this binding.
+// A self-contained PCG64 with a fixed bit layout drives every draw in a
+// fixed order. The same seed and configuration reproduce the event stream and
+// its predictions within this harness.
 
 namespace spot_loadtest::generator {
 

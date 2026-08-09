@@ -90,8 +90,8 @@ if(DEFINED OPENPIT_RUNTIME_LIBRARY_FILE AND OPENPIT_RUNTIME_LIBRARY_FILE)
 endif()
 
 # -----------------------------------------------------------------------------
-# The example's own smoke test (gtest), mirroring main_test.go. Registered here,
-# in the example's CMake - not in the binding's test tree.
+# The example's own gtest smoke test is registered here, in the example's CMake
+# rather than the binding's test tree.
 
 option(OPENPIT_EXAMPLE_BUILD_TESTS "Build the rate_pnl_killswitch smoke test"
   "${PROJECT_IS_TOP_LEVEL}")

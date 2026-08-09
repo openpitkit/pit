@@ -19,12 +19,14 @@
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts/accounts.hpp"
+#include "openpit/error.hpp"
 #include "openpit/pretrade/callbacks.hpp"
 #include "openpit/pretrade/decision.hpp"
 #include "openpit/tx/tx.hpp"
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <typeinfo>
@@ -145,12 +147,16 @@ struct HasStartDryRun<
     std::void_t<decltype(std::declval<const Policy&>().CheckPreTradeStartDryRun(
         std::declval<const Order&>()))>> : std::true_type {};
 
-}  // namespace detail
+[[noreturn]] inline void ThrowTypeMismatch(std::string_view policy_name,
+                                           const std::type_info& expected_type,
+                                           const std::type_info& actual_type) {
+  throw ::openpit::Error("policy '" + std::string(policy_name) +
+                         "' expected client payload type '" +
+                         expected_type.name() + "', got '" +
+                         actual_type.name() + "'");
+}
 
-// Implemented by binding layer.
-[[nodiscard]] Reject MakeTypeMismatchReject(
-    std::string_view policy_name, RejectScope scope, RejectCode code,
-    std::string_view reason, std::string_view expected_type_name);
+}  // namespace detail
 
 // Implemented by binding layer.
 void PushReject(PolicyDecision& decision, Reject reject);
@@ -162,8 +168,7 @@ void PushReject(PolicyDecision& decision, Reject reject);
 //
 // `SafeSlow`:
 // - Uses `dynamic_cast` to verify runtime type compatibility.
-// - Produces deterministic reject on order mismatch.
-// - Returns no account blocks on report mismatch.
+// - Throws `openpit::Error` on a payload type mismatch.
 // - Risk profile: safe default at dynamic boundaries.
 //
 // `UnsafeFast`:
@@ -208,7 +213,7 @@ class StartPolicyAdapter {
   // Adapts openpit order callback to client order type.
   //
   // SafeSlow:
-  // - type mismatch -> deterministic reject
+  // - type mismatch -> `openpit::Error`
   //
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
@@ -217,9 +222,7 @@ class StartPolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
       if (concrete_order == nullptr) {
-        return MakeTypeMismatchReject(Name(), RejectScope::Order,
-                                      RejectCode::Other, "order type mismatch",
-                                      typeid(ClientOrder).name());
+        detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
       return m_policy.CheckPreTradeStart(*concrete_order);
     } else {
@@ -236,9 +239,7 @@ class StartPolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
       if (concrete_order == nullptr) {
-        return MakeTypeMismatchReject(Name(), RejectScope::Order,
-                                      RejectCode::Other, "order type mismatch",
-                                      typeid(ClientOrder).name());
+        detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
       return m_policy.CheckPreTradeStartDryRun(*concrete_order);
     } else {
@@ -250,7 +251,7 @@ class StartPolicyAdapter {
   // Adapts execution-report callback to client report type.
   //
   // SafeSlow:
-  // - type mismatch -> empty account-block list
+  // - type mismatch -> `openpit::Error`
   //
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
@@ -267,7 +268,7 @@ class StartPolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
       if (concrete_report == nullptr) {
-        return {};
+        detail::ThrowTypeMismatch(Name(), typeid(ClientReport), typeid(report));
       }
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, *concrete_report,
@@ -295,8 +296,10 @@ class StartPolicyAdapter {
       const openpit::ExecutionReport& report) const {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
-      return concrete_report != nullptr &&
-             m_policy.ApplyExecutionReport(*concrete_report);
+      if (concrete_report == nullptr) {
+        detail::ThrowTypeMismatch(Name(), typeid(ClientReport), typeid(report));
+      }
+      return m_policy.ApplyExecutionReport(*concrete_report);
     } else {
       return m_policy.ApplyExecutionReport(
           static_cast<const ClientReport&>(report));
@@ -356,9 +359,7 @@ class PolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
       if (concrete_order == nullptr) {
-        return MakeTypeMismatchReject(Name(), RejectScope::Order,
-                                      RejectCode::Other, "order type mismatch",
-                                      typeid(ClientOrder).name());
+        detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
       return m_policy.CheckPreTradeStart(*concrete_order);
     } else {
@@ -375,9 +376,7 @@ class PolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
       if (concrete_order == nullptr) {
-        return MakeTypeMismatchReject(Name(), RejectScope::Order,
-                                      RejectCode::Other, "order type mismatch",
-                                      typeid(ClientOrder).name());
+        detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
       return m_policy.CheckPreTradeStartDryRun(*concrete_order);
     } else {
@@ -389,7 +388,7 @@ class PolicyAdapter {
   // Adapts main-stage callback to client order type and decision object.
   //
   // SafeSlow:
-  // - order type mismatch -> deterministic reject pushed into decision
+  // - order type mismatch -> `openpit::Error`
   //
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
@@ -399,11 +398,7 @@ class PolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
       if (concrete_order == nullptr) {
-        PushReject(decision,
-                   MakeTypeMismatchReject(
-                       Name(), RejectScope::Order, RejectCode::Other,
-                       "order type mismatch", typeid(ClientOrder).name()));
-        return;
+        detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
       m_policy.PerformPreTradeCheck(*concrete_order, context, decision);
     } else {
@@ -419,11 +414,7 @@ class PolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
       if (concrete_order == nullptr) {
-        PushReject(decision,
-                   MakeTypeMismatchReject(
-                       Name(), RejectScope::Order, RejectCode::Other,
-                       "order type mismatch", typeid(ClientOrder).name()));
-        return;
+        detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
       if constexpr (detail::HasMainFull<ClientPolicy, ClientOrder>::value) {
         m_policy.PerformPreTradeCheck(*concrete_order, context, mutations,
@@ -455,11 +446,7 @@ class PolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
       if (concrete_order == nullptr) {
-        PushReject(decision,
-                   MakeTypeMismatchReject(
-                       Name(), RejectScope::Order, RejectCode::Other,
-                       "order type mismatch", typeid(ClientOrder).name()));
-        return;
+        detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
       if constexpr (detail::HasMainDryRunFull<P, ClientOrder>::value) {
         m_policy.PerformPreTradeCheckDryRun(*concrete_order, context, mutations,
@@ -481,7 +468,7 @@ class PolicyAdapter {
   // Adapts execution-report callback to client report type.
   //
   // SafeSlow:
-  // - type mismatch -> empty account-block list
+  // - type mismatch -> `openpit::Error`
   //
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
@@ -498,7 +485,7 @@ class PolicyAdapter {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
       if (concrete_report == nullptr) {
-        return {};
+        detail::ThrowTypeMismatch(Name(), typeid(ClientReport), typeid(report));
       }
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, *concrete_report,
@@ -526,8 +513,10 @@ class PolicyAdapter {
       const openpit::ExecutionReport& report) const {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
-      return concrete_report != nullptr &&
-             m_policy.ApplyExecutionReport(*concrete_report);
+      if (concrete_report == nullptr) {
+        detail::ThrowTypeMismatch(Name(), typeid(ClientReport), typeid(report));
+      }
+      return m_policy.ApplyExecutionReport(*concrete_report);
     } else {
       return m_policy.ApplyExecutionReport(
           static_cast<const ClientReport&>(report));

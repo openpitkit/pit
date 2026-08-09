@@ -92,6 +92,43 @@ describe("rate-limit boundary conversion", () => {
     },
   );
 
+  it("propagates a plain-object getter exception unchanged", () => {
+    const marker = new Error("maxOrders getter failed");
+    const limit = Object.defineProperty({ windowMs: 1000 }, "maxOrders", {
+      get() {
+        throw marker;
+      },
+    }) as { maxOrders: number; windowMs: number };
+
+    let caught: unknown;
+    try {
+      new RateLimitBrokerBarrier(limit);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(marker);
+  });
+
+  it("propagates a wrapper clone exception unchanged", () => {
+    const marker = new Error("RateLimit.clone failed");
+    const limit = new RateLimit(1, 1000);
+    Object.defineProperty(limit, "clone", {
+      value() {
+        throw marker;
+      },
+    });
+
+    let caught: unknown;
+    try {
+      new RateLimitBrokerBarrier(limit);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(marker);
+  });
+
   it("accepts the largest whole millisecond below the core bound", () => {
     expect(() => buildBrokerRateLimit(18_446_744_073_709)).not.toThrow();
   });

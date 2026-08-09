@@ -2548,7 +2548,9 @@ pub unsafe extern "C" fn openpit_create_param_account_id_from_string(
 #[no_mangle]
 /// Validates and copies an asset identifier into a caller-owned shared-string handle.
 ///
-/// The returned handle must be destroyed with `openpit_destroy_param_asset`.
+/// The asset handle is an `OpenPitSharedString`. Release it exactly once with
+/// either `openpit_destroy_param_asset` or `openpit_destroy_shared_string`;
+/// both functions deallocate the same handle.
 pub unsafe extern "C" fn openpit_create_param_asset_from_string(
     value: OpenPitStringView,
     out_error: OpenPitOutParamError,
@@ -2570,7 +2572,11 @@ pub unsafe extern "C" fn openpit_create_param_asset_from_string(
 }
 
 #[no_mangle]
-/// Destroys a caller-owned asset handle created by `openpit_create_param_asset_from_string`.
+/// Destroys a caller-owned asset handle created by
+/// `openpit_create_param_asset_from_string`.
+///
+/// This is the same deallocation as `openpit_destroy_shared_string` because
+/// asset handles are `OpenPitSharedString` handles.
 pub extern "C" fn openpit_destroy_param_asset(handle: *mut OpenPitSharedString) {
     crate::string::openpit_destroy_shared_string(handle);
 }

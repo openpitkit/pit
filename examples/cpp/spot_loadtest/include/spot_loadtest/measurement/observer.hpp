@@ -26,8 +26,6 @@
 
 // Observer inner-metrics accumulation (diagnostic, separate from the headline).
 //
-// Mirror of: examples/go/spot_loadtest/internal/measurement/observer.go
-//
 // `ObserverSink` accumulates queue_wait and engine_compute durations reported
 // by the asyncengine observer callbacks into SEPARATE diagnostic histograms
 // kept strictly out of the headline streams. These are per-account AGGREGATE

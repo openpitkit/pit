@@ -46,9 +46,9 @@
 // within that callback. It is neither copyable nor movable, to
 // discourage retaining it past the callback.
 //
-// This header also defines the three free functions the existing adapter header
+// This header also defines the two free functions the existing adapter header
 // (`openpit/pretrade/adapters.hpp`) forward-declares and calls:
-// `MakeTypeMismatchReject`, `PushReject`, and `ContextOrder`.
+// `PushReject` and `ContextOrder`.
 
 namespace openpit::pretrade {
 
@@ -195,19 +195,6 @@ class Context {
   const ::openpit::Order* m_order;
   const OpenPitPretradeContext* m_native;
 };
-
-// Builds an order-or-account scoped reject carrying an "expected type" detail.
-//
-// Defined here to satisfy the forward declaration in
-// `openpit/pretrade/adapters.hpp`;
-// the adapter templates call it to report a payload type mismatch
-// deterministically. `expected_type_name` is stored in the reject `details`.
-[[nodiscard]] inline Reject MakeTypeMismatchReject(
-    std::string_view policy_name, RejectScope scope, RejectCode code,
-    std::string_view reason, std::string_view expected_type_name) {
-  return Reject(std::string(policy_name), scope, code, std::string(reason),
-                std::string(expected_type_name));
-}
 
 // Appends a reject to a policy decision. Satisfies the forward declaration in
 // `openpit/pretrade/adapters.hpp`.

@@ -21,9 +21,9 @@
 #include "spot_loadtest/driver/live.hpp"
 #include "spot_loadtest/generator/event.hpp"
 #include "spot_loadtest/measurement/snapshot.hpp"
-#include "spot_loadtest/measurement/window.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -32,17 +32,14 @@
 // measures the C++ FFI latency TRUE OPEN-LOOP against the generator's virtual
 // causal timeline.
 //
-// Mirror of: examples/go/spot_loadtest/internal/driver/{driver,build,collect,
-//            schedule,sink,oracle,observer,probe}.go
-//
-// Concurrency model (true open-loop): the driver drives the engine concurrently
-// through `openpit::asyncengine::TypedAsyncEngine` (per-account queues, futures
-// — the matching C++ concurrency surface to Go's `asyncengine`), with its own
-// submitter / collector / finalizer std::thread pools mirroring the Go
-// goroutine roster. One submitter per account paces each event to its VirtualT0
-// and submits non-blocking; a collector pool awaits futures and records the
-// open-loop latency (resolve - VirtualT0, the headline); a finalizer pool
-// CommitAndCloses accepted reservations off the measured path.
+// Concurrency model (true open-loop): the driver uses
+// `openpit::asyncengine::TypedAsyncEngine` with per-account queues and futures,
+// plus bounded submitter, collector, and finalizer `std::thread` pools. Each
+// submitter deterministically merges complete account chains assigned to its
+// shard, paces every event to its VirtualT0, and submits non-blocking. A
+// collector pool awaits futures and records the open-loop latency
+// (resolve - VirtualT0, the headline); a finalizer pool CommitAndCloses
+// accepted reservations off the measured path.
 
 namespace spot_loadtest::driver {
 
@@ -55,6 +52,14 @@ public:
       : std::runtime_error(
             "driver: run hit dispatch backpressure (QueueLimit); not a valid "
             "latency measurement") {}
+};
+
+class SubmitLagInvalidRun : public std::runtime_error {
+public:
+  SubmitLagInvalidRun()
+      : std::runtime_error(
+            "driver: submit scheduling lag exceeded the configured limit; "
+            "not a valid latency measurement") {}
 };
 
 // Returned by Run when the run drained cleanly and resolved a non-empty set of
@@ -70,14 +75,16 @@ public:
 // The dispatch strategy selected for the async engine.
 enum class DispatchStrategy { Dynamic, Sharded };
 
-// Tunes one driver run. Zero values are filled with safe defaults so a test can
-// pass an almost-empty Config.
+// Tunes one driver run. Most zero values use the documented defaults.
+// submitterWorkers is required for every non-empty stream.
 struct Config {
   int collectors = 0; // pool draining resolved futures (0 -> default).
   int finalizers = 0; // pool finalizing accepted reservations (0 -> default).
   bool observer = false;
 
   std::uint64_t activeAccounts = 0; // informational (disclosure / reporting).
+  std::size_t submitterWorkers = 0; // bounded account-chain scheduler pool.
+  std::chrono::nanoseconds maxSubmitLag{0}; // required harness validity limit.
 
   DispatchStrategy dispatchStrategy = DispatchStrategy::Dynamic;
   std::uint64_t maxQueues = 0;             // Dynamic only (0 = unlimited).
@@ -86,16 +93,16 @@ struct Config {
   int queueCapacity = 0;                   // both (0 = engine default 1024).
   std::chrono::nanoseconds slowSubmitThreshold{0}; // both (0 = engine default).
 
-  std::int64_t windowSize = 0; // order-check ops per window (0 -> 10000).
-  measurement::WindowUnit windowUnit = measurement::WindowUnit::Ops;
-  std::chrono::nanoseconds wallWindow{0};
+  std::int64_t windowSize = 0; // order-check ops per window (> 0 required).
 
   int overheadProbes = 0; // self-overhead probes before the workload (0 = off).
 
   LiveSource *live = nullptr; // populated by Run before any thread starts.
 };
 
-// Derives the driver Config from the validated app config.
+// Derives the driver Config from the validated app config. Throws
+// std::invalid_argument when a value cannot be represented by the driver or
+// selects an unsupported mode.
 [[nodiscard]] Config FromAppConfig(const config::Config &cfg);
 
 // The immutable summary Run returns alongside the Snapshot.
@@ -107,11 +114,13 @@ struct Stats {
   std::uint64_t fundings = 0;
   std::uint64_t fundingAccepts = 0;
   std::uint64_t fundingRejects = 0;
+  std::uint64_t submitLagBreaches = 0;
   std::uint64_t backpressure = 0;
   std::uint64_t handoffStalls = 0;
   int maxWorkOverflow = 0;
   std::uint64_t checksum = 0;
   std::int64_t maxInFlight = 0;
+  std::size_t submitterThreads = 0;
   int sampleCount = 0;
 };
 
@@ -125,15 +134,16 @@ struct RunResult {
 // open-loop, and returns measured stats and a full measurement Snapshot once
 // every operation has resolved and the engine has stopped.
 //
-// Throws BackpressureInvalidRun / ZeroChecksumInvalidRun for an invalid run
-// (the RunResult is attached so the caller can still print diagnostics — see
-// the `result` out-param overload below). Throws std::runtime_error on a hard
-// error (oracle divergence, invariant break, engine build failure).
+// Throws SubmitLagInvalidRun / BackpressureInvalidRun /
+// ZeroChecksumInvalidRun for an invalid run. Use RunCollecting below when the
+// caller must retain the result for diagnostics. Throws std::runtime_error on a
+// hard error (oracle divergence, invariant break, engine build failure). Throws
+// std::invalid_argument when a non-empty stream has no submitter worker.
 [[nodiscard]] RunResult Run(const generator::Stream &stream, const Config &cfg);
 
-// Variant that, on an invalid-run sentinel, fills `result` with the Stats and
-// Snapshot before throwing so the caller can print the non-latency diagnostics.
-// `invalidReason` is set to a non-empty string on an invalid run.
+// Variant that returns the Stats and Snapshot on an invalid run instead of
+// throwing an invalid-run sentinel. `invalidReason` names the invalid
+// condition.
 [[nodiscard]] RunResult RunCollecting(const generator::Stream &stream,
                                       const Config &cfg,
                                       std::string &invalidReason);

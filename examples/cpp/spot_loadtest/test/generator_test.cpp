@@ -17,8 +17,6 @@
 
 // Generator property tests and shadow-ledger arithmetic tests.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/generator_test.go
-//            examples/go/spot_loadtest/internal/generator/ledger_test.go
 
 #include "spot_loadtest/config/config.hpp"
 #include "spot_loadtest/decimal.hpp"
@@ -29,10 +27,11 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 namespace {
@@ -45,17 +44,16 @@ using spot_loadtest::Decimal;
   return Decimal::FromString(s);
 }
 
-// A representative, fully-valid config in code (mirror of the Go testConfig).
+// A representative, fully valid in-code configuration.
 [[nodiscard]] config::Config TestConfig(std::uint64_t seed,
                                         std::uint64_t totalOps) {
   config::Config c;
   c.run.seed = seed;
   c.run.totalOps = totalOps;
   c.run.window = 1000;
-  c.run.windowUnit = config::WindowUnit::Ops;
   c.reject = config::Reject{0.05, 0.005};
   c.accounts = config::Accounts{500};
-  c.concurrency = config::Concurrency{128};
+  c.concurrency = config::Concurrency{128, 16, std::chrono::milliseconds(1)};
   c.instruments.symbols = {"AAPL", "SPX",  "MSFT", "AMZN", "GOOG",
                            "META", "TSLA", "NVDA", "JPM",  "BAC"};
   c.instruments.settlement = "USD";
@@ -98,7 +96,149 @@ using spot_loadtest::Decimal;
 //------------------------------------------------------------------------------
 // Generator property tests.
 
-// Same seed + config must yield a byte-identical serialised stream.
+TEST(Generator, ZeroOrderCheckBudgetFailsClosed) {
+  config::Config cfg = TestConfig(0xC0FFEE, 0);
+  try {
+    (void)gen::Generate(cfg);
+    ADD_FAILURE() << "expected a positive total_ops error";
+  } catch (const std::runtime_error &e) {
+    EXPECT_STREQ(e.what(), "generator: run.total_ops must be positive");
+  }
+}
+
+TEST(Generator, NoneReportDelayRejectsIgnoredParameters) {
+  config::Config cfg = TestConfig(0xC0FFEE, 1000);
+  cfg.reportDelay.mean = std::chrono::milliseconds(2);
+  cfg.reportDelay.distribution = config::ReportDelayDistribution::None;
+  EXPECT_THROW((void)gen::Generate(cfg), std::runtime_error);
+
+  cfg.reportDelay.mean = std::chrono::nanoseconds(0);
+  cfg.reportDelay.sigma = 0.5;
+  EXPECT_THROW((void)gen::Generate(cfg), std::runtime_error);
+}
+
+TEST(Generator, InvalidProgrammaticReportDelayFailsClosed) {
+  config::Config cfg = TestConfig(0xC0FFEE, 1000);
+  cfg.reportDelay.mean = std::chrono::nanoseconds(-1);
+  EXPECT_THROW((void)gen::Generate(cfg), std::runtime_error);
+
+  cfg.reportDelay.mean = std::chrono::nanoseconds(0);
+  cfg.reportDelay.sigma = std::numeric_limits<double>::infinity();
+  EXPECT_THROW((void)gen::Generate(cfg), std::runtime_error);
+
+  cfg.reportDelay =
+      config::ReportDelay{std::chrono::milliseconds(1),
+                          config::ReportDelayDistribution::Fixed, 0.5};
+  EXPECT_THROW((void)gen::Generate(cfg), std::runtime_error);
+
+  cfg.reportDelay =
+      config::ReportDelay{std::chrono::nanoseconds(0),
+                          config::ReportDelayDistribution::Lognormal, 0.5};
+  EXPECT_THROW((void)gen::Generate(cfg), std::runtime_error);
+}
+
+TEST(Generator, UnknownProgrammaticReportDelayDistributionFailsClosed) {
+  config::Config cfg = TestConfig(0xC0FFEE, 1);
+  cfg.reportDelay.distribution =
+      static_cast<config::ReportDelayDistribution>(99);
+
+  try {
+    (void)gen::Generate(cfg);
+    ADD_FAILURE() << "expected an unknown report-delay distribution error";
+  } catch (const std::runtime_error &error) {
+    EXPECT_STREQ(error.what(),
+                 "generator: report_delay.distribution has unknown value 99");
+  }
+}
+
+TEST(Generator, NearMaxReportDelayKeepsVirtualTimelineRepresentable) {
+  constexpr std::int64_t kCausalGapNs = 1000;
+  const std::chrono::nanoseconds delay(
+      std::numeric_limits<std::int64_t>::max() - kCausalGapNs);
+  config::Config cfg = TestConfig(0xC0FFEE, 1);
+  cfg.arrival.offeredRate = 0;
+  cfg.reject.targetRate = 0;
+  cfg.reportDelay =
+      config::ReportDelay{delay, config::ReportDelayDistribution::Fixed, 0};
+
+  const std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
+  bool sawSettlement = false;
+  for (const gen::Event &event : stream->events) {
+    if (event.kind == gen::EventKind::Settlement) {
+      EXPECT_EQ(event.virtualT0, delay);
+      sawSettlement = true;
+    }
+  }
+  EXPECT_TRUE(sawSettlement);
+}
+
+TEST(Generator, MaxReportDelayFailsBeforeCausalDeadlineOverflow) {
+  config::Config cfg = TestConfig(0xC0FFEE, 1);
+  cfg.arrival.offeredRate = 0;
+  cfg.reject.targetRate = 0;
+  cfg.reportDelay = config::ReportDelay{
+      std::chrono::nanoseconds(std::numeric_limits<std::int64_t>::max()),
+      config::ReportDelayDistribution::Fixed, 0};
+
+  EXPECT_THROW(
+      {
+        try {
+          (void)gen::Generate(cfg);
+        } catch (const std::runtime_error &error) {
+          EXPECT_STREQ(
+              error.what(),
+              "generator: account causal deadline exceeds nanoseconds range");
+          throw;
+        }
+      },
+      std::runtime_error);
+}
+
+TEST(Generator, LognormalMaxReportDelaySampleIsRepresentable) {
+  config::Config cfg = TestConfig(0xC0FFEE, 1);
+  cfg.arrival.offeredRate = 0;
+  cfg.reject.targetRate = 0;
+  cfg.reportDelay = config::ReportDelay{
+      std::chrono::nanoseconds(std::numeric_limits<std::int64_t>::max()),
+      config::ReportDelayDistribution::Lognormal, 0};
+
+  EXPECT_THROW(
+      {
+        try {
+          (void)gen::Generate(cfg);
+        } catch (const std::runtime_error &error) {
+          EXPECT_STREQ(
+              error.what(),
+              "generator: account causal deadline exceeds nanoseconds range");
+          throw;
+        }
+      },
+      std::runtime_error);
+}
+
+TEST(Generator, MaxReportDelayFailsBeforeSettlementTimeOverflow) {
+  config::Config cfg = TestConfig(0xC0FFEE, 1);
+  cfg.arrival.offeredRate = 1;
+  cfg.reject.targetRate = 0;
+  cfg.reportDelay = config::ReportDelay{
+      std::chrono::nanoseconds(std::numeric_limits<std::int64_t>::max()),
+      config::ReportDelayDistribution::Fixed, 0};
+
+  EXPECT_THROW(
+      {
+        try {
+          (void)gen::Generate(cfg);
+        } catch (const std::runtime_error &error) {
+          EXPECT_STREQ(
+              error.what(),
+              "generator: report settlement time exceeds nanoseconds range");
+          throw;
+        }
+      },
+      std::runtime_error);
+}
+
+// The same seed and configuration must reproduce the serialized stream.
 TEST(Generator, DeterminismByteIdentical) {
   const config::Config cfg = TestConfig(0xC0FFEE, 20000);
   const std::string a = gen::Generate(cfg)->Serialize();
@@ -232,8 +372,9 @@ TEST(Generator, SelfFundingPreventsStarvation) {
 TEST(Generator, VirtualTimelineCausal) {
   config::Config cfg = TestConfig(0xC0FFEE, 40000);
   cfg.arrival.offeredRate = 50000;
-  cfg.reportDelay = config::ReportDelay{
-      config::ReportDelayDistribution::Lognormal, "2ms", 0.5};
+  cfg.reportDelay =
+      config::ReportDelay{std::chrono::milliseconds(2),
+                          config::ReportDelayDistribution::Lognormal, 0.5};
   const std::unique_ptr<gen::Stream> s = gen::Generate(cfg);
 
   std::map<std::string, std::chrono::nanoseconds> lastByAccount;
@@ -285,8 +426,9 @@ TEST(Generator, VirtualTimelineCausal) {
 TEST(Generator, VirtualTimelineDeterministic) {
   config::Config cfg = TestConfig(0x5EED, 20000);
   cfg.arrival.offeredRate = 50000;
-  cfg.reportDelay = config::ReportDelay{
-      config::ReportDelayDistribution::Lognormal, "2ms", 0.5};
+  cfg.reportDelay =
+      config::ReportDelay{std::chrono::milliseconds(2),
+                          config::ReportDelayDistribution::Lognormal, 0.5};
   const std::unique_ptr<gen::Stream> a = gen::Generate(cfg);
   const std::unique_ptr<gen::Stream> b = gen::Generate(cfg);
   ASSERT_EQ(a->events.size(), b->events.size());
@@ -297,7 +439,7 @@ TEST(Generator, VirtualTimelineDeterministic) {
 }
 
 //------------------------------------------------------------------------------
-// Shadow-ledger arithmetic tests (mirror of ledger_test.go).
+// Shadow-ledger arithmetic tests.
 
 void AssertBal(gen::Ledger &l, const std::string &asset,
                const std::string &wantAvail, const std::string &wantHeld) {

@@ -17,16 +17,12 @@
 
 #pragma once
 
-//
-// `RunSync` drives a single-threaded NoSync engine + NoSync market-data service
-// operation by operation in row order. `RunAsync` drives an AccountSync engine
-// wrapped in the typed async engine (Dynamic strategy, one serial queue per
-// account) + FullSync market-data service: per-account operations serialize
-// while different accounts run in parallel. Each stops at the first verdict
-// mismatch and returns a partial report.
-//
-// `std::chrono::steady_clock` time point (`Deadline`); `RunSync` / `RunAsync`
-// `ctx.Err()`.
+// Runs scenario tables through sequential and parallel engine configurations.
+// `RunSync` uses a NoSync engine and NoSync market-data service in table order.
+// `RunAsync` uses an AccountSync engine and FullSync market-data service; its
+// typed async wrapper gives each account a serial queue, allowing different
+// accounts to run in parallel while addressed TICKs fence their targets.
+// Normal deadline and verdict-mismatch exits return partial reports.
 
 #include "openpit/pretrade/decision.hpp"
 
@@ -40,7 +36,8 @@
 
 namespace spot_table {
 
-// `context.Context` timeout.
+// A monotonic run deadline. RunSync checks it before each row; RunAsync checks
+// it before submission and verdict waits, then releases submitted reservations.
 using Deadline = std::chrono::steady_clock::time_point;
 
 enum class Mode {
@@ -83,20 +80,27 @@ struct Report {
   }
 };
 
-// Executes the table in Mode A: NoSync engine, strictly
-// operation-by-operation. TICK rows are replayed live at their row position.
-// Stops at the first verdict mismatch and returns a partial report. Throws on a
+// Runs table rows through NoSync components in order, replaying TICKs in place.
+// Stops at the deadline or first verdict mismatch and returns a partial report.
+// Throws `openpit::Error` if engine or market-data service setup fails and
+// `FeedError` if a TICK instrument cannot be parsed or registered.
 [[nodiscard]] Report RunSync(Deadline deadline, const Frontmatter &fm,
                              const std::vector<Row> &rows);
 
-// Executes the table in Mode B: AccountSync engine wrapped in the typed async
-// engine. GROUP rows are registered first; non-TICK rows are submitted in row
-// order and run per-account-serially / cross-account-parallel; addressed TICKs
-// fence their targets. Verdicts are awaited in row order, stopping on the first
+// Runs table rows through an AccountSync engine in the typed async wrapper and
+// a FullSync market-data service. GROUP rows register first; non-TICK rows
+// preserve per-account order while different accounts run in parallel.
+// Addressed TICKs fence targets. Stops at the deadline or first verdict
+// mismatch and returns a partial report. Throws `openpit::Error` on setup,
+// `FeedError` if a TICK instrument cannot be parsed or registered, and
+// `BuildError` if a SEED, ORDER, or FILL row cannot be translated. Unlike
+// `RunSync`, the row-build `BuildError` escapes instead of becoming a
+// `Failure`.
 [[nodiscard]] Report RunAsync(Deadline deadline, const Frontmatter &fm,
                               const std::vector<Row> &rows);
 
-// The case-insensitive reject-code name from a reject Code, used in
+// Returns the case-insensitive table name for `code`, or `Code(<value>)` when
+// it is not in the table map.
 [[nodiscard]] std::string CodeName(openpit::reject::RejectCode code);
 
 } // namespace spot_table

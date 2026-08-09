@@ -56,6 +56,17 @@ TEST(ParamAsset, ValidatesOwnsAndCopiesValue) {
   EXPECT_EQ(assigned, asset);
 }
 
+TEST(ParamAsset, CopyOutlivesSource) {
+  const Asset copied = [] {
+    const Asset source("AAPL");
+    const Asset copy(source);
+    EXPECT_EQ(copy, source);
+    return copy;
+  }();
+
+  EXPECT_EQ(copied.View(), "AAPL");
+}
+
 TEST(ParamAsset, EmptyAndWhitespaceOnlyValuesThrowStructuredError) {
   EXPECT_THROW({ (void)Asset(""); }, openpit::Error);
 

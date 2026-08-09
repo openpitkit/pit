@@ -32,8 +32,6 @@
 // Writes live run progress to an std::ostream (typically std::cerr) at a
 // configurable tick interval.
 //
-// Mirror of: examples/go/spot_loadtest/internal/progress/progress.go
-//
 // It reads counters from the driver's LiveSource via a race-safe accessor and
 // NEVER writes to the same stream as the final report (stdout). Each tick
 // overwrites the previous line using a carriage-return prefix; the final stop

@@ -17,7 +17,6 @@
 
 #pragma once
 
-//
 // A scenario file is a Markdown document with an optional `---`-delimited
 // front-matter block and one GFM pipe-table. `ParseFile` reads the file,
 // `Parse` parses an in-memory stream; both yield a `Table` of validated rows.
@@ -64,7 +63,7 @@ struct Table {
   std::vector<Row> rows;
 };
 
-// Thrown on any parse or per-row validation failure. Mirrors the `error`
+// Thrown on any parse or per-row validation failure.
 class ParseError : public std::runtime_error {
 public:
   explicit ParseError(const std::string &message)

@@ -295,7 +295,7 @@ pub(crate) type StorageBuilderRef = StorageBuilder<StorageFactory>;
 
 /// Normalized order payload retained for custom-policy callbacks.
 ///
-/// The Rust wrapper is cloned into a *fresh* wasm object for every callback.
+/// The wrapped payload is cloned into a *fresh* wasm object for every callback.
 /// One policy can therefore mutate or free its argument without changing what
 /// later policies observe.  The lifecycle token scopes every context/control
 /// handed out while this order is processed.

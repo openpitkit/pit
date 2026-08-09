@@ -26,9 +26,6 @@
 
 // The shadow fund model.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/ledger.go and
-// money.go
-//
 // An INDEPENDENT reimplementation of the spot-funds arithmetic that never
 // imports the engine — which is what makes the per-op oracle non-circular. It
 // reproduces policy-contract section 2 exactly, including the engine's

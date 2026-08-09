@@ -120,8 +120,8 @@ class AccountBlockError(Exception):
 class ConfigureErrorKind:
     """Classifies why a runtime policy reconfiguration failed.
 
-    Integer values match the C ``OpenPitConfigureErrorKind`` and the Go
-    ``ConfigureErrorKind`` so all bindings agree on the discriminants.
+    Integer values are stable and match the C ``OpenPitConfigureErrorKind``
+    discriminants.
     """
 
     UNKNOWN: typing.ClassVar[ConfigureErrorKind]

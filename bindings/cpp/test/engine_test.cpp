@@ -48,7 +48,7 @@ using openpit::pretrade::RejectCode;
 namespace policies = openpit::pretrade::policies;
 
 // Builds the canonical single-leg test order for `accountId`: a buy of one AAPL
-// settled in USD at price 100, mirroring the Go `rateLimitTestOrder` helper.
+// settled in USD at price 100.
 [[nodiscard]] openpit::model::Order TestOrder(std::uint64_t accountId) {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
@@ -279,6 +279,10 @@ class ThrowingReportPolicy {
 };
 
 struct DeferredOrder : public openpit::model::Order {
+  std::unique_ptr<std::string> strategyTag;
+};
+
+struct CopyableDeferredOrder : public openpit::model::Order {
   std::string strategyTag;
 };
 
@@ -291,6 +295,29 @@ class DeferredOrderPolicy {
       const openpit::pretrade::Context& context,
       openpit::pretrade::PolicyDecision& /*decision*/) const {
     const auto* order = dynamic_cast<const DeferredOrder*>(&context.Order());
+    if (order == nullptr) {
+      throw std::runtime_error("deferred order type was not preserved");
+    }
+    if (!order->strategyTag) {
+      throw std::runtime_error("deferred order tag was moved unexpectedly");
+    }
+    *m_observedTag = *order->strategyTag;
+  }
+
+ private:
+  std::shared_ptr<std::string> m_observedTag;
+};
+
+class CopyableDeferredOrderPolicy {
+ public:
+  explicit CopyableDeferredOrderPolicy(std::shared_ptr<std::string> observedTag)
+      : m_observedTag(std::move(observedTag)) {}
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& context,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    const auto* order =
+        dynamic_cast<const CopyableDeferredOrder*>(&context.Order());
     if (order == nullptr) {
       throw std::runtime_error("deferred order type was not preserved");
     }
@@ -709,8 +736,9 @@ TEST(EngineDropCopy, DestructorSuppressesRollbackFailure) {
 
 TEST(EngineRequest, ExecutePassesThenCommit) {
   Engine engine = SingleOrderEngine();
+  const openpit::model::Order order = TestOrder(1);
 
-  openpit::pretrade::StartResult start = engine.StartPreTrade(TestOrder(1));
+  openpit::pretrade::StartResult start = engine.StartPreTrade(order);
   ASSERT_TRUE(start.request.has_value());
 
   openpit::pretrade::ExecuteResult executed = start.request->Execute();
@@ -723,7 +751,8 @@ TEST(EngineRequest, SecondDeferredFlowIsRejectedAtStart) {
   Engine engine = SingleOrderEngine();
 
   // Drive the first order all the way to commit.
-  openpit::pretrade::StartResult first = engine.StartPreTrade(TestOrder(1));
+  const openpit::model::Order firstOrder = TestOrder(1);
+  openpit::pretrade::StartResult first = engine.StartPreTrade(firstOrder);
   ASSERT_TRUE(first.request.has_value());
   openpit::pretrade::ExecuteResult firstExec = first.request->Execute();
   ASSERT_TRUE(firstExec.reservation.has_value());
@@ -741,15 +770,16 @@ TEST(EngineRequest, SecondDeferredFlowIsRejectedAtStart) {
 
 TEST(EngineRequest, CallbackExceptionRethrowsOriginalType) {
   Engine engine = CustomPolicyEngine(ThrowingMainPolicy{});
+  const openpit::model::Order order = TestOrder(1);
 
-  openpit::pretrade::StartResult start = engine.StartPreTrade(TestOrder(1));
+  openpit::pretrade::StartResult start = engine.StartPreTrade(order);
   ASSERT_TRUE(start.request.has_value());
 
   EXPECT_THROW(
       { static_cast<void>(start.request->Execute()); }, std::runtime_error);
 }
 
-TEST(EngineRequest, OwnsConcreteOrderUntilDeferredExecution) {
+TEST(EngineRequest, OwnsRvalueConcreteOrderUntilDeferredExecution) {
   const auto observedTag = std::make_shared<std::string>();
   EngineBuilder builder(SyncPolicy::Full);
   openpit::pretrade::CustomPolicy<DeferredOrderPolicy> policy(
@@ -760,14 +790,72 @@ TEST(EngineRequest, OwnsConcreteOrderUntilDeferredExecution) {
   std::optional<openpit::pretrade::StartResult> start;
   {
     DeferredOrder order;
-    order.strategyTag = "survives-caller-scope";
-    start.emplace(engine.StartPreTrade(order));
-    ASSERT_TRUE(start->request.has_value());
+    order.strategyTag = std::make_unique<std::string>("request-owned");
+    start.emplace(engine.StartPreTrade(std::move(order)));
+    EXPECT_EQ(order.strategyTag, nullptr);
   }
+  ASSERT_TRUE(start->request.has_value());
 
   openpit::pretrade::ExecuteResult executed = start->request->Execute();
   ASSERT_TRUE(executed.Passed());
-  EXPECT_EQ(*observedTag, "survives-caller-scope");
+  EXPECT_EQ(*observedTag, "request-owned");
+}
+
+TEST(EngineRequest, CopiesLvalueConcreteOrderUntilDeferredExecution) {
+  const auto observedTag = std::make_shared<std::string>();
+  EngineBuilder builder(SyncPolicy::Full);
+  openpit::pretrade::CustomPolicy<CopyableDeferredOrderPolicy> policy(
+      "CopyableDeferredOrderPolicy", CopyableDeferredOrderPolicy(observedTag));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+
+  CopyableDeferredOrder order;
+  order.strategyTag = "caller-owned";
+  openpit::pretrade::StartResult start = engine.StartPreTrade(order);
+  ASSERT_TRUE(start.request.has_value());
+  EXPECT_EQ(order.strategyTag, "caller-owned");
+
+  order.strategyTag = "caller-mutated";
+  const openpit::pretrade::ExecuteResult executed = start.request->Execute();
+  ASSERT_TRUE(executed.Passed());
+  EXPECT_EQ(*observedTag, "caller-owned");
+}
+
+TEST(EngineRequest, BaseTypedReferenceToDerivedThrowsInsteadOfSlicing) {
+  Engine engine = SingleOrderEngine();
+  DeferredOrder derived;
+  const openpit::model::Order& order = derived;
+
+  EXPECT_THROW(
+      { static_cast<void>(engine.StartPreTrade(order)); }, openpit::Error);
+}
+
+TEST(EngineRequest, TypeErasedUniquePtrPreservesDynamicType) {
+  const auto observedTag = std::make_shared<std::string>();
+  EngineBuilder builder(SyncPolicy::Full);
+  openpit::pretrade::CustomPolicy<DeferredOrderPolicy> policy(
+      "DeferredOrderPolicy", DeferredOrderPolicy(observedTag));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+
+  auto concrete = std::make_unique<DeferredOrder>();
+  concrete->strategyTag = std::make_unique<std::string>("type-erased");
+  std::unique_ptr<const openpit::Order> order = std::move(concrete);
+  openpit::pretrade::StartResult start = engine.StartPreTrade(std::move(order));
+  ASSERT_TRUE(start.request.has_value());
+
+  openpit::pretrade::ExecuteResult executed = start.request->Execute();
+  ASSERT_TRUE(executed.Passed());
+  EXPECT_EQ(*observedTag, "type-erased");
+}
+
+TEST(EngineRequest, NullUniquePtrThrows) {
+  Engine engine = SingleOrderEngine();
+  std::unique_ptr<const openpit::Order> order;
+
+  EXPECT_THROW(
+      { static_cast<void>(engine.StartPreTrade(std::move(order))); },
+      openpit::Error);
 }
 
 //------------------------------------------------------------------------------

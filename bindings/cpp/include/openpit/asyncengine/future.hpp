@@ -57,10 +57,13 @@
 //
 // The shared-future payload is conditional on `T` (see `Payload<T>`): a
 // copyable `T` stores the `Result<T>` inline so the hot resolve path allocates
-// nothing extra, while a move-only `T` is boxed in a `std::shared_ptr` so the
-// single consuming `Await()` can move the value out of the shared state.
+// nothing extra, while a move-only `T` is uniquely boxed so a single consumer
+// can move the value out of the shared state.
 
 namespace openpit::asyncengine {
+
+template <typename T>
+class Future;
 
 // Machine-readable category of an async-dispatch failure carried by a future
 // or thrown by a lifecycle call. These are dispatcher conditions, not SDK
@@ -76,7 +79,46 @@ enum class ErrorCode : std::uint8_t {
   // A caller-supplied `Submit` closure threw. The closure exception never
   // crosses a thread boundary; its `what()` is captured here instead.
   TaskFailed,
+  // A move-only future value was already returned to another consumer.
+  ValueConsumed,
 };
+
+namespace detail {
+
+template <typename T, bool = std::is_copy_constructible_v<T>>
+class ResultConsumption {
+ protected:
+  [[nodiscard]] bool TryConsumeValue() const noexcept { return true; }
+};
+
+template <typename T>
+class ResultConsumption<T, false> {
+ protected:
+  ResultConsumption() = default;
+
+  ResultConsumption(ResultConsumption&& other) noexcept {
+    m_consumed.store(other.m_consumed.exchange(true, std::memory_order_relaxed),
+                     std::memory_order_relaxed);
+  }
+
+  ResultConsumption& operator=(ResultConsumption&& other) noexcept {
+    if (this != &other) {
+      m_consumed.store(
+          other.m_consumed.exchange(true, std::memory_order_relaxed),
+          std::memory_order_relaxed);
+    }
+    return *this;
+  }
+
+  [[nodiscard]] bool TryConsumeValue() const noexcept {
+    return !m_consumed.exchange(true, std::memory_order_acq_rel);
+  }
+
+ private:
+  mutable std::atomic_bool m_consumed{false};
+};
+
+}  // namespace detail
 
 /// \brief Async dispatch failure carried by a future or lifecycle API.
 //
@@ -109,10 +151,14 @@ class Error : public std::exception {
 // failure. A move-only `T` is supported by the consuming `Future::Await()`;
 // `Get()` is available only when `T` is copyable.
 template <typename T>
-class Result {
+class Result : private detail::ResultConsumption<T> {
  public:
   Result(T value) : m_value(std::move(value)) {}  // NOLINT: implicit by design.
   Result(Error error) : m_value(std::move(error)) {}  // NOLINT: implicit.
+  Result(const Result&) = default;
+  Result(Result&&) = default;
+  Result& operator=(const Result&) = default;
+  Result& operator=(Result&&) = default;
 
   [[nodiscard]] bool HasValue() const noexcept {
     return std::holds_alternative<T>(m_value);
@@ -131,22 +177,29 @@ class Result {
   }
 
  private:
+  friend class Future<T>;
+
+  [[nodiscard]] bool TryConsumeValue() const noexcept {
+    return detail::ResultConsumption<T>::TryConsumeValue();
+  }
+
   std::variant<T, Error> m_value;
 };
 
 // Shared-state payload carried by the future. A copyable `T` stores the
 // `Result<T>` inline (no per-resolve allocation); a move-only `T` is boxed in a
-// `std::shared_ptr` so the single consuming `Await()` can move out of the
+// `std::unique_ptr` so the single consuming `Await()` can move out of the
 // shared state.
 template <typename T>
 using Payload = std::conditional_t<std::is_copy_constructible_v<T>, Result<T>,
-                                   std::shared_ptr<Result<T>>>;
+                                   std::unique_ptr<Result<T>>>;
 
 /// \brief Consumer side of an async operation returning one value.
 //
 // Future over a single value `T`. Resolved exactly once via the paired
 // `Promise<T>`. Safe for concurrent observation by multiple threads when `T`
-// is copyable; move-only `T` has a single consuming `Await()` contract.
+// is copyable. A move-only value can be consumed once; later `Await()` calls
+// throw `ErrorCode::ValueConsumed`.
 template <typename T>
 class Future {
  public:
@@ -157,21 +210,7 @@ class Future {
 
   // Blocks until resolved, then returns the value or rethrows the carried
   // `Error` on the caller's thread.
-  [[nodiscard]] T Await() const {
-    if constexpr (std::is_copy_constructible_v<T>) {
-      const Result<T>& result = m_state.get();
-      if (result.HasError()) {
-        throw result.GetError();
-      }
-      return result.Value();
-    } else {
-      const std::shared_ptr<Result<T>>& result = m_state.get();
-      if (result->HasError()) {
-        throw result->GetError();
-      }
-      return std::move(*result).Value();
-    }
-  }
+  [[nodiscard]] T Await() const { return ConsumeResolved(); }
 
   // Blocks up to `timeout`. Returns the value on resolution, rethrows the
   // carried `Error`, or returns `std::nullopt` if the deadline passes first
@@ -182,19 +221,7 @@ class Future {
     if (m_state.wait_for(timeout) != std::future_status::ready) {
       return std::nullopt;
     }
-    if constexpr (std::is_copy_constructible_v<T>) {
-      const Result<T>& result = m_state.get();
-      if (result.HasError()) {
-        throw result.GetError();
-      }
-      return result.Value();
-    } else {
-      const std::shared_ptr<Result<T>>& result = m_state.get();
-      if (result->HasError()) {
-        throw result->GetError();
-      }
-      return std::move(*result).Value();
-    }
+    return ConsumeResolved();
   }
 
   [[nodiscard]] bool Done() const {
@@ -204,9 +231,36 @@ class Future {
 
   // Blocks for the resolution without consuming it, then returns the carried
   // `Result<T>` by copy. Requires a copyable `T`.
-  [[nodiscard]] Result<T> Get() const { return m_state.get(); }
+  [[nodiscard]] Result<T> Get() const {
+    if constexpr (std::is_copy_constructible_v<T>) {
+      return m_state.get();
+    } else {
+      static_assert(std::is_copy_constructible_v<T>,
+                    "Future<T>::Get() requires a copy-constructible T; use "
+                    "Await() for a move-only T");
+    }
+  }
 
  private:
+  [[nodiscard]] T ConsumeResolved() const {
+    if constexpr (std::is_copy_constructible_v<T>) {
+      const Result<T>& result = m_state.get();
+      if (result.HasError()) {
+        throw result.GetError();
+      }
+      return result.Value();
+    } else {
+      const std::unique_ptr<Result<T>>& result = m_state.get();
+      if (result->HasError()) {
+        throw result->GetError();
+      }
+      if (!result->TryConsumeValue()) {
+        throw Error(ErrorCode::ValueConsumed,
+                    "async future value was already consumed");
+      }
+      return std::move(*result).Value();
+    }
+  }
   std::shared_future<Payload<T>> m_state;
 };
 
@@ -238,7 +292,7 @@ class Promise {
       m_state->promise.set_value(std::move(result));
     } else {
       m_state->promise.set_value(
-          std::make_shared<Result<T>>(std::move(result)));
+          std::make_unique<Result<T>>(std::move(result)));
     }
   }
 

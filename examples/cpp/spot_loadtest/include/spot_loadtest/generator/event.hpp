@@ -26,10 +26,6 @@
 
 // Abstract, typed, serialisable load-test events plus their predictions.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/event.go (and
-// ledger.go for Side / RejectReason / fundingKind, which live alongside the
-// ledger in Go).
-//
 // The predictions (accept/reason/post) ARE the oracle: the driver asserts the
 // engine reproduces them exactly, per account, in account event order.
 

@@ -112,35 +112,38 @@ use wasm_bindgen::prelude::*;
 
 /// WASM module entry point invoked by the generated glue on instantiation.
 ///
-/// Installs the panic boundary so a Rust panic reaches JavaScript as an
-/// `InternalError` instead of a bare wasm trap.
+/// Installs the module-global panic boundary so a native Rust/WASM panic
+/// reaches JavaScript as an `InternalError` instead of a bare wasm trap.
 #[wasm_bindgen(start)]
 pub fn start() {
     install_panic_boundary();
 }
 
-/// Routes Rust panics out of WebAssembly as idiomatic JavaScript errors.
+/// Routes native Rust/WASM module panics out as idiomatic JavaScript errors.
 ///
 /// `wasm32-unknown-unknown` has no unwinding runtime - the shipped `std` is
 /// built with `panic = "abort"` and `catch_unwind` can never catch - so the
-/// panic hook is the only place where a panic is still observable from Rust.
+/// panic hook is the only remaining observable boundary for a panic.
+/// `std::panic::set_hook` is module-global: it observes panics from core code,
+/// binding adapters, and native glue alike.
 /// Throwing from it hands control to the JavaScript engine, which discards the
 /// wasm frames of the failed call and runs the `finally` blocks of the
-/// generated glue. The module stays instantiated only to return the same
-/// `InternalError` from every guarded entry point; callers must reload it.
+/// generated glue. The module stays instantiated, but every guarded entry
+/// point that could reach core state returns the same `InternalError`; callers
+/// must reload it.
 ///
-/// Rust destructors of the aborted call do not run, so binding state that
+/// Destructors of the aborted call do not run, so binding state that
 /// outlives a single call is reset here. Everything the failed operation was
 /// mutating is left unspecified: the error reports a defect, it does not make
 /// the operation recoverable.
 ///
-/// Only the first panic of an instance can be converted at all: the runtime
-/// marks its hook as entered and clears that mark only when the hook returns,
-/// which this one never does, so it would treat a second panic as a panic
-/// inside the hook and abort before reaching it. That is why the report poisons
-/// the module rather than merely failing one call - every entry point that
-/// could reach core state, and therefore another panic, refuses to run
-/// afterwards. Callers must reload the module after an `InternalError`.
+/// Only the first panic of an instance can be converted at all: the Rust
+/// runtime marks its hook as entered and clears that mark only when the hook
+/// returns, which this one never does, so it would treat a second panic as a
+/// panic inside the hook and abort before reaching it. That is why the report
+/// poisons the module rather than merely failing one call - every entry point
+/// guarded against poisoned core state refuses to run afterwards. Callers must
+/// reload the module after an `InternalError`.
 fn install_panic_boundary() {
     std::panic::set_hook(Box::new(|info| {
         #[cfg(feature = "console_error_panic_hook")]

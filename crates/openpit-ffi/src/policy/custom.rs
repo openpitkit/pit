@@ -257,8 +257,8 @@ pub(super) struct CustomPreTradePolicy {
     pub(super) check_pre_trade_start_fn: Option<OpenPitPretradePreTradePolicyCheckPreTradeStartFn>,
     pub(super) perform_pre_trade_check_fn:
         Option<OpenPitPretradePreTradePolicyPerformPreTradeCheckFn>,
-    // Dry-run hooks are set at construction. `None` means "delegate to the
-    // matching normal hook", matching the Rust trait default.
+    // Dry-run hooks are set at construction. `None` delegates to the matching
+    // normal hook.
     pub(super) check_pre_trade_start_dry_run_fn:
         Option<OpenPitPretradePreTradePolicyCheckPreTradeStartFn>,
     pub(super) perform_pre_trade_check_dry_run_fn:
@@ -371,8 +371,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         ctx: &PreTradeContext<StorageFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
-        // A null dry-run hook delegates to the normal start-stage hook, matching
-        // the Rust trait default exactly.
+        // A null dry-run hook delegates to the normal start-stage hook.
         let Some(check_fn) = self.check_pre_trade_start_dry_run_fn else {
             return self.check_pre_trade_start(ctx, order);
         };
@@ -389,8 +388,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         order: &Order,
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
-        // A null dry-run hook delegates to the normal main-stage hook, matching
-        // the Rust trait default exactly.
+        // A null dry-run hook delegates to the normal main-stage hook.
         let Some(check_fn) = self.perform_pre_trade_check_dry_run_fn else {
             return self.perform_pre_trade_check(ctx, order, mutations);
         };
@@ -710,8 +708,8 @@ unsafe fn build_custom_pre_trade_policy(
 /// - A null `check_pre_trade_start_dry_run_fn` or
 ///   `perform_pre_trade_check_dry_run_fn` leaves that dry-run hook delegating to
 ///   its normal counterpart (`check_pre_trade_start_fn` /
-///   `perform_pre_trade_check_fn` respectively), exactly matching the Rust trait
-///   default; pass non-null to install an explicit read-only dry-run variant.
+///   `perform_pre_trade_check_fn` respectively); pass non-null to install an
+///   explicit read-only dry-run variant.
 /// - Non-null callbacks and `free_user_data_fn` must remain callable for as long
 ///   as the policy may still be used by either the caller pointer or the engine.
 /// - Custom main-stage and account-adjustment callbacks can register

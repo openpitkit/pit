@@ -382,7 +382,7 @@ impl JsQuoteTtl {
     /// # Errors
     ///
     /// Throws `RangeError` when `durationMs` is negative, non-finite, or too
-    /// large to represent as a Rust duration.
+    /// large to represent as a native duration.
     #[wasm_bindgen(js_name = within)]
     pub fn within(duration_ms: f64) -> Result<JsQuoteTtl, JsValue> {
         let duration = Duration::try_from_secs_f64(duration_ms / 1000.0).map_err(|_| {
@@ -731,7 +731,7 @@ fn get_with_account_info(
 /// the read needs it.
 ///
 /// Every method touches shared service state, so every one of them throws
-/// `InternalError` once an engine defect has poisoned the module instance.
+/// `InternalError` once a module panic has poisoned the module instance.
 #[wasm_bindgen(js_name = MarketDataService)]
 #[derive(Clone)]
 pub struct JsMarketDataService {

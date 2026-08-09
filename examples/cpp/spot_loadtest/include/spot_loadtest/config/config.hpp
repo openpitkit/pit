@@ -27,28 +27,18 @@
 
 // Loads and validates the INI configuration file for the spot-limit load test.
 //
-// Mirror of: examples/go/spot_loadtest/internal/config/config.go
-//
-// Validation is up-front and explicit for the sections consumed by the
-// generator: required keys must be present with valid values. The accepted
-// conveniences match the Go version exactly: instruments.settlement defaults to
-// USD, funding.seed and funding.top_up default to funding.amount, and the
-// optional [arrival] and [report_delay] sections are parsed leniently.
+// Validation is up-front and explicit for required generator sections.
+// `instruments.settlement` defaults to USD, while `funding.seed` and
+// `funding.top_up` default to `funding.amount`. Optional [arrival] and
+// [report_delay] sections and keys retain their struct defaults when absent.
 
 namespace spot_loadtest::config {
 
-// Thrown on any validation failure, carrying a contextual message (the analogue
-// of the Go `error` return).
+// Thrown on any configuration validation failure with a contextual message.
 class ConfigError : public std::runtime_error {
 public:
   using std::runtime_error::runtime_error;
 };
-
-// Controls whether the sliding window is sized in operations or wall-clock
-// time.
-enum class WindowUnit { Ops, Wall };
-
-[[nodiscard]] std::string ToString(WindowUnit unit);
 
 // The distribution of the simulated TS round-trip (report-return) delay.
 enum class ReportDelayDistribution { None, Lognormal, Fixed };
@@ -57,9 +47,7 @@ enum class ReportDelayDistribution { None, Lognormal, Fixed };
 struct Run {
   std::uint64_t seed = 0;
   std::uint64_t totalOps = 0;
-  std::string duration;
   std::uint64_t window = 0;
-  WindowUnit windowUnit = WindowUnit::Ops;
   bool observer = false;
 };
 
@@ -70,8 +58,8 @@ struct Arrival {
 
 // Models the simulated TS round-trip before report settlement.
 struct ReportDelay {
+  std::chrono::nanoseconds mean{0};
   ReportDelayDistribution distribution = ReportDelayDistribution::None;
-  std::string mean;
   double sigma = 0.0;
 };
 
@@ -86,10 +74,12 @@ struct Accounts {
   std::uint64_t count = 0;
 };
 
-// The bounded-concurrency workload knob: the maximum size of the active working
-// set hot at any moment (must be > 0 and <= Accounts.count).
+// The bounded-concurrency workload knobs. All values must be positive, and the
+// submitter pool cannot exceed the active set.
 struct Concurrency {
   std::uint64_t activeAccounts = 0;
+  std::uint64_t submitterWorkers = 0;
+  std::chrono::nanoseconds maxSubmitLag{0};
 };
 
 // The dispatch strategy for the async engine.

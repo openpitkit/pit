@@ -94,7 +94,8 @@ namespace detail {
 // value into a `ClosureTask`, keeping the strategy ignorant of the driver.
 template <typename RunFn, typename AbortFn>
 [[nodiscard]] TaskPtr MakeTask(RunFn run, AbortFn abort) {
-  return std::make_unique<ClosureTask>(std::move(run), std::move(abort));
+  return std::make_unique<ClosureTask<RunFn, AbortFn>>(std::move(run),
+                                                       std::move(abort));
 }
 
 template <typename PromiseType, typename AbortHandler>
@@ -230,7 +231,8 @@ class AsyncEngine {
     Promise<R> promise;
     Future<R> future = promise.GetFuture();
     Driver* driver = m_driver;
-    auto run = [promise, driver, op = std::move(op)] {
+    // Some operations move captured payloads, so `op` must be mutable.
+    auto run = [promise, driver, op = std::move(op)]() mutable {
       try {
         promise.Resolve(op(*driver));
       } catch (const std::exception& ex) {
@@ -257,7 +259,7 @@ class AsyncEngine {
     PairPromise<A, B> promise;
     PairFuture<A, B> future = promise.GetFuture();
     Driver* driver = m_driver;
-    auto run = [promise, driver, op = std::move(op)] {
+    auto run = [promise, driver, op = std::move(op)]() mutable {
       try {
         std::pair<A, B> result = op(*driver);
         promise.Resolve(std::move(result.first), std::move(result.second));
@@ -290,7 +292,7 @@ class AsyncEngine {
     PairPromise<FirstValue, SecondValue> promise;
     PairFuture<FirstValue, SecondValue> future = promise.GetFuture();
     Driver* driver = m_driver;
-    auto run = [promise, driver, operation = std::move(operation)] {
+    auto run = [promise, driver, operation = std::move(operation)]() mutable {
       try {
         std::pair<FirstValue, SecondValue> result = operation(*driver);
         promise.Resolve(std::move(result.first), std::move(result.second));

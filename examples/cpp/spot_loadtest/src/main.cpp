@@ -18,11 +18,10 @@
 // spot_loadtest measures the C++ FFI submit->decision latency for the openpit
 // pre-trade engine running a spot-limit funds policy at high offered rates.
 //
-// Mirror of: examples/go/spot_loadtest/main.go
-//
 // Run with:
 //
-//   ./spot_loadtest --config configs/baseline.ini
+//   ./build/spot_loadtest \
+//     --config examples/cpp/spot_loadtest/configs/baseline.ini
 //
 // See README.md for the full build and run recipe.
 
@@ -99,27 +98,37 @@ int main(int argc, char **argv) {
   std::string configPath;
   bool allowDebugCore = false;
   bool showProgress = true;
+  bool validateConfig = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--config" && i + 1 < argc) {
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        std::cerr << "error: --config requires a path\n";
+        return 1;
+      }
       configPath = argv[++i];
     } else if (arg.rfind("--config=", 0) == 0) {
       configPath = arg.substr(std::string("--config=").size());
+    } else if (arg == "--validate-config") {
+      validateConfig = true;
     } else if (arg == "--allow-debug-core") {
       allowDebugCore = true;
     } else if (arg == "--progress=false" || arg == "--no-progress") {
       showProgress = false;
     } else if (arg == "--progress" || arg == "--progress=true") {
       showProgress = true;
+    } else {
+      std::cerr << "error: unknown option: " << arg << "\n";
+      return 1;
     }
   }
 
   if (configPath.empty()) {
     std::cerr << "error: --config is required\n"
               << "usage: spot_loadtest --config <path/to/config.ini> "
-                 "[--allow-debug-core] [--progress=false]\n"
-              << "  the default config is configs/baseline.ini\n";
+                 "[--validate-config] [--allow-debug-core] "
+                 "[--progress=false]\n";
     return 1;
   }
 
@@ -137,6 +146,11 @@ int main(int argc, char **argv) {
   } catch (const std::exception &e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;
+  }
+
+  if (validateConfig) {
+    std::cerr << "config valid: " << absConfig << "\n";
+    return 0;
   }
 
   const std::string repoRoot = RepoRootFromExe(argv[0]);
@@ -193,7 +207,7 @@ int main(int argc, char **argv) {
 
   if (!invalidReason.empty()) {
     sl::reporter::WriteInvalid(std::cout, e, cfg, configPath, result.snapshot,
-                               stream->stats);
+                               result.stats.submitterThreads, stream->stats);
     std::cerr << "\nerror: run invalid — " << invalidReason
               << "; latency numbers suppressed\n";
     return 1;
@@ -201,6 +215,6 @@ int main(int argc, char **argv) {
 
   // Write the full report to stdout. Nothing else writes to stdout.
   sl::reporter::Write(std::cout, e, cfg, configPath, result.snapshot,
-                      stream->stats);
+                      result.stats.submitterThreads, stream->stats);
   return 0;
 }

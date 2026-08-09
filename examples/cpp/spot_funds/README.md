@@ -94,9 +94,9 @@ in `src/spot_funds.hpp` thread from placement to fill:
   gives back an owned snapshot detached from the reservation, valid before or
   after `Commit()`, and throws `openpit::Error` on an empty
   (default-constructed or moved-from) handle.
-- `ApplyFill` copies the report, sets `model::Fill::lock` - a
-  `std::shared_ptr<pretrade::PreTradeLock>` - to a `Clone()` of that lock, and
-  passes the copy to `Engine::ApplyExecutionReport`. The returned
+- `ApplyFill` copies the report, writes a `Clone()` of that lock into
+  `model::Fill::lock`, and passes the copy to `Engine::ApplyExecutionReport`.
+  The returned
   `PostTradeResult::accountBlocks` is empty when settlement succeeded.
 
 Everything else - the engine build, the seed adjustment, the orders, the
@@ -108,4 +108,3 @@ reject-code check, and the no-block fill assertion - uses the high-level
 - [SpotFunds wiki page](https://wiki.openpit.dev/Spot-Funds/) -
   the full policy reference (market orders, slippage, pricing source, fee
   conventions).
-- [`examples/go/spot_funds`](../../go/spot_funds) - the same scenario in Go.

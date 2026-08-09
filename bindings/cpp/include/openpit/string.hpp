@@ -19,6 +19,8 @@
 
 #include "openpit/detail/handle.hpp"
 #include "openpit/detail/native_access.hpp"
+#include "openpit/detail/shared_string.hpp"
+#include "openpit/error.hpp"
 
 #include <openpit.h>
 
@@ -62,7 +64,9 @@ class StringView {
   }
 
   // Copies the bytes into an owning `std::string`.
-  [[nodiscard]] std::string ToString() const { return std::string(View()); }
+  [[nodiscard]] std::string ToString() const {
+    return detail::CopyStringView(m_view);
+  }
 
  private:
   friend class detail::NativeAccess;
@@ -82,12 +86,6 @@ namespace detail {
                        value.size()};
 }
 
-struct SharedStringDeleter {
-  void operator()(OpenPitSharedString* handle) const noexcept {
-    openpit_destroy_shared_string(handle);
-  }
-};
-
 }  // namespace detail
 
 // Owning RAII wrapper over an `OpenPitSharedString` handle.
@@ -102,13 +100,21 @@ class SharedString {
     return static_cast<bool>(m_handle);
   }
 
-  // Borrows the handle's bytes; valid only while this object is alive.
+  // Borrows the handle's bytes; valid only while this object is alive. Returns
+  // an empty view when this object has no live handle.
   [[nodiscard]] StringView View() const noexcept {
     return detail::FromNative<StringView>(
         openpit_shared_string_view(m_handle.Get()));
   }
 
-  [[nodiscard]] std::string ToString() const { return View().ToString(); }
+  // Copies the bytes into an owning string. Throws `Error` when this object has
+  // no live handle.
+  [[nodiscard]] std::string ToString() const {
+    if (!m_handle) {
+      throw Error("shared string is empty");
+    }
+    return View().ToString();
+  }
 
  private:
   friend class detail::NativeAccess;

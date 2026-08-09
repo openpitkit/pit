@@ -17,7 +17,6 @@
 
 // Progress line formatting tests.
 //
-// Mirror of: examples/go/spot_loadtest/internal/progress/progress_test.go
 
 #include "spot_loadtest/measurement/sink.hpp"
 #include "spot_loadtest/progress/progress.hpp"

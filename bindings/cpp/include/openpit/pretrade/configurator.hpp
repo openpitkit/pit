@@ -18,6 +18,7 @@
 #pragma once
 
 #include "openpit/pretrade/policies.hpp"
+#include "openpit/string.hpp"
 
 namespace openpit {
 

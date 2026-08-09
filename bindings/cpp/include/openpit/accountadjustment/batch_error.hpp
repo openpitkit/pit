@@ -18,6 +18,7 @@
 #pragma once
 
 #include "openpit/detail/handle.hpp"
+#include "openpit/error.hpp"
 #include "openpit/pretrade/decision.hpp"
 
 #include <openpit.h>
@@ -44,22 +45,22 @@ struct BatchErrorDeleter {
 
 // Owning RAII wrapper over a caller-owned `OpenPitAccountAdjustmentBatchError`
 // returned by an apply call when a policy rejects the batch. A rejected batch
-// is an expected business outcome, so this is a value type, never thrown.
+// is an expected business outcome, so this is a value type, never thrown. A
+// `BatchError` always carries a handle unless it has been moved from.
 // `FailedAdjustmentIndex()` is the position of the offending adjustment in the
 // applied array; `Rejects()` copies the policy rejects that caused it.
 // Move-only.
 class BatchError {
  public:
-  BatchError() noexcept = default;
-
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
   }
 
-  // Index of the failing adjustment within the applied batch.
-  [[nodiscard]] std::size_t FailedAdjustmentIndex() const noexcept {
+  // Index of the failing adjustment within the applied batch. Throws `Error`
+  // if this batch error has no handle.
+  [[nodiscard]] std::size_t FailedAdjustmentIndex() const {
     if (!m_handle) {
-      return 0;
+      throw ::openpit::Error("batch error is empty");
     }
     return openpit_account_adjustment_batch_error_get_failed_adjustment_index(
         m_handle.Get());
@@ -67,25 +68,28 @@ class BatchError {
 
   // Copies the policy rejects carried by this batch error. The rejects borrow
   // string memory from the batch error only during the copy; the returned
-  // values own their strings.
+  // values own their strings. Throws `Error` if this batch error has no handle,
+  // the C ABI does not provide the promised reject list, or an element fails.
   [[nodiscard]] std::vector<::openpit::reject::Reject> Rejects() const {
     std::vector<::openpit::reject::Reject> out;
     if (!m_handle) {
-      return out;
+      throw ::openpit::Error("batch error is empty");
     }
     const OpenPitPretradeRejectList* list =
         openpit_account_adjustment_batch_error_get_rejects(m_handle.Get());
     if (list == nullptr) {
-      return out;
+      throw ::openpit::Error(
+          "openpit_account_adjustment_batch_error_get_rejects returned null");
     }
     const std::size_t count = openpit_pretrade_reject_list_len(list);
     out.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
       OpenPitPretradeReject raw{};
-      if (openpit_pretrade_reject_list_get(list, i, &raw)) {
-        out.push_back(
-            ::openpit::detail::FromNative<::openpit::reject::Reject>(raw));
+      if (!openpit_pretrade_reject_list_get(list, i, &raw)) {
+        throw ::openpit::Error("openpit_pretrade_reject_list_get failed");
       }
+      out.push_back(
+          ::openpit::detail::FromNative<::openpit::reject::Reject>(raw));
     }
     return out;
   }

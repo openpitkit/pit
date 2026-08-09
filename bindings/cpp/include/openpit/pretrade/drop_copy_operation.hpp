@@ -94,7 +94,8 @@ class DropCopyOperation {
   }
 
   // Returns the request's first account block. This is request-local history;
-  // use IsAccountBlocked() for the apply-time registry snapshot.
+  // use IsAccountBlocked() for the apply-time registry snapshot. Throws `Error`
+  // if the C ABI does not provide the promised detached list.
   [[nodiscard]] std::optional<::openpit::accounts::AccountBlock> AccountBlock()
       const {
     OpenPitPretradeAccountBlockList* blocks =
@@ -103,11 +104,16 @@ class DropCopyOperation {
                               detail::AccountBlockListDeleter>
         owner(blocks);
     if (blocks == nullptr) {
+      throw ::openpit::Error(
+          "openpit_pretrade_drop_copy_operation_get_account_block returned "
+          "null");
+    }
+    if (openpit_pretrade_account_block_list_len(owner.Get()) == 0) {
       return std::nullopt;
     }
     OpenPitPretradeAccountBlock raw{};
     if (!openpit_pretrade_account_block_list_get(owner.Get(), 0, &raw)) {
-      return std::nullopt;
+      throw ::openpit::Error("openpit_pretrade_account_block_list_get failed");
     }
     return ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
         raw);

@@ -17,7 +17,6 @@
 
 // Measurement layer tests.
 //
-// Mirror of: examples/go/spot_loadtest/internal/measurement/measurement_test.go
 
 #include "spot_loadtest/measurement/overhead.hpp"
 #include "spot_loadtest/measurement/sink.hpp"
@@ -40,7 +39,7 @@ using std::chrono::nanoseconds;
 // A latency value supplied by the driver lands in the histogram exactly as
 // given, with no recomputation (the coordinated-omission correctness test).
 TEST(Measurement, COSamplePassthrough) {
-  m::Windows w(m::WindowUnit::Ops, 10000, nanoseconds(0));
+  m::Windows w(10000);
   m::Sink s(&w);
 
   const auto syntheticProcessing = milliseconds(3);
@@ -66,7 +65,7 @@ TEST(Measurement, COSamplePassthrough) {
 // Windows rotate correctly on op-count boundaries.
 TEST(Measurement, WindowingByOps) {
   constexpr int kWindowSize = 100;
-  m::Windows w(m::WindowUnit::Ops, kWindowSize, nanoseconds(0));
+  m::Windows w(kWindowSize);
   for (int i = 0; i < 350; ++i) {
     w.RecordOrderCheck(microseconds(i + 1));
   }
@@ -82,28 +81,10 @@ TEST(Measurement, WindowingByOps) {
   EXPECT_EQ(snaps[3].orderCheck.count, 50);
 }
 
-// Wall-clock windows rotate when the configured duration elapses.
-TEST(Measurement, WindowingByWall) {
-  const auto wallWindow = milliseconds(50);
-  m::Windows w(m::WindowUnit::Wall, 0, wallWindow);
-  for (int i = 0; i < 20; ++i) {
-    w.RecordOrderCheck(milliseconds(1));
-  }
-  std::this_thread::sleep_for(wallWindow + milliseconds(10));
-  for (int i = 0; i < 20; ++i) {
-    w.RecordOrderCheck(milliseconds(1));
-  }
-  std::vector<m::WindowSnapshot> snaps;
-  m::Percentiles oc;
-  m::Percentiles set;
-  w.Snapshot(snaps, oc, set);
-  EXPECT_GE(snaps.size(), 2u);
-}
-
 // The merged histogram contains exactly as many samples as the sum of all
 // window counts.
 TEST(Measurement, MergedPercentilesMatchWindowUnion) {
-  m::Windows w(m::WindowUnit::Ops, 50, nanoseconds(0));
+  m::Windows w(50);
   constexpr int kTotal = 130;
   for (int i = 0; i < kTotal; ++i) {
     w.RecordOrderCheck(microseconds(i + 1));
@@ -125,7 +106,7 @@ TEST(Measurement, MergedPercentilesMatchWindowUnion) {
 // percentiles bit-for-bit (the steady-state lossless-merge invariant).
 TEST(Measurement, MergeWindowRangeLossless) {
   constexpr int kWindowSize = 50;
-  m::Windows w(m::WindowUnit::Ops, kWindowSize, nanoseconds(0));
+  m::Windows w(kWindowSize);
   for (int i = 0; i < 220; ++i) {
     w.RecordOrderCheck(microseconds(i + 1));
     w.RecordSettlement(microseconds((i + 1) * 2));
@@ -151,7 +132,7 @@ TEST(Measurement, MergeWindowRangeLossless) {
 
 // The checksum is not constant after multiple distinct records (anti-DCE).
 TEST(Measurement, ChecksumChangesOnEachRecord) {
-  m::Windows w(m::WindowUnit::Ops, 10000, nanoseconds(0));
+  m::Windows w(10000);
   m::Sink s(&w);
 
   s.RecordSubmit();
@@ -169,7 +150,7 @@ TEST(Measurement, ChecksumChangesOnEachRecord) {
 // RecordSubmit / RecordOrderCheck keep the in-flight counter and peak
 // consistent.
 TEST(Measurement, InFlight) {
-  m::Windows w(m::WindowUnit::Ops, 10000, nanoseconds(0));
+  m::Windows w(10000);
   m::Sink s(&w);
   s.RecordSubmit();
   s.RecordSubmit();
@@ -180,15 +161,32 @@ TEST(Measurement, InFlight) {
   EXPECT_GE(s.Stats().maxInFlight, 2);
 }
 
+// Submit lag is measured independently from engine latency, and every sample
+// beyond the configured limit invalidates the run.
+TEST(Measurement, SubmitLagHistogramAndBreaches) {
+  m::Windows w(10000);
+  m::Sink s(&w);
+  const auto maxLag = milliseconds(1);
+
+  s.RecordSubmitLag(microseconds(400), maxLag);
+  s.RecordSubmitLag(maxLag, maxLag);
+  s.RecordSubmitLag(milliseconds(2), maxLag);
+
+  const m::Snapshot snap = m::Build(w, s, nullptr, m::OverheadSummary{});
+  EXPECT_EQ(snap.submitLag.count, 3);
+  EXPECT_EQ(snap.submitLagBreaches, 1u);
+  EXPECT_GE(snap.submitLag.max, milliseconds(2));
+}
+
 // Concurrent RecordDequeue / RecordComplete are race-free and counted.
 TEST(Measurement, ObserverSinkRaceClean) {
   m::ObserverSink obs;
   // `static` keeps the constants usable inside the lambdas below without an
   // explicit capture: MSVC rejects the implicit use otherwise (C3493).
-  static constexpr int kGoroutines = 10;
+  static constexpr int kWorkerThreads = 10;
   static constexpr int kCallsEach = 500;
   std::vector<std::thread> ts;
-  for (int i = 0; i < kGoroutines; ++i) {
+  for (int i = 0; i < kWorkerThreads; ++i) {
     ts.emplace_back([&obs] {
       for (int j = 0; j < kCallsEach; ++j) {
         obs.RecordDequeue(microseconds(j + 1));
@@ -204,19 +202,19 @@ TEST(Measurement, ObserverSinkRaceClean) {
     t.join();
   }
   const m::InnerMetrics im = obs.Snapshot();
-  EXPECT_EQ(im.dequeues, kGoroutines * kCallsEach);
-  EXPECT_EQ(im.completes, kGoroutines * kCallsEach);
+  EXPECT_EQ(im.dequeues, kWorkerThreads * kCallsEach);
+  EXPECT_EQ(im.completes, kWorkerThreads * kCallsEach);
 }
 
 // RecordSubmit / RecordOrderCheck are race-free under concurrent collectors.
 TEST(Measurement, SinkRaceClean) {
-  m::Windows w(m::WindowUnit::Ops, 10000, nanoseconds(0));
+  m::Windows w(10000);
   m::Sink s(&w);
   // See `ObserverSinkRaceClean`: `static` avoids the MSVC C3493 capture rule.
-  static constexpr int kGoroutines = 8;
+  static constexpr int kWorkerThreads = 8;
   static constexpr int kOpsEach = 200;
   std::vector<std::thread> ts;
-  for (int i = 0; i < kGoroutines; ++i) {
+  for (int i = 0; i < kWorkerThreads; ++i) {
     ts.emplace_back([&s, i] {
       for (int j = 0; j < kOpsEach; ++j) {
         s.RecordSubmit();
@@ -228,14 +226,14 @@ TEST(Measurement, SinkRaceClean) {
     t.join();
   }
   EXPECT_EQ(s.Stats().orderChecks,
-            static_cast<unsigned>(kGoroutines * kOpsEach));
+            static_cast<unsigned>(kWorkerThreads * kOpsEach));
 }
 
 // Steady-state percentiles exclude warmup: p90/p99 are lower than the all-run
 // figures that include the warmup spike.
 TEST(Measurement, SteadyStateConsistency) {
   constexpr int kWindowSize = 50;
-  m::Windows w(m::WindowUnit::Ops, kWindowSize, nanoseconds(0));
+  m::Windows w(kWindowSize);
   m::Sink s(&w);
   for (int i = 0; i < kWindowSize; ++i) {
     s.RecordSubmit();
@@ -261,7 +259,7 @@ TEST(Measurement, AchievedRejectRateOrderCheckOnly) {
   constexpr int kTotalSettlements = 95;
   constexpr int kSettlementRejects = 10;
 
-  m::Windows w(m::WindowUnit::Ops, 10000, nanoseconds(0));
+  m::Windows w(10000);
   m::Sink s(&w);
   for (int i = 0; i < kOrderCheckRejects; ++i) {
     s.RecordSubmit();
@@ -286,7 +284,7 @@ TEST(Measurement, AchievedRejectRateOrderCheckOnly) {
 
 // The divide-by-zero guard: no order checks => achieved rate 0.
 TEST(Measurement, AchievedRejectRateZeroOrderChecks) {
-  m::Windows w(m::WindowUnit::Ops, 10000, nanoseconds(0));
+  m::Windows w(10000);
   m::Sink s(&w);
   for (int i = 0; i < 10; ++i) {
     s.RecordSubmit();

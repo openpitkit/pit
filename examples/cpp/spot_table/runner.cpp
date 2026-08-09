@@ -60,7 +60,7 @@ namespace {
 // Bounds graceful shutdown and reservation draining of the async engine.
 constexpr std::chrono::seconds kAsyncStopTimeout{30};
 
-// True once the run's deadline has passed; the mirror of `ctx.Err() != nil`.
+// Returns true once the run deadline has passed.
 [[nodiscard]] bool Expired(Deadline deadline) {
   return std::chrono::steady_clock::now() >= deadline;
 }
@@ -85,7 +85,7 @@ const std::unordered_map<std::string, RejectCode> &CodeNames() {
   return table;
 }
 
-// `strings.ToLower(strings.TrimSpace(name))`.
+// Trims surrounding whitespace and lowercases the remaining bytes.
 [[nodiscard]] std::string ToLowerTrimmed(const std::string &s) {
   const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
   std::size_t begin = 0;
@@ -144,9 +144,10 @@ const std::unordered_map<std::string, RejectCode> &CodeNames() {
 }
 
 //------------------------------------------------------------------------------
-// `checkOrderVerdict` / `seedFillVerdictError`.
+// Verdict checks.
 
-// Reports an expectation SEED/FILL cannot honor. ACCEPT is an ORDER-only
+// Reports an invalid expected verdict for a SEED or FILL row. ACCEPT is
+// ORDER-only.
 [[nodiscard]] std::optional<Failure> SeedFillVerdictError(const Row &row) {
   if (row.expect == "ACCEPT") {
     return Failure{row, row.action +
@@ -157,7 +158,8 @@ const std::unordered_map<std::string, RejectCode> &CodeNames() {
                  row.action + " row must use OK/REJECT, got " + row.expect};
 }
 
-// Compares a SEED outcome against the row's expected verdict. `rejected` is
+// Checks a SEED result against its expected verdict. `rejected` denotes engine
+// rejection.
 [[nodiscard]] std::optional<Failure> CheckSeedVerdict(const Row &row,
                                                       bool rejected) {
   if (row.expect == "OK") {
@@ -174,7 +176,8 @@ const std::unordered_map<std::string, RejectCode> &CodeNames() {
   return std::nullopt;
 }
 
-// Compares a FILL outcome against the row's expected verdict. `blocked` is
+// Checks a FILL result against its expected verdict. `blocked` denotes an
+// account block.
 [[nodiscard]] std::optional<Failure> CheckFillVerdict(const Row &row,
                                                       bool blocked) {
   if (row.expect == "OK") {
@@ -191,7 +194,7 @@ const std::unordered_map<std::string, RejectCode> &CodeNames() {
   return std::nullopt;
 }
 
-// `checkOrderVerdict`.
+// Checks an ORDER result against its expected verdict and optional reject code.
 [[nodiscard]] std::optional<Failure>
 CheckOrderVerdict(const Row &row, const std::vector<Reject> &rejects,
                   bool passed) {
@@ -223,8 +226,7 @@ CheckOrderVerdict(const Row &row, const std::vector<Reject> &rejects,
 
 //------------------------------------------------------------------------------
 
-// Aggregates every GROUP row into the set of accounts to register per group,
-// `groupMembership`.
+// Collects GROUP rows, retaining table order for registration and reporting.
 struct GroupMembership {
   std::vector<std::string> order; // group labels in first-seen order
   std::map<std::string, std::vector<param::AccountId>> members;
@@ -239,7 +241,7 @@ struct GroupMembership {
     return Row{};
   }
 
-  // `countInReport`.
+  // Adds GROUP rows to the report totals.
   void CountInReport(Report &report) const {
     for (const Row &row : rows) {
       report.total++;
@@ -248,7 +250,7 @@ struct GroupMembership {
   }
 };
 
-// `collectGroups`.
+// Builds group membership from GROUP rows in table order.
 [[nodiscard]] std::pair<GroupMembership, std::optional<Failure>>
 CollectGroups(const std::vector<Row> &rows) {
   GroupMembership g;
@@ -273,8 +275,7 @@ CollectGroups(const std::vector<Row> &rows) {
 
 //------------------------------------------------------------------------------
 
-// Replays one TICK row: a global push when neither account nor group is set,
-// `pushTick`.
+// Replays a TICK row globally or to its selected accounts and groups.
 void PushTick(MarketFeed &feed, const Row &row) {
   if (row.account.empty() && row.group.empty()) {
     feed.Push(row.instrument, row.price);
@@ -301,7 +302,8 @@ struct SyncEngineSet {
   openpit::Engine engine;
 };
 
-// Builds the Mode A engine: single-thread NoSync with the spot funds policy
+// Builds a NoSync engine and market-data service. The SpotFundsPolicy takes
+// market-order slippage from front matter and uses Mark pricing.
 [[nodiscard]] SyncEngineSet BuildSpotEngineSync(const Frontmatter &fm) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   md::Service service = md::Builder::FromEngineSyncPolicy(
@@ -464,7 +466,7 @@ std::string CodeName(RejectCode code) {
 }
 
 //------------------------------------------------------------------------------
-// RunSync.
+// Synchronous table execution.
 
 Report RunSync(Deadline deadline, const Frontmatter &fm,
                const std::vector<Row> &rows) {
@@ -541,13 +543,13 @@ Report RunSync(Deadline deadline, const Frontmatter &fm,
 }
 
 //------------------------------------------------------------------------------
-// RunAsync.
+// Asynchronous table execution.
 
 namespace {
 
 using AsyncEngine = ae::TypedAsyncEngine<ae::EngineAdapter>;
 
-// Returns whichever failure sits on the earlier table row; a nullopt is "no
+// Returns the failure from the earlier table row, or whichever is present.
 [[nodiscard]] std::optional<Failure> EarlierFailure(std::optional<Failure> a,
                                                     std::optional<Failure> b) {
   if (!a.has_value()) {
@@ -562,7 +564,7 @@ using AsyncEngine = ae::TypedAsyncEngine<ae::EngineAdapter>;
   return a;
 }
 
-// A row submitted to the async engine, paired with the future-await logic
+// An asynchronously submitted row and callbacks to await, fence, or release it.
 //
 // `await` resolves the step's verdict and finalizes any reservation; `wait`
 // blocks until the engine call ran without scoring (used by a TICK barrier);
@@ -575,21 +577,19 @@ struct AsyncStep {
   std::function<void()> release;
 };
 
-// Threads the per-account barrier bookkeeping and the per-operation latency
+// Holds per-account barriers, report state, and latency timers for submission.
 struct AsyncSubmission {
   MarketFeed *feed = nullptr;
   GroupMembership *groups = nullptr;
   Report *report = nullptr;
   Deadline deadline{};
   std::vector<AsyncStep> steps;
-  // Fill reports outlive the worker closures that borrow them.
-  std::vector<std::shared_ptr<FillReport>> fillReports;
   std::map<param::AccountId, std::vector<std::function<void()>>> waiters;
+  // Protects latency statistics written by timer threads.
   std::mutex statsMu;
-  // report is read.
   std::vector<std::thread> timers;
 
-  // Records one operation's submit-to-resolve latency as soon as its future
+  // Records submit-to-resolve latency after an operation's future completes.
   template <typename FutureT>
   void ObserveOnResolve(FutureT future,
                         std::chrono::steady_clock::time_point start,
@@ -619,8 +619,8 @@ struct AsyncSubmission {
   }
 };
 
-// without a deadline (the engine resolves these registrations promptly), so the
-// argument is presently unused.
+// Registers groups before submitting rows. The deadline is not applied because
+// registration completes promptly.
 [[nodiscard]] std::optional<Failure>
 RegisterGroupsAsync([[maybe_unused]] Deadline deadline, AsyncEngine &engine,
                     const GroupMembership &groups, Report &report) {
@@ -648,8 +648,7 @@ RegisterGroupsAsync([[maybe_unused]] Deadline deadline, AsyncEngine &engine,
   return std::nullopt;
 }
 
-// Finalizes a passing reservation (commit) or any other (rollback), then closes
-// `finalizeReservation`.
+// Commits a passing reservation or rolls back any other reservation.
 void FinalizeReservation(
     [[maybe_unused]] Deadline deadline,
     const std::shared_ptr<ae::AsyncReservation<ae::EngineAdapter>> &res,
@@ -695,7 +694,7 @@ void FinalizeReservation(
   return step;
 }
 
-// `submitOrder`.
+// Submits an ORDER and retains its future for later verdict evaluation.
 [[nodiscard]] AsyncStep SubmitAsyncOrder(AsyncSubmission &s,
                                          AsyncEngine &engine,
                                          param::AccountId acc, const Row &row) {
@@ -748,14 +747,10 @@ void FinalizeReservation(
 
 [[nodiscard]] AsyncStep SubmitAsyncFill(AsyncSubmission &s, AsyncEngine &engine,
                                         param::AccountId acc, const Row &row) {
-  auto fillReport =
-      std::make_shared<FillReport>(BuildFillReport(row, acc, *s.feed));
-  s.fillReports.push_back(fillReport);
+  FillReport fillReport = BuildFillReport(row, acc, *s.feed);
   const auto start = std::chrono::steady_clock::now();
   auto future = std::make_shared<ae::Future<openpit::PostTradeResult>>(
-      engine.Generic().Call(acc, [fillReport](ae::EngineAdapter &driver) {
-        return driver.ApplyExecutionReport(fillReport->Report());
-      }));
+      engine.ApplyExecutionReport(fillReport.TakeReport()));
   s.ObserveOnResolve(*future, start, &s.report->fill);
 
   AsyncStep step;
@@ -777,8 +772,7 @@ void FinalizeReservation(
   return step;
 }
 
-// The accounts whose outstanding operations a TICK must fence: the addressed
-// `barrierAccounts`.
+// Returns accounts whose outstanding work an addressed TICK must fence.
 [[nodiscard]] std::vector<param::AccountId>
 BarrierAccounts(const AsyncSubmission &s, const Row &row) {
   std::vector<param::AccountId> accounts;
@@ -799,8 +793,9 @@ BarrierAccounts(const AsyncSubmission &s, const Row &row) {
   return accounts;
 }
 
-// Fences the TICK's target accounts then publishes the quote. A global push has
-// no fence (the determinism contract restricts it to the pre-order setup
+// Fences addressed TICK targets before publishing. Global TICKs publish
+// without a fence and are deterministic only when table authors keep them in
+// the pre-order setup block; this function does not enforce that precondition.
 void ReplayTick(AsyncSubmission &s, const Row &row) {
   if (row.account.empty() && row.group.empty()) {
     s.feed->Push(row.instrument, row.price);
@@ -818,8 +813,8 @@ void ReplayTick(AsyncSubmission &s, const Row &row) {
   PushTick(*s.feed, row);
 }
 
-// Submits every non-TICK row and replays addressed TICKs in order. A TICK
-// `submitAsyncSteps`.
+// Submits non-TICK rows and replays TICK rows in table order until a deadline
+// or replay failure.
 void SubmitAsyncSteps(Deadline deadline, AsyncEngine &engine,
                       AsyncSubmission &s, const std::vector<Row> &rows) {
   for (const Row &row : rows) {
@@ -866,7 +861,9 @@ void SubmitAsyncSteps(Deadline deadline, AsyncEngine &engine,
 
 Report RunAsync(Deadline deadline, const Frontmatter &fm,
                 const std::vector<Row> &rows) {
-  // Build the AccountSync engine + FullSync market-data service. Mirrors
+  // Builds an AccountSync engine and FullSync market-data service. The
+  // SpotFundsPolicy takes market-order slippage from front matter and uses Mark
+  // pricing.
   openpit::EngineBuilder builder(openpit::SyncPolicy::Account);
   md::Service service =
       md::Builder::FromEngineSyncPolicy(md::QuoteTtl::Infinite(),
@@ -930,18 +927,18 @@ Report RunAsync(Deadline deadline, const Frontmatter &fm,
   report.wallClock = std::chrono::steady_clock::now() - start;
   report.firstFail = EarlierFailure(report.firstFail, submitFail);
 
-  // Drain steps the verdict loop never reached so each reservation is finalized
+  // Drain steps the verdict loop did not reach so every reservation is
+  // finalized.
   for (std::size_t i = awaited; i < s.steps.size(); ++i) {
     if (s.steps[i].release) {
       s.steps[i].release();
     }
   }
 
-  // Every operation has now resolved; wait for the latency timers to finish
+  // All operations have resolved; wait for latency timers to finish.
   s.JoinTimers();
 
-  // Graceful shutdown, then the service is released as the locals unwind
-  // deferred StopGraceful + service.Close().
+  // Stop the async engine before local service and driver objects unwind.
   (void)asyncEngine.StopGraceful(kAsyncStopTimeout);
   return report;
 }

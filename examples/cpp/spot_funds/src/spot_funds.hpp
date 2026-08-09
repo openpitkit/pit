@@ -213,8 +213,7 @@ ApplyFill(const ::openpit::Engine &engine,
           const ::openpit::model::ExecutionReport &report,
           const ::openpit::pretrade::PreTradeLock &lock) {
   ::openpit::model::ExecutionReport reportWithLock = report;
-  reportWithLock.fill->lock =
-      std::make_shared<::openpit::pretrade::PreTradeLock>(lock.Clone());
+  reportWithLock.fill->lock = lock.Clone();
   ::openpit::PostTradeResult result =
       engine.ApplyExecutionReport(reportWithLock);
   FillResult out;

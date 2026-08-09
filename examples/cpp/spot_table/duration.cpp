@@ -34,7 +34,7 @@ constexpr std::int64_t kNanosPerSecond = 1000LL * 1000LL * 1000LL;
 constexpr std::int64_t kNanosPerMinute = 60 * kNanosPerSecond;
 constexpr std::int64_t kNanosPerHour = 60 * kNanosPerMinute;
 
-// Renders a fractional unit value (e.g. "1.5") trimming trailing zeros, the way
+// Renders a fractional unit value while trimming trailing zeros.
 [[nodiscard]] std::string FormatFloat(std::int64_t value, std::int64_t unit,
                                       const char *suffix) {
   const std::int64_t whole = value / unit;
@@ -79,7 +79,7 @@ std::string FormatDuration(Nanos d) {
     if (ns < kNanosPerMicro) {
       out = std::to_string(ns) + "ns";
     } else if (ns < kNanosPerMilli) {
-      out = FormatFloat(ns, kNanosPerMicro, "µs"); // µs
+      out = FormatFloat(ns, kNanosPerMicro, "µs");
     } else {
       out = FormatFloat(ns, kNanosPerMilli, "ms");
     }
@@ -108,7 +108,7 @@ Nanos RoundDuration(Nanos d, Nanos unit) {
   const std::int64_t u = unit.count();
   const std::int64_t v = d.count();
   const std::int64_t r = v % u;
-  // unit.
+  // Compare the absolute remainder to half the rounding unit.
   const std::int64_t absR = r < 0 ? -r : r;
   std::int64_t rounded = v - r;
   if (absR + absR >= u) {
@@ -132,7 +132,7 @@ bool ParseDuration(const std::string &text, Nanos &out, std::string &err) {
     err = "invalid duration \"" + text + "\"";
     return false;
   }
-  // Special case "0" with no unit, mirroring time.ParseDuration.
+  // Accept "0" without a unit as zero duration.
   if (text.substr(i) == "0") {
     out = Nanos(0);
     return true;

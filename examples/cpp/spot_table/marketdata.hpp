@@ -17,7 +17,7 @@
 
 #pragma once
 
-// wrapper that replays TICK rows against it.
+// Wraps a live market-data service and replays TICK rows against it.
 //
 // Each execution mode owns one feed over its own service: the runner registers
 // every instrument that any TICK row mentions up front, then pushes quotes live
@@ -40,19 +40,21 @@
 
 namespace spot_table {
 
-// Splits "BASE/QUOTE" into its two parts. Throws `FeedError` when the input is
+// Splits "BASE/QUOTE" into its two parts. Throws `FeedError` unless both sides
+// are non-empty.
 [[nodiscard]] std::pair<std::string, std::string>
 SplitInstrument(const std::string &s);
 
-// Thrown on any market-feed failure (registration, push, or a malformed
+// Thrown on market-feed registration or publication failure, or malformed
+// instrument or price input.
 class FeedError : public std::runtime_error {
 public:
   explicit FeedError(const std::string &message)
       : std::runtime_error(message) {}
 };
 
-// Wraps a live `marketdata::Service` and replays TICK rows against it. The
-// caller retains ownership of the service and is responsible for closing it
+// Wraps a live `marketdata::Service` and replays TICK rows against it.
+// The caller owns the service and is responsible for closing it.
 class MarketFeed {
 public:
   // Wraps an already-built market-data service handle. Borrowing only: the
@@ -60,11 +62,12 @@ public:
   explicit MarketFeed(openpit::marketdata::Service &service)
       : m_service(&service) {}
 
-  // Registers every instrument named by a TICK row so later live pushes
-  // resolve. Throws `FeedError` on a malformed instrument or a registration
+  // Registers TICK instruments so later live pushes resolve. Throws `FeedError`
+  // for malformed instruments or failed registrations.
   void RegisterInstruments(const std::vector<Row> &rows);
 
-  // Publishes a global mark-price snapshot for `instrument`. Throws `FeedError`
+  // Publishes a global mark-price snapshot. Throws `FeedError` for invalid
+  // input, an unregistered instrument, or failed publication.
   void Push(const std::string &instrument, const std::string &price);
 
   // Publishes an addressed mark-price snapshot for `instrument` to each listed
@@ -73,7 +76,8 @@ public:
                const std::vector<openpit::param::AccountId> &accounts,
                const std::vector<openpit::param::AccountGroupId> &groups);
 
-  // The last price string pushed for `instrument`, or "" when none yet. Mirrors
+  // Returns the last price string pushed for `instrument`, or "" when none
+  // exists.
   [[nodiscard]] std::string LatestPrice(const std::string &instrument) const;
 
 private:

@@ -81,9 +81,9 @@ private:
   int m_rejectCap;
 };
 
-// Renders a duration the way Go's time.Duration.String() does, so the summary
-// reads identically to the Go example. The values are wall-clock timings, so
-// the exact figures vary run to run.
+// Renders sub-second durations in one ns/µs/ms unit and durations of at least
+// one second as one compact seconds value. The values are wall-clock timings,
+// so the exact figures vary run to run.
 [[nodiscard]] std::string FormatDuration(std::chrono::nanoseconds value) {
   const std::int64_t ns = value.count();
   char buffer[64];

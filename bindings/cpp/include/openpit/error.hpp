@@ -17,10 +17,12 @@
 
 #pragma once
 
-#include "openpit/string.hpp"
+#include "openpit/detail/handle.hpp"
+#include "openpit/detail/shared_string.hpp"
 
 #include <openpit.h>
 
+#include <cstdint>
 #include <exception>
 #include <optional>
 #include <string>
@@ -104,11 +106,12 @@ namespace detail {
 class ErrorAccess final {
  public:
   [[nodiscard]] static std::string TakeString(OpenPitSharedString* handle) {
-    return FromNative<SharedString>(handle).ToString();
+    Handle<OpenPitSharedString, SharedStringDeleter> owned(handle);
+    return CopyString(openpit_shared_string_view(owned.Get()));
   }
 
   [[nodiscard]] static std::string CopyString(OpenPitStringView view) {
-    return FromNative<StringView>(view).ToString();
+    return CopyStringView(view);
   }
 };
 

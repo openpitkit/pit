@@ -28,8 +28,6 @@
 
 // The complete post-run measurement picture.
 //
-// Mirror of: examples/go/spot_loadtest/internal/measurement/snapshot.go
-//
 // Carries per-window trajectory data, merged percentiles for the headline
 // streams, throughput, reject rate, harness overhead, inner metrics, and the
 // anti-DCE checksum. The steady-state headline is computed by a LOSSLESS Merge
@@ -50,6 +48,7 @@ struct Snapshot {
   int warmupWindows = 0;
 
   Percentiles serviceTime;
+  Percentiles submitLag;
 
   double throughput = 0.0;
 
@@ -66,6 +65,7 @@ struct Snapshot {
   double achievedRejectRate = 0.0;
 
   std::int64_t maxInFlight = 0;
+  std::uint64_t submitLagBreaches = 0;
   std::uint64_t backpressure = 0;
   std::uint64_t handoffStalls = 0;
   int maxWorkOverflow = 0;

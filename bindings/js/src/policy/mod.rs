@@ -24,9 +24,9 @@
 //!
 //! ## Callback-error bridge (critical under `panic = "abort"`)
 //!
-//! A JS callback may throw. Because `panic = "abort"` turns any Rust panic into
-//! an unrecoverable wasm trap, a thrown `JsValue` must never become a Rust
-//! panic. Instead the adapter captures the thrown value in a thread-local
+//! A JS callback may throw. With `panic = "abort"`, allowing that thrown
+//! `JsValue` to become a Rust panic would produce an unrecoverable wasm trap.
+//! Instead the adapter captures the thrown value in a thread-local,
 //! operation-scoped stack, returns a benign sentinel reject into the engine
 //! core, and lets the core unwind normally. The engine entry point then wraps
 //! the first captured exception together with any reconciled result.
@@ -445,15 +445,15 @@ thread_local! {
 }
 
 /// Message used when a panic report could not be recorded.
-const UNAVAILABLE_PANIC_REPORT: &str = "openpit engine panicked; no report available";
+const UNAVAILABLE_PANIC_REPORT: &str = "openpit module panicked; no report available";
 
 /// Records a panic that is about to leave the boundary as a JS exception.
 ///
 /// Such an exception destroys wasm frames without running their destructors,
 /// so their guard frames are dropped here. The panic report also poisons the
-/// module: the Rust runtime cannot safely report a second panic from the same
-/// instance, and no surviving outer engine may resume after its guard frame was
-/// abandoned. Every later guarded call therefore returns the same
+/// module: the Rust/WASM runtime cannot safely report a second panic from the
+/// same instance, and no surviving outer engine may resume after its guard
+/// frame was abandoned. Every later guarded call therefore returns the same
 /// `InternalError` before touching core state.
 pub(crate) fn report_panic(report: &str) {
     let _ = PANIC_POISONED.try_with(|poisoned| poisoned.set(true));

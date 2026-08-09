@@ -32,7 +32,6 @@
 #include <gtest/gtest.h>
 
 #include <cassert>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -112,8 +111,7 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
                             openpit::param::Quantity::FromString("10"));
   fill.leavesQuantity = openpit::param::Quantity::FromString("0");
   fill.isFinal = true;
-  fill.lock =
-      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(restored));
+  fill.lock = std::move(restored);
 
   openpit::model::ExecutionReport report;
   report.operation = std::move(operation);

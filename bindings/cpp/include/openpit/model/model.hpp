@@ -25,7 +25,6 @@
 #include <openpit.h>
 
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -52,55 +51,57 @@ using RawExecutionReport = ::OpenPitExecutionReport;
 
 namespace openpit {
 
-// Polymorphic base for an order payload handed to a pre-trade policy. Client
-// order types derive from this so `openpit/pretrade/adapters.hpp` can recover
-// the
-// concrete type via `dynamic_cast`.
-//
+namespace model {
+class Order;
+class ExecutionReport;
+}  // namespace model
+
+// Internal polymorphic seam for pre-trade order dispatch. Clients use
+// `model::Order`, not this base: the engine uses it only for `dynamic_cast`,
+// and its private `NativeView()` crosses the internal C ABI.
 class Order {
  public:
+  virtual ~Order() = default;
+
+ private:
+  friend class detail::NativeAccess;
+  friend class model::Order;
+
   Order() = default;
   Order(const Order&) = default;
   Order(Order&&) = default;
   Order& operator=(const Order&) = default;
   Order& operator=(Order&&) = default;
-  virtual ~Order() = default;
-
- private:
-  friend class detail::NativeAccess;
 
   [[nodiscard]] detail::RawOrder Native() const noexcept {
     return NativeView();
   }
 
-  [[nodiscard]] virtual detail::RawOrder NativeView() const noexcept {
-    return detail::RawOrder{};
-  }
+  [[nodiscard]] virtual detail::RawOrder NativeView() const noexcept = 0;
 };
 
-// Polymorphic base for an execution-report payload applied by a policy. Client
-// report types derive from this so `openpit/pretrade/adapters.hpp` can recover
-// the
-// concrete type via `dynamic_cast`.
+// Internal polymorphic seam for post-trade report dispatch. Clients use
+// `model::ExecutionReport`, not this base: the engine uses it only for
+// `dynamic_cast`, and its private `NativeView()` crosses the internal C ABI.
 class ExecutionReport {
  public:
+  virtual ~ExecutionReport() = default;
+
+ private:
+  friend class detail::NativeAccess;
+  friend class model::ExecutionReport;
+
   ExecutionReport() = default;
   ExecutionReport(const ExecutionReport&) = default;
   ExecutionReport(ExecutionReport&&) = default;
   ExecutionReport& operator=(const ExecutionReport&) = default;
   ExecutionReport& operator=(ExecutionReport&&) = default;
-  virtual ~ExecutionReport() = default;
 
- private:
-  friend class detail::NativeAccess;
-
-  [[nodiscard]] detail::RawExecutionReport Native() const noexcept {
+  [[nodiscard]] detail::RawExecutionReport Native() const {
     return NativeView();
   }
 
-  [[nodiscard]] virtual detail::RawExecutionReport NativeView() const noexcept {
-    return detail::RawExecutionReport{};
-  }
+  [[nodiscard]] virtual detail::RawExecutionReport NativeView() const = 0;
 };
 
 namespace detail {
@@ -109,12 +110,12 @@ namespace detail {
 // this thread.
 //
 // The pre-trade pipeline runs policy callbacks synchronously on the invoking
-// thread while the exact submitted `openpit::Order` is alive. Deferred
-// `StartPreTrade` requests own that object through `Request::Execute()`, so the
-// custom-policy trampolines can preserve its dynamic type for `dynamic_cast`
-// recovery instead of rebuilding only the base C POD view. `nullptr` when no
-// submission is in flight (the trampolines then reconstruct the order from the
-// C view).
+// thread while the exact submitted `openpit::Order` is alive. In a deferred
+// flow the request owns that object and installs the guard before the main
+// stage, so the custom policy trampolines can preserve its dynamic type for
+// `dynamic_cast` recovery instead of rebuilding only the base C POD view.
+// `nullptr` when no submission is in flight (the trampolines then reconstruct
+// the order from the C view).
 [[nodiscard]] inline const Order*& CurrentSubmittedOrder() noexcept {
   static thread_local const Order* current = nullptr;
   return current;
@@ -559,7 +560,8 @@ class Order : public ::openpit::Order {
   }
 
   // Borrows this object's string storage; valid only while it stays alive.
-  [[nodiscard]] OpenPitOrder NativeView() const noexcept override {
+  // Routing model fields and engine native view must not diverge.
+  [[nodiscard]] OpenPitOrder NativeView() const noexcept final {
     OpenPitOrder raw{};
     if (operation) {
       raw.operation.value = ::openpit::detail::Native(*operation);
@@ -677,27 +679,28 @@ struct Trade {
 // Fill-details group of an execution report.
 //
 struct Fill {
-  std::shared_ptr<pretrade::PreTradeLock> lock;
-  std::optional<Trade> lastTrade;
+  // An absent lock maps to the C ABI null pointer and is a normal state.
+  // Lock requirements belong to the configured policies, not this binding.
+  std::optional<::openpit::pretrade::PreTradeLock> lock{};
+  std::optional<Trade> lastTrade{};
   // Structured fee amount and currency reported for this fill.
-  std::optional<param::MonetaryAmount> fee;
-  std::optional<param::Quantity> leavesQuantity;
-  std::optional<bool> isFinal;
+  std::optional<param::MonetaryAmount> fee{};
+  std::optional<param::Quantity> leavesQuantity{};
+  std::optional<bool> isFinal{};
 
  private:
   friend class ::openpit::detail::NativeAccess;
 
   [[nodiscard]] static Fill FromRaw(const OpenPitExecutionReportFill& raw) {
-    Fill out;
+    Fill out{};
     if (raw.lock != nullptr) {
       OpenPitPretradePreTradeLock* clonedRaw =
           openpit_pretrade_pre_trade_lock_clone(raw.lock);
       if (clonedRaw == nullptr) {
         throw ::openpit::Error("pre-trade lock clone failed");
       }
-      auto cloned =
+      out.lock =
           ::openpit::detail::FromNative<pretrade::PreTradeLock>(clonedRaw);
-      out.lock = std::make_shared<pretrade::PreTradeLock>(std::move(cloned));
     }
     if (raw.last_trade.is_set) {
       out.lastTrade =
@@ -714,8 +717,14 @@ struct Fill {
     return out;
   }
 
-  [[nodiscard]] OpenPitExecutionReportFill Native() const noexcept {
+  [[nodiscard]] OpenPitExecutionReportFill Native() const {
     OpenPitExecutionReportFill raw{};
+    if (lock) {
+      if (!*lock) {
+        throw ::openpit::Error("fill.lock was moved from");
+      }
+      raw.lock = ::openpit::detail::Native(*lock);
+    }
     if (lastTrade) {
       raw.last_trade.value = ::openpit::detail::Native(*lastTrade);
       raw.last_trade.is_set = true;
@@ -725,7 +734,6 @@ struct Fill {
       raw.leaves_quantity.value = ::openpit::detail::Native(*leavesQuantity);
       raw.leaves_quantity.is_set = true;
     }
-    raw.lock = lock ? ::openpit::detail::Native(*lock) : nullptr;
     if (isFinal) {
       raw.is_final.value = *isFinal;
       raw.is_final.is_set = true;
@@ -806,7 +814,8 @@ class ExecutionReport : public ::openpit::ExecutionReport {
 
   // Borrows this object's string storage; valid only while it stays alive. A
   // produced fill carries its own lock through to the native view.
-  [[nodiscard]] OpenPitExecutionReport NativeView() const noexcept override {
+  // Routing model fields and engine native view must not diverge.
+  [[nodiscard]] OpenPitExecutionReport NativeView() const final {
     OpenPitExecutionReport raw{};
     if (operation) {
       raw.operation.value = ::openpit::detail::Native(*operation);

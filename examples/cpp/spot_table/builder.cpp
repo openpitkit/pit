@@ -104,7 +104,7 @@ adj::AccountAdjustment BuildSeedAdjustment(const Row &row) {
 
 namespace {
 
-// Turns an ORDER row's qty or volume cell into a TradeAmount. Exactly one is
+// Builds an ORDER trade amount from volume when present, otherwise quantity.
 [[nodiscard]] model::TradeAmount BuildTradeAmount(const Row &row) {
   if (!row.volume.empty()) {
     try {

@@ -28,8 +28,6 @@
 
 // The partitioned account/instrument universe.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/cohort.go
-//
 // Account assignment is deterministic: accounts are dealt to cohorts in
 // proportion to weight using a largest-remainder split, then laid out in cohort
 // order, so account i's cohort depends only on the config (not on the RNG).

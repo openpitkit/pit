@@ -35,6 +35,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -114,12 +115,19 @@ class Task {
 using TaskPtr = std::unique_ptr<Task>;
 using SubmitFailureHandler = std::function<void(Error)>;
 
-// Closure task: runs a caller-supplied `std::function<void()>` and resolves a
-// void future. The closure is built by the engine layer to call the driver and
-// resolve a typed promise; this keeps the strategy free of driver knowledge.
+// Closure task: runs caller-supplied closures and resolves a void future. The
+// closure is built by the engine layer to call the driver and resolve a typed
+// promise; this keeps the strategy free of driver knowledge.
+template <typename RunFn, typename AbortFn>
 class ClosureTask final : public Task {
+  static_assert(std::is_invocable_v<RunFn&>,
+                "ClosureTask run closure must be invocable with no arguments");
+  static_assert(
+      std::is_invocable_v<AbortFn&, Error>,
+      "ClosureTask abort closure must be invocable with openpit::Error");
+
  public:
-  ClosureTask(std::function<void()> run, std::function<void(Error)> abort)
+  ClosureTask(RunFn run, AbortFn abort)
       : m_run(std::move(run)), m_abort(std::move(abort)) {}
 
   void Run() override {
@@ -146,8 +154,8 @@ class ClosureTask final : public Task {
     }
   }
 
-  std::function<void()> m_run;
-  std::function<void(Error)> m_abort;
+  RunFn m_run;
+  AbortFn m_abort;
 };
 
 inline void ResolveMandatoryCleanup(Promise<std::monostate> promise,

@@ -20,9 +20,9 @@
 #include <string>
 #include <string_view>
 
-// Self-contained SHA-256 so the report can echo the config hash (the analogue
-// of Go's crypto/sha256) without an external dependency. Used only off the hot
-// path, once per run, on the config file bytes.
+// Self-contained SHA-256 lets the report echo the config hash without an
+// external dependency. It runs once per run, off the hot path, on the config
+// file bytes.
 
 namespace spot_loadtest {
 

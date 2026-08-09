@@ -20,6 +20,7 @@
 #include "openpit/detail/native_access.hpp"
 #include "openpit/error.hpp"
 #include "openpit/param/detail/native.hpp"
+#include "openpit/string.hpp"
 
 #include <cstdint>
 #include <string>

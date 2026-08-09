@@ -26,8 +26,6 @@
 
 // Result-sink accumulation with an anti-DCE checksum.
 //
-// Mirror of: examples/go/spot_loadtest/internal/measurement/sink.go
-//
 // `Sink` accumulates resolved operation measurements into HdrHistogram windows,
 // maintains operation-class counters kept STRICTLY SEPARATE so the headline
 // never mixes classes, and computes an anti-DCE checksum over every decision.
@@ -54,6 +52,7 @@ struct SinkStats {
   std::uint64_t fundings = 0;
   std::uint64_t fundingAccepts = 0;
   std::uint64_t fundingRejects = 0;
+  std::uint64_t submitLagBreaches = 0;
   std::uint64_t backpressure = 0;
   std::uint64_t handoffStalls = 0;
   int maxWorkOverflow = 0;
@@ -77,6 +76,9 @@ public:
   void RecordSettlement(std::chrono::nanoseconds latency, bool accepted);
   // Records one order-check SERVICE-TIME diagnostic (never the headline).
   void RecordServiceTime(std::chrono::nanoseconds latency);
+  // Records scheduling lag and whether it exceeds the configured run limit.
+  void RecordSubmitLag(std::chrono::nanoseconds lag,
+                       std::chrono::nanoseconds maxLag);
   // Records one resolved funding adjustment (no histogram; own tally only).
   void RecordFunding(bool accepted);
   // Records one submit the engine refused with a backpressure signal.
@@ -105,6 +107,7 @@ private:
   std::uint64_t m_fundings = 0;
   std::uint64_t m_fundingAccepts = 0;
   std::uint64_t m_fundingRejects = 0;
+  std::uint64_t m_submitLagBreaches = 0;
   std::uint64_t m_checksum = 0;
   std::uint64_t m_backpressure = 0;
   std::uint64_t m_handoffStalls = 0;

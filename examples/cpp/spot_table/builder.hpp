@@ -71,8 +71,7 @@ public:
   FillReport(openpit::model::ExecutionReport report,
              openpit::pretrade::PreTradeLock lock)
       : m_report(std::move(report)) {
-    m_report.fill->lock =
-        std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
+    m_report.fill->lock = std::move(lock);
   }
 
   // The account this report addresses, for async per-account routing.
@@ -82,6 +81,12 @@ public:
 
   [[nodiscard]] const openpit::model::ExecutionReport &Report() const noexcept {
     return m_report;
+  }
+
+  // Transfers the report and its move-only lock to an async task.
+  [[nodiscard]] std::unique_ptr<const openpit::ExecutionReport> TakeReport() {
+    return std::make_unique<openpit::model::ExecutionReport>(
+        std::move(m_report));
   }
 
 private:

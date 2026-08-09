@@ -89,7 +89,7 @@ impl LifecycleToken {
 /// against a completed transaction.
 ///
 /// A panic abandons the operation without invalidating its token, so the handle
-/// also rejects every call once an engine defect has poisoned the module.
+/// also rejects every call once a module panic has poisoned the module.
 #[wasm_bindgen(js_name = AccountControl)]
 pub struct JsAccountControl {
     inner: openpit::AccountControl<StorageFactory>,

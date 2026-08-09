@@ -42,9 +42,7 @@ namespace policies = openpit::pretrade::policies;
 // Register two accounts into one group, read membership back by id,
 // and unregister the group.
 TEST(AccountGroupsWiki, RegisterReadUnregister) {
-  // Build an engine with the order-validation policy (mirrors the
-  // Go/Python/Rust siblings that use FullSync / no_sync with the built-in
-  // order-validation policy; FullSync is chosen here to match the Go sibling).
+  // Build an engine with the order-validation policy.
   EngineBuilder builder(SyncPolicy::Full);
   builder.Add(policies::OrderValidationPolicy{});
   Engine engine = builder.Build();

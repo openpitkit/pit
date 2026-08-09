@@ -175,7 +175,7 @@ impl JsSettlementScheme {
 /// Caller-owned registry of stable instrument identities and attributes.
 ///
 /// Every method reads or writes the shared book, so every one of them throws
-/// `InternalError` once an engine defect has poisoned the module instance.
+/// `InternalError` once a module panic has poisoned the module instance.
 #[wasm_bindgen(js_name = ReferenceBook)]
 pub struct JsReferenceBook {
     inner: ReferenceBook,

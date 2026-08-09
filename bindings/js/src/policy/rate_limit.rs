@@ -77,9 +77,11 @@ impl JsRateLimit {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `windowMs` cannot be represented as a Rust
-    /// duration. Positive and maximum-window validation is performed by the
-    /// core settings constructor when the policy is built.
+    /// Throws `TypeError` when `maxOrders` is not a number, or `RangeError`
+    /// when `maxOrders` is not an exact non-negative integer in the supported
+    /// range or `windowMs` cannot be represented as a native duration. Positive
+    /// and maximum-window validation is performed by the core settings
+    /// constructor when the policy is built.
     #[wasm_bindgen(constructor)]
     pub fn new(max_orders: IntegerNumber, window_ms: f64) -> Result<JsRateLimit, JsValue> {
         let max_orders =
@@ -134,8 +136,10 @@ impl JsRateLimit {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on a missing/invalid field, or when the value is
-    /// neither a `RateLimit` nor a plain object.
+    /// Throws `TypeError` when the value has the wrong shape or a required
+    /// field is missing or non-numeric, and `RangeError` when a numeric field
+    /// is outside its supported boundary. Getter and wrapper `clone()`
+    /// exceptions propagate unchanged.
     fn coerce(value: JsValue) -> Result<JsRateLimit, JsValue> {
         if let Some(wrapped) = extract_cloned_wrapper::<JsRateLimit>(&value)? {
             return Ok(wrapped);
@@ -186,7 +190,9 @@ impl JsRateLimitBrokerBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid limit.
+    /// Throws `TypeError` for a malformed limit shape or missing/non-numeric
+    /// field, and `RangeError` for an invalid numeric boundary. Exceptions from
+    /// plain-object getters or a wrapper's `clone()` propagate unchanged.
     #[wasm_bindgen(constructor)]
     pub fn new(limit: RateLimitLike) -> Result<JsRateLimitBrokerBarrier, JsValue> {
         Ok(Self {
@@ -222,7 +228,9 @@ impl JsRateLimitAssetBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `AssetError` when `settlementAsset` is empty.
+    /// Throws `TypeError`/`RangeError` for an invalid limit, or `AssetError`
+    /// when `settlementAsset` is empty. Exceptions from plain-object getters or
+    /// a wrapper's `clone()` propagate unchanged.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: RateLimitLike,
@@ -266,7 +274,9 @@ impl JsRateLimitAccountBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AccountIdError` on an invalid limit or identifier.
+    /// Throws `TypeError`/`RangeError` for an invalid limit, or
+    /// `AccountIdError` for an invalid identifier. Exceptions from plain-object
+    /// getters or a wrapper's `clone()` propagate unchanged.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: RateLimitLike,
@@ -308,7 +318,10 @@ impl JsRateLimitAccountAssetBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `AssetError` when `settlementAsset` is empty.
+    /// Throws `TypeError`/`RangeError` for an invalid limit, `AccountIdError`
+    /// for an invalid identifier, or `AssetError` when `settlementAsset` is
+    /// empty. Exceptions from plain-object getters or a wrapper's `clone()`
+    /// propagate unchanged.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: RateLimitLike,

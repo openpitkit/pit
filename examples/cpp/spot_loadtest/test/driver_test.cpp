@@ -17,9 +17,6 @@
 
 // Driver integration tests (require the native core).
 //
-// Mirror of: examples/go/spot_loadtest/internal/driver/driver_test.go
-//            examples/go/spot_loadtest/internal/driver/doc_backing_test.go
-//
 // Run with the native runtime resolvable at load time, e.g.:
 //   OPENPIT_RUNTIME_LIBRARY=$(pwd)/target/release/libopenpit_ffi.dylib
 
@@ -32,10 +29,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <limits>
+#include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -54,12 +57,11 @@ using spot_loadtest::Decimal;
   c.run.seed = seed;
   c.run.totalOps = totalOps;
   c.run.window = 1000;
-  c.run.windowUnit = config::WindowUnit::Ops;
   c.run.observer = true;
   c.arrival.offeredRate = 0; // unpaced (saturated).
   c.reject = config::Reject{target, 0.01};
   c.accounts = config::Accounts{200};
-  c.concurrency = config::Concurrency{64};
+  c.concurrency = config::Concurrency{64, 8, std::chrono::seconds(1)};
   c.asyncEngine.strategy = config::AsyncEngineStrategy::Dynamic;
   c.asyncEngine.maxQueues = 256;
   c.asyncEngine.idleCleanup = std::chrono::seconds(2);
@@ -100,6 +102,39 @@ using spot_loadtest::Decimal;
   return c;
 }
 
+struct SingleEventRun {
+  std::unique_ptr<gen::Stream> stream;
+  driver::Config config;
+};
+
+[[nodiscard]] SingleEventRun MakeSingleEventRun(std::uint64_t seed) {
+  config::Config cfg = TestConfig(seed, 1, 0.05);
+  cfg.accounts.count = 1;
+  cfg.concurrency = config::Concurrency{1, 1, std::chrono::seconds(1)};
+  std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
+
+  driver::Config dcfg = driver::FromAppConfig(cfg);
+  dcfg.collectors = 1;
+  dcfg.finalizers = 1;
+  dcfg.overheadProbes = 0;
+  return SingleEventRun{std::move(stream), dcfg};
+}
+
+void SetWorkEventTimes(gen::Stream &stream,
+                       std::chrono::nanoseconds virtualT0) {
+  std::size_t workEvents = 0;
+  for (gen::Event &event : stream.events) {
+    if (event.kind == gen::EventKind::Funding && event.fundingIsSeed) {
+      continue;
+    }
+    event.virtualT0 = virtualT0;
+    ++workEvents;
+  }
+  if (workEvents == 0) {
+    throw std::logic_error("test setup: generated stream has no work event");
+  }
+}
+
 // The Phase-3 / Phase-4 integration gate: a moderate stream through the REAL
 // asyncengine, asserting the per-op oracle agrees, submission is open-loop, the
 // windows are populated, inner metrics fire, the overhead probe ran, and the
@@ -112,9 +147,10 @@ TEST(Driver, OraclePipeline) {
 
   driver::Config dcfg;
   dcfg.observer = true;
+  dcfg.submitterWorkers = 8;
   dcfg.collectors = 16;
   dcfg.windowSize = 1000;
-  dcfg.windowUnit = spot_loadtest::measurement::WindowUnit::Ops;
+  dcfg.maxSubmitLag = std::chrono::seconds(1);
   dcfg.overheadProbes = 50;
 
   const driver::RunResult result = driver::Run(*stream, dcfg);
@@ -131,6 +167,7 @@ TEST(Driver, OraclePipeline) {
   // Open-loop witness: peak in-flight well above the active set.
   EXPECT_GT(stats.maxInFlight,
             static_cast<std::int64_t>(cfg.concurrency.activeAccounts));
+  EXPECT_EQ(stats.submitterThreads, dcfg.submitterWorkers);
 
   EXPECT_FALSE(snap.windows.empty());
   EXPECT_GT(snap.orderCheck.count, 0);
@@ -152,11 +189,14 @@ TEST(Driver, OpenLoopHighRejectRate) {
 
   driver::Config dcfg;
   dcfg.observer = false;
+  dcfg.submitterWorkers = 8;
   dcfg.collectors = 16;
   dcfg.windowSize = 1000;
+  dcfg.maxSubmitLag = std::chrono::seconds(1);
   dcfg.overheadProbes = 0;
 
   const driver::RunResult result = driver::Run(*stream, dcfg);
+  EXPECT_EQ(result.stats.submitterThreads, dcfg.submitterWorkers);
   EXPECT_GT(result.stats.rejects, 0u);
   EXPECT_GT(result.stats.maxInFlight,
             static_cast<std::int64_t>(cfg.concurrency.activeAccounts));
@@ -178,12 +218,269 @@ TEST(Driver, BoundedConcurrency) {
   const driver::RunResult result = driver::Run(*stream, dcfg);
   EXPECT_EQ(result.stats.backpressure, 0u);
   EXPECT_NE(result.stats.checksum, 0u);
+  EXPECT_EQ(result.stats.submitterThreads,
+            static_cast<std::size_t>(cfg.concurrency.submitterWorkers));
   EXPECT_GT(result.stats.maxInFlight,
             static_cast<std::int64_t>(cfg.concurrency.activeAccounts));
   const std::uint64_t wantOrderEvents =
       stream->stats.orderChecks +
       (stream->stats.fundings - stream->stats.seeds);
   EXPECT_EQ(result.stats.orderChecks, wantOrderEvents);
+}
+
+TEST(Driver, NonEmptyStreamRequiresSubmitterWorkers) {
+  const config::Config cfg = TestConfig(0xBAD, 100, 0.05);
+  const std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
+  ASSERT_FALSE(stream->events.empty());
+
+  driver::Config dcfg;
+  dcfg.collectors = 2;
+  dcfg.finalizers = 2;
+  dcfg.windowSize = 100;
+
+  EXPECT_THROW((void)driver::Run(*stream, dcfg), std::invalid_argument);
+}
+
+TEST(Driver, FromAppConfigChecksWindowRepresentationBounds) {
+  config::Config cfg = TestConfig(0xA12, 100, 0.05);
+
+  cfg.run.window = 0;
+  EXPECT_THROW((void)driver::FromAppConfig(cfg), std::invalid_argument);
+
+  cfg.run.window =
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+  EXPECT_EQ(driver::FromAppConfig(cfg).windowSize,
+            std::numeric_limits<std::int64_t>::max());
+
+  ++cfg.run.window;
+  EXPECT_THROW((void)driver::FromAppConfig(cfg), std::invalid_argument);
+}
+
+TEST(Driver, RunRequiresPositiveWindowSize) {
+  gen::Stream stream;
+  driver::Config cfg;
+  cfg.collectors = 1;
+  cfg.finalizers = 1;
+  cfg.maxSubmitLag = std::chrono::seconds(1);
+  cfg.overheadProbes = 0;
+
+  cfg.windowSize = 0;
+  EXPECT_THROW((void)driver::Run(stream, cfg), std::invalid_argument);
+  cfg.windowSize = -1;
+  EXPECT_THROW((void)driver::Run(stream, cfg), std::invalid_argument);
+
+  cfg.windowSize = 1;
+  EXPECT_NO_THROW((void)driver::Run(stream, cfg));
+  cfg.windowSize = std::numeric_limits<std::int64_t>::max();
+  EXPECT_NO_THROW((void)driver::Run(stream, cfg));
+}
+
+TEST(Driver, FromAppConfigRequiresPositiveSubmitLagLimit) {
+  config::Config cfg = TestConfig(0xA13, 100, 0.05);
+  cfg.concurrency.maxSubmitLag = std::chrono::nanoseconds(0);
+
+  EXPECT_THROW((void)driver::FromAppConfig(cfg), std::invalid_argument);
+}
+
+TEST(Driver, SmallVirtualDeadlineRuns) {
+  SingleEventRun run = MakeSingleEventRun(0xD1);
+  SetWorkEventTimes(*run.stream, std::chrono::nanoseconds(1));
+
+  EXPECT_NO_THROW((void)driver::Run(*run.stream, run.config));
+}
+
+TEST(Driver, SubmitLagBreachInvalidatesRun) {
+  SingleEventRun run = MakeSingleEventRun(0xD10);
+  SetWorkEventTimes(*run.stream, std::chrono::nanoseconds(0));
+  run.config.maxSubmitLag = std::chrono::nanoseconds(1);
+
+  std::string invalidReason;
+  const driver::RunResult result =
+      driver::RunCollecting(*run.stream, run.config, invalidReason);
+  EXPECT_EQ(invalidReason, "submit-lag");
+  EXPECT_GT(result.snapshot.submitLag.count, 0);
+  EXPECT_GT(result.snapshot.submitLagBreaches, 0u);
+  EXPECT_EQ(result.stats.submitLagBreaches, result.snapshot.submitLagBreaches);
+  EXPECT_THROW((void)driver::Run(*run.stream, run.config),
+               driver::SubmitLagInvalidRun);
+}
+
+TEST(Driver, NegativeVirtualDeadlineIsRejected) {
+  SingleEventRun run = MakeSingleEventRun(0xD2);
+  SetWorkEventTimes(*run.stream, std::chrono::nanoseconds(-1));
+
+  try {
+    (void)driver::Run(*run.stream, run.config);
+    FAIL() << "expected negative virtual deadline failure";
+  } catch (const std::runtime_error &error) {
+    EXPECT_NE(std::string(error.what()).find("negative virtualT0"),
+              std::string::npos);
+  }
+}
+
+TEST(Driver, UnrepresentableVirtualDeadlineIsRejectedWithoutSleeping) {
+  SingleEventRun run = MakeSingleEventRun(0xD3);
+  for (const std::chrono::nanoseconds offset :
+       {std::chrono::nanoseconds::max() - std::chrono::nanoseconds(1),
+        std::chrono::nanoseconds::max()}) {
+    SCOPED_TRACE(offset.count());
+    SetWorkEventTimes(*run.stream, offset);
+    try {
+      (void)driver::Run(*run.stream, run.config);
+      FAIL() << "expected virtual deadline overflow";
+    } catch (const std::runtime_error &error) {
+      EXPECT_NE(std::string(error.what()).find("clock"), std::string::npos);
+    }
+  }
+}
+
+TEST(Driver, SubmitterWorkerFailurePropagatesCleanly) {
+  const config::Config cfg = TestConfig(0xFA17, 1000, 0.05);
+  const std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
+  auto event = std::find_if(stream->events.begin(), stream->events.end(),
+                            [](const gen::Event &item) {
+                              return item.kind == gen::EventKind::OrderCheck;
+                            });
+  ASSERT_NE(event, stream->events.end());
+  event->price = Dec("-1");
+  event->quantity = Dec("-1");
+
+  driver::Config dcfg = driver::FromAppConfig(cfg);
+  dcfg.collectors = 4;
+  dcfg.finalizers = 4;
+  dcfg.overheadProbes = 0;
+
+  try {
+    (void)driver::Run(*stream, dcfg);
+    FAIL() << "expected submitter worker failure";
+  } catch (const std::runtime_error &error) {
+    EXPECT_NE(std::string(error.what()).find("driver: submitter worker:"),
+              std::string::npos);
+  }
+}
+
+TEST(Driver, WorkerFailureDoesNotLoseSleepingSubmitterWakeup) {
+  constexpr int kSleepers = 32;
+  constexpr int kIterations = 16;
+  config::Config cfg = TestConfig(0xFA18, 1, 0.05);
+  cfg.accounts.count = kSleepers + 1;
+  cfg.concurrency = config::Concurrency{kSleepers + 1, kSleepers + 1,
+                                        std::chrono::seconds(1)};
+  std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
+
+  std::vector<std::string> accounts;
+  for (const gen::Event &event : stream->events) {
+    if (event.kind == gen::EventKind::Funding && event.fundingIsSeed) {
+      accounts.push_back(event.account);
+    }
+  }
+  ASSERT_EQ(accounts.size(), static_cast<std::size_t>(kSleepers + 1));
+  const auto work = std::find_if(
+      stream->events.begin(), stream->events.end(),
+      [](const gen::Event &event) {
+        return !(event.kind == gen::EventKind::Funding && event.fundingIsSeed);
+      });
+  ASSERT_NE(work, stream->events.end());
+
+  std::vector<gen::Event> events;
+  for (const gen::Event &event : stream->events) {
+    if (event.kind == gen::EventKind::Funding && event.fundingIsSeed) {
+      events.push_back(event);
+    }
+  }
+  for (int index = 0; index < kSleepers; ++index) {
+    gen::Event sleeper = *work;
+    sleeper.seq = static_cast<std::uint64_t>(100 + index);
+    sleeper.account = accounts[static_cast<std::size_t>(index)];
+    sleeper.virtualT0 = std::chrono::seconds(1);
+    events.push_back(std::move(sleeper));
+  }
+
+  gen::Event failing = *work;
+  failing.seq = 1000;
+  failing.account = accounts.back();
+  failing.virtualT0 = std::chrono::nanoseconds(0);
+  failing.price = Dec("-1");
+  failing.quantity = Dec("-1");
+  events.push_back(failing);
+  stream->events = std::move(events);
+
+  driver::Config dcfg = driver::FromAppConfig(cfg);
+  dcfg.collectors = 4;
+  dcfg.finalizers = 4;
+  dcfg.overheadProbes = 0;
+
+  for (int iteration = 0; iteration < kIterations; ++iteration) {
+    SCOPED_TRACE(iteration);
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_THROW((void)driver::Run(*stream, dcfg), std::runtime_error);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    EXPECT_LT(elapsed, std::chrono::milliseconds(500));
+  }
+}
+
+TEST(Driver, SubmitterShardMergesChainsByVirtualTime) {
+  config::Config cfg = TestConfig(0x5A4D, 80, 0.05);
+  cfg.accounts.count = 4;
+  cfg.concurrency = config::Concurrency{4, 1, std::chrono::seconds(1)};
+  cfg.arrival.offeredRate = 40;
+  const std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
+
+  std::map<std::string, std::chrono::nanoseconds> lastArrival;
+  for (const gen::Event &event : stream->events) {
+    auto [position, inserted] =
+        lastArrival.try_emplace(event.account, event.virtualT0);
+    if (!inserted && position->second < event.virtualT0) {
+      position->second = event.virtualT0;
+    }
+  }
+  ASSERT_GE(lastArrival.size(), 2u);
+
+  std::vector<std::string> accounts;
+  accounts.reserve(lastArrival.size());
+  for (const auto &[account, _] : lastArrival) {
+    accounts.push_back(account);
+  }
+  std::sort(accounts.begin(), accounts.end(),
+            [&](const std::string &lhs, const std::string &rhs) {
+              if (lastArrival.at(lhs) != lastArrival.at(rhs)) {
+                return lastArrival.at(lhs) > lastArrival.at(rhs);
+              }
+              return lhs < rhs;
+            });
+  std::map<std::string, std::size_t> rank;
+  for (std::size_t index = 0; index < accounts.size(); ++index) {
+    rank.emplace(accounts[index], index);
+  }
+
+  std::optional<std::chrono::nanoseconds> laterFirstArrival;
+  for (const gen::Event &event : stream->events) {
+    if (rank.at(event.account) == 0 ||
+        (event.kind == gen::EventKind::Funding && event.fundingIsSeed)) {
+      continue;
+    }
+    if (!laterFirstArrival || event.virtualT0 < *laterFirstArrival) {
+      laterFirstArrival = event.virtualT0;
+    }
+  }
+  ASSERT_TRUE(laterFirstArrival.has_value());
+  // A whole-chain scheduler would issue the first chain's late event before
+  // this earlier event from another chain. The driver rejects that regression.
+  ASSERT_GT(lastArrival.at(accounts.front()), *laterFirstArrival);
+
+  std::stable_sort(stream->events.begin(), stream->events.end(),
+                   [&](const gen::Event &lhs, const gen::Event &rhs) {
+                     return rank.at(lhs.account) < rank.at(rhs.account);
+                   });
+
+  driver::Config dcfg = driver::FromAppConfig(cfg);
+  dcfg.collectors = 4;
+  dcfg.finalizers = 4;
+  dcfg.overheadProbes = 0;
+  const driver::RunResult result = driver::Run(*stream, dcfg);
+
+  EXPECT_EQ(result.stats.submitterThreads, 1u);
+  EXPECT_EQ(result.stats.backpressure, 0u);
 }
 
 // Exercises the PACED offered-rate path; submission still overlaps decisions.
@@ -194,8 +491,10 @@ TEST(Driver, PacedSubmission) {
 
   driver::Config dcfg;
   dcfg.observer = false;
+  dcfg.submitterWorkers = 8;
   dcfg.collectors = 16;
   dcfg.windowSize = 1000;
+  dcfg.maxSubmitLag = std::chrono::seconds(1);
   dcfg.overheadProbes = 0;
 
   const driver::RunResult result = driver::Run(*stream, dcfg);
@@ -239,6 +538,7 @@ TEST(Driver, DocBackingBaselineRecipe) {
   config::Config baseCfg = config::Load(SPOT_LOADTEST_BASELINE_INI);
   ASSERT_FALSE(baseCfg.cohorts.empty());
   ASSERT_FALSE(baseCfg.instruments.symbols.empty());
+  EXPECT_EQ(baseCfg.concurrency.maxSubmitLag, std::chrono::milliseconds(1));
 
   // Reduced run: same seed + cohort structure as the baseline, smaller scale.
   config::Config reduced = baseCfg;
@@ -246,6 +546,7 @@ TEST(Driver, DocBackingBaselineRecipe) {
   reduced.run.window = 5000;
   reduced.accounts.count = 500;
   reduced.concurrency.activeAccounts = 64;
+  reduced.concurrency.maxSubmitLag = std::chrono::seconds(1);
   reduced.asyncEngine.maxQueues = 0;
   reduced.asyncEngine.idleCleanup = std::chrono::seconds(2);
 
@@ -261,6 +562,7 @@ TEST(Driver, DocBackingBaselineRecipe) {
   EXPECT_GT(result.stats.accepts, 0u);
   EXPECT_GT(result.stats.rejects, 0u);
   EXPECT_EQ(result.snapshot.backpressure, 0u);
+  EXPECT_EQ(result.snapshot.submitLagBreaches, 0u);
   EXPECT_NE(result.snapshot.checksum, 0u);
   EXPECT_GE(result.snapshot.maxInFlight, 2);
   EXPECT_FALSE(result.snapshot.windows.empty());
@@ -274,7 +576,8 @@ TEST(Driver, DocBackingBaselineRecipe) {
   e.core.profile = "release";
   std::ostringstream buf;
   spot_loadtest::reporter::Write(buf, e, reduced, "configs/baseline.ini",
-                                 result.snapshot, stream->stats);
+                                 result.snapshot, result.stats.submitterThreads,
+                                 stream->stats);
   const std::string out = buf.str();
   for (const char *block :
        {"=== Headline:", "=== Environment ===", "=== Workload ===",
@@ -285,6 +588,7 @@ TEST(Driver, DocBackingBaselineRecipe) {
   EXPECT_NE(out.find("0 (healthy"), std::string::npos);
   EXPECT_NE(out.find("Open-Loop Order-Check Latency"), std::string::npos);
   EXPECT_NE(out.find("DIAGNOSTIC, NOT the headline"), std::string::npos);
+  EXPECT_NE(out.find("Submit scheduling lag"), std::string::npos);
   EXPECT_NE(out.find("What IS measured"), std::string::npos);
   EXPECT_NE(out.find("What is NOT measured"), std::string::npos);
   EXPECT_NE(out.find("configs/baseline.ini"), std::string::npos);

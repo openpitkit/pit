@@ -39,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -70,6 +71,27 @@ struct HasAddTo : std::false_type {};
 template <typename T>
 struct HasAddTo<T, std::void_t<decltype(std::declval<const T&>().AddTo(
                        std::declval<EngineBuilder&>()))>> : std::true_type {};
+
+// Rejects a base reference that would otherwise slice a derived payload.
+template <typename BaseType, typename PayloadType,
+          std::enable_if_t<
+              std::is_base_of_v<BaseType, std::decay_t<PayloadType>>, int> = 0>
+[[nodiscard]] std::unique_ptr<const BaseType> OwnExactPolymorphic(
+    PayloadType&& payload, const char* typeMismatchMessage) {
+  using DecayedPayload = std::decay_t<PayloadType>;
+  if constexpr (std::is_same_v<DecayedPayload, BaseType>) {
+    static_assert(!std::is_same_v<DecayedPayload, BaseType>,
+                  "The root polymorphic base cannot be owned by value; pass "
+                  "std::unique_ptr<const openpit::Order> or "
+                  "std::unique_ptr<const openpit::ExecutionReport> instead");
+    return {};
+  } else {
+    if (typeid(payload) != typeid(DecayedPayload)) {
+      throw Error(typeMismatchMessage);
+    }
+    return std::make_unique<DecayedPayload>(std::forward<PayloadType>(payload));
+  }
+}
 
 }  // namespace detail
 
@@ -205,13 +227,12 @@ class Engine {
     return static_cast<bool>(m_handle);
   }
 
-  // Starts a deferred pre-trade request from an explicitly owned polymorphic
-  // order. This overload is the escape hatch for type-erased code: the shared
-  // owner keeps the exact dynamic type alive through `Request::Execute()`.
+  // Starts a deferred pre-trade request that owns its submitted order until
+  // `Request::Execute()` runs the main stage.
   [[nodiscard]] ::openpit::pretrade::StartResult StartPreTrade(
-      std::shared_ptr<const ::openpit::Order> order) const {
-    if (order == nullptr) {
-      throw ::openpit::Error("StartPreTrade requires a non-null order");
+      std::unique_ptr<const ::openpit::Order> order) const {
+    if (!order) {
+      throw Error("StartPreTrade requires a non-null order");
     }
     const OpenPitOrder raw = ::openpit::detail::Native(*order);
     OpenPitPretradePreTradeRequest* request = nullptr;
@@ -233,30 +254,39 @@ class Engine {
     }
     ::openpit::pretrade::StartResult out;
     if (status == OpenPitPretradeStatus_Rejected) {
-      if (rejects != nullptr) {
-        out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
+      if (rejects == nullptr) {
+        throw Error(
+            "openpit_engine_start_pre_trade returned Rejected "
+            "without rejects");
       }
+      out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
       return out;
+    }
+    if (status != OpenPitPretradeStatus_Passed) {
+      throw Error("openpit_engine_start_pre_trade returned an invalid status");
+    }
+    if (request == nullptr) {
+      throw Error(
+          "openpit_engine_start_pre_trade returned Passed without a "
+          "request");
     }
     out.request = ::openpit::detail::FromNative<::openpit::pretrade::Request>(
         ::openpit::pretrade::detail::RequestInit{request, std::move(order)});
     return out;
   }
 
-  // Starts a deferred request from a concrete order value. Lvalues are copied
-  // and rvalues are moved into the returned request, preserving the exact
-  // client type and making execution independent of the caller's lifetime.
-  // Code that has already erased the static type to `openpit::Order` must use
-  // the shared_ptr overload above so slicing is impossible.
-  template <typename OrderT,
-            std::enable_if_t<
-                std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>> &&
-                    !std::is_same_v<::openpit::Order, std::decay_t<OrderT>>,
-                int> = 0>
+  // Moves an rvalue or copies an lvalue into the deferred request. A
+  // base-typed reference to a derived order must use the ownership overload.
+  template <
+      typename OrderT,
+      std::enable_if_t<
+          std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>>, int> = 0>
   [[nodiscard]] ::openpit::pretrade::StartResult StartPreTrade(
       OrderT&& order) const {
-    return StartPreTrade(
-        std::make_shared<std::decay_t<OrderT>>(std::forward<OrderT>(order)));
+    return StartPreTrade(detail::OwnExactPolymorphic<::openpit::Order>(
+        std::forward<OrderT>(order),
+        "StartPreTrade cannot own a base-typed reference to a derived "
+        "order; pass std::unique_ptr<const openpit::Order> instead"));
   }
 
   // Runs the complete pre-trade pipeline. On accept the result carries a
@@ -285,10 +315,22 @@ class Engine {
     }
     ::openpit::pretrade::ExecuteResult out;
     if (status == OpenPitPretradeStatus_Rejected) {
-      if (rejects != nullptr) {
-        out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
+      if (rejects == nullptr) {
+        throw Error(
+            "openpit_engine_execute_pre_trade returned Rejected "
+            "without rejects");
       }
+      out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
       return out;
+    }
+    if (status != OpenPitPretradeStatus_Passed) {
+      throw Error(
+          "openpit_engine_execute_pre_trade returned an invalid status");
+    }
+    if (reservation == nullptr) {
+      throw Error(
+          "openpit_engine_execute_pre_trade returned Passed without a "
+          "reservation");
     }
     out.reservation =
         ::openpit::detail::FromNative<::openpit::pretrade::Reservation>(
@@ -337,10 +379,21 @@ class Engine {
     }
     ::openpit::pretrade::DropCopyResult out;
     if (status == OpenPitPretradeStatus_Rejected) {
-      if (rejects != nullptr) {
-        out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
+      if (rejects == nullptr) {
+        throw Error(
+            "openpit_engine_apply_drop_copy returned Rejected "
+            "without rejects");
       }
+      out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
       return out;
+    }
+    if (status != OpenPitPretradeStatus_Passed) {
+      throw Error("openpit_engine_apply_drop_copy returned an invalid status");
+    }
+    if (operation == nullptr) {
+      throw Error(
+          "openpit_engine_apply_drop_copy returned Passed without an "
+          "operation");
     }
     out.operation =
         ::openpit::detail::FromNative<::openpit::pretrade::DropCopyOperation>(
@@ -510,49 +563,65 @@ class Engine {
       detail::ThrowFromSharedString(
           error, "openpit_engine_apply_execution_report failed");
     }
+    if (!resultHandle) {
+      throw Error("openpit_engine_apply_execution_report returned null result");
+    }
 
     PostTradeResult out;
     const auto* blocks =
         openpit_post_trade_result_get_account_blocks(resultHandle.Get());
+    if (blocks == nullptr) {
+      throw Error("openpit_post_trade_result_get_account_blocks returned null");
+    }
     const std::size_t blockCount =
         openpit_pretrade_account_block_list_len(blocks);
     out.accountBlocks.reserve(blockCount);
     for (std::size_t i = 0; i < blockCount; ++i) {
       OpenPitPretradeAccountBlock block{};
-      if (openpit_pretrade_account_block_list_get(blocks, i, &block)) {
-        out.accountBlocks.push_back(
-            ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
-                block));
+      if (!openpit_pretrade_account_block_list_get(blocks, i, &block)) {
+        throw Error("openpit_pretrade_account_block_list_get failed");
       }
+      out.accountBlocks.push_back(
+          ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
+              block));
     }
 
     const auto* accountPnls =
         openpit_post_trade_result_get_account_pnls(resultHandle.Get());
+    if (accountPnls == nullptr) {
+      throw Error("openpit_post_trade_result_get_account_pnls returned null");
+    }
     const std::size_t accountPnlCount =
         openpit_account_pnl_outcome_list_len(accountPnls);
     out.accountPnls.reserve(accountPnlCount);
     for (std::size_t i = 0; i < accountPnlCount; ++i) {
       OpenPitAccountPnlOutcome outcome{};
-      if (openpit_account_pnl_outcome_list_get(accountPnls, i, &outcome)) {
-        out.accountPnls.push_back(
-            ::openpit::detail::FromNative<
-                ::openpit::accountadjustment::AccountPnlOutcome>(outcome));
+      if (!openpit_account_pnl_outcome_list_get(accountPnls, i, &outcome)) {
+        throw Error("openpit_account_pnl_outcome_list_get failed");
       }
+      out.accountPnls.push_back(
+          ::openpit::detail::FromNative<
+              ::openpit::accountadjustment::AccountPnlOutcome>(outcome));
     }
 
     const auto* adjustments =
         openpit_post_trade_result_get_account_adjustments(resultHandle.Get());
+    if (adjustments == nullptr) {
+      throw Error(
+          "openpit_post_trade_result_get_account_adjustments returned null");
+    }
     const std::size_t adjustmentCount =
         openpit_account_adjustment_outcome_list_len(adjustments);
     out.accountAdjustments.reserve(adjustmentCount);
     for (std::size_t i = 0; i < adjustmentCount; ++i) {
       OpenPitAccountAdjustmentOutcome adjustment{};
-      if (openpit_account_adjustment_outcome_list_get(adjustments, i,
-                                                      &adjustment)) {
-        out.accountAdjustments.push_back(
-            ::openpit::detail::FromNative<
-                ::openpit::accountadjustment::Outcome>(adjustment));
+      if (!openpit_account_adjustment_outcome_list_get(adjustments, i,
+                                                       &adjustment)) {
+        throw Error("openpit_account_adjustment_outcome_list_get failed");
       }
+      out.accountAdjustments.push_back(
+          ::openpit::detail::FromNative<::openpit::accountadjustment::Outcome>(
+              adjustment));
     }
     return out;
   }

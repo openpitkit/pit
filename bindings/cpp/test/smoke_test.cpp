@@ -42,6 +42,17 @@ TEST(Runtime, BuildProfileReportsKnownKeys) {
   EXPECT_NE(profile.find("debug_assertions="), std::string::npos);
 }
 
+TEST(SharedValues, EmptyViewsRemainReadableButOwningCopiesThrow) {
+  const openpit::SharedString text;
+  const openpit::SharedBytes bytes;
+
+  EXPECT_TRUE(text.View().Empty());
+  EXPECT_TRUE(text.View().ToString().empty());
+  EXPECT_TRUE(bytes.View().Empty());
+  EXPECT_THROW(static_cast<void>(text.ToString()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(bytes.ToVector()), openpit::Error);
+}
+
 TEST(Reject, EvaluationFailureClassificationIsExposed) {
   using openpit::pretrade::IsEvaluationFailure;
   using openpit::pretrade::RejectCode;

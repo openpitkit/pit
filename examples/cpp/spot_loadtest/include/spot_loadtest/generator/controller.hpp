@@ -23,8 +23,6 @@
 
 // The offline reject-rate controller.
 //
-// Mirror of: examples/go/spot_loadtest/internal/generator/controller.go
-//
 // Without engine feedback it calibrates how often the generator emits an order
 // the shadow model predicts will be rejected, converging the predicted reject
 // rate to the configured target. Error-driven (integral) control: force the

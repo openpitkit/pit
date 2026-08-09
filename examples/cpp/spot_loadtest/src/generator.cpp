@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -51,9 +52,6 @@ constexpr std::array<std::uint64_t, 10> kPriceCentsGrid = {
 // Bounds for how many wakes an admitted account stays active before it idles.
 constexpr int kDwellWakesMin = 2;
 constexpr int kDwellWakesSpread = 6;
-
-// Bounds duration-only configs (the harness only needs a finite stream).
-constexpr std::uint64_t kDefaultOrderCheckBudget = 100000;
 
 // Small fixed spacing between an event and a causally-dependent successor on
 // the same account on the virtual timeline.
@@ -76,6 +74,20 @@ AssignPrices(const std::vector<std::string> &symbols) {
   return a > b ? a : b;
 }
 
+[[nodiscard]] nanoseconds CheckedAdd(nanoseconds left, nanoseconds right,
+                                     const char *context) {
+  const std::int64_t leftCount = left.count();
+  const std::int64_t rightCount = right.count();
+  constexpr std::int64_t kMin = std::numeric_limits<std::int64_t>::min();
+  constexpr std::int64_t kMax = std::numeric_limits<std::int64_t>::max();
+  if ((rightCount > 0 && leftCount > kMax - rightCount) ||
+      (rightCount < 0 && leftCount < kMin - rightCount)) {
+    throw std::overflow_error(std::string(context) +
+                              " exceeds nanoseconds range");
+  }
+  return nanoseconds(leftCount + rightCount);
+}
+
 // One inter-arrival of the offered order-check process (exponential). When the
 // offered rate is 0 the process is unpaced: return 0.
 [[nodiscard]] nanoseconds InterArrival(Rng &vg, double rate) {
@@ -94,63 +106,80 @@ struct ReportDelayParams {
 
 [[nodiscard]] ReportDelayParams
 ResolveReportDelay(const config::ReportDelay &rd) {
+  switch (rd.distribution) {
+  case config::ReportDelayDistribution::None:
+  case config::ReportDelayDistribution::Fixed:
+  case config::ReportDelayDistribution::Lognormal:
+    break;
+  default:
+    throw std::invalid_argument(
+        "report_delay.distribution has unknown value " +
+        std::to_string(static_cast<int>(rd.distribution)));
+  }
+  if (rd.mean.count() < 0) {
+    throw std::invalid_argument("report_delay.mean must be non-negative");
+  }
+  if (!std::isfinite(rd.sigma) || rd.sigma < 0) {
+    throw std::invalid_argument(
+        "report_delay.sigma must be finite and non-negative");
+  }
+  if (rd.distribution == config::ReportDelayDistribution::None &&
+      (rd.mean.count() != 0 || rd.sigma != 0.0)) {
+    throw std::invalid_argument(
+        "report_delay.mean and sigma must be zero when distribution is none");
+  }
+  if (rd.distribution == config::ReportDelayDistribution::Fixed &&
+      rd.sigma != 0.0) {
+    throw std::invalid_argument(
+        "report_delay.sigma must be zero when distribution is fixed");
+  }
+  if (rd.distribution == config::ReportDelayDistribution::Lognormal &&
+      rd.mean.count() == 0 && rd.sigma != 0.0) {
+    throw std::invalid_argument(
+        "report_delay.sigma must be zero when lognormal mean is zero");
+  }
   ReportDelayParams out;
+  out.mean = rd.mean;
   out.sigma = rd.sigma;
   out.dist = rd.distribution;
-  if (!rd.mean.empty()) {
-    // The mean is a Go duration string (e.g. "2ms"); the config parser already
-    // validated the rest of the file, but a stray value here is non-fatal so we
-    // parse leniently, leaving mean = 0 on failure.
-    try {
-      // Reuse a minimal duration parse for the small set of units the harness
-      // uses ("ms", "s", "us", "ns"). The baseline uses "2ms".
-      const std::string &s = rd.mean;
-      std::size_t pos = 0;
-      double num = std::stod(s, &pos);
-      const std::string unit = s.substr(pos);
-      double unitNs = 0.0;
-      if (unit == "ns") {
-        unitNs = 1.0;
-      } else if (unit == "us" || unit == "\xC2\xB5s") {
-        unitNs = 1e3;
-      } else if (unit == "ms") {
-        unitNs = 1e6;
-      } else if (unit == "s") {
-        unitNs = 1e9;
-      } else if (unit == "m") {
-        unitNs = 60e9;
-      } else if (unit == "h") {
-        unitNs = 3600e9;
-      }
-      if (unitNs > 0) {
-        const auto ns = static_cast<std::int64_t>(num * unitNs);
-        if (ns > 0) {
-          out.mean = nanoseconds(ns);
-        }
-      }
-    } catch (...) {
-      // leave mean = 0.
-    }
-  }
   return out;
 }
 
 // Samples the simulated report-return delay added to a settlement's virtual
-// time. Zero mean -> 0. Fixed -> the mean. Lognormal (default) -> a lognormal
-// whose median is the mean: mean * exp(sigma * Z), Z ~ N(0,1).
+// time. Zero mean -> 0. Fixed -> the mean. Lognormal -> a lognormal whose
+// median is the mean: mean * exp(sigma * Z), Z ~ N(0,1).
 [[nodiscard]] nanoseconds ReportDelaySample(Rng &vg,
                                             const ReportDelayParams &p) {
-  if (p.mean.count() <= 0) {
+  switch (p.dist) {
+  case config::ReportDelayDistribution::None:
     return nanoseconds(0);
-  }
-  if (p.dist == config::ReportDelayDistribution::Fixed) {
-    return p.mean;
+  case config::ReportDelayDistribution::Fixed:
+    return p.mean.count() <= 0 ? nanoseconds(0) : p.mean;
+  case config::ReportDelayDistribution::Lognormal:
+    if (p.mean.count() <= 0) {
+      return nanoseconds(0);
+    }
+    break;
+  default:
+    throw std::invalid_argument("report_delay.distribution has unknown value " +
+                                std::to_string(static_cast<int>(p.dist)));
   }
   const double z = vg.NormFloat();
   const double factor = std::exp(p.sigma * z);
-  const auto d = nanoseconds(
-      static_cast<std::int64_t>(static_cast<double>(p.mean.count()) * factor));
-  return d.count() < 0 ? nanoseconds(0) : d;
+  if (!std::isfinite(factor)) {
+    throw std::overflow_error("report_delay sample exceeds nanoseconds range");
+  }
+  if (factor == 1.0) {
+    return p.mean;
+  }
+  // The random factor is already double. Keeping the range decision in that
+  // type avoids changing the result with the platform's long double ABI.
+  const double delayNs = static_cast<double>(p.mean.count()) * factor;
+  const double maxExclusiveNs = std::ldexp(1.0, 63);
+  if (!std::isfinite(delayNs) || delayNs >= maxExclusiveNs) {
+    throw std::overflow_error("report_delay sample exceeds nanoseconds range");
+  }
+  return nanoseconds(static_cast<std::int64_t>(delayNs));
 }
 
 // One slot of the bounded active working set.
@@ -244,10 +273,10 @@ private:
   }
 
   void RunLoop() {
-    std::uint64_t target = m_cfg.run.totalOps;
-    if (target == 0) {
-      target = kDefaultOrderCheckBudget;
+    if (m_cfg.run.totalOps == 0) {
+      throw std::invalid_argument("run.total_ops must be positive");
     }
+    const std::uint64_t target = m_cfg.run.totalOps;
     InitActiveSet();
     while (m_stats.orderChecks < target) {
       const int slot = m_rng.IntN(static_cast<int>(m_active.size()));
@@ -487,7 +516,7 @@ private:
     m_events.push_back(std::move(ev));
   }
 
-  // Mirror of schedule.go: stamps each event with a VirtualT0 on the offline
+  // Stamps each event with a VirtualT0 on the offline
   // virtual causal timeline using a dedicated schedule RNG (decorrelated from
   // the content RNG), so the emitted content stays unchanged and only the
   // virtual times are added.
@@ -510,25 +539,30 @@ private:
         const nanoseconds arrival =
             MaxDuration(globalClock, acctClock[ev.account]);
         ev.virtualT0 = arrival;
-        acctClock[ev.account] = arrival + kCausalGap;
+        acctClock[ev.account] =
+            CheckedAdd(arrival, kCausalGap, "account causal deadline");
         break;
       }
       case EventKind::OrderCheck: {
-        globalClock += InterArrival(vg, rate);
+        globalClock = CheckedAdd(globalClock, InterArrival(vg, rate),
+                                 "virtual arrival timeline");
         const nanoseconds arrival =
             MaxDuration(globalClock, acctClock[ev.account]);
         ev.virtualT0 = arrival;
         ocVirtualByCorr[ev.correlationId] = arrival;
-        acctClock[ev.account] = arrival + kCausalGap;
+        acctClock[ev.account] =
+            CheckedAdd(arrival, kCausalGap, "account causal deadline");
         break;
       }
       case EventKind::Settlement: {
         const nanoseconds oc = ocVirtualByCorr[ev.correlationId];
         const nanoseconds delay = ReportDelaySample(vg, report);
-        const nanoseconds settle = oc + delay;
+        const nanoseconds settle =
+            CheckedAdd(oc, delay, "report settlement time");
         ev.virtualT0 = settle;
-        acctClock[ev.account] =
-            MaxDuration(acctClock[ev.account], settle + kCausalGap);
+        acctClock[ev.account] = MaxDuration(
+            acctClock[ev.account],
+            CheckedAdd(settle, kCausalGap, "account causal deadline"));
         break;
       }
       }

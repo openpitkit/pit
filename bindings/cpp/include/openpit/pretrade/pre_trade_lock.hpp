@@ -33,11 +33,14 @@
 
 // Pre-trade lock: the hot-path handle accumulating reserved-price records.
 //
-// `PreTradeLock` is a move-only RAII value. Its mutating hot-path operations
-// (`Push`, `PushMany`, `Len`, `IsEmpty`, `Merge`, `PricesView`) allocate no C++
+// `PreTradeLock` is a copyable RAII value with deep-copy semantics. Copying a
+// moved-from lock yields another moved-from lock. Its mutating hot-path
+// operations
+// (`Push`, `PushMany`, `Len`, `IsEmpty`, `Merge`, `PricesOf`) allocate no C++
 // containers; only snapshots (`Entries`/`Prices`) and serialization helpers
-// materialize owned data. Expected validation and construction failures throw
-// `openpit::Error`. A lock has no reject channel - it only stores prices.
+// materialize owned data. Every operation that uses the native lock requires a
+// live handle and throws `openpit::Error` otherwise; `operator bool()` reports
+// handle presence. A lock has no reject channel - it only stores prices.
 
 namespace openpit::pretrade {
 
@@ -91,11 +94,24 @@ struct PreTradeLockEntriesDeleter {
 
 }  // namespace detail
 
-// RAII pre-trade lock. Move-only; destruction releases the native handle.
+// RAII pre-trade lock with deep-copy value semantics. Copying a moved-from lock
+// yields another moved-from lock; destruction releases the native handle.
 class PreTradeLock {
  public:
   // Allocates an empty lock. The C constructor always succeeds.
   PreTradeLock() : m_handle(openpit_create_pretrade_pre_trade_lock()) {}
+
+  PreTradeLock(PreTradeLock&&) noexcept = default;
+  PreTradeLock& operator=(PreTradeLock&&) noexcept = default;
+
+  PreTradeLock(const PreTradeLock& other) : PreTradeLock(CopyOf(other)) {}
+
+  PreTradeLock& operator=(const PreTradeLock& other) {
+    if (this != &other) {
+      *this = CopyOf(other);
+    }
+    return *this;
+  }
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
@@ -104,7 +120,7 @@ class PreTradeLock {
   // Returns an independent deep copy of this lock.
   [[nodiscard]] PreTradeLock Clone() const {
     OpenPitPretradePreTradeLock* raw =
-        openpit_pretrade_pre_trade_lock_clone(m_handle.Get());
+        openpit_pretrade_pre_trade_lock_clone(Native());
     if (raw == nullptr) {
       throw Error("openpit_pretrade_pre_trade_lock_clone failed");
     }
@@ -112,19 +128,19 @@ class PreTradeLock {
   }
 
   // Total number of stored prices across all groups.
-  [[nodiscard]] std::size_t Len() const noexcept {
-    return openpit_pretrade_pre_trade_lock_len(m_handle.Get());
+  [[nodiscard]] std::size_t Len() const {
+    return openpit_pretrade_pre_trade_lock_len(Native());
   }
 
-  [[nodiscard]] bool IsEmpty() const noexcept {
-    return openpit_pretrade_pre_trade_lock_is_empty(m_handle.Get());
+  [[nodiscard]] bool IsEmpty() const {
+    return openpit_pretrade_pre_trade_lock_is_empty(Native());
   }
 
   // Appends `price` under `policyGroupId`. Throws `openpit::Error` when the
   // price fails domain validation.
   void Push(std::uint16_t policyGroupId, ::openpit::param::Price price) {
     OpenPitSharedString* error = nullptr;
-    if (!openpit_pretrade_pre_trade_lock_push(m_handle.Get(), policyGroupId,
+    if (!openpit_pretrade_pre_trade_lock_push(Native(), policyGroupId,
                                               ::openpit::detail::Native(price),
                                               &error)) {
       ::openpit::detail::ThrowFromSharedString(
@@ -141,7 +157,7 @@ class PreTradeLock {
       raw.push_back(::openpit::detail::Native(entry));
     }
     OpenPitSharedString* error = nullptr;
-    if (!openpit_pretrade_pre_trade_lock_push_many(m_handle.Get(), raw.data(),
+    if (!openpit_pretrade_pre_trade_lock_push_many(Native(), raw.data(),
                                                    raw.size(), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_pretrade_pre_trade_lock_push_many failed");
@@ -151,8 +167,8 @@ class PreTradeLock {
   // Appends every record from `src` into this lock, leaving `src` unchanged.
   void Merge(const PreTradeLock& src) {
     OpenPitSharedString* error = nullptr;
-    if (!openpit_pretrade_pre_trade_lock_merge(m_handle.Get(),
-                                               src.m_handle.Get(), &error)) {
+    if (!openpit_pretrade_pre_trade_lock_merge(Native(), src.Native(),
+                                               &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_pretrade_pre_trade_lock_merge failed");
     }
@@ -164,7 +180,7 @@ class PreTradeLock {
   [[nodiscard]] std::vector<LockEntry> Entries() const {
     ::openpit::detail::Handle<OpenPitPretradePreTradeLockEntries,
                               detail::PreTradeLockEntriesDeleter>
-        entries(openpit_pretrade_pre_trade_lock_entries(m_handle.Get()));
+        entries(openpit_pretrade_pre_trade_lock_entries(Native()));
     const OpenPitPretradePreTradeLockEntriesView view =
         openpit_pretrade_pre_trade_lock_entries_view(entries.Get());
     std::vector<LockEntry> out;
@@ -183,7 +199,7 @@ class PreTradeLock {
   [[nodiscard]] std::vector<::openpit::param::Price> Prices() const {
     ::openpit::detail::Handle<OpenPitPretradePreTradeLockEntries,
                               detail::PreTradeLockEntriesDeleter>
-        entries(openpit_pretrade_pre_trade_lock_entries(m_handle.Get()));
+        entries(openpit_pretrade_pre_trade_lock_entries(Native()));
     const OpenPitPretradePreTradeLockEntriesView view =
         openpit_pretrade_pre_trade_lock_entries_view(entries.Get());
     std::vector<::openpit::param::Price> out;
@@ -204,7 +220,7 @@ class PreTradeLock {
     OpenPitSharedString* error = nullptr;
     const OpenPitPretradePreTradeLockPricesStatus status =
         openpit_pretrade_pre_trade_lock_prices_of(
-            m_handle.Get(), policyGroupId, &singlePrice, &listRaw, &error);
+            Native(), policyGroupId, &singlePrice, &listRaw, &error);
     switch (status) {
       case OpenPitPretradePreTradeLockPricesStatus_Empty:
         return {};
@@ -254,7 +270,7 @@ class PreTradeLock {
   [[nodiscard]] std::string ToJson() const {
     OpenPitSharedString* error = nullptr;
     OpenPitSharedString* handle =
-        openpit_pretrade_pre_trade_lock_to_json(m_handle.Get(), &error);
+        openpit_pretrade_pre_trade_lock_to_json(Native(), &error);
     if (handle == nullptr) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_pretrade_pre_trade_lock_to_json failed");
@@ -282,8 +298,18 @@ class PreTradeLock {
   explicit PreTradeLock(detail::RawPreTradeLock* handle) noexcept
       : m_handle(handle) {}
 
-  [[nodiscard]] detail::RawPreTradeLock* Native() const noexcept {
+  [[nodiscard]] detail::RawPreTradeLock* Native() const {
+    if (!m_handle) {
+      throw Error("pre-trade lock has no handle (was moved from)");
+    }
     return m_handle.Get();
+  }
+
+  [[nodiscard]] static PreTradeLock CopyOf(const PreTradeLock& other) {
+    if (!other) {
+      return PreTradeLock(nullptr);
+    }
+    return other.Clone();
   }
 
   [[nodiscard]] static std::vector<::openpit::param::Price> PricesFromView(
@@ -304,7 +330,7 @@ class PreTradeLock {
   [[nodiscard]] std::vector<std::uint8_t> ToBytes(Encoder encoder,
                                                   const char* fallback) const {
     OpenPitSharedString* error = nullptr;
-    OpenPitSharedBytes* handle = encoder(m_handle.Get(), &error);
+    OpenPitSharedBytes* handle = encoder(Native(), &error);
     if (handle == nullptr) {
       ::openpit::detail::ThrowFromSharedString(error, fallback);
     }

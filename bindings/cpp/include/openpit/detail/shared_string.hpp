@@ -17,29 +17,23 @@
 
 #pragma once
 
-// Captures host details printed at the head of each run's report, before the
-// single-run summary or the repeat run's final summary. Gathering is
-// best-effort: unavailable fields remain "unknown" without failing the run.
-// `toolchain` records the C++ compiler and the OpenPit version.
+#include <openpit.h>
 
 #include <string>
 
-namespace spot_table {
+namespace openpit::detail {
 
-struct PlatformInfo {
-  std::string hardware = "unknown";
-  std::string cpu = "unknown";
-  int cores = 0;
-  std::string memory = "unknown";
-  std::string disk = "unknown";
-  std::string os = "unknown";
-  std::string arch = "unknown";
-  std::string toolchain = "unknown";
+struct SharedStringDeleter {
+  void operator()(OpenPitSharedString* handle) const noexcept {
+    openpit_destroy_shared_string(handle);
+  }
 };
 
-[[nodiscard]] PlatformInfo GatherPlatform();
+[[nodiscard]] inline std::string CopyStringView(OpenPitStringView view) {
+  if (view.ptr == nullptr || view.len == 0) {
+    return {};
+  }
+  return {reinterpret_cast<const char*>(view.ptr), view.len};
+}
 
-// Writes the gathered platform information to standard output.
-void PrintPlatform();
-
-} // namespace spot_table
+}  // namespace openpit::detail

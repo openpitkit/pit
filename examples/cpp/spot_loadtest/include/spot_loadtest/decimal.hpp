@@ -24,13 +24,10 @@
 
 // Exact fixed-point money for the shadow ledger.
 //
-// The Go harness uses shopspring/decimal; here the value space is deliberately
-// restricted exactly as the Go `money.go` is — quantity is an integer lot
-// count (scale 0) and price has at most `priceScale = 2` fractional digits
-// (classic equity ticks) — so every monetary value is exact at scale 2 and
-// fits in a signed 128-bit fixed-point coefficient. This mirrors `q*p` being
-// exact with no rounding, which is what keeps the shadow ledger bit-for-bit
-// against the engine.
+// The generated workload uses integer lots (scale 0) and prices with at
+// most `priceScale = 2` fractional digits. Monetary values therefore fit a
+// signed 128-bit fixed-point coefficient at scale 2, and `q * p` is exact
+// without rounding. This keeps the shadow ledger aligned with the engine.
 //
 // `Decimal` carries a scale-2 integer coefficient (units of 0.01). The engine
 // value types (`openpit::param`) are constructed from `ToString()`, so the
@@ -85,7 +82,7 @@ public:
     return Decimal(m_coefficient * static_cast<Coefficient>(lots));
   }
 
-  // Full scale-2 decimal multiply, the analogue of shopspring decimal.Mul. Both
+  // Full scale-2 decimal multiply. Both
   // operands carry a scale-2 coefficient (value = coeff/100), so the true
   // product is (c1*c2)/10000; rendered back at scale 2 the coefficient is
   // (c1*c2)/100. In the harness value space (one factor is an integer lot
@@ -128,10 +125,9 @@ public:
     return m_coefficient >= o.m_coefficient;
   }
 
-  // Canonical string form: no trailing zeros, mirroring decimal.String() for
-  // the value space the harness uses (integers render without a fractional
-  // part, scale-2 values without trailing zeros). Crossed into the engine value
-  // types verbatim so the construction stays exact.
+  // Canonical string form: no trailing zeros. Integers have no fractional
+  // part, and scale-2 values omit trailing fractional zeros. Values cross into
+  // the engine through their exact string form.
   [[nodiscard]] std::string ToString() const;
 
 private:

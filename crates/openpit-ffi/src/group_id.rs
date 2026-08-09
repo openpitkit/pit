@@ -16,7 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 /// The default policy-group identifier used when a caller does not assign a
-/// policy to a specific group. Mirrors `openpit::DEFAULT_POLICY_GROUP_ID`.
+/// policy to a specific group.
 pub const OPENPIT_DEFAULT_POLICY_GROUP_ID: u16 = 0;
 
 const _: () = assert!(OPENPIT_DEFAULT_POLICY_GROUP_ID == openpit::DEFAULT_POLICY_GROUP_ID.value());

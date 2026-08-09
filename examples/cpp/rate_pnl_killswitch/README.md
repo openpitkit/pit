@@ -108,8 +108,5 @@ runtime resolver, so the example exercises exactly what an SDK consumer sees.
 - [RateLimitPolicy](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
   and [PnlBoundsKillSwitchPolicy][pnl-bounds-policy] -
   the policy references for the two kill switches combined here.
-- [`../../python/rate_pnl_killswitch`](../../python/rate_pnl_killswitch) and
-  [`../../go/rate_pnl_killswitch`](../../go/rate_pnl_killswitch) - the same
-  supervisor in Python and Go.
 
 [pnl-bounds-policy]: https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy

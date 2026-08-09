@@ -17,7 +17,6 @@
 
 // Reporter rendering tests.
 //
-// Mirror of: examples/go/spot_loadtest/internal/reporter/reporter_test.go
 
 #include "spot_loadtest/reporter/reporter.hpp"
 
@@ -29,7 +28,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <cstdint>
+#include <cstddef>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -46,6 +45,8 @@ using std::chrono::microseconds;
 using std::chrono::milliseconds;
 using std::chrono::nanoseconds;
 using std::chrono::seconds;
+
+constexpr std::size_t kSyntheticSubmitterThreads = 7;
 
 [[nodiscard]] bool Contains(const std::string &haystack,
                             const std::string &needle) {
@@ -105,6 +106,9 @@ using std::chrono::seconds;
   snap.serviceTime = measurement::Percentiles{
       microseconds(30),  microseconds(45),  microseconds(70),
       microseconds(120), microseconds(300), 200000};
+  snap.submitLag = measurement::Percentiles{
+      microseconds(10),  microseconds(20),  microseconds(80),
+      microseconds(150), microseconds(400), 200000};
 
   snap.warmupWindows = 1;
   snap.throughput = 45000;
@@ -148,7 +152,6 @@ using std::chrono::seconds;
   cfg.run.seed = 0xC0FFEE;
   cfg.run.totalOps = 200000;
   cfg.run.window = 100000;
-  cfg.run.windowUnit = config::WindowUnit::Ops;
   cfg.run.observer = true;
 
   cfg.reject.targetRate = 0.05;
@@ -156,6 +159,8 @@ using std::chrono::seconds;
 
   cfg.accounts.count = 10000;
   cfg.concurrency.activeAccounts = 1024;
+  cfg.concurrency.submitterWorkers = 8;
+  cfg.concurrency.maxSubmitLag = milliseconds(1);
 
   cfg.asyncEngine.strategy = config::AsyncEngineStrategy::Dynamic;
   cfg.asyncEngine.maxQueues = 4096;
@@ -216,7 +221,8 @@ using std::chrono::seconds;
 [[nodiscard]] std::string Render() {
   std::ostringstream out;
   reporter::Write(out, SyntheticEnv(), SyntheticConfig(), "configs/test.ini",
-                  SyntheticSnapshot(), SyntheticStreamStats());
+                  SyntheticSnapshot(), kSyntheticSubmitterThreads,
+                  SyntheticStreamStats());
   return out.str();
 }
 
@@ -299,13 +305,26 @@ TEST(Reporter, ServiceTimeIsDiagnosticOnly) {
          "headline";
 }
 
+// Verifies that submit scheduling lag is a separate harness-validity
+// distribution and never masquerades as engine latency.
+TEST(Reporter, SubmitLagIsHarnessValidityMetric) {
+  const std::string out = Render();
+  const std::size_t diagIdx = out.find("=== Diagnostics");
+  const std::size_t lagIdx = out.find("Submit scheduling lag");
+  ASSERT_NE(diagIdx, std::string::npos);
+  ASSERT_NE(lagIdx, std::string::npos);
+  EXPECT_GT(lagIdx, diagIdx);
+  EXPECT_TRUE(Contains(out, "HARNESS VALIDITY metric"));
+  EXPECT_TRUE(Contains(out, "breaches: 0"));
+}
+
 // Verifies the anti-DCE checksum is printed.
 TEST(Reporter, ChecksumInReport) {
   std::ostringstream out;
   measurement::Snapshot snap = SyntheticSnapshot();
   snap.checksum = 0xDEADBEEFCAFEBABEULL;
   reporter::Write(out, SyntheticEnv(), SyntheticConfig(), "configs/test.ini",
-                  snap, SyntheticStreamStats());
+                  snap, kSyntheticSubmitterThreads, SyntheticStreamStats());
   EXPECT_TRUE(Contains(out.str(), "DEADBEEFCAFEBABE"))
       << "report must print the anti-DCE checksum";
 }
@@ -328,6 +347,10 @@ TEST(Reporter, ConcurrencyDisclosure) {
            "Concurrency model",
            "population (total accounts)",
            "active working set",
+           "configured submitter cap      : 8",
+           "actual submitter threads      : 7",
+           "maximum submit scheduling lag : 1ms",
+           "submit-lag limit breaches     : 0",
            "Engine dispatch sizing",
            "strategy",
            "max_queues",
@@ -351,7 +374,7 @@ TEST(Reporter, BackpressureDisclosed) {
   measurement::Snapshot snap = SyntheticSnapshot();
   snap.backpressure = 4242;
   reporter::Write(out, SyntheticEnv(), SyntheticConfig(), "configs/test.ini",
-                  snap, SyntheticStreamStats());
+                  snap, kSyntheticSubmitterThreads, SyntheticStreamStats());
   const std::string s = out.str();
   EXPECT_TRUE(Contains(s, "4242"))
       << "report must print a nonzero backpressure count";
@@ -365,7 +388,8 @@ TEST(Reporter, ObserverDisabledMessage) {
   config::Config cfg = SyntheticConfig();
   cfg.run.observer = false;
   reporter::Write(out, SyntheticEnv(), cfg, "configs/test.ini",
-                  SyntheticSnapshot(), SyntheticStreamStats());
+                  SyntheticSnapshot(), kSyntheticSubmitterThreads,
+                  SyntheticStreamStats());
   EXPECT_TRUE(Contains(out.str(), "Observer disabled"))
       << "diagnostics block must say observer is disabled when observer=off";
 }
@@ -383,7 +407,7 @@ TEST(Reporter, ReproductionRecipe) {
   std::ostringstream out;
   reporter::Write(out, SyntheticEnv(), SyntheticConfig(),
                   "configs/baseline.ini", SyntheticSnapshot(),
-                  SyntheticStreamStats());
+                  kSyntheticSubmitterThreads, SyntheticStreamStats());
   EXPECT_TRUE(Contains(out.str(), "configs/baseline.ini"))
       << "disclaimer must include the config flag in the reproduction recipe";
 }
@@ -405,7 +429,7 @@ TEST(Reporter, SingleWindowNoWarmupExclusion) {
   snap.windows.resize(1); // only one window
   snap.warmupWindows = 0; // no warmup when single window
   reporter::Write(out, SyntheticEnv(), SyntheticConfig(), "configs/test.ini",
-                  snap, SyntheticStreamStats());
+                  snap, kSyntheticSubmitterThreads, SyntheticStreamStats());
   EXPECT_TRUE(Contains(out.str(), "single window"))
       << "with one window the report must note no warmup exclusion is possible";
 }
@@ -424,7 +448,8 @@ TEST(Reporter, WriteInvalidSuppressesHeadlineAndNamesReason) {
   measurement::Snapshot snap = SyntheticSnapshot();
   snap.backpressure = 7;
   reporter::WriteInvalid(out, SyntheticEnv(), SyntheticConfig(),
-                         "configs/test.ini", snap, SyntheticStreamStats());
+                         "configs/test.ini", snap, kSyntheticSubmitterThreads,
+                         SyntheticStreamStats());
   const std::string s = out.str();
   EXPECT_TRUE(Contains(s, "RUN INVALID"))
       << "invalid report must print the invalid banner";
@@ -449,31 +474,47 @@ TEST(Reporter, WriteInvalidNamesZeroChecksum) {
   snap.backpressure = 0;
   snap.checksum = 0; // non-empty run + zero checksum = invalid
   reporter::WriteInvalid(out, SyntheticEnv(), SyntheticConfig(),
-                         "configs/test.ini", snap, SyntheticStreamStats());
+                         "configs/test.ini", snap, kSyntheticSubmitterThreads,
+                         SyntheticStreamStats());
   const std::string s = out.str();
   EXPECT_TRUE(Contains(s, "zero anti-DCE checksum on a non-empty run"))
       << "invalid report must name the zero-checksum reason";
 }
 
-// Pins the duration-knob rendering to Go's time.Duration.String() output. A
-// fractional idle_cleanup must render with its fraction (Go: 2.5s), not be
-// truncated to whole seconds; a sub-minute slow_submit_threshold must render as
-// a proper duration string (Go: 30s / 1m30s), not a millisecond float.
-TEST(Reporter, DurationKnobsMatchGoString) {
+// A submit-lag breach names the failed pacing invariant, retains the lag
+// distribution for diagnosis, and suppresses the latency headline.
+TEST(Reporter, WriteInvalidNamesSubmitLagAndKeepsDiagnostic) {
+  std::ostringstream out;
+  measurement::Snapshot snap = SyntheticSnapshot();
+  snap.submitLagBreaches = 3;
+  reporter::WriteInvalid(out, SyntheticEnv(), SyntheticConfig(),
+                         "configs/test.ini", snap, kSyntheticSubmitterThreads,
+                         SyntheticStreamStats());
+  const std::string s = out.str();
+  EXPECT_TRUE(Contains(s, "submit scheduling lag limit exceeded x 3"));
+  EXPECT_TRUE(Contains(s, "Submit scheduling lag"));
+  EXPECT_TRUE(Contains(s, "breaches: 3"));
+  EXPECT_FALSE(Contains(s, "=== Headline:"));
+}
+
+// Pins compact duration-knob rendering. A fractional `idle_cleanup` keeps its
+// fraction, while a sub-minute `slow_submit_threshold` renders as a duration
+// string instead of a millisecond float.
+TEST(Reporter, DurationKnobsUseCompactForm) {
   std::ostringstream out;
   config::Config cfg = SyntheticConfig();
   cfg.asyncEngine.idleCleanup = milliseconds(2500);
   cfg.asyncEngine.slowSubmitThreshold = milliseconds(90000); // 1m30s
   reporter::Write(out, SyntheticEnv(), cfg, "configs/test.ini",
-                  SyntheticSnapshot(), SyntheticStreamStats());
+                  SyntheticSnapshot(), kSyntheticSubmitterThreads,
+                  SyntheticStreamStats());
   const std::string s = out.str();
   EXPECT_TRUE(Contains(s, "idle_cleanup (queue retire)   : 2.5s"))
-      << "idle_cleanup must render fractional seconds like Go's "
-         "Duration.String()";
+      << "idle_cleanup must render 2500ms as 2.5s";
   EXPECT_FALSE(Contains(s, "idle_cleanup (queue retire)   : 2s"))
-      << "idle_cleanup must not truncate the fractional part";
+      << "idle_cleanup must not render 2500ms as 2s";
   EXPECT_TRUE(Contains(s, "slow_submit_threshold         : 1m30s"))
-      << "slow_submit_threshold must render as a Go duration string";
+      << "slow_submit_threshold must render 90000ms as 1m30s";
 }
 
 } // namespace

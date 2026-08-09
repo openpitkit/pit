@@ -25,8 +25,6 @@
 
 // Harness self-overhead characterisation.
 //
-// Mirror of: examples/go/spot_loadtest/internal/measurement/overhead.go
-//
 // `MeasureOverhead` runs a prober a fixed number of times sequentially (no
 // concurrency, so the probe sees no workload queueing) against a quiescent
 // engine, and returns the latency distribution. The driver probes it through

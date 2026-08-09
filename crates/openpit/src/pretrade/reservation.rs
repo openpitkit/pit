@@ -150,12 +150,6 @@ impl PreTradeReservation {
     ///
     /// The panic is the API contract: each reservation must be finalized
     /// at most once and the caller is responsible for tracking ownership.
-    /// A panic must never cross a language boundary, and it cannot be
-    /// caught in a build that aborts on panic, so language bindings
-    /// (Python, Go, C) MUST track finalization in their own reservation
-    /// handle and never forward a repeated finalization into this method.
-    /// Their published contract is what a foreign caller sees; the C ABI,
-    /// for example, makes a repeated commit a no-op.
     pub fn commit(&mut self) {
         self.inner
             .take()
@@ -185,11 +179,7 @@ impl PreTradeReservation {
     /// The reservation API itself imposes no panic on double-rollback or
     /// rollback-after-commit; both are silent no-ops.
     ///
-    /// A misbehaving policy mutation closure can still unwind, and that
-    /// unwind must never cross a language boundary. Language bindings
-    /// (Python, Go, C) that expose this method own that guarantee for
-    /// their surface; they cannot rely on catching the unwind, because a
-    /// build that aborts on panic gives them nothing to catch.
+    /// A misbehaving policy mutation closure can still unwind.
     pub fn rollback(&mut self) {
         if let Some(inner) = self.inner.take() {
             inner.rollback();

@@ -29,7 +29,6 @@
 
 #include <memory>
 #include <optional>
-#include <utility>
 #include <vector>
 
 namespace openpit::pretrade {
@@ -43,7 +42,8 @@ struct ExecuteResult;
 
 // Deferred pre-trade request returned by `StartPreTrade`. Move-only RAII:
 // `Execute()` runs the remaining stages once; destruction abandons an
-// unexecuted request without creating a reservation.
+// unexecuted request without creating a reservation. The request owns the
+// submitted order and preserves its concrete type for the main stage.
 class Request {
  public:
   Request() = default;
@@ -58,7 +58,7 @@ class Request {
   friend class ::openpit::detail::NativeAccess;
 
   explicit Request(detail::RequestInit init) noexcept
-      : m_handle(init.handle), m_order(std::move(init.order)) {}
+      : m_order(std::move(init.order)), m_handle(init.handle) {}
 
   [[nodiscard]] detail::RawRequest* Native() const noexcept {
     return m_handle.Get();
@@ -71,12 +71,16 @@ class Request {
     return m_handle.Get();
   }
 
+  [[nodiscard]] const ::openpit::Order& RequireOrder() const {
+    if (!m_order) {
+      throw ::openpit::Error("pre-trade request has no order");
+    }
+    return *m_order;
+  }
+
+  std::unique_ptr<const ::openpit::Order> m_order;
   ::openpit::detail::Handle<detail::RawRequest, detail::PreTradeRequestDeleter>
       m_handle;
-  // Owned polymorphic order this request was started from, so the deferred main
-  // stage can recover the client order type without depending on caller
-  // lifetime. Empty only for a default-constructed request.
-  std::shared_ptr<const ::openpit::Order> m_order;
 };
 
 struct ExecuteResult {
@@ -91,15 +95,11 @@ struct ExecuteResult {
   OpenPitPretradePreTradeReservation* reservation = nullptr;
   OpenPitPretradeRejectList* rejects = nullptr;
   OpenPitSharedString* error = nullptr;
-  // Re-establish the original order for the deferred main stage so a custom
-  // policy still recovers the client order type; harmless when null.
-  std::optional<::openpit::detail::CurrentOrderGuard> orderGuard;
-  if (m_order != nullptr) {
-    orderGuard.emplace(*m_order);
-  }
+  detail::RawRequest* const request = RequireHandle();
+  const ::openpit::detail::CurrentOrderGuard orderGuard(RequireOrder());
   ::openpit::detail::CallbackExceptionScope callbackExceptions;
   const OpenPitPretradeStatus status =
-      openpit_pretrade_pre_trade_request_execute(RequireHandle(), &reservation,
+      openpit_pretrade_pre_trade_request_execute(request, &reservation,
                                                  &rejects, &error);
   if (callbackExceptions.HasPending()) {
     openpit_destroy_pretrade_pre_trade_reservation(reservation);
@@ -113,10 +113,23 @@ struct ExecuteResult {
   }
   ExecuteResult out;
   if (status == OpenPitPretradeStatus_Rejected) {
-    if (rejects != nullptr) {
-      out.rejects = detail::ListAccess::DrainRejects(rejects);
+    if (rejects == nullptr) {
+      throw ::openpit::Error(
+          "openpit_pretrade_pre_trade_request_execute returned Rejected "
+          "without rejects");
     }
+    out.rejects = detail::ListAccess::DrainRejects(rejects);
     return out;
+  }
+  if (status != OpenPitPretradeStatus_Passed) {
+    throw ::openpit::Error(
+        "openpit_pretrade_pre_trade_request_execute returned an invalid "
+        "status");
+  }
+  if (reservation == nullptr) {
+    throw ::openpit::Error(
+        "openpit_pretrade_pre_trade_request_execute returned Passed "
+        "without a reservation");
   }
   out.reservation = ::openpit::detail::FromNative<Reservation>(reservation);
   return out;

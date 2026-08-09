@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "openpit/error.hpp"
 #include "openpit/string.hpp"
 
 #include <openpit.h>
@@ -25,22 +26,24 @@
 
 namespace openpit {
 
-// Returns the OpenPit runtime version string. Never fails.
+// Returns the OpenPit runtime version string. Throws `Error` if the C ABI
+// violates its non-empty-view contract.
 [[nodiscard]] inline std::string GetVersion() {
   const OpenPitStringView version = openpit_get_runtime_version();
-  if (version.ptr == nullptr) {
-    return {};
+  if (version.ptr == nullptr || version.len == 0) {
+    throw Error("openpit_get_runtime_version returned an empty view");
   }
   return {reinterpret_cast<const char*>(version.ptr), version.len};
 }
 
 // Returns the build-profile descriptor of the linked runtime: a stable
 // `key=value;`-delimited string (keys include `version`, `profile`,
-// `debug_assertions`). Never fails.
+// `debug_assertions`). Throws `Error` if the C ABI violates its non-empty-view
+// contract.
 [[nodiscard]] inline std::string GetBuildProfile() {
   const OpenPitStringView profile = openpit_get_runtime_build_profile();
-  if (profile.ptr == nullptr) {
-    return {};
+  if (profile.ptr == nullptr || profile.len == 0) {
+    throw Error("openpit_get_runtime_build_profile returned an empty view");
   }
   return {reinterpret_cast<const char*>(profile.ptr), profile.len};
 }

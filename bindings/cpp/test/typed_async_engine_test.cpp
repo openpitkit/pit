@@ -120,6 +120,16 @@ constexpr std::uint64_t kAccountA = 1001;
   return report;
 }
 
+[[nodiscard]] openpit::model::ExecutionReport TestLockedReport(
+    std::uint64_t accountId) {
+  openpit::model::ExecutionReport report = TestReport(accountId);
+  report.fill.emplace();
+  report.fill->lock.emplace();
+  report.fill->lock->Push(openpit::param::DefaultPolicyGroupId,
+                          Price::FromString("100"));
+  return report;
+}
+
 // An AccountSync rate-limit engine that admits a single order per account on
 // the broker axis: the second pre-trade for an account rejects with
 // RateLimitExceeded.
@@ -323,6 +333,44 @@ class FatalRejectPolicy {
   }
 };
 
+struct TypedAsyncDeskOrder : public openpit::model::Order {};
+
+struct TypedAsyncDeskReport : public openpit::model::ExecutionReport {};
+
+class TypedAsyncPayloadPolicy {
+ public:
+  TypedAsyncPayloadPolicy(std::atomic<bool>* orderSeen,
+                          std::atomic<bool>* reportSeen)
+      : m_orderSeen(orderSeen), m_reportSeen(reportSeen) {}
+
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "TypedAsyncPayloadPolicy";
+  }
+
+  void PerformPreTradeCheck(const TypedAsyncDeskOrder&,
+                            const openpit::pretrade::Context&,
+                            openpit::pretrade::PolicyDecision&) const {
+    m_orderSeen->store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
+  ApplyExecutionReport(const openpit::pretrade::PostTradeContext&,
+                       const TypedAsyncDeskReport&,
+                       openpit::pretrade::PostTradeAdjustments&,
+                       openpit::pretrade::PostTradePnls&) const {
+    m_reportSeen->store(true, std::memory_order_relaxed);
+    return {};
+  }
+
+ private:
+  std::atomic<bool>* m_orderSeen;
+  std::atomic<bool>* m_reportSeen;
+};
+
+using TypedAsyncPayloadAdapter =
+    openpit::pretrade::PolicyAdapterWithSafeSlowArgType<
+        TypedAsyncPayloadPolicy, TypedAsyncDeskOrder, TypedAsyncDeskReport>;
+
 class BlockingRollbackPolicy {
  public:
   BlockingRollbackPolicy(Gate* started, Gate* release)
@@ -409,9 +457,12 @@ struct MockEngineAdapter {
   std::atomic<std::size_t> dropCopies{0};
 
   [[nodiscard]] openpit::pretrade::StartResult StartPreTrade(
-      const openpit::model::Order& order) {
-    const AccountId account = order.operation && order.operation->accountId
-                                  ? *order.operation->accountId
+      std::unique_ptr<const openpit::Order> order) {
+    const auto* modelOrder =
+        dynamic_cast<const openpit::model::Order*>(order.get());
+    const AccountId account = modelOrder != nullptr && modelOrder->operation &&
+                                      modelOrder->operation->accountId
+                                  ? *modelOrder->operation->accountId
                                   : AccountId{};
     std::optional<ConcurrencyProbe::Span> span;
     if (probe != nullptr) {
@@ -424,14 +475,14 @@ struct MockEngineAdapter {
   }
 
   [[nodiscard]] openpit::pretrade::ExecuteResult ExecutePreTrade(
-      const openpit::model::Order&) {
+      std::unique_ptr<const openpit::Order>) {
     openpit::pretrade::ExecuteResult result;
     result.reservation.emplace(openpit::pretrade::Reservation());
     return result;
   }
 
   [[nodiscard]] openpit::pretrade::DropCopyResult ApplyDropCopy(
-      const openpit::model::Order&) {
+      std::unique_ptr<const openpit::Order>) {
     dropCopies.fetch_add(1, std::memory_order_relaxed);
     openpit::pretrade::DropCopyResult result;
     result.operation.emplace(openpit::pretrade::DropCopyOperation());
@@ -443,7 +494,7 @@ struct MockEngineAdapter {
   }
 
   [[nodiscard]] openpit::PostTradeResult ApplyExecutionReport(
-      const openpit::model::ExecutionReport&) {
+      std::unique_ptr<const openpit::ExecutionReport>) {
     return openpit::PostTradeResult{};
   }
 
@@ -458,12 +509,25 @@ struct MockEngineAdapter {
   }
 };
 
+struct MakeTypedAsyncEngineCallable {
+  template <typename EngineT>
+  auto operator()(EngineT&& engine) const
+      -> decltype(ae::MakeTypedAsyncEngine(std::forward<EngineT>(engine), 1));
+};
+
 static_assert(
     std::is_move_constructible_v<ae::TypedAsyncEngine<MockEngineAdapter>>);
 static_assert(
     !std::is_move_assignable_v<ae::TypedAsyncEngine<MockEngineAdapter>>);
 static_assert(std::is_move_constructible_v<ae::OwnedTypedAsyncEngine>);
 static_assert(!std::is_move_assignable_v<ae::OwnedTypedAsyncEngine>);
+static_assert(std::is_constructible_v<ae::EngineAdapter, const Engine&>);
+static_assert(!std::is_constructible_v<ae::EngineAdapter, Engine&&>);
+static_assert(!std::is_constructible_v<ae::EngineAdapter, const Engine&&>);
+static_assert(std::is_invocable_v<MakeTypedAsyncEngineCallable, const Engine&>);
+static_assert(!std::is_invocable_v<MakeTypedAsyncEngineCallable, Engine&&>);
+static_assert(
+    !std::is_invocable_v<MakeTypedAsyncEngineCallable, const Engine&&>);
 
 //------------------------------------------------------------------------------
 // Lifecycle (real engine): start -> execute -> commit, then clean stop.
@@ -732,8 +796,8 @@ TEST(TypedAsyncErrorModel, RateLimitRejectIsValueNotThrow) {
 }
 
 // A missing account id is delivered as the MissingAccountId VALUE error through
-// the future (rethrown by Await on the caller thread), mirroring Go's
-// ErrMissingAccountID. The future resolves synchronously on the submitter.
+// the future (rethrown by Await on the caller thread). The future resolves
+// synchronously on the submitter.
 TEST(TypedAsyncErrorModel, MissingAccountIdResolvesWithError) {
   Engine engine = OrderValidationEngine();
   ae::EngineAdapter driver(engine);
@@ -786,6 +850,450 @@ TEST(TypedAsyncErrorModel, AbiFailureBecomesTaskFailed) {
   }
 
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, LvalueReportRetriesAfterStoppedSubmit) {
+  Engine engine = OrderValidationEngine();
+  auto stopped = ae::MakeTypedAsyncEngine(engine, 1);
+  ASSERT_TRUE(stopped.StopGraceful(seconds(10)));
+
+  openpit::model::ExecutionReport report = TestLockedReport(kAccountA);
+  try {
+    (void)stopped.ApplyExecutionReport(report).Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+
+  ASSERT_TRUE(report.operation.has_value());
+  ASSERT_TRUE(report.operation->accountId.has_value());
+  EXPECT_EQ(*report.operation->accountId, AccountId::FromUint64(kAccountA));
+  ASSERT_TRUE(report.fill.has_value());
+  ASSERT_TRUE(report.fill->lock.has_value());
+  ASSERT_TRUE(*report.fill->lock);
+  EXPECT_EQ(report.fill->lock->Len(), 1u);
+
+  auto retry = ae::MakeTypedAsyncEngine(engine, 1);
+  EXPECT_TRUE(retry.ApplyExecutionReport(report).Await(kAwaitCap).has_value());
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, LvalueReportRetriesAfterQueueLimit) {
+  Engine engine = OrderValidationEngine();
+  ae::EngineAdapter limitedDriver(engine);
+  auto limited = ae::TypedBuilder<ae::EngineAdapter>(limitedDriver)
+                     .Dynamic()
+                     .MaxQueues(1)
+                     .IdleCleanupAfter(seconds(10))
+                     .Build();
+  Gate occupied;
+  Gate release;
+  ae::Future<std::monostate> running =
+      limited.Submit(AccountId::FromUint64(kAccountA), [&] {
+        occupied.Open();
+        release.Wait();
+      });
+  ASSERT_TRUE(occupied.WaitFor(kAwaitCap));
+
+  openpit::model::ExecutionReport report = TestLockedReport(kAccountA + 1);
+  try {
+    (void)limited.ApplyExecutionReport(report).Await(kAwaitCap);
+    FAIL() << "expected QueueLimit";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::QueueLimit);
+  }
+
+  ASSERT_TRUE(report.operation.has_value());
+  ASSERT_TRUE(report.operation->accountId.has_value());
+  EXPECT_EQ(*report.operation->accountId, AccountId::FromUint64(kAccountA + 1));
+  ASSERT_TRUE(report.fill.has_value());
+  ASSERT_TRUE(report.fill->lock.has_value());
+  ASSERT_TRUE(*report.fill->lock);
+  EXPECT_EQ(report.fill->lock->Len(), 1u);
+
+  release.Open();
+  ASSERT_TRUE(running.Await(kAwaitCap).has_value());
+  ASSERT_TRUE(limited.StopGraceful(seconds(10)));
+
+  ae::EngineAdapter retryDriver(engine);
+  auto retry =
+      ae::TypedBuilder<ae::EngineAdapter>(retryDriver).Sharded(1).Build();
+  EXPECT_TRUE(retry.ApplyExecutionReport(report).Await(kAwaitCap).has_value());
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership,
+     LvalueDropCopyRetriesAfterHardStopAbortsQueuedCall) {
+  Engine engine = OrderValidationEngine();
+  auto stopped = ae::MakeTypedAsyncEngine(engine, 1);
+  Gate occupied;
+  Gate release;
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  ae::Future<std::monostate> running = stopped.Submit(account, [&] {
+    occupied.Open();
+    release.Wait();
+  });
+  ASSERT_TRUE(occupied.WaitFor(kAwaitCap));
+
+  openpit::model::Order order = TestOrder(kAccountA);
+  ae::Future<ae::DropCopyOutcome<ae::EngineAdapter>> aborted =
+      stopped.ApplyDropCopy(order);
+
+  EXPECT_FALSE(stopped.StopHard(std::chrono::milliseconds(1)));
+  release.Open();
+  EXPECT_TRUE(stopped.StopHard(seconds(10)));
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  try {
+    (void)aborted.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+
+  ASSERT_TRUE(order.operation.has_value());
+  ASSERT_TRUE(order.operation->accountId.has_value());
+  EXPECT_EQ(*order.operation->accountId, account);
+
+  auto retry = ae::MakeTypedAsyncEngine(engine, 1);
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      retry.ApplyDropCopy(order).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  EXPECT_TRUE(
+      outcome.operation->RollbackAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, LvalueDropCopyRetriesAfterQueueLimit) {
+  Engine engine = OrderValidationEngine();
+  ae::EngineAdapter limitedDriver(engine);
+  auto limited = ae::TypedBuilder<ae::EngineAdapter>(limitedDriver)
+                     .Dynamic()
+                     .MaxQueues(1)
+                     .IdleCleanupAfter(seconds(10))
+                     .Build();
+  Gate occupied;
+  Gate release;
+  ae::Future<std::monostate> running =
+      limited.Submit(AccountId::FromUint64(kAccountA), [&] {
+        occupied.Open();
+        release.Wait();
+      });
+  ASSERT_TRUE(occupied.WaitFor(kAwaitCap));
+
+  openpit::model::Order order = TestOrder(kAccountA + 1);
+  try {
+    (void)limited.ApplyDropCopy(order).Await(kAwaitCap);
+    FAIL() << "expected QueueLimit";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::QueueLimit);
+  }
+
+  ASSERT_TRUE(order.operation.has_value());
+  ASSERT_TRUE(order.operation->accountId.has_value());
+  EXPECT_EQ(*order.operation->accountId, AccountId::FromUint64(kAccountA + 1));
+
+  release.Open();
+  ASSERT_TRUE(running.Await(kAwaitCap).has_value());
+  ASSERT_TRUE(limited.StopGraceful(seconds(10)));
+
+  auto retry = ae::MakeTypedAsyncEngine(engine, 1);
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      retry.ApplyDropCopy(order).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  EXPECT_TRUE(
+      outcome.operation->RollbackAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, LvalueDropCopyRetriesAfterSubmitCancelled) {
+  Engine engine = OrderValidationEngine();
+  ae::EngineAdapter boundedDriver(engine);
+  auto bounded = ae::TypedBuilder<ae::EngineAdapter>(boundedDriver)
+                     .WithQueueCapacity(1)
+                     .Sharded(1)
+                     .Build();
+  Gate occupied;
+  Gate release;
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  ae::Future<std::monostate> running = bounded.Submit(account, [&] {
+    occupied.Open();
+    release.Wait();
+  });
+  ASSERT_TRUE(occupied.WaitFor(kAwaitCap));
+  ae::Future<std::monostate> accepted = bounded.Submit(account, [] {});
+
+  openpit::model::Order order = TestOrder(kAccountA);
+  try {
+    (void)bounded.ApplyDropCopy(order, std::chrono::milliseconds(50))
+        .Await(kAwaitCap);
+    FAIL() << "expected SubmitCancelled";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::SubmitCancelled);
+  }
+
+  ASSERT_TRUE(order.operation.has_value());
+  ASSERT_TRUE(order.operation->accountId.has_value());
+  EXPECT_EQ(*order.operation->accountId, account);
+
+  release.Open();
+  ASSERT_TRUE(running.Await(kAwaitCap).has_value());
+  ASSERT_TRUE(accepted.Await(kAwaitCap).has_value());
+  ASSERT_TRUE(bounded.StopGraceful(seconds(10)));
+
+  auto retry = ae::MakeTypedAsyncEngine(engine, 1);
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      retry.ApplyDropCopy(order).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  EXPECT_TRUE(
+      outcome.operation->RollbackAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, RvalueReportTransfersFillLock) {
+  Engine engine = OrderValidationEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+  openpit::model::ExecutionReport report = TestLockedReport(kAccountA);
+
+  ae::Future<openpit::PostTradeResult> submitted =
+      async.ApplyExecutionReport(std::move(report));
+
+  ASSERT_TRUE(report.fill.has_value());
+  ASSERT_TRUE(report.fill->lock.has_value());
+  EXPECT_FALSE(*report.fill->lock);
+  EXPECT_TRUE(submitted.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, NamedConstRvalueReportCopiesFillLock) {
+  Engine engine = OrderValidationEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+  const openpit::model::ExecutionReport report = TestLockedReport(kAccountA);
+
+  ae::Future<openpit::PostTradeResult> submitted = async.ApplyExecutionReport(
+      static_cast<const openpit::model::ExecutionReport&&>(report));
+
+  ASSERT_TRUE(report.fill.has_value());
+  ASSERT_TRUE(report.fill->lock.has_value());
+  ASSERT_TRUE(*report.fill->lock);
+  EXPECT_EQ(report.fill->lock->Len(), 1u);
+  EXPECT_TRUE(submitted.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, DerivedOrderReachesSafeSlowPolicy) {
+  std::atomic<bool> orderSeen{false};
+  std::atomic<bool> reportSeen{false};
+  EngineBuilder builder(SyncPolicy::Full);
+  openpit::pretrade::CustomPolicy<TypedAsyncPayloadAdapter> policy(
+      "TypedAsyncPayloadPolicy",
+      TypedAsyncPayloadAdapter{
+          TypedAsyncPayloadPolicy(&orderSeen, &reportSeen)});
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  auto concrete = std::make_unique<TypedAsyncDeskOrder>();
+  concrete->operation = TestOrder(kAccountA).operation;
+  std::unique_ptr<const openpit::Order> order = std::move(concrete);
+  ae::StartOutcome<ae::EngineAdapter> start =
+      async.StartPreTrade(std::move(order)).Await(kAwaitCap).value();
+  ASSERT_TRUE(start.Passed());
+
+  auto executed = start.request->Execute().Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.first);
+  EXPECT_TRUE(orderSeen.load(std::memory_order_relaxed));
+  EXPECT_TRUE(executed.first->CommitAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership, DerivedReportReachesSafeSlowPolicy) {
+  std::atomic<bool> orderSeen{false};
+  std::atomic<bool> reportSeen{false};
+  EngineBuilder builder(SyncPolicy::Full);
+  openpit::pretrade::CustomPolicy<TypedAsyncPayloadAdapter> policy(
+      "TypedAsyncPayloadPolicy",
+      TypedAsyncPayloadAdapter{
+          TypedAsyncPayloadPolicy(&orderSeen, &reportSeen)});
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  auto concrete = std::make_unique<TypedAsyncDeskReport>();
+  concrete->operation = TestReport(kAccountA).operation;
+  std::unique_ptr<const openpit::ExecutionReport> report = std::move(concrete);
+  EXPECT_TRUE(async.ApplyExecutionReport(std::move(report))
+                  .Await(kAwaitCap)
+                  .has_value());
+  EXPECT_TRUE(reportSeen.load(std::memory_order_relaxed));
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership,
+     IntermediateBaseTypedLvalueReportThrowsBeforeOwnership) {
+  Engine engine = OrderValidationEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+  openpit::model::ExecutionReport payload = TestLockedReport(kAccountA);
+  auto concrete = std::make_unique<TypedAsyncDeskReport>();
+  concrete->operation = std::move(payload.operation);
+  concrete->fill = std::move(payload.fill);
+  openpit::model::ExecutionReport& report = *concrete;
+
+  EXPECT_THROW(static_cast<void>(async.ApplyExecutionReport(report)),
+               openpit::Error);
+
+  ASSERT_TRUE(concrete->operation.has_value());
+  ASSERT_TRUE(concrete->operation->accountId.has_value());
+  EXPECT_EQ(*concrete->operation->accountId, AccountId::FromUint64(kAccountA));
+  ASSERT_TRUE(concrete->fill.has_value());
+  ASSERT_TRUE(concrete->fill->lock.has_value());
+  ASSERT_TRUE(*concrete->fill->lock);
+  EXPECT_EQ(concrete->fill->lock->Len(), 1u);
+
+  std::unique_ptr<const openpit::ExecutionReport> submitted =
+      std::move(concrete);
+  EXPECT_TRUE(async.ApplyExecutionReport(std::move(submitted))
+                  .Await(kAwaitCap)
+                  .has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership,
+     TypeErasedReportRetriesFromIndependentPayloadAfterStopped) {
+  Engine engine = OrderValidationEngine();
+  auto stopped = ae::MakeTypedAsyncEngine(engine, 1);
+  ASSERT_TRUE(stopped.StopGraceful(seconds(10)));
+
+  openpit::model::ExecutionReport submittedPayload =
+      TestLockedReport(kAccountA);
+  auto submitted = std::make_unique<TypedAsyncDeskReport>();
+  submitted->operation = std::move(submittedPayload.operation);
+  submitted->fill = std::move(submittedPayload.fill);
+  std::unique_ptr<const openpit::ExecutionReport> erased = std::move(submitted);
+
+  openpit::model::ExecutionReport retainedPayload = TestLockedReport(kAccountA);
+  auto retained = std::make_unique<TypedAsyncDeskReport>();
+  retained->operation = std::move(retainedPayload.operation);
+  retained->fill = std::move(retainedPayload.fill);
+
+  try {
+    (void)stopped.ApplyExecutionReport(std::move(erased)).Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+
+  EXPECT_FALSE(erased);
+  ASSERT_TRUE(retained->operation.has_value());
+  ASSERT_TRUE(retained->operation->accountId.has_value());
+  EXPECT_EQ(*retained->operation->accountId, AccountId::FromUint64(kAccountA));
+  ASSERT_TRUE(retained->fill.has_value());
+  ASSERT_TRUE(retained->fill->lock.has_value());
+  ASSERT_TRUE(*retained->fill->lock);
+  EXPECT_EQ(retained->fill->lock->Len(), 1u);
+
+  auto retry = ae::MakeTypedAsyncEngine(engine, 1);
+  std::unique_ptr<const openpit::ExecutionReport> retryReport =
+      std::move(retained);
+  EXPECT_TRUE(retry.ApplyExecutionReport(std::move(retryReport))
+                  .Await(kAwaitCap)
+                  .has_value());
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership,
+     IntermediateBaseTypedReferencesToDerivedPayloadsThrow) {
+  Engine engine = OrderValidationEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+  TypedAsyncDeskOrder derivedOrder;
+  const openpit::model::Order& order = derivedOrder;
+  TypedAsyncDeskReport derivedReport;
+  openpit::model::ExecutionReport& report = derivedReport;
+
+  EXPECT_THROW(static_cast<void>(async.StartPreTrade(order)), openpit::Error);
+  EXPECT_THROW(static_cast<void>(async.ApplyExecutionReport(std::move(report))),
+               openpit::Error);
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership,
+     OwnedLvalueAdjustmentBatchRetriesAfterStoppedSubmit) {
+  Engine engine = OrderValidationEngine();
+  auto stopped = ae::MakeTypedAsyncEngine(engine, 1);
+  ASSERT_TRUE(stopped.StopGraceful(seconds(10)));
+
+  openpit::accountadjustment::AccountAdjustment adjustment;
+  openpit::accountadjustment::BalanceOperation operation;
+  operation.asset = openpit::param::Asset("USD");
+  adjustment.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(operation));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = openpit::param::AdjustmentAmount::Absolute(
+      openpit::param::PositionSize::FromString("100"));
+  adjustment.amount = amount;
+  std::vector<openpit::accountadjustment::AccountAdjustment> adjustments;
+  adjustments.push_back(std::move(adjustment));
+
+  try {
+    (void)stopped
+        .ApplyAccountAdjustment(AccountId::FromUint64(kAccountA), adjustments)
+        .Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+
+  ASSERT_EQ(adjustments.size(), 1u);
+  ASSERT_TRUE(adjustments.front().operation.has_value());
+
+  auto retry = ae::MakeTypedAsyncEngine(engine, 1);
+  const ae::AdjustmentOutcome outcome =
+      retry
+          .ApplyAccountAdjustment(AccountId::FromUint64(kAccountA), adjustments)
+          .Await(kAwaitCap)
+          .value();
+  EXPECT_TRUE(outcome.Passed());
+  EXPECT_EQ(adjustments.size(), 1u);
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncPayloadOwnership,
+     OwnedRvalueAdjustmentBatchRetriesFromIndependentCopyAfterStoppedSubmit) {
+  Engine engine = OrderValidationEngine();
+  auto stopped = ae::MakeTypedAsyncEngine(engine, 1);
+  ASSERT_TRUE(stopped.StopGraceful(seconds(10)));
+
+  openpit::accountadjustment::AccountAdjustment adjustment;
+  openpit::accountadjustment::BalanceOperation operation;
+  operation.asset = openpit::param::Asset("USD");
+  adjustment.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(operation));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = openpit::param::AdjustmentAmount::Absolute(
+      openpit::param::PositionSize::FromString("100"));
+  adjustment.amount = amount;
+  std::vector<openpit::accountadjustment::AccountAdjustment> submittedBatch;
+  submittedBatch.push_back(std::move(adjustment));
+  const std::vector<openpit::accountadjustment::AccountAdjustment> retryBatch =
+      submittedBatch;
+
+  try {
+    (void)stopped
+        .ApplyAccountAdjustment(AccountId::FromUint64(kAccountA),
+                                std::move(submittedBatch))
+        .Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+
+  auto retry = ae::MakeTypedAsyncEngine(engine, 1);
+  const ae::AdjustmentOutcome outcome =
+      retry.ApplyAccountAdjustment(AccountId::FromUint64(kAccountA), retryBatch)
+          .Await(kAwaitCap)
+          .value();
+  EXPECT_TRUE(outcome.Passed());
+  EXPECT_EQ(retryBatch.size(), 1u);
+  EXPECT_TRUE(retry.StopGraceful(seconds(10)));
 }
 
 // Empty-batch adjustment applies cleanly: not rejected, no outcomes.
@@ -1539,7 +2047,7 @@ void ExpectDeferredCleanupCannotLoseProducerWake(bool dynamic, bool hardStop,
   Gate releaseWorker;
   std::atomic<bool> setupFailed{false};
   strategy->Submit(account,
-                   std::make_unique<ae::detail::ClosureTask>(
+                   ae::detail::MakeTask(
                        [&] {
                          workerEntered.Open();
                          releaseWorker.Wait();
@@ -1550,17 +2058,14 @@ void ExpectDeferredCleanupCannotLoseProducerWake(bool dynamic, bool hardStop,
                    });
   ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
   strategy->Submit(
-      account,
-      std::make_unique<ae::detail::ClosureTask>([] {}, [](ae::Error) {}),
-      noDeadline,
+      account, ae::detail::MakeTask([] {}, [](ae::Error) {}), noDeadline,
       [&](ae::Error) { setupFailed.store(true, std::memory_order_relaxed); });
 
   Gate failureHandlerEntered;
   ae::ErrorCode producerError = ae::ErrorCode::Stopped;
   std::thread producer([&] {
     strategy->Submit(
-        account,
-        std::make_unique<ae::detail::ClosureTask>([] {}, [](ae::Error) {}),
+        account, ae::detail::MakeTask([] {}, [](ae::Error) {}),
         std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
         [&](ae::Error error) {
           producerError = error.Code();
@@ -1927,15 +2432,12 @@ TEST(TypedAsyncCleanup, HardStopAbortReleasesRequestInAccountLane) {
   ae::EngineAdapter driver(engine);
   auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Sharded(1).Build();
 
-  auto order = std::make_shared<openpit::model::Order>(TestOrder(kAccountA));
-  std::weak_ptr<const openpit::Order> orderLifetime = order;
+  openpit::model::Order order = TestOrder(kAccountA);
   openpit::pretrade::StartResult started = engine.StartPreTrade(order);
   ASSERT_TRUE(started.Passed());
   auto request = std::make_shared<ae::AsyncRequest<ae::EngineAdapter>>(
       std::move(*started.request), &async.Generic(),
       AccountId::FromUint64(kAccountA));
-  order.reset();
-  ASSERT_FALSE(orderLifetime.expired());
 
   Gate running;
   Gate release;
@@ -1957,7 +2459,6 @@ TEST(TypedAsyncCleanup, HardStopAbortReleasesRequestInAccountLane) {
   } catch (const ae::Error& err) {
     EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
   }
-  EXPECT_TRUE(orderLifetime.expired());
 }
 
 TEST(TypedAsyncCleanup, SubmitFailureReleasesRequestAfterStop) {
@@ -1968,15 +2469,12 @@ TEST(TypedAsyncCleanup, SubmitFailureReleasesRequestAfterStop) {
                    .IdleCleanupAfter(std::chrono::nanoseconds(0))
                    .Build();
 
-  auto order = std::make_shared<openpit::model::Order>(TestOrder(kAccountA));
-  std::weak_ptr<const openpit::Order> orderLifetime = order;
+  openpit::model::Order order = TestOrder(kAccountA);
   openpit::pretrade::StartResult started = engine.StartPreTrade(order);
   ASSERT_TRUE(started.Passed());
   auto request = std::make_shared<ae::AsyncRequest<ae::EngineAdapter>>(
       std::move(*started.request), &async.Generic(),
       AccountId::FromUint64(kAccountA));
-  order.reset();
-  ASSERT_FALSE(orderLifetime.expired());
   ASSERT_TRUE(async.StopGraceful(seconds(10)));
 
   ae::Future<std::monostate> close = request->Close();
@@ -1986,7 +2484,6 @@ TEST(TypedAsyncCleanup, SubmitFailureReleasesRequestAfterStop) {
   } catch (const ae::Error& err) {
     EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
   }
-  EXPECT_TRUE(orderLifetime.expired());
 }
 
 //------------------------------------------------------------------------------
@@ -2164,15 +2661,15 @@ TEST(TypedAsyncErrorModel, ThrowingRunClosureKeepsTheLaneUsable) {
   };
 
   strategy.Submit(account,
-                  std::make_unique<ae::detail::ClosureTask>(
+                  ae::detail::MakeTask(
                       [] { throw std::runtime_error("run closure escaped"); },
                       [](ae::Error) {}),
                   noDeadline, onFailure);
   Gate laneStillRuns;
-  strategy.Submit(account,
-                  std::make_unique<ae::detail::ClosureTask>(
-                      [&] { laneStillRuns.Open(); }, [](ae::Error) {}),
-                  noDeadline, onFailure);
+  strategy.Submit(
+      account,
+      ae::detail::MakeTask([&] { laneStillRuns.Open(); }, [](ae::Error) {}),
+      noDeadline, onFailure);
 
   EXPECT_TRUE(laneStillRuns.WaitFor(kAwaitCap));
   EXPECT_FALSE(submitFailed.load(std::memory_order_relaxed));
@@ -2193,7 +2690,7 @@ TEST(TypedAsyncErrorModel, ThrowingAbortClosureStillDrainsTheLane) {
   Gate workerEntered;
   Gate releaseWorker;
   strategy.Submit(account,
-                  std::make_unique<ae::detail::ClosureTask>(
+                  ae::detail::MakeTask(
                       [&] {
                         workerEntered.Open();
                         releaseWorker.Wait();
@@ -2203,15 +2700,15 @@ TEST(TypedAsyncErrorModel, ThrowingAbortClosureStillDrainsTheLane) {
   ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
   strategy.Submit(
       account,
-      std::make_unique<ae::detail::ClosureTask>(
+      ae::detail::MakeTask(
           [] {},
           [](ae::Error) { throw std::runtime_error("abort closure escaped"); }),
       noDeadline, onFailure);
   Gate lastTaskAborted;
-  strategy.Submit(account,
-                  std::make_unique<ae::detail::ClosureTask>(
-                      [] {}, [&](ae::Error) { lastTaskAborted.Open(); }),
-                  noDeadline, onFailure);
+  strategy.Submit(
+      account,
+      ae::detail::MakeTask([] {}, [&](ae::Error) { lastTaskAborted.Open(); }),
+      noDeadline, onFailure);
 
   EXPECT_FALSE(strategy.StopHard(std::chrono::steady_clock::now() +
                                  std::chrono::milliseconds(1)));

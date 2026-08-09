@@ -26,8 +26,6 @@
 // A race-safe bridge between the driver's internal sink and the progress
 // reporter.
 //
-// Mirror of: examples/go/spot_loadtest/internal/driver/live.go
-//
 // Holds an atomic pointer to the live-counter accessor; Run stores the real
 // accessor before starting any thread, so the progress reporter can call
 // Counters() at any time. Before the accessor is stored, Counters() returns a
