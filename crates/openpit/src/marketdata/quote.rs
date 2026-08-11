@@ -21,18 +21,15 @@ use crate::param::Price;
 
 /// Current market snapshot for an instrument.
 ///
-/// Every field is optional: producers publish only the fields they actually
-/// have. How a `Quote` interacts with the slot's previously stored value is
-/// chosen by the publisher when calling the service:
+/// Every field is optional: producers publish only the fields that exist in
+/// one observation. A publication always replaces the stored snapshot, so an
+/// absent field clears the previous value rather than retaining it. A publisher
+/// that needs to combine observations must merge them itself, because it owns
+/// both the observation relationship and the combined source age.
 ///
-/// - [`MarketDataService::push`](super::service::MarketDataService::push)
-///   replaces the entire snapshot - any field left as `None` in the new quote
-///   is cleared from the slot.
-/// - [`MarketDataService::push_patch`](super::service::MarketDataService::push_patch)
-///   merges the new quote into the existing snapshot - `None` fields preserve
-///   the prior value, `Some` fields overwrite it.
-///
-/// In either case the slot's publish instant is bumped to the current time.
+/// The service records the current monotonic publish instant and the source age
+/// supplied by the publisher. Reads advance that source age by the elapsed time
+/// since publication when evaluating freshness.
 ///
 /// `#[non_exhaustive]` keeps the door open for further optional fields in
 /// future releases.
@@ -70,17 +67,6 @@ impl Quote {
         self.ask = Some(ask);
         self
     }
-
-    /// Merges `patch` into `self`: every `Some` field of `patch` overwrites
-    /// the matching field of `self`; every `None` field leaves `self`
-    /// unchanged.
-    pub(crate) fn patched_with(self, patch: Quote) -> Quote {
-        Quote {
-            mark: patch.mark.or(self.mark),
-            bid: patch.bid.or(self.bid),
-            ask: patch.ask.or(self.ask),
-        }
-    }
 }
 
 /// Maximum age allowed for a stored quote before it is treated as
@@ -103,19 +89,19 @@ impl Quote {
 /// The effective lifetime for a read is resolved by the cascade for the
 /// requested `(account, group)`; see
 /// [`MarketDataService`](super::service::MarketDataService) for the tier
-/// order. After a successful [`push`](super::service::MarketDataService::push)
-/// or [`push_patch`](super::service::MarketDataService::push_patch) the quote
-/// is observable through [`get`](super::service::MarketDataService::get) until
-/// at least the effective lifetime has elapsed; reads after that point return
-/// an expired-quote error (the entry is not removed from storage, only hidden
-/// from optional consumers).
+/// order. A publication supplies the quote's age at the source. The quote is
+/// observable through [`get`](super::service::MarketDataService::get) only
+/// while that source age plus the elapsed time since publication remains below
+/// the effective lifetime. Expired entries remain stored and are returned in
+/// the expired-quote error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuoteTtl {
     /// Quotes never expire on their own; only
     /// [`clear`](super::service::MarketDataService::clear) or a new push can
     /// change visibility.
     Infinite,
-    /// Quotes expire `duration` after the push that wrote them.
+    /// Quotes expire when their source age plus time elapsed since publication
+    /// reaches `duration`.
     Within(Duration),
 }
 

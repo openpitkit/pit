@@ -100,7 +100,7 @@ func TestUnknownInstrumentIDErrorCarriesID(t *testing.T) {
 	defer service.Close()
 
 	instrumentID := NewInstrumentIDFromUint64(999)
-	err = service.Push(instrumentID, NewQuote())
+	err = service.Push(instrumentID, NewQuote(), 0)
 	var unknown *UnknownInstrumentIDError
 	if !errors.As(err, &unknown) || !errors.Is(err, ErrUnknownInstrument) {
 		t.Fatalf("Push() error = %v, want UnknownInstrumentIDError", err)

@@ -1417,7 +1417,11 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
     let market_data = builder.market_data(QuoteTtl::Infinite).build();
     let aapl = Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?);
     let aapl_id = market_data.register(aapl.clone())?;
-    market_data.push(aapl_id, Quote::new().with_mark(Price::from_str("200")?))?;
+    market_data.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("200")?),
+        std::time::Duration::ZERO,
+    )?;
 
     // Worst-case slippage of 1500 bps, priced from the quote mark.
     let settings = SpotFundsSettings::new(1500, SpotFundsPricingSource::Mark, [])?;

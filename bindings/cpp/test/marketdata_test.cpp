@@ -240,7 +240,8 @@ TEST(MarketDataBuilder, FullSyncUpgradeBuildsConcurrentSafeService) {
   const md::InstrumentId id = Register(
       service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
                                           ::openpit::param::Asset("USD")));
-  EXPECT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("10"))),
+  EXPECT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("10")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 }
 
@@ -279,7 +280,8 @@ TEST(MarketDataBuilder, NoSyncServicePushAndReadOnSameThread) {
       service, openpit::model::Instrument(::openpit::param::Asset("BTC"),
                                           ::openpit::param::Asset("USD")));
 
-  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("42000"))),
+  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("42000")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
   const std::optional<md::Quote> quote =
@@ -376,7 +378,8 @@ TEST(MarketDataService, PushByInstrumentCreatesSlotAndReturnsId) {
                                               ::openpit::param::Asset("USD"));
 
   const md::InstrumentId id = service.PushByInstrument(
-      instrument, md::Quote().WithMark(Price::FromString("2000")));
+      instrument, md::Quote().WithMark(Price::FromString("2000")),
+      std::chrono::nanoseconds::zero());
 
   const std::optional<md::InstrumentId> resolved = service.Resolve(instrument);
   ASSERT_TRUE(resolved.has_value());
@@ -392,10 +395,12 @@ TEST(MarketDataService, PushReplaceRoundTripsExactPrices) {
       service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
                                           ::openpit::param::Asset("USD")));
 
-  ASSERT_EQ(service.Push(id, md::Quote()
-                                 .WithMark(Price::FromString("150"))
-                                 .WithBid(Price::FromString("149.5"))
-                                 .WithAsk(Price::FromString("150.5"))),
+  ASSERT_EQ(service.Push(id,
+                         md::Quote()
+                             .WithMark(Price::FromString("150"))
+                             .WithBid(Price::FromString("149.5"))
+                             .WithAsk(Price::FromString("150.5")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
   const std::optional<md::Quote> quote =
@@ -407,36 +412,39 @@ TEST(MarketDataService, PushReplaceRoundTripsExactPrices) {
   EXPECT_EQ(quote->Ask()->ToString(), "150.5");
 }
 
-TEST(MarketDataService, PushPatchPreservesUnsetFields) {
+TEST(MarketDataService, PushReplacesUnsetFields) {
   md::Service service = BuildService(md::SyncPolicy::None);
   const md::InstrumentId id = Register(
       service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
                                           ::openpit::param::Asset("USD")));
 
-  ASSERT_EQ(service.Push(id, md::Quote()
-                                 .WithMark(Price::FromString("100"))
-                                 .WithBid(Price::FromString("99"))
-                                 .WithAsk(Price::FromString("101"))),
+  ASSERT_EQ(service.Push(id,
+                         md::Quote()
+                             .WithMark(Price::FromString("100"))
+                             .WithBid(Price::FromString("99"))
+                             .WithAsk(Price::FromString("101")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
-  // Patch only the mark; bid and ask are preserved.
-  ASSERT_EQ(
-      service.PushPatch(id, md::Quote().WithMark(Price::FromString("105"))),
-      md::RegisterStatus::Ok);
+  // A mark-only observation clears bid and ask.
+  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("105")),
+                         std::chrono::nanoseconds::zero()),
+            md::RegisterStatus::Ok);
 
   const std::optional<md::Quote> quote =
       service.Find(id, AccountId::FromUint64(1), NoGroupInfo{},
                    md::QuoteResolution::AccountThenGroupThenDefault);
   ASSERT_TRUE(quote.has_value());
   EXPECT_EQ(quote->Mark()->ToString(), "105");
-  EXPECT_EQ(quote->Bid()->ToString(), "99");
-  EXPECT_EQ(quote->Ask()->ToString(), "101");
+  EXPECT_FALSE(quote->Bid().has_value());
+  EXPECT_FALSE(quote->Ask().has_value());
 }
 
 TEST(MarketDataService, PushUnknownInstrumentReportsUnknown) {
   md::Service service = BuildService(md::SyncPolicy::None);
   EXPECT_EQ(service.Push(md::InstrumentId::FromUint64(999),
-                         md::Quote().WithMark(Price::FromString("1"))),
+                         md::Quote().WithMark(Price::FromString("1")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::UnknownInstrument);
 }
 
@@ -505,7 +513,8 @@ TEST(MarketDataService, ClearHidesQuoteButKeepsRegistration) {
                                           ::openpit::param::Asset("USD")));
   const AccountId account = AccountId::FromUint64(1);
 
-  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("200"))),
+  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("200")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
   ASSERT_TRUE(service
                   .Find(id, account, NoGroupInfo{},
@@ -519,7 +528,8 @@ TEST(MarketDataService, ClearHidesQuoteButKeepsRegistration) {
                    .has_value());
 
   // Pushing again restores visibility for the same id.
-  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("210"))),
+  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("210")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
   const std::optional<md::Quote> recovered =
       service.Find(id, account, NoGroupInfo{},
@@ -537,9 +547,9 @@ TEST(MarketDataService, PushForEmptyTargetsReportsNoTarget) {
       service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
                                           ::openpit::param::Asset("USD")));
 
-  EXPECT_EQ(
-      service.PushFor(id, md::Quote().WithMark(Price::FromString("1")), {}, {}),
-      md::RegisterStatus::NoTarget);
+  EXPECT_EQ(service.PushFor(id, md::Quote().WithMark(Price::FromString("1")),
+                            std::chrono::nanoseconds::zero(), {}, {}),
+            md::RegisterStatus::NoTarget);
 }
 
 TEST(MarketDataService, PushForReachesPerAccountBucketUnderAccountOnly) {
@@ -551,7 +561,7 @@ TEST(MarketDataService, PushForReachesPerAccountBucketUnderAccountOnly) {
   const std::vector<AccountId> accounts{AccountId::FromUint64(10),
                                         AccountId::FromUint64(11)};
   ASSERT_EQ(service.PushFor(id, md::Quote().WithMark(Price::FromString("150")),
-                            accounts, {}),
+                            std::chrono::nanoseconds::zero(), accounts, {}),
             md::RegisterStatus::Ok);
 
   // Account 10 sees its per-account quote under AccountOnly.
@@ -577,7 +587,7 @@ TEST(MarketDataService, ResolutionFallsThroughToGroupBucket) {
   const AccountGroupId group = AccountGroupId::FromUint32(7);
   const std::vector<AccountGroupId> groups{group};
   ASSERT_EQ(service.PushFor(id, md::Quote().WithMark(Price::FromString("321")),
-                            {}, groups),
+                            std::chrono::nanoseconds::zero(), {}, groups),
             md::RegisterStatus::Ok);
 
   // The account has no per-account quote; the resolver supplies group 7, so the
@@ -605,7 +615,7 @@ TEST(MarketDataService, DefaultGroupBucketServesEveryoneElse) {
   // Targeting the default account group writes the "everyone-else" bucket.
   const std::vector<AccountGroupId> groups{DefaultAccountGroup};
   ASSERT_EQ(service.PushFor(id, md::Quote().WithMark(Price::FromString("7.5")),
-                            {}, groups),
+                            std::chrono::nanoseconds::zero(), {}, groups),
             md::RegisterStatus::Ok);
 
   const std::optional<md::Quote> quote =
@@ -627,7 +637,8 @@ TEST(MarketDataService, FiniteTtlExpiresQuote) {
                                           ::openpit::param::Asset("USD")));
   const AccountId account = AccountId::FromUint64(1);
 
-  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("200"))),
+  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("200")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
   // After the (sub-nanosecond) lifetime elapses the quote reads as absent.
@@ -647,7 +658,8 @@ TEST(MarketDataService, FiniteTtlExpiresQuote) {
   // An infinite instrument-level override keeps the next quote visible.
   ASSERT_EQ(service.SetInstrumentTtl(id, md::QuoteTtl::Infinite()),
             md::RegisterStatus::Ok);
-  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("205"))),
+  ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("205")),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
   std::this_thread::sleep_for(std::chrono::milliseconds(5));
   const std::optional<md::Quote> quote =
@@ -676,7 +688,8 @@ TEST(MarketDataService, CloneSharesUnderlyingState) {
                                        ::openpit::param::Asset("USD")));
 
   md::Service reader = feed.Clone();
-  ASSERT_EQ(feed.Push(id, md::Quote().WithMark(Price::FromString("314.15"))),
+  ASSERT_EQ(feed.Push(id, md::Quote().WithMark(Price::FromString("314.15")),
+                      std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
   // A quote pushed through one handle is visible through the other.

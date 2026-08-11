@@ -72,9 +72,12 @@ func TestExampleWikiMarketDataPushAndRead(t *testing.T) {
 	mark, _ := param.NewPriceFromString("150")
 	bid, _ := param.NewPriceFromString("149.5")
 	ask, _ := param.NewPriceFromString("150.5")
+	// Caller computes feed-observation-to-call age; the SDK cannot know it.
+	quoteSourceAge := 20 * time.Millisecond
 	if err := service.Push(
 		aaplID,
 		marketdata.NewQuote().WithMark(mark).WithBid(bid).WithAsk(ask),
+		quoteSourceAge,
 	); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
@@ -106,8 +109,8 @@ func TestExampleWikiMarketDataPushAndRead(t *testing.T) {
 	}
 }
 
-// Source: https://wiki.openpit.dev/Market-Data/ - Replace Versus Patch
-func TestExampleWikiMarketDataReplaceVersusPatch(t *testing.T) {
+// Source: https://wiki.openpit.dev/Market-Data/ - Replace Quote Snapshots
+func TestExampleWikiMarketDataReplacesObservations(t *testing.T) {
 	service, err := NewEngineBuilder().
 		FullSync().
 		MarketData(marketdata.InfiniteTTL()).
@@ -136,17 +139,19 @@ func TestExampleWikiMarketDataReplaceVersusPatch(t *testing.T) {
 	if err := service.Push(
 		aaplID,
 		marketdata.NewQuote().WithMark(mark).WithBid(bid).WithAsk(ask),
+		0,
 	); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 
-	// Patch only the mark; bid and ask are preserved.
+	// A mark-only observation clears bid and ask.
 	newMark, _ := param.NewPriceFromString("105")
-	if err := service.PushPatch(
+	if err := service.Push(
 		aaplID,
 		marketdata.NewQuote().WithMark(newMark),
+		0,
 	); err != nil {
-		t.Fatalf("PushPatch() error = %v", err)
+		t.Fatalf("Push() error = %v", err)
 	}
 
 	accountID := param.NewAccountIDFromUint64(1)
@@ -162,11 +167,11 @@ func TestExampleWikiMarketDataReplaceVersusPatch(t *testing.T) {
 	if got, _ := quote.Mark().Get(); !got.Equal(newMark) {
 		t.Fatalf("quote.Mark() = %v, want %v", got, newMark)
 	}
-	if got, _ := quote.Bid().Get(); !got.Equal(bid) {
-		t.Fatalf("quote.Bid() = %v, want %v", got, bid)
+	if quote.Bid().IsSet() {
+		t.Fatal("quote.Bid() is set, want unset after replacement")
 	}
-	if got, _ := quote.Ask().Get(); !got.Equal(ask) {
-		t.Fatalf("quote.Ask() = %v, want %v", got, ask)
+	if quote.Ask().IsSet() {
+		t.Fatal("quote.Ask() is set, want unset after replacement")
 	}
 }
 
@@ -190,7 +195,7 @@ func TestExampleWikiMarketDataFiniteTTLHidesStaleQuote(t *testing.T) {
 	}
 
 	mark, _ := param.NewPriceFromString("200")
-	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(mark)); err != nil {
+	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(mark), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 
@@ -213,7 +218,7 @@ func TestExampleWikiMarketDataFiniteTTLHidesStaleQuote(t *testing.T) {
 
 	// A fresh push restores visibility.
 	fresh, _ := param.NewPriceFromString("205")
-	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(fresh)); err != nil {
+	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(fresh), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 	quote, ok := service.GetOptional(
@@ -247,7 +252,7 @@ func TestExampleWikiMarketDataClearThenRecover(t *testing.T) {
 	}
 
 	mark, _ := param.NewPriceFromString("200")
-	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(mark)); err != nil {
+	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(mark), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 
@@ -263,7 +268,7 @@ func TestExampleWikiMarketDataClearThenRecover(t *testing.T) {
 
 	// Pushing again restores a quote for the same id.
 	recovered, _ := param.NewPriceFromString("210")
-	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(recovered)); err != nil {
+	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(recovered), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 	quote, ok := service.GetOptional(
@@ -305,6 +310,7 @@ func TestExampleWikiMarketDataMarketOrdersBookTopOverride(t *testing.T) {
 	if err := marketData.Push(
 		aaplID,
 		marketdata.NewQuote().WithMark(mark).WithBid(bid).WithAsk(ask),
+		0,
 	); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
@@ -353,7 +359,7 @@ func TestExampleWikiMarketDataMarketOrdersBookTopOverride(t *testing.T) {
 	// A full replace that carries only the mark drops bid and ask. With the
 	// BookTop source there is no ask to price a buy, so it is rejected.
 	replaced, _ := param.NewPriceFromString("215")
-	if err := marketData.Push(aaplID, marketdata.NewQuote().WithMark(replaced)); err != nil {
+	if err := marketData.Push(aaplID, marketdata.NewQuote().WithMark(replaced), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 	// (No Get call after this push - the engine reads quotes internally.)
@@ -394,6 +400,7 @@ func TestExampleWikiMarketDataPushForFanOut(t *testing.T) {
 	if err := service.PushFor(
 		aaplID,
 		marketdata.NewQuote().WithMark(mark),
+		0,
 		[]param.AccountID{
 			param.NewAccountIDFromUint64(10),
 			param.NewAccountIDFromUint64(11),

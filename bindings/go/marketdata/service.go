@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"runtime/cgo"
 	"sync"
+	"time"
 
 	"go.openpit.dev/openpit/internal/callback"
 	"go.openpit.dev/openpit/internal/mdhandle"
@@ -56,8 +57,8 @@ var (
 	ErrAccountGroupResolution = errors.New("account group resolution failed")
 )
 
-// ErrNoTarget is returned by PushFor and PushForPatch when both the account and
-// account-group slices are empty (no target was specified).
+// ErrNoTarget is returned by PushFor when both the account and account-group
+// slices are empty (no target was specified).
 var ErrNoTarget = errors.New("no target accounts or groups specified")
 
 //------------------------------------------------------------------------------
@@ -254,14 +255,17 @@ func (s *Service) RegisterWithIDAndTTL(
 	}
 }
 
-// PushFor publishes a quote for instrumentID, replacing the stored snapshot for
-// each of the specified accounts and groups. At least one account or group must
-// be supplied; passing empty slices returns ErrNoTarget. To target the default
-// ("everyone-else") bucket, include [param.DefaultAccountGroup] in
-// accountGroupIDs.
+// PushFor publishes one quote observation for instrumentID, replacing the
+// stored snapshot for each specified account and group. A missing quote field
+// is absent from the observation, not retained from an older one. sourceAge is
+// the time between observation and publication; a negative value is clamped to
+// zero. At least one account or group must be supplied; passing empty slices
+// returns ErrNoTarget. To target the default ("everyone-else") bucket, include
+// [param.DefaultAccountGroup] in accountGroupIDs.
 func (s *Service) PushFor(
 	instrumentID InstrumentID,
 	quote Quote,
+	sourceAge time.Duration,
 	accountIDs []param.AccountID,
 	accountGroupIDs []param.AccountGroupID,
 ) error {
@@ -282,49 +286,7 @@ func (s *Service) PushFor(
 		s.handle,
 		instrumentID.Handle(),
 		quote.Handle(),
-		nativeAccounts,
-		nativeGroups,
-	)
-	switch status {
-	case native.MarketDataRegisterStatusOk:
-		return nil
-	case native.MarketDataRegisterStatusUnknownInstrument:
-		return newUnknownInstrumentIDError(instrumentID)
-	case native.MarketDataRegisterStatusNoTarget:
-		return ErrNoTarget
-	default:
-		return err
-	}
-}
-
-// PushForPatch publishes a partial update for instrumentID, merging it into
-// the stored snapshot for each of the specified accounts and groups. At least
-// one account or group must be supplied; passing empty slices returns
-// ErrNoTarget. To target the default ("everyone-else") bucket, include
-// [param.DefaultAccountGroup] in accountGroupIDs.
-func (s *Service) PushForPatch(
-	instrumentID InstrumentID,
-	quote Quote,
-	accountIDs []param.AccountID,
-	accountGroupIDs []param.AccountGroupID,
-) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.handle == nil {
-		return ErrServiceClosed
-	}
-	nativeAccounts := make([]native.ParamAccountID, len(accountIDs))
-	for i, a := range accountIDs {
-		nativeAccounts[i] = a.Handle()
-	}
-	nativeGroups := make([]native.ParamAccountGroupID, len(accountGroupIDs))
-	for i, g := range accountGroupIDs {
-		nativeGroups[i] = g.Handle()
-	}
-	status, err := native.MarketDataServicePushForPatch(
-		s.handle,
-		instrumentID.Handle(),
-		quote.Handle(),
+		sourceAge,
 		nativeAccounts,
 		nativeGroups,
 	)
@@ -521,14 +483,26 @@ func (s *Service) Clear(instrumentID InstrumentID) {
 	native.MarketDataServiceClear(s.handle, instrumentID.Handle())
 }
 
-// Push publishes a quote for instrumentID, replacing the entire stored snapshot.
-func (s *Service) Push(instrumentID InstrumentID, quote Quote) error {
+// Push publishes one quote observation for instrumentID, replacing the entire
+// stored snapshot. A missing field is absent from the observation, not retained
+// from an older quote. sourceAge is the time between observation and
+// publication; a negative value is clamped to zero.
+func (s *Service) Push(
+	instrumentID InstrumentID,
+	quote Quote,
+	sourceAge time.Duration,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.handle == nil {
 		return ErrServiceClosed
 	}
-	status, err := native.MarketDataServicePush(s.handle, instrumentID.Handle(), quote.Handle())
+	status, err := native.MarketDataServicePush(
+		s.handle,
+		instrumentID.Handle(),
+		quote.Handle(),
+		sourceAge,
+	)
 	switch status {
 	case native.MarketDataRegisterStatusOk:
 		return nil
@@ -539,31 +513,15 @@ func (s *Service) Push(instrumentID InstrumentID, quote Quote) error {
 	}
 }
 
-// PushPatch publishes a partial update for instrumentID, merging it into the
-// stored snapshot.
-func (s *Service) PushPatch(instrumentID InstrumentID, quote Quote) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.handle == nil {
-		return ErrServiceClosed
-	}
-	status, err := native.MarketDataServicePushPatch(s.handle, instrumentID.Handle(), quote.Handle())
-	switch status {
-	case native.MarketDataRegisterStatusOk:
-		return nil
-	case native.MarketDataRegisterStatusUnknownInstrument:
-		return newUnknownInstrumentIDError(instrumentID)
-	default:
-		return err
-	}
-}
-
-// PushByInstrument publishes a quote for instrument, replacing the stored
-// snapshot, and returns the instrument's id. If instrument is unregistered, a
-// named slot is created with the service-default TTL.
+// PushByInstrument publishes one quote observation for instrument, replacing
+// the stored snapshot, and returns the instrument's id. sourceAge is the time
+// between observation and publication; a negative value is clamped to zero. If
+// instrument is unregistered, a named slot is created with the service-default
+// TTL.
 func (s *Service) PushByInstrument(
 	instrument param.Instrument,
 	quote Quote,
+	sourceAge time.Duration,
 ) (InstrumentID, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -574,29 +532,7 @@ func (s *Service) PushByInstrument(
 		s.handle,
 		instrument.Handle(),
 		quote.Handle(),
-	)
-	runtime.KeepAlive(instrument)
-	if err != nil {
-		return InstrumentID{}, err
-	}
-	return newInstrumentIDFromHandle(id), nil
-}
-
-// PushByInstrumentPatch publishes a partial update for instrument, merging it
-// into the stored snapshot, and returns the instrument's id.
-func (s *Service) PushByInstrumentPatch(
-	instrument param.Instrument,
-	quote Quote,
-) (InstrumentID, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.handle == nil {
-		return InstrumentID{}, ErrServiceClosed
-	}
-	id, err := native.MarketDataServicePushByInstrumentPatch(
-		s.handle,
-		instrument.Handle(),
-		quote.Handle(),
+		sourceAge,
 	)
 	runtime.KeepAlive(instrument)
 	if err != nil {

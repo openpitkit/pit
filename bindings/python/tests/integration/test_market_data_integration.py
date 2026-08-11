@@ -20,7 +20,11 @@ def test_market_data_quote_expired_error_carries_stale_quote() -> None:
     aapl_id = service.register(openpit.Instrument("AAPL", "USD"))
     account_id = openpit.param.AccountId.from_int(1)
 
-    service.push(aapl_id, openpit.marketdata.Quote(mark="200"))
+    service.push(
+        aapl_id,
+        openpit.marketdata.Quote(mark="200"),
+        timedelta(),
+    )
     time.sleep(0.04)
 
     with pytest.raises(openpit.marketdata.QuoteExpired) as exc_info:
@@ -62,5 +66,9 @@ def test_market_data_registration_errors_carry_variant_payloads() -> None:
 
     unknown_id = openpit.marketdata.InstrumentId(999)
     with pytest.raises(openpit.marketdata.UnknownInstrumentId) as unknown:
-        service.push(unknown_id, openpit.marketdata.Quote(mark="1"))
+        service.push(
+            unknown_id,
+            openpit.marketdata.Quote(mark="1"),
+            timedelta(),
+        )
     assert unknown.value.instrument_id == unknown_id

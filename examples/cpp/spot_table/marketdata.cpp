@@ -20,6 +20,8 @@
 #include "openpit/error.hpp"
 #include "openpit/param/param.hpp"
 
+#include <chrono>
+
 #include "builder.hpp"
 
 namespace spot_table {
@@ -61,7 +63,8 @@ void MarketFeed::RegisterInstruments(const std::vector<Row> &rows) {
 
 void MarketFeed::Push(const std::string &instrument, const std::string &price) {
   const auto [id, quote] = MakeQuote(instrument, price);
-  const md::RegisterStatus status = m_service->Push(id, quote);
+  const md::RegisterStatus status =
+      m_service->Push(id, quote, std::chrono::nanoseconds::zero());
   if (status != md::RegisterStatus::Ok) {
     throw FeedError("push " + instrument + ": publish did not succeed");
   }
@@ -73,8 +76,8 @@ void MarketFeed::PushFor(
     const std::vector<openpit::param::AccountId> &accounts,
     const std::vector<openpit::param::AccountGroupId> &groups) {
   const auto [id, quote] = MakeQuote(instrument, price);
-  const md::RegisterStatus status =
-      m_service->PushFor(id, quote, accounts, groups);
+  const md::RegisterStatus status = m_service->PushFor(
+      id, quote, std::chrono::nanoseconds::zero(), accounts, groups);
   if (status != md::RegisterStatus::Ok) {
     throw FeedError("push_for " + instrument + ": publish did not succeed");
   }

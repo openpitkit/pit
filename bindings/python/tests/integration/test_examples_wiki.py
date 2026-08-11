@@ -16,6 +16,7 @@
 # Please see https://openpit.dev and the OWNERS file for details.
 
 
+import datetime
 import typing
 
 import openpit
@@ -1100,7 +1101,11 @@ def test_example_wiki_spot_funds_market_orders() -> None:
     market_data = builder.market_data(openpit.marketdata.QuoteTtl.infinite()).build()
     aapl = openpit.Instrument("AAPL", "USD")
     aapl_id = market_data.register(aapl)
-    market_data.push(aapl_id, openpit.marketdata.Quote(mark="200"))
+    market_data.push(
+        aapl_id,
+        openpit.marketdata.Quote(mark="200"),
+        datetime.timedelta(),
+    )
 
     # Spot funds with market orders enabled at 1500 bps worst-case slippage.
     engine = builder.builtin(

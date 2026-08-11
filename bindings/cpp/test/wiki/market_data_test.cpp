@@ -74,9 +74,12 @@ TEST(MarketDataWiki, PushReadAndResolve) {
   const Price mark = Price::FromString("150");
   const Price bid = Price::FromString("149.5");
   const Price ask = Price::FromString("150.5");
-  ASSERT_EQ(service.Push(aaplId,
-                         md::Quote().WithMark(mark).WithBid(bid).WithAsk(ask)),
-            md::RegisterStatus::Ok);
+  // Caller computes feed-observation-to-call age; the SDK cannot know it.
+  const std::chrono::milliseconds quoteSourceAge(20);
+  ASSERT_EQ(
+      service.Push(aaplId, md::Quote().WithMark(mark).WithBid(bid).WithAsk(ask),
+                   quoteSourceAge),
+      md::RegisterStatus::Ok);
 
   // Read for an account with no group: the lookup falls through to the default
   // bucket. Pass any AccountInfo; in policy code this is usually the pre-trade
@@ -112,9 +115,9 @@ TEST(MarketDataWiki, PushForFansOutToAccountsAndGroup) {
 
   // Fan out to two accounts and one group simultaneously.
   ASSERT_EQ(
-      service.PushFor(aaplId, md::Quote().WithMark(mark),
-                      {AccountId::FromUint64(10), AccountId::FromUint64(11)},
-                      {groupId}),
+      service.PushFor(
+          aaplId, md::Quote().WithMark(mark), std::chrono::nanoseconds::zero(),
+          {AccountId::FromUint64(10), AccountId::FromUint64(11)}, {groupId}),
       md::RegisterStatus::Ok);
 
   // Read back for account 10 under AccountOnly - hits the per-account bucket.
@@ -126,9 +129,9 @@ TEST(MarketDataWiki, PushForFansOutToAccountsAndGroup) {
 }
 
 //------------------------------------------------------------------------------
-// Replace Versus Patch
+// Replace Quote Snapshots
 
-TEST(MarketDataWiki, PushPatchPreservesUnsetFields) {
+TEST(MarketDataWiki, PushReplacesUnsetFields) {
   md::Service service = md::Builder::FromEngineSyncPolicy(
                             md::QuoteTtl::Infinite(), openpit::SyncPolicy::None)
                             .Build();
@@ -141,15 +144,18 @@ TEST(MarketDataWiki, PushPatchPreservesUnsetFields) {
 
   const Price bid = Price::FromString("99");
   const Price ask = Price::FromString("101");
-  ASSERT_EQ(service.Push(aaplId, md::Quote()
-                                     .WithMark(Price::FromString("100"))
-                                     .WithBid(bid)
-                                     .WithAsk(ask)),
+  ASSERT_EQ(service.Push(aaplId,
+                         md::Quote()
+                             .WithMark(Price::FromString("100"))
+                             .WithBid(bid)
+                             .WithAsk(ask),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
-  // Patch only the mark; bid and ask are preserved.
+  // A mark-only observation clears bid and ask.
   const Price newMark = Price::FromString("105");
-  ASSERT_EQ(service.PushPatch(aaplId, md::Quote().WithMark(newMark)),
+  ASSERT_EQ(service.Push(aaplId, md::Quote().WithMark(newMark),
+                         std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
   const AccountId accountId = AccountId::FromUint64(1);
@@ -158,8 +164,8 @@ TEST(MarketDataWiki, PushPatchPreservesUnsetFields) {
                    md::QuoteResolution::AccountThenGroupThenDefault);
   ASSERT_TRUE(quote.has_value());
   EXPECT_EQ(quote->Mark(), newMark);
-  EXPECT_EQ(quote->Bid(), bid);
-  EXPECT_EQ(quote->Ask(), ask);
+  EXPECT_FALSE(quote->Bid().has_value());
+  EXPECT_FALSE(quote->Ask().has_value());
 }
 
 //------------------------------------------------------------------------------
@@ -177,9 +183,9 @@ TEST(MarketDataWiki, ClearHidesQuoteThenPushRestores) {
   const md::InstrumentId aaplId = registration.instrumentId.value();
 
   const AccountId accountId = AccountId::FromUint64(1);
-  ASSERT_EQ(
-      service.Push(aaplId, md::Quote().WithMark(Price::FromString("200"))),
-      md::RegisterStatus::Ok);
+  ASSERT_EQ(service.Push(aaplId, md::Quote().WithMark(Price::FromString("200")),
+                         std::chrono::nanoseconds::zero()),
+            md::RegisterStatus::Ok);
 
   // Clear hides the quote but keeps the instrument registered.
   service.Clear(aaplId);
@@ -189,9 +195,9 @@ TEST(MarketDataWiki, ClearHidesQuoteThenPushRestores) {
                    .has_value());
 
   // Pushing again restores a quote for the same id.
-  ASSERT_EQ(
-      service.Push(aaplId, md::Quote().WithMark(Price::FromString("210"))),
-      md::RegisterStatus::Ok);
+  ASSERT_EQ(service.Push(aaplId, md::Quote().WithMark(Price::FromString("210")),
+                         std::chrono::nanoseconds::zero()),
+            md::RegisterStatus::Ok);
   EXPECT_TRUE(service
                   .Find(aaplId, accountId, NoGroupInfo{},
                         md::QuoteResolution::AccountThenGroupThenDefault)

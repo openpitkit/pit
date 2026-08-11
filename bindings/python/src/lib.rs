@@ -990,65 +990,66 @@ impl PyMarketDataService {
 
     // ── Push (default bucket) ─────────────────────────────────────────────────
 
+    /// Publish one quote observation into the default bucket.
+    ///
+    /// An absent quote field is absent from that observation, not retained from
+    /// an older quote. ``source_age`` is a ``datetime.timedelta`` between
+    /// observation and publication; negative values are clamped to zero.
     fn push(
         &self,
         py: Python<'_>,
         instrument_id: &PyInstrumentId,
         quote: &PyQuote,
+        source_age: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        py.detach(|| self.inner.push(instrument_id.inner, quote.inner))
-            .map_err(create_unknown_instrument_id_error)
+        let source_age = parse_source_age(source_age)?;
+        py.detach(|| {
+            self.inner
+                .push(instrument_id.inner, quote.inner, source_age)
+        })
+        .map_err(create_unknown_instrument_id_error)
     }
 
-    fn push_patch(
-        &self,
-        py: Python<'_>,
-        instrument_id: &PyInstrumentId,
-        quote: &PyQuote,
-    ) -> PyResult<()> {
-        py.detach(|| self.inner.push_patch(instrument_id.inner, quote.inner))
-            .map_err(create_unknown_instrument_id_error)
-    }
-
+    /// Publish one quote observation into an instrument's default bucket.
+    ///
+    /// An absent quote field is absent from that observation, not retained from
+    /// an older quote. ``source_age`` is a ``datetime.timedelta`` between
+    /// observation and publication; negative values are clamped to zero.
     fn push_by_instrument(
         &self,
         py: Python<'_>,
         instrument: &Bound<'_, PyAny>,
         quote: &PyQuote,
+        source_age: &Bound<'_, PyAny>,
     ) -> PyResult<PyInstrumentId> {
         let instrument = parse_instrument_input(instrument)?;
-        let inner = py.detach(|| self.inner.push_by_instrument(&instrument, quote.inner));
-        Ok(PyInstrumentId { inner })
-    }
-
-    fn push_by_instrument_patch(
-        &self,
-        py: Python<'_>,
-        instrument: &Bound<'_, PyAny>,
-        quote: &PyQuote,
-    ) -> PyResult<PyInstrumentId> {
-        let instrument = parse_instrument_input(instrument)?;
+        let source_age = parse_source_age(source_age)?;
         let inner = py.detach(|| {
             self.inner
-                .push_by_instrument_patch(&instrument, quote.inner)
+                .push_by_instrument(&instrument, quote.inner, source_age)
         });
         Ok(PyInstrumentId { inner })
     }
 
     // ── Targeted fan-out push ─────────────────────────────────────────────────
 
-    /// Push a full quote snapshot to specific accounts and/or groups.
+    /// Push one quote observation to specific accounts and/or groups.
     ///
     /// To target the default ("everyone-else") bucket, include
-    /// ``AccountGroupId.DEFAULT`` in ``account_group_ids``.
+    /// ``AccountGroupId.DEFAULT`` in ``account_group_ids``. An absent quote
+    /// field is absent from the observation, not retained from an older quote.
+    /// ``source_age`` is a ``datetime.timedelta`` between observation and
+    /// publication; negative values are clamped to zero.
     fn push_for(
         &self,
         py: Python<'_>,
         instrument_id: &PyInstrumentId,
         quote: &PyQuote,
+        source_age: &Bound<'_, PyAny>,
         account_ids: &Bound<'_, PyAny>,
         account_group_ids: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
+        let source_age = parse_source_age(source_age)?;
         let account_ids = account_ids
             .try_iter()?
             .map(|item| parse_account_id_input(&item?))
@@ -1058,35 +1059,13 @@ impl PyMarketDataService {
             .map(|item| parse_account_group_id_input(&item?))
             .collect::<PyResult<Vec<_>>>()?;
         py.detach(|| {
-            self.inner
-                .push_for(instrument_id.inner, quote.inner, &account_ids, &group_ids)
-        })
-        .map_err(create_push_for_error)
-    }
-
-    /// Push a partial quote patch to specific accounts and/or groups.
-    ///
-    /// To target the default ("everyone-else") bucket, include
-    /// ``AccountGroupId.DEFAULT`` in ``account_group_ids``.
-    fn push_for_patch(
-        &self,
-        py: Python<'_>,
-        instrument_id: &PyInstrumentId,
-        quote: &PyQuote,
-        account_ids: &Bound<'_, PyAny>,
-        account_group_ids: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
-        let account_ids = account_ids
-            .try_iter()?
-            .map(|item| parse_account_id_input(&item?))
-            .collect::<PyResult<Vec<_>>>()?;
-        let group_ids = account_group_ids
-            .try_iter()?
-            .map(|item| parse_account_group_id_input(&item?))
-            .collect::<PyResult<Vec<_>>>()?;
-        py.detach(|| {
-            self.inner
-                .push_for_patch(instrument_id.inner, quote.inner, &account_ids, &group_ids)
+            self.inner.push_for(
+                instrument_id.inner,
+                quote.inner,
+                source_age,
+                &account_ids,
+                &group_ids,
+            )
         })
         .map_err(create_push_for_error)
     }
@@ -4594,6 +4573,27 @@ fn parse_rate_limit_window(value: &Bound<'_, PyAny>) -> PyResult<Duration> {
     // so neither the day-to-second scaling nor the micro-to-nano scaling can
     // overflow their target types.
     Ok(Duration::new(days * 86_400 + seconds, microseconds * 1_000))
+}
+
+fn parse_source_age(value: &Bound<'_, PyAny>) -> PyResult<Duration> {
+    let datetime = value.py().import("datetime")?;
+    let timedelta = datetime.getattr("timedelta")?;
+    if !value.is_instance(&timedelta)? {
+        return Err(PyTypeError::new_err(
+            "source_age must be datetime.timedelta",
+        ));
+    }
+
+    let days = value.getattr("days")?.extract::<i64>()?;
+    if days < 0 {
+        return Ok(Duration::ZERO);
+    }
+    let seconds = value.getattr("seconds")?.extract::<u64>()?;
+    let microseconds = value.getattr("microseconds")?.extract::<u32>()?;
+    Ok(Duration::new(
+        days as u64 * 86_400 + seconds,
+        microseconds * 1_000,
+    ))
 }
 
 fn parse_rate_limit_entity(obj: &Bound<'_, PyAny>) -> PyResult<RateLimit> {

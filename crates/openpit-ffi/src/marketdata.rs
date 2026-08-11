@@ -181,6 +181,10 @@ pub extern "C" fn openpit_create_marketdata_quote_ttl_within(
     }
 }
 
+fn duration_from_parts_saturating(secs: u64, nanos: u32) -> Duration {
+    Duration::from_secs(secs).saturating_add(Duration::from_nanos(u64::from(nanos)))
+}
+
 //--------------------------------------------------------------------------------------------------
 // QuoteResolution
 
@@ -261,8 +265,8 @@ pub enum OpenPitMarketDataRegisterStatus {
     /// A boundary failure occurred (null pointer or an invalid payload); when
     /// `out_error` is not null, a caller-owned error string was written.
     Error = 5,
-    /// A targeted push (`push_for` / `push_for_patch`) was called with both the
-    /// account list and the group list empty.
+    /// A targeted push (`push_for`) was called with both the account list and
+    /// the group list empty.
     NoTarget = 6,
 }
 
@@ -963,6 +967,10 @@ pub extern "C" fn openpit_marketdata_service_clear(
 
 /// Publishes a quote for `instrument_id`, replacing the entire stored snapshot.
 ///
+/// `source_age_secs` plus `source_age_nanos` is the time elapsed since the
+/// source observed the quote. The parts are normalized with saturating
+/// arithmetic.
+///
 /// Status:
 /// - `Ok`: the snapshot was replaced;
 /// - `UnknownInstrument`: `instrument_id` is not registered;
@@ -974,6 +982,8 @@ pub extern "C" fn openpit_marketdata_service_push(
     service: *const OpenPitMarketDataService,
     instrument_id: OpenPitMarketDataInstrumentId,
     quote: OpenPitMarketDataQuote,
+    source_age_secs: u64,
+    source_age_nanos: u32,
     out_error: OpenPitOutError,
 ) -> OpenPitMarketDataRegisterStatus {
     if service.is_null() {
@@ -987,41 +997,11 @@ pub extern "C" fn openpit_marketdata_service_push(
             return OpenPitMarketDataRegisterStatus::Error;
         }
     };
-    match unsafe { &*service }
-        .handle
-        .push(InstrumentId::new(instrument_id), parsed)
-    {
-        Ok(()) => OpenPitMarketDataRegisterStatus::Ok,
-        Err(UnknownInstrumentId { .. }) => OpenPitMarketDataRegisterStatus::UnknownInstrument,
-    }
-}
-
-/// Publishes a partial update for `instrument_id`, merging it into the stored
-/// snapshot.
-///
-/// Behaves like `openpit_marketdata_service_push` otherwise.
-#[no_mangle]
-pub extern "C" fn openpit_marketdata_service_push_patch(
-    service: *const OpenPitMarketDataService,
-    instrument_id: OpenPitMarketDataInstrumentId,
-    quote: OpenPitMarketDataQuote,
-    out_error: OpenPitOutError,
-) -> OpenPitMarketDataRegisterStatus {
-    if service.is_null() {
-        write_error(out_error, "market-data service is null");
-        return OpenPitMarketDataRegisterStatus::Error;
-    }
-    let parsed = match quote.to_quote() {
-        Ok(parsed) => parsed,
-        Err(message) => {
-            write_error(out_error, message.as_str());
-            return OpenPitMarketDataRegisterStatus::Error;
-        }
-    };
-    match unsafe { &*service }
-        .handle
-        .push_patch(InstrumentId::new(instrument_id), parsed)
-    {
+    match unsafe { &*service }.handle.push(
+        InstrumentId::new(instrument_id),
+        parsed,
+        duration_from_parts_saturating(source_age_secs, source_age_nanos),
+    ) {
         Ok(()) => OpenPitMarketDataRegisterStatus::Ok,
         Err(UnknownInstrumentId { .. }) => OpenPitMarketDataRegisterStatus::UnknownInstrument,
     }
@@ -1033,6 +1013,10 @@ pub extern "C" fn openpit_marketdata_service_push_patch(
 /// Publishes a quote for `instrument_id` into the per-account bucket of every
 /// account in `account_ids` and the per-group bucket of every group in
 /// `account_group_ids`, replacing each target's snapshot.
+///
+/// `source_age_secs` plus `source_age_nanos` is the time elapsed since the
+/// source observed the quote. The parts are normalized with saturating
+/// arithmetic.
 ///
 /// A null pointer with a matching length of `0` is a valid empty list.
 ///
@@ -1049,6 +1033,8 @@ pub extern "C" fn openpit_marketdata_service_push_for(
     service: *const OpenPitMarketDataService,
     instrument_id: OpenPitMarketDataInstrumentId,
     quote: OpenPitMarketDataQuote,
+    source_age_secs: u64,
+    source_age_nanos: u32,
     account_ids: *const OpenPitParamAccountId,
     account_ids_len: usize,
     account_group_ids: *const OpenPitParamAccountGroupId,
@@ -1092,77 +1078,7 @@ pub extern "C" fn openpit_marketdata_service_push_for(
     match unsafe { &*service }.handle.push_for(
         InstrumentId::new(instrument_id),
         parsed,
-        accounts,
-        groups,
-    ) {
-        Ok(()) => OpenPitMarketDataRegisterStatus::Ok,
-        Err(PushForError::UnknownInstrument { .. }) => {
-            OpenPitMarketDataRegisterStatus::UnknownInstrument
-        }
-        Err(PushForError::NoTarget) => OpenPitMarketDataRegisterStatus::NoTarget,
-        // `PushForError` is `#[non_exhaustive]`; treat any future variant as
-        // a boundary failure.
-        Err(error) => {
-            write_error(out_error, error.to_string().as_str());
-            OpenPitMarketDataRegisterStatus::Error
-        }
-    }
-}
-
-/// Publishes a partial update for `instrument_id` into the per-account bucket
-/// of every account in `account_ids` and the per-group bucket of every group in
-/// `account_group_ids`, merging independently into each target's existing
-/// snapshot.
-///
-/// Behaves like `openpit_marketdata_service_push_for` otherwise.
-#[no_mangle]
-pub extern "C" fn openpit_marketdata_service_push_for_patch(
-    service: *const OpenPitMarketDataService,
-    instrument_id: OpenPitMarketDataInstrumentId,
-    quote: OpenPitMarketDataQuote,
-    account_ids: *const OpenPitParamAccountId,
-    account_ids_len: usize,
-    account_group_ids: *const OpenPitParamAccountGroupId,
-    account_group_ids_len: usize,
-    out_error: OpenPitOutError,
-) -> OpenPitMarketDataRegisterStatus {
-    if service.is_null() {
-        write_error(out_error, "market-data service is null");
-        return OpenPitMarketDataRegisterStatus::Error;
-    }
-    let parsed = match quote.to_quote() {
-        Ok(parsed) => parsed,
-        Err(message) => {
-            write_error(out_error, message.as_str());
-            return OpenPitMarketDataRegisterStatus::Error;
-        }
-    };
-    // SAFETY: `AccountId` is `#[repr(transparent)]` over `u64` (the underlying
-    // type of `OpenPitParamAccountId`) and `AccountId::from_u64` is a pure
-    // value-wrap, so the raw array is bit-identical to `&[AccountId]`. Likewise
-    // `AccountGroupId` is `#[repr(transparent)]` over `u32` and `import_group`
-    // is the identity value-map (raw `0` == `DEFAULT_ACCOUNT_GROUP`; every
-    // other value passes through unchanged), so the raw array is bit-identical
-    // to `&[AccountGroupId]`. Each borrow is valid for its declared length; an
-    // empty list (null pointer or zero length) becomes `&[]`.
-    let accounts: &[AccountId] = if account_ids_len > 0 {
-        unsafe { std::slice::from_raw_parts(account_ids as *const AccountId, account_ids_len) }
-    } else {
-        &[]
-    };
-    let groups: &[AccountGroupId] = if account_group_ids_len > 0 {
-        unsafe {
-            std::slice::from_raw_parts(
-                account_group_ids as *const AccountGroupId,
-                account_group_ids_len,
-            )
-        }
-    } else {
-        &[]
-    };
-    match unsafe { &*service }.handle.push_for_patch(
-        InstrumentId::new(instrument_id),
-        parsed,
+        duration_from_parts_saturating(source_age_secs, source_age_nanos),
         accounts,
         groups,
     ) {
@@ -1188,6 +1104,10 @@ pub extern "C" fn openpit_marketdata_service_push_for_patch(
 /// If `instrument` is unregistered, a named slot is created with the
 /// service-default TTL.
 ///
+/// `source_age_secs` plus `source_age_nanos` is the time elapsed since the
+/// source observed the quote. The parts are normalized with saturating
+/// arithmetic.
+///
 /// Success:
 /// - returns `true` and writes the instrument's id to `out_id`.
 ///
@@ -1201,6 +1121,8 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
     service: *const OpenPitMarketDataService,
     instrument: *const OpenPitInstrument,
     quote: OpenPitMarketDataQuote,
+    source_age_secs: u64,
+    source_age_nanos: u32,
     out_id: *mut OpenPitMarketDataInstrumentId,
     out_error: OpenPitOutError,
 ) -> bool {
@@ -1227,51 +1149,11 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
             return false;
         }
     };
-    let id = unsafe { &*service }
-        .handle
-        .push_by_instrument(&parsed_instrument, parsed_quote);
-    unsafe { *out_id = id.as_u64() };
-    true
-}
-
-/// Publishes a partial update for `instrument`, merging it into the stored
-/// snapshot.
-///
-/// Behaves like `openpit_marketdata_service_push_by_instrument` otherwise.
-#[no_mangle]
-pub extern "C" fn openpit_marketdata_service_push_by_instrument_patch(
-    service: *const OpenPitMarketDataService,
-    instrument: *const OpenPitInstrument,
-    quote: OpenPitMarketDataQuote,
-    out_id: *mut OpenPitMarketDataInstrumentId,
-    out_error: OpenPitOutError,
-) -> bool {
-    if service.is_null() {
-        write_error(out_error, "market-data service is null");
-        return false;
-    }
-    if instrument.is_null() {
-        write_error(out_error, "instrument is null");
-        return false;
-    }
-    if out_id.is_null() {
-        write_error(out_error, "out_id is null");
-        return false;
-    }
-    let Some(parsed_instrument) = import_required_instrument(unsafe { &*instrument }, out_error)
-    else {
-        return false;
-    };
-    let parsed_quote = match quote.to_quote() {
-        Ok(parsed) => parsed,
-        Err(message) => {
-            write_error(out_error, message.as_str());
-            return false;
-        }
-    };
-    let id = unsafe { &*service }
-        .handle
-        .push_by_instrument_patch(&parsed_instrument, parsed_quote);
+    let id = unsafe { &*service }.handle.push_by_instrument(
+        &parsed_instrument,
+        parsed_quote,
+        duration_from_parts_saturating(source_age_secs, source_age_nanos),
+    );
     unsafe { *out_id = id.as_u64() };
     true
 }
@@ -1522,7 +1404,7 @@ mod tests {
 
         let quote = quote_with_mark("200");
         assert_eq!(
-            openpit_marketdata_service_push(service, id, quote, &mut err),
+            openpit_marketdata_service_push(service, id, quote, 0, 0, &mut err),
             OpenPitMarketDataRegisterStatus::Ok
         );
         assert!(err.is_null());
@@ -1569,7 +1451,7 @@ mod tests {
         let mut id: u64 = 0;
         let mut err = null_error();
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
-        openpit_marketdata_service_push(service, id, quote_with_mark("200"), &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("200"), 0, 0, &mut err);
         openpit_marketdata_service_clear(service, id);
 
         let mut out_quote = OpenPitMarketDataQuote::default();
@@ -1588,7 +1470,7 @@ mod tests {
         let mut id: u64 = 0;
         let mut err = null_error();
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
-        openpit_marketdata_service_push(service, id, quote_with_mark("200"), &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("200"), 0, 0, &mut err);
 
         // The clone observes the registration/push made through `service`.
         let mut out_quote = OpenPitMarketDataQuote::default();
@@ -1617,7 +1499,7 @@ mod tests {
         let mut id: u64 = u64::MAX;
         let mut err = null_error();
         assert!(openpit_marketdata_service_push_by_instrument(
-            service, &inst, quote, &mut id, &mut err
+            service, &inst, quote, 0, 0, &mut id, &mut err
         ));
         assert!(err.is_null());
 
@@ -1714,9 +1596,42 @@ mod tests {
         let service = build_service();
         let quote = OpenPitMarketDataQuote::default();
         let mut err = null_error();
-        let status = openpit_marketdata_service_push(service, 99, quote, &mut err);
+        let status = openpit_marketdata_service_push(service, 99, quote, 0, 0, &mut err);
         assert_eq!(status, OpenPitMarketDataRegisterStatus::UnknownInstrument);
         assert!(err.is_null());
+        openpit_destroy_marketdata_service(service);
+    }
+
+    #[test]
+    fn push_source_age_parts_saturate_and_expire_quote() {
+        let mut err = null_error();
+        let service = openpit_create_marketdata_service(
+            0,
+            openpit_create_marketdata_quote_ttl_within(1, 0),
+            &mut err,
+        );
+        assert!(!service.is_null());
+        assert!(err.is_null());
+
+        let inst = instrument("AAPL", "USD");
+        let mut id = 0;
+        assert_eq!(
+            openpit_marketdata_service_register(service, &inst, &mut id, &mut err),
+            OpenPitMarketDataRegisterStatus::Ok
+        );
+        let quote = quote_with_mark("200");
+        assert_eq!(
+            openpit_marketdata_service_push(service, id, quote, u64::MAX, u32::MAX, &mut err,),
+            OpenPitMarketDataRegisterStatus::Ok
+        );
+
+        let mut out_quote = OpenPitMarketDataQuote::default();
+        assert_eq!(
+            get_default(service, id, &mut out_quote),
+            OpenPitMarketDataGetStatus::QuoteExpired
+        );
+        assert_eq!(out_quote, quote);
+
         openpit_destroy_marketdata_service(service);
     }
 
@@ -1811,7 +1726,7 @@ mod tests {
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
 
         // Push the default bucket with mark=100.
-        openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("100"), 0, 0, &mut err);
 
         // Push per-account (account=42) bucket with mark=200.
         let account: u64 = 42;
@@ -1819,6 +1734,8 @@ mod tests {
             service,
             id,
             quote_with_mark("200"),
+            0,
+            0,
             &account,
             1,
             std::ptr::null(),
@@ -1872,6 +1789,8 @@ mod tests {
             service,
             id,
             quote_with_mark("100"),
+            0,
+            0,
             std::ptr::null(),
             0,
             std::ptr::null(),
@@ -1890,7 +1809,7 @@ mod tests {
         let mut id: u64 = 0;
         let mut err = null_error();
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
-        openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("100"), 0, 0, &mut err);
 
         // Pin a zero-duration TTL for account=1 — the quote will appear stale
         // immediately on the next read for that account.
@@ -1928,7 +1847,7 @@ mod tests {
         let mut id: u64 = 0;
         let mut err = null_error();
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
-        openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("100"), 0, 0, &mut err);
 
         // no_group_resolver reports NoGroup; AccountThenGroup can't fall
         // through to a group bucket, but AccountThenGroupThenDefault can still
@@ -1963,6 +1882,8 @@ mod tests {
             service,
             id,
             quote_with_mark("300"),
+            0,
+            0,
             std::ptr::null(),
             0,
             &group1,
@@ -1997,7 +1918,7 @@ mod tests {
         let mut err = null_error();
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
         // Default bucket holds a quote a group-less account would inherit.
-        openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("100"), 0, 0, &mut err);
 
         let mut out = OpenPitMarketDataQuote::default();
         let status = openpit_marketdata_service_get(
@@ -2025,7 +1946,7 @@ mod tests {
         let mut id: u64 = 0;
         let mut err = null_error();
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
-        openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("100"), 0, 0, &mut err);
 
         let mut out = OpenPitMarketDataQuote::default();
         let status = openpit_marketdata_service_get(

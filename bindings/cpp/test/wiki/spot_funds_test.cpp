@@ -122,7 +122,8 @@ TEST(SpotFundsWiki, MarketBuyPricedFromMarkWithSlippage) {
   ASSERT_TRUE(registration.instrumentId.has_value());
   const md::InstrumentId aaplId = registration.instrumentId.value();
   ASSERT_EQ(
-      marketData.Push(aaplId, md::Quote().WithMark(Price::FromString("200"))),
+      marketData.Push(aaplId, md::Quote().WithMark(Price::FromString("200")),
+                      std::chrono::nanoseconds::zero()),
       md::RegisterStatus::Ok);
 
   // Spot funds with market orders enabled at 1500 bps worst-case slippage,

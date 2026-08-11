@@ -101,18 +101,22 @@ impl InstrumentRegistry {
 /// are **strict**: they return an error if the instrument name or id is already
 /// taken — they never silently return an existing entry.
 ///
-/// Quotes are published on the hot path via:
-/// - [`push`](Self::push) / [`push_patch`](Self::push_patch) — by
-///   [`InstrumentId`] into the default bucket; the id must have been registered
-///   beforehand.
-/// - [`push_for`](Self::push_for) / [`push_for_patch`](Self::push_for_patch) —
-///   by id, fanned out into the per-account bucket of every listed account and
-///   the per-group bucket of every listed group (the default bucket is
-///   targetable by listing [`DEFAULT_ACCOUNT_GROUP`]).
-/// - [`push_by_instrument`](Self::push_by_instrument) /
-///   [`push_by_instrument_patch`](Self::push_by_instrument_patch) — by
-///   instrument name into the default bucket; auto-registers a named slot on
-///   first sight.
+/// Every publication supplies the quote's source age: the time elapsed between
+/// observing the prices and calling the service. [`Duration::ZERO`] means the
+/// quote was observed at publication time. Freshness advances from that source
+/// age using the monotonic clock, with saturating arithmetic throughout.
+///
+/// Quotes are published on the hot path via [`push`](Self::push) by
+/// [`InstrumentId`] into the default bucket, [`push_for`](Self::push_for) by
+/// id into targeted buckets, or
+/// [`push_by_instrument`](Self::push_by_instrument) by instrument name into
+/// the default bucket.
+///
+/// A quote is one observation. An absent field means that field does not exist
+/// in the observation; it never means to retain a field from a prior quote.
+/// Publishers that combine observations must merge them before publication,
+/// because only they know whether the fields describe one observation and which
+/// source age the combined snapshot carries.
 ///
 /// Consumers poll via [`get`](Self::get), supplying the reading account, an
 /// [`AccountInfo`], and a [`QuoteResolution`] that picks which buckets to
@@ -161,7 +165,10 @@ impl InstrumentRegistry {
 /// The internal locks are selected by the `Sync` mode: genuine no-ops under
 /// [`LocalSync`](crate::LocalSync) (strictly single-threaded, zero overhead)
 /// and real `parking_lot::RwLock`s under [`FullSync`](crate::FullSync) (a
-/// concurrent producer is supported).
+/// concurrent producer is supported). Within each instrument slot, quote
+/// selection and the instrument-specific TTL cascade are resolved under one
+/// read guard, so a read cannot combine state from opposite sides of a
+/// concurrent publication or TTL update.
 pub struct MarketDataService<Sync: MarketDataSync> {
     /// Service-wide default quote lifetime (cascade tier 8); `None` means
     /// infinite.
@@ -462,8 +469,8 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         };
         let guard = self.slots.read();
         if let Some(slot) = guard.get(slot_idx as usize) {
-            let mut ttls = slot.ttls.write();
-            mutate(&mut ttls);
+            let mut state = slot.state.write();
+            mutate(&mut state.ttls);
         }
         Ok(())
     }
@@ -484,9 +491,9 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         };
         let guard = self.slots.read();
         if let Some(slot) = guard.get(slot_idx as usize) {
-            let mut quotes = slot.quotes.write();
-            quotes.accounts.clear();
-            quotes.groups.clear();
+            let mut state = slot.state.write();
+            state.quotes.accounts.clear();
+            state.quotes.groups.clear();
         }
     }
 
@@ -497,56 +504,42 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     ///
     /// Every field of `quote` (including `None` fields) becomes the new stored
     /// value; any field previously set on the default bucket but absent from
-    /// `quote` is cleared. The publish instant is bumped to the current time.
+    /// `quote` is cleared. `source_age` is the time elapsed since the source
+    /// observed the quote; [`Duration::ZERO`] means "observed now".
     ///
     /// # Errors
     ///
     /// Returns [`UnknownInstrumentId`] if `instrument_id` has not been
     /// registered.
     ///
-    /// Use [`push_patch`](Self::push_patch) to overwrite only the fields you
-    /// have new values for, or [`push_for`](Self::push_for) to target specific
-    /// accounts/groups.
+    /// Use [`push_for`](Self::push_for) to target specific accounts/groups.
     pub fn push(
         &self,
         instrument_id: InstrumentId,
         quote: Quote,
+        source_age: Duration,
     ) -> Result<(), UnknownInstrumentId> {
-        self.store_default_by_id(instrument_id, |_prev| quote)
-    }
-
-    /// Publishes a partial update for `instrument_id` into the default
-    /// ("everyone-else") bucket, **merging** it into the existing snapshot.
-    ///
-    /// For each field of `quote`: `Some` overwrites the prior value, `None`
-    /// leaves it intact. If the default bucket was empty the patch becomes the
-    /// new snapshot as-is. The publish instant is bumped to the current time.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`UnknownInstrumentId`] if `instrument_id` has not been
-    /// registered.
-    pub fn push_patch(
-        &self,
-        instrument_id: InstrumentId,
-        quote: Quote,
-    ) -> Result<(), UnknownInstrumentId> {
-        self.store_default_by_id(instrument_id, |prev| {
-            prev.unwrap_or_default().patched_with(quote)
-        })
+        self.store_default_by_id(instrument_id, quote, source_age)
     }
 
     fn store_default_by_id(
         &self,
         instrument_id: InstrumentId,
-        build: impl FnOnce(Option<Quote>) -> Quote,
+        quote: Quote,
+        source_age: Duration,
     ) -> Result<(), UnknownInstrumentId> {
         let slot_idx = self.slot_for_id(instrument_id)?;
         let now = Instant::now();
         let guard = self.slots.read();
         if let Some(slot) = guard.get(slot_idx as usize) {
-            let mut quotes = slot.quotes.write();
-            store_into(&mut quotes.groups, DEFAULT_ACCOUNT_GROUP, now, build);
+            let mut state = slot.state.write();
+            store_into(
+                &mut state.quotes.groups,
+                DEFAULT_ACCOUNT_GROUP,
+                now,
+                quote,
+                source_age,
+            );
         }
         Ok(())
     }
@@ -557,8 +550,8 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     /// account in `accounts` and the per-group bucket of every group in
     /// `groups`, **replacing** each target's snapshot.
     ///
-    /// All targets share one `pushed_at` instant. The default bucket is
-    /// targetable by listing [`DEFAULT_ACCOUNT_GROUP`] in `groups`.
+    /// All targets share one `pushed_at` instant and `source_age`. The default
+    /// bucket is targetable by listing [`DEFAULT_ACCOUNT_GROUP`] in `groups`.
     ///
     /// # Errors
     ///
@@ -571,44 +564,26 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         &self,
         instrument_id: InstrumentId,
         quote: Quote,
+        source_age: Duration,
         account_ids: &[AccountId],
         account_group_ids: &[AccountGroupId],
     ) -> Result<(), PushForError> {
-        self.store_for(instrument_id, account_ids, account_group_ids, |_prev| quote)
-    }
-
-    /// Publishes a partial update for `instrument_id` into the per-account
-    /// bucket of every account in `account_ids` and the per-group bucket of
-    /// every group in `account_group_ids`, **merging** independently into each
-    /// target's existing snapshot.
-    ///
-    /// All targets share one `pushed_at` instant. The default bucket is
-    /// targetable by listing [`DEFAULT_ACCOUNT_GROUP`] in `account_group_ids`.
-    ///
-    /// # Errors
-    ///
-    /// - [`PushForError::UnknownInstrument`] if `instrument_id` is not
-    ///   registered.
-    /// - [`PushForError::NoTarget`] if both `account_ids` and
-    ///   `account_group_ids` are empty.
-    pub fn push_for_patch(
-        &self,
-        instrument_id: InstrumentId,
-        quote: Quote,
-        account_ids: &[AccountId],
-        account_group_ids: &[AccountGroupId],
-    ) -> Result<(), PushForError> {
-        self.store_for(instrument_id, account_ids, account_group_ids, |prev| {
-            prev.unwrap_or_default().patched_with(quote)
-        })
+        self.store_for(
+            instrument_id,
+            quote,
+            source_age,
+            account_ids,
+            account_group_ids,
+        )
     }
 
     fn store_for(
         &self,
         instrument_id: InstrumentId,
+        quote: Quote,
+        source_age: Duration,
         account_ids: &[AccountId],
         account_group_ids: &[AccountGroupId],
-        build: impl Fn(Option<Quote>) -> Quote,
     ) -> Result<(), PushForError> {
         if account_ids.is_empty() && account_group_ids.is_empty() {
             return Err(PushForError::NoTarget);
@@ -624,12 +599,24 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         let now = Instant::now();
         let guard = self.slots.read();
         if let Some(slot) = guard.get(slot_idx as usize) {
-            let mut quotes = slot.quotes.write();
+            let mut state = slot.state.write();
             for &account_id in account_ids {
-                store_into(&mut quotes.accounts, account_id, now, &build);
+                store_into(
+                    &mut state.quotes.accounts,
+                    account_id,
+                    now,
+                    quote,
+                    source_age,
+                );
             }
             for &account_group_id in account_group_ids {
-                store_into(&mut quotes.groups, account_group_id, now, &build);
+                store_into(
+                    &mut state.quotes.groups,
+                    account_group_id,
+                    now,
+                    quote,
+                    source_age,
+                );
             }
         }
         Ok(())
@@ -644,25 +631,18 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     /// (inheriting the service-default TTL) and the new id is returned. If
     /// `instrument` is already registered its existing id is reused.
     ///
+    /// `source_age` is the time elapsed since the source observed `quote`.
+    ///
     /// There is no account/group targeting on the by-instrument path; use
     /// [`push_for`](Self::push_for) for that.
-    pub fn push_by_instrument(&self, instrument: &Instrument, quote: Quote) -> InstrumentId {
+    pub fn push_by_instrument(
+        &self,
+        instrument: &Instrument,
+        quote: Quote,
+        source_age: Duration,
+    ) -> InstrumentId {
         let (instrument_id, slot_idx) = self.resolve_or_register_named(instrument);
-        self.store_default_at(slot_idx, |_prev| quote);
-        instrument_id
-    }
-
-    /// Publishes a partial update for `instrument` into the default bucket
-    /// (patch semantics).
-    ///
-    /// If `instrument` has not been registered before, a named slot is created
-    /// (inheriting the service-default TTL) and the new id is returned. If
-    /// `instrument` is already registered its existing id is reused.
-    pub fn push_by_instrument_patch(&self, instrument: &Instrument, quote: Quote) -> InstrumentId {
-        let (instrument_id, slot_idx) = self.resolve_or_register_named(instrument);
-        self.store_default_at(slot_idx, |prev| {
-            prev.unwrap_or_default().patched_with(quote)
-        });
+        self.store_default_at(slot_idx, quote, source_age);
         instrument_id
     }
 
@@ -709,24 +689,22 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         // TTL cascade, so `account_info.group()` runs at most once per read.
         let mut group_cell: Option<Option<AccountGroupId>> = None;
 
-        let selected = {
-            let quotes = slot.quotes.read();
-            select_quote(
-                &quotes,
-                account_id,
-                account_info,
-                resolution,
-                &mut group_cell,
-            )
-            .ok_or(MarketDataError::QuoteUnavailable)?
-        };
-
-        let effective_ttl = {
-            let ttls = slot.ttls.read();
-            self.effective_ttl(&ttls, account_id, account_info, &mut group_cell)
-        };
+        let state = slot.state.read();
+        let selected = select_quote(
+            &state.quotes,
+            account_id,
+            account_info,
+            resolution,
+            &mut group_cell,
+        )
+        .ok_or(MarketDataError::QuoteUnavailable)?;
+        let effective_ttl =
+            self.effective_ttl(&state.ttls, account_id, account_info, &mut group_cell);
         if let Some(ttl) = effective_ttl {
-            if Instant::now().saturating_duration_since(selected.pushed_at) >= ttl {
+            let effective_age = Instant::now()
+                .saturating_duration_since(selected.pushed_at)
+                .saturating_add(selected.source_age);
+            if effective_age >= ttl {
                 return Err(MarketDataError::QuoteExpired(selected.quote));
             }
         }
@@ -839,12 +817,18 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     }
 
     /// Writes a quote into the default bucket of the slot at `slot_idx`.
-    fn store_default_at(&self, slot_idx: u32, build: impl FnOnce(Option<Quote>) -> Quote) {
+    fn store_default_at(&self, slot_idx: u32, quote: Quote, source_age: Duration) {
         let now = Instant::now();
         let guard = self.slots.read();
         if let Some(slot) = guard.get(slot_idx as usize) {
-            let mut quotes = slot.quotes.write();
-            store_into(&mut quotes.groups, DEFAULT_ACCOUNT_GROUP, now, build);
+            let mut state = slot.state.write();
+            store_into(
+                &mut state.quotes.groups,
+                DEFAULT_ACCOUNT_GROUP,
+                now,
+                quote,
+                source_age,
+            );
         }
     }
 
@@ -869,20 +853,21 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
 
 // ─── Free helpers ──────────────────────────────────────────────────────────────
 
-/// Stores a built quote into `map[key]`, merging with any existing entry via
-/// `build` and stamping `now` as the publish instant.
+/// Stores one quote observation in `map[key]`, stamping `now` and retaining its
+/// source age.
 fn store_into<BucketKey: std::hash::Hash + Eq>(
     map: &mut HashMap<BucketKey, QuoteState>,
     key: BucketKey,
     now: Instant,
-    build: impl FnOnce(Option<Quote>) -> Quote,
+    quote: Quote,
+    source_age: Duration,
 ) {
-    let prev = map.get(&key).map(|state| state.quote);
     map.insert(
         key,
         QuoteState {
-            quote: build(prev),
+            quote,
             pushed_at: now,
+            source_age,
         },
     );
 }
@@ -924,5 +909,45 @@ fn select_quote(
             }
             quotes.groups.get(&DEFAULT_ACCOUNT_GROUP).copied()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::sync_mode::FullSync;
+    use crate::param::Asset;
+
+    use super::*;
+    use crate::marketdata::MarketDataBuilder;
+
+    #[test]
+    fn full_sync_slot_state_read_blocks_writes() {
+        let service = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+        let instrument = Instrument::new(
+            Asset::new("AAPL").expect("asset must be valid"),
+            Asset::new("USD").expect("asset must be valid"),
+        );
+        let instrument_id = service
+            .register(instrument)
+            .expect("registration must succeed");
+        let slot_idx = service
+            .slot_for_id(instrument_id)
+            .expect("registered instrument must have a slot");
+        let slots = service.slots.read();
+        let slot = slots
+            .get(slot_idx as usize)
+            .expect("registered slot must exist");
+        let state = slot.state.read();
+
+        assert!(
+            slot.state.try_write().is_none(),
+            "a read of the merged state must block a concurrent writer"
+        );
+
+        drop(state);
+        assert!(
+            slot.state.try_write().is_some(),
+            "the writer must proceed after the merged-state read ends"
+        );
     }
 }

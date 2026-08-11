@@ -16,6 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::param::{AccountGroupId, AccountId};
 use crate::time::Instant;
@@ -24,11 +25,12 @@ use super::builder::MarketDataSync;
 use super::quote::Quote;
 use super::ttl::TtlSetting;
 
-/// Quote payload plus the instant at which it was published.
+/// Quote payload, its source age, and the instant at which it was published.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct QuoteState {
     pub(crate) quote: Quote,
     pub(crate) pushed_at: Instant,
+    pub(crate) source_age: Duration,
 }
 
 /// Per-instrument quote storage across the three conceptual buckets.
@@ -91,30 +93,42 @@ impl SlotTtls {
     }
 }
 
+/// Quotes and TTL settings observed atomically for one instrument.
+pub(crate) struct SlotState {
+    /// The instrument's quote buckets.
+    pub(crate) quotes: SlotQuotes,
+    /// The instrument's TTL settings across all axes.
+    pub(crate) ttls: SlotTtls,
+}
+
+impl SlotState {
+    fn new(instrument_ttl: Option<TtlSetting>) -> Self {
+        Self {
+            quotes: SlotQuotes::new(),
+            ttls: SlotTtls::new(instrument_ttl),
+        }
+    }
+}
+
 /// Internal per-instrument storage slot.
 ///
-/// Holds the three quote buckets and the per-slot TTL settings, each behind the
+/// Holds the three quote buckets and the per-slot TTL settings behind one
 /// mode-selected [`MarketDataSync::Lock`]: a genuine no-op under
 /// [`LocalSync`](crate::LocalSync) and a real `parking_lot::RwLock` under
 /// [`FullSync`](crate::FullSync).
 ///
-/// The two domains use *separate* locks so a TTL setter (rare) never blocks a
-/// concurrent quote push or read on the same instrument, and vice versa. A read
-/// briefly takes the quote lock to select a candidate, then the TTL lock to
-/// resolve the cascade; the two are independent, so no lock-ordering hazard
-/// arises (a writer of one never waits on the other).
+/// Keeping both domains under one guard makes quote selection and TTL cascade
+/// resolution one atomic read. A reader can therefore never pair a quote copied
+/// before a concurrent publication with TTL settings written after it.
 pub(crate) struct Slot<Sync: MarketDataSync> {
-    /// The instrument's quote buckets.
-    pub(crate) quotes: Sync::Lock<SlotQuotes>,
-    /// The instrument's TTL settings across all axes.
-    pub(crate) ttls: Sync::Lock<SlotTtls>,
+    /// The instrument's atomically observed quote and TTL state.
+    pub(crate) state: Sync::Lock<SlotState>,
 }
 
 impl<Sync: MarketDataSync> Slot<Sync> {
     pub(crate) fn new(sync: &Sync, instrument_ttl: Option<TtlSetting>) -> Self {
         Self {
-            quotes: sync.new_lock(SlotQuotes::new()),
-            ttls: sync.new_lock(SlotTtls::new(instrument_ttl)),
+            state: sync.new_lock(SlotState::new(instrument_ttl)),
         }
     }
 }

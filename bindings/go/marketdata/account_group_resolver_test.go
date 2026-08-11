@@ -70,7 +70,7 @@ func newServiceWithDefaultBucketQuote(
 	if err != nil {
 		t.Fatalf("NewPriceFromString() error = %v", err)
 	}
-	if err := service.Push(id, marketdata.NewQuote().WithMark(mark)); err != nil {
+	if err := service.Push(id, marketdata.NewQuote().WithMark(mark), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 	return service, id
@@ -181,10 +181,7 @@ func TestServiceCloseIsIdempotentAndMethodsDoNotUseReleasedHandle(t *testing.T) 
 			return err
 		},
 		"PushFor": func() error {
-			return service.PushFor(id, quote, []param.AccountID{account}, nil)
-		},
-		"PushForPatch": func() error {
-			return service.PushForPatch(id, quote, []param.AccountID{account}, nil)
+			return service.PushFor(id, quote, 0, []param.AccountID{account}, nil)
 		},
 		"SetInstrumentTTL":   func() error { return service.SetInstrumentTTL(id, ttl) },
 		"ClearInstrumentTTL": func() error { return service.ClearInstrumentTTL(id) },
@@ -200,14 +197,9 @@ func TestServiceCloseIsIdempotentAndMethodsDoNotUseReleasedHandle(t *testing.T) 
 		"ClearInstrumentAccountGroupTTL": func() error {
 			return service.ClearInstrumentAccountGroupTTL(id, param.DefaultAccountGroup)
 		},
-		"Push":      func() error { return service.Push(id, quote) },
-		"PushPatch": func() error { return service.PushPatch(id, quote) },
+		"Push": func() error { return service.Push(id, quote, 0) },
 		"PushByInstrument": func() error {
-			_, err := service.PushByInstrument(instrument, quote)
-			return err
-		},
-		"PushByInstrumentPatch": func() error {
-			_, err := service.PushByInstrumentPatch(instrument, quote)
+			_, err := service.PushByInstrument(instrument, quote, 0)
 			return err
 		},
 		"Get": func() error {
@@ -266,7 +258,7 @@ func TestServiceCloneSharesTheUnderlyingService(t *testing.T) {
 
 	// Closing the original must leave the clone on the same live service.
 	service.Close()
-	if err := clone.Push(id, marketdata.NewQuote()); err != nil {
+	if err := clone.Push(id, marketdata.NewQuote(), 0); err != nil {
 		t.Fatalf("Push() on clone error = %v", err)
 	}
 }

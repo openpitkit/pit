@@ -684,6 +684,7 @@ impl<Sync: MarketDataSync> SpotFundsMarketData<Sync> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::*;
     use crate::marketdata::{MarketDataBuilder, Quote, QuoteTtl};
@@ -817,7 +818,7 @@ mod tests {
         let id = svc
             .register(Instrument::new(asset("AAPL"), asset("USD")))
             .expect("register must succeed");
-        svc.push(id, Quote::new().with_mark(px("100")))
+        svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
             .expect("push must succeed");
         (svc, id)
     }

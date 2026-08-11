@@ -916,7 +916,7 @@ func TestSpotFundsAccountPnlHaltIsStickyUntilExactForceSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPriceFromString() error = %v", err)
 	}
-	if err := service.Push(fxID, marketdata.NewQuote().WithMark(fxRate)); err != nil {
+	if err := service.Push(fxID, marketdata.NewQuote().WithMark(fxRate), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 	second, err := engine.ApplyExecutionReport(feeReport)

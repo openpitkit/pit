@@ -105,7 +105,7 @@ fn local_sync_register_push_get() {
     assert!(get_default(&svc, id).is_none());
 
     let q = Quote::new().with_mark(px("150"));
-    svc.push(id, q)
+    svc.push(id, q, Duration::ZERO)
         .expect("push must succeed for registered id");
 
     let got = get_default(&svc, id).expect("quote must be present");
@@ -127,7 +127,7 @@ fn full_sync_concurrent_reads_under_push_storm() {
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
 
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("initial push must succeed");
 
     let num_readers = 4;
@@ -152,7 +152,7 @@ fn full_sync_concurrent_reads_under_push_storm() {
         for i in 0u32..1_000 {
             let p = Price::from_str(&(100 + i).to_string()).unwrap_or(px("100"));
             svc_producer
-                .push(id, Quote::new().with_mark(p))
+                .push(id, Quote::new().with_mark(p), Duration::ZERO)
                 .expect("push must succeed");
         }
     });
@@ -178,7 +178,7 @@ fn quote_carries_optional_bid_ask() {
         .with_mark(px("150"))
         .with_bid(px("149.5"))
         .with_ask(px("150.5"));
-    svc.push(id, q).expect("push must succeed");
+    svc.push(id, q, Duration::ZERO).expect("push must succeed");
 
     let got = get_default(&svc, id).expect("quote must be present");
     assert_eq!(got.mark, Some(px("150")));
@@ -196,7 +196,7 @@ fn infinite_ttl_keeps_quote_visible() {
     let id = svc
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
 
     std::thread::sleep(Duration::from_millis(80));
@@ -217,7 +217,7 @@ fn finite_ttl_hides_aged_quote() {
     let id = svc
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
 
     assert!(
@@ -245,6 +245,116 @@ fn finite_ttl_hides_aged_quote() {
     );
 }
 
+#[test]
+fn zero_source_age_is_fresh_on_first_read() {
+    let service =
+        MarketDataBuilder::<LocalSync>::new(QuoteTtl::Within(Duration::from_secs(1))).build();
+    let instrument_id = service
+        .register(instr("AAPL", "USD"))
+        .expect("register must succeed");
+    let quote = Quote::new().with_mark(px("100"));
+
+    service
+        .push(instrument_id, quote, Duration::ZERO)
+        .expect("push must succeed");
+
+    assert_eq!(get_default(&service, instrument_id), Some(quote));
+}
+
+#[test]
+fn source_age_leaves_only_the_remaining_ttl_window() {
+    let ttl = Duration::from_millis(500);
+    let service = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Within(ttl)).build();
+    let instrument_id = service
+        .register(instr("AAPL", "USD"))
+        .expect("register must succeed");
+    let quote = Quote::new().with_mark(px("100"));
+
+    service
+        .push(instrument_id, quote, Duration::from_millis(350))
+        .expect("push must succeed");
+    assert_eq!(get_default(&service, instrument_id), Some(quote));
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        service.get(
+            instrument_id,
+            acc(1),
+            &group_source(None),
+            QuoteResolution::AccountThenGroupThenDefault,
+        ),
+        Err(MarketDataError::QuoteExpired(quote))
+    );
+}
+
+#[test]
+fn source_age_at_or_beyond_ttl_expires_stored_quote_immediately() {
+    let ttl = Duration::from_secs(5);
+    let service = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Within(ttl)).build();
+    let instrument_id = service
+        .register(instr("AAPL", "USD"))
+        .expect("register must succeed");
+
+    for (quote, source_age) in [
+        (Quote::new().with_mark(px("100")), ttl),
+        (
+            Quote::new().with_mark(px("200")),
+            ttl.saturating_add(Duration::from_nanos(1)),
+        ),
+    ] {
+        service
+            .push(instrument_id, quote, source_age)
+            .expect("aged push must still succeed");
+        assert_eq!(
+            service.get(
+                instrument_id,
+                acc(1),
+                &group_source(None),
+                QuoteResolution::AccountThenGroupThenDefault,
+            ),
+            Err(MarketDataError::QuoteExpired(quote))
+        );
+    }
+}
+
+#[test]
+fn infinite_ttl_ignores_maximum_source_age() {
+    let service = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
+    let instrument_id = service
+        .register(instr("AAPL", "USD"))
+        .expect("register must succeed");
+    let quote = Quote::new().with_mark(px("100"));
+
+    service
+        .push(instrument_id, quote, Duration::MAX)
+        .expect("maximum source age must not fail publication");
+
+    assert_eq!(get_default(&service, instrument_id), Some(quote));
+}
+
+#[test]
+fn maximum_source_age_saturates_under_finite_ttl() {
+    let service = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Within(Duration::MAX)).build();
+    let instrument_id = service
+        .register(instr("AAPL", "USD"))
+        .expect("register must succeed");
+    let quote = Quote::new().with_mark(px("100"));
+
+    service
+        .push(instrument_id, quote, Duration::MAX)
+        .expect("maximum source age must not fail publication");
+
+    assert_eq!(
+        service.get(
+            instrument_id,
+            acc(1),
+            &group_source(None),
+            QuoteResolution::AccountThenGroupThenDefault,
+        ),
+        Err(MarketDataError::QuoteExpired(quote))
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Test 6 — Per-instrument TTL override beats service default
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -261,10 +371,14 @@ fn per_instrument_ttl_override_beats_service_default() {
         .register_with_ttl(instr("MSFT", "USD"), QuoteTtl::Infinite)
         .expect("register_with_ttl must succeed");
 
-    svc.push(short_id, Quote::new().with_mark(px("100")))
+    svc.push(short_id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
-    svc.push(infinite_id, Quote::new().with_mark(px("200")))
-        .expect("push must succeed");
+    svc.push(
+        infinite_id,
+        Quote::new().with_mark(px("200")),
+        Duration::ZERO,
+    )
+    .expect("push must succeed");
 
     std::thread::sleep(short + Duration::from_millis(50));
     assert!(
@@ -288,13 +402,13 @@ fn push_after_ttl_expiry_restores_visibility() {
     let id = svc
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
 
     std::thread::sleep(ttl + Duration::from_millis(50));
     assert!(get_default(&svc, id).is_none());
 
-    svc.push(id, Quote::new().with_mark(px("110")))
+    svc.push(id, Quote::new().with_mark(px("110")), Duration::ZERO)
         .expect("re-push must succeed");
     let q = get_default(&svc, id).expect("fresh push must be visible again");
     assert_eq!(q.mark, Some(px("110")));
@@ -309,7 +423,7 @@ fn clear_hides_quote_without_removing_instrument() {
     let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
     let aapl = instr("AAPL", "USD");
     let id = svc.register(aapl.clone()).expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
     assert!(get_default(&svc, id).is_some());
 
@@ -321,7 +435,7 @@ fn clear_hides_quote_without_removing_instrument() {
         "registry entry must remain after clear"
     );
 
-    svc.push(id, Quote::new().with_mark(px("105")))
+    svc.push(id, Quote::new().with_mark(px("105")), Duration::ZERO)
         .expect("re-push must succeed");
     assert_eq!(
         get_default(&svc, id).expect("re-push must be visible").mark,
@@ -346,94 +460,17 @@ fn push_replaces_all_fields() {
             .with_mark(px("100"))
             .with_bid(px("99"))
             .with_ask(px("101")),
+        Duration::ZERO,
     )
     .expect("push must succeed");
 
-    svc.push(id, Quote::new().with_bid(px("98")))
+    svc.push(id, Quote::new().with_bid(px("98")), Duration::ZERO)
         .expect("second push must succeed");
 
     let got = get_default(&svc, id).expect("quote must be present");
     assert_eq!(got.mark, None, "replace must drop mark");
     assert_eq!(got.bid, Some(px("98")));
     assert_eq!(got.ask, None, "replace must drop ask");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Test — push_patch (merge semantics): missing fields preserve prior values
-// ═══════════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn push_patch_preserves_unspecified_fields() {
-    let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
-    let id = svc
-        .register(instr("AAPL", "USD"))
-        .expect("register must succeed");
-
-    svc.push(
-        id,
-        Quote::new()
-            .with_mark(px("100"))
-            .with_bid(px("99"))
-            .with_ask(px("101")),
-    )
-    .expect("push must succeed");
-
-    svc.push_patch(id, Quote::new().with_mark(px("105")))
-        .expect("push_patch must succeed");
-
-    let got = get_default(&svc, id).expect("quote must be present");
-    assert_eq!(
-        got.mark,
-        Some(px("105")),
-        "patch must replace specified field"
-    );
-    assert_eq!(got.bid, Some(px("99")), "patch must keep prior bid");
-    assert_eq!(got.ask, Some(px("101")), "patch must keep prior ask");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Test — push_patch on empty slot stores the patch verbatim
-// ═══════════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn push_patch_on_empty_slot_stores_partial_quote() {
-    let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
-    let id = svc
-        .register(instr("AAPL", "USD"))
-        .expect("register must succeed");
-
-    svc.push_patch(id, Quote::new().with_bid(px("99")))
-        .expect("push_patch must succeed");
-
-    let got = get_default(&svc, id).expect("patch must establish a quote");
-    assert_eq!(got.mark, None);
-    assert_eq!(got.bid, Some(px("99")));
-    assert_eq!(got.ask, None);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Test — push_patch refreshes the publish instant even without changes
-// ═══════════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn push_patch_bumps_publish_instant() {
-    let ttl = Duration::from_millis(60);
-    let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Within(ttl)).build();
-    let id = svc
-        .register(instr("AAPL", "USD"))
-        .expect("register must succeed");
-
-    svc.push(id, Quote::new().with_mark(px("100")))
-        .expect("push must succeed");
-    std::thread::sleep(Duration::from_millis(40));
-
-    svc.push_patch(id, Quote::new())
-        .expect("push_patch must succeed");
-    std::thread::sleep(Duration::from_millis(40));
-
-    let got =
-        get_default(&svc, id).expect("patch must keep the quote alive past the original deadline");
-    assert_eq!(got.mark, Some(px("100")));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -477,20 +514,10 @@ fn push_on_unregistered_id_returns_error() {
     let unknown = InstrumentId::new(99);
 
     let err = svc
-        .push(unknown, Quote::new().with_mark(px("100")))
+        .push(unknown, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect_err("push on unknown id must return Err");
     assert_eq!(
         err,
-        UnknownInstrumentId {
-            instrument_id: unknown
-        }
-    );
-
-    let err_patch = svc
-        .push_patch(unknown, Quote::new().with_bid(px("50")))
-        .expect_err("push_patch on unknown id must return Err");
-    assert_eq!(
-        err_patch,
         UnknownInstrumentId {
             instrument_id: unknown
         }
@@ -542,7 +569,7 @@ fn push_by_instrument_auto_registers_and_reuses_id() {
     let aapl = instr("AAPL", "USD");
 
     // First call: instrument unknown → auto-register + push.
-    let id_first = svc.push_by_instrument(&aapl, Quote::new().with_mark(px("100")));
+    let id_first = svc.push_by_instrument(&aapl, Quote::new().with_mark(px("100")), Duration::ZERO);
 
     // resolve must now find the instrument.
     assert_eq!(
@@ -556,7 +583,8 @@ fn push_by_instrument_auto_registers_and_reuses_id() {
     assert_eq!(got.mark, Some(px("100")));
 
     // Second call with the same name: must reuse the same id.
-    let id_second = svc.push_by_instrument(&aapl, Quote::new().with_mark(px("110")));
+    let id_second =
+        svc.push_by_instrument(&aapl, Quote::new().with_mark(px("110")), Duration::ZERO);
     assert_eq!(
         id_second, id_first,
         "push_by_instrument must reuse existing id on second call"
@@ -581,7 +609,7 @@ fn set_instrument_ttl_changes_freshness_and_errors_on_unknown_id() {
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
 
-    svc.push(id, Quote::new().with_mark(px("200")))
+    svc.push(id, Quote::new().with_mark(px("200")), Duration::ZERO)
         .expect("push must succeed");
     assert!(
         get_default(&svc, id).is_some(),
@@ -749,7 +777,7 @@ fn build_sf_engine_with_market_orders(
     let id = svc
         .register(aapl_usd.clone())
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(mark_price))
+    svc.push(id, Quote::new().with_mark(mark_price), Duration::ZERO)
         .expect("push must succeed");
     let settings = SpotFundsSettings::new(
         slippage_bps,
@@ -840,6 +868,7 @@ fn spot_funds_book_top_uses_ask_for_market_buy() {
             .with_mark(px("100"))
             .with_bid(px("90"))
             .with_ask(px("200")),
+        Duration::ZERO,
     )
     .expect("push must succeed");
     let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::BookTop, std::iter::empty())
@@ -889,7 +918,7 @@ fn spot_funds_book_top_without_ask_rejects_market_buy() {
     let svc = builder.market_data(QuoteTtl::Infinite).build();
     let id = svc.register(aapl.clone()).expect("register must succeed");
     // Push mark only - no ask available.
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
     let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::BookTop, std::iter::empty())
         .expect("settings must build");
@@ -941,9 +970,9 @@ fn spot_funds_per_instrument_override_only_affects_its_id() {
     let msft_id = svc
         .register(msft.clone())
         .expect("register msft must succeed");
-    svc.push(aapl_id, Quote::new().with_mark(px("100")))
+    svc.push(aapl_id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push aapl must succeed");
-    svc.push(msft_id, Quote::new().with_mark(px("100")))
+    svc.push(msft_id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push msft must succeed");
 
     // Global slippage 0; AAPL override charges 100 % slippage (10_000 bps).
@@ -1067,12 +1096,24 @@ fn push_for_fans_out_to_account_and_group_buckets() {
 
     // Default bucket carries 100; the fan-out targets account 7 (200) and
     // group 3 (300).
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("default push must succeed");
-    svc.push_for(id, Quote::new().with_mark(px("200")), &[acc(7)], &[])
-        .expect("account fan-out must succeed");
-    svc.push_for(id, Quote::new().with_mark(px("300")), &[], &[grp(3)])
-        .expect("group fan-out must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("200")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("account fan-out must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("300")),
+        Duration::ZERO,
+        &[],
+        &[grp(3)],
+    )
+    .expect("group fan-out must succeed");
 
     // AccountOnly: account 7 sees its own bucket; account 8 sees nothing.
     assert_eq!(
@@ -1153,6 +1194,7 @@ fn push_for_default_group_writes_everyone_else_bucket() {
     svc.push_for(
         id,
         Quote::new().with_mark(px("123")),
+        Duration::ZERO,
         &[],
         &[DEFAULT_ACCOUNT_GROUP],
     )
@@ -1179,14 +1221,15 @@ fn push_for_with_no_targets_returns_error() {
         .expect("register must succeed");
 
     let err = svc
-        .push_for(id, Quote::new().with_mark(px("100")), &[], &[])
+        .push_for(
+            id,
+            Quote::new().with_mark(px("100")),
+            Duration::ZERO,
+            &[],
+            &[],
+        )
         .expect_err("push_for with no targets must error");
     assert_eq!(err, PushForError::NoTarget);
-
-    let err_patch = svc
-        .push_for_patch(id, Quote::new().with_mark(px("100")), &[], &[])
-        .expect_err("push_for_patch with no targets must error");
-    assert_eq!(err_patch, PushForError::NoTarget);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1201,7 +1244,13 @@ fn push_for_on_unregistered_id_returns_error() {
     let unknown = InstrumentId::new(77);
 
     let err = svc
-        .push_for(unknown, Quote::new().with_mark(px("100")), &[acc(1)], &[])
+        .push_for(
+            unknown,
+            Quote::new().with_mark(px("100")),
+            Duration::ZERO,
+            &[acc(1)],
+            &[],
+        )
         .expect_err("push_for on unknown id must error");
     assert_eq!(
         err,
@@ -1209,52 +1258,6 @@ fn push_for_on_unregistered_id_returns_error() {
             instrument_id: unknown
         }
     );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Test — push_for_patch merges into each target bucket independently
-// ═══════════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn push_for_patch_merges_each_bucket_independently() {
-    let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
-    let id = svc
-        .register(instr("AAPL", "USD"))
-        .expect("register must succeed");
-
-    // Seed account 7 with a bid; seed group 3 with an ask.
-    svc.push_for(id, Quote::new().with_bid(px("99")), &[acc(7)], &[])
-        .expect("seed account must succeed");
-    svc.push_for(id, Quote::new().with_ask(px("201")), &[], &[grp(3)])
-        .expect("seed group must succeed");
-
-    // Patch a mark into both targets; the prior per-bucket fields survive.
-    svc.push_for_patch(id, Quote::new().with_mark(px("150")), &[acc(7)], &[grp(3)])
-        .expect("patch fan-out must succeed");
-
-    let account_quote = svc
-        .get(
-            id,
-            acc(7),
-            &group_source(None),
-            QuoteResolution::AccountOnly,
-        )
-        .expect("account 7 quote present");
-    assert_eq!(account_quote.mark, Some(px("150")));
-    assert_eq!(account_quote.bid, Some(px("99")), "account bid preserved");
-    assert_eq!(account_quote.ask, None, "account never had an ask");
-
-    let group_quote = svc
-        .get(
-            id,
-            acc(8),
-            &group_source(Some(grp(3))),
-            QuoteResolution::AccountThenGroup,
-        )
-        .expect("group 3 quote present");
-    assert_eq!(group_quote.mark, Some(px("150")));
-    assert_eq!(group_quote.ask, Some(px("201")), "group ask preserved");
-    assert_eq!(group_quote.bid, None, "group never had a bid");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1305,8 +1308,14 @@ fn ttl_cascade_instrument_account_is_highest_priority() {
     svc.set_instrument_account_ttl(id, acc(7), QuoteTtl::Within(Duration::from_millis(40)))
         .expect("instrument-account ttl must set");
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[acc(7)], &[])
-        .expect("push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     // Account 7: tier-1 tiny TTL expired the quote.
@@ -1337,8 +1346,14 @@ fn ttl_cascade_account_beats_instrument_only() {
         .expect("register must succeed");
     svc.set_account_ttl(acc(7), QuoteTtl::Within(Duration::from_millis(40)));
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[acc(7)], &[])
-        .expect("push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert!(
@@ -1364,8 +1379,14 @@ fn ttl_cascade_group_beats_instrument_only() {
     svc.set_account_group_ttl(grp(3), QuoteTtl::Within(Duration::from_millis(40)));
 
     // Quote lives in the group bucket; the reader is in group 3.
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[], &[grp(3)])
-        .expect("push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[],
+        &[grp(3)],
+    )
+    .expect("push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert!(
@@ -1400,8 +1421,14 @@ fn ttl_cascade_set_infinite_stops_cascade() {
     svc.set_instrument_account_ttl(id, acc(7), QuoteTtl::Infinite)
         .expect("instrument-account ttl must set");
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[acc(7)], &[])
-        .expect("push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert_eq!(
@@ -1429,7 +1456,7 @@ fn ttl_cascade_falls_through_to_global_default() {
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
 
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
     assert!(get_default(&svc, id).is_some(), "fresh quote visible");
 
@@ -1458,7 +1485,7 @@ fn ttl_cascade_uses_requested_axes_not_found_bucket() {
         .expect("instrument-account ttl must set");
 
     // Default bucket only.
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
@@ -1501,8 +1528,14 @@ fn ttl_cascade_clear_account_ttl_reverts_to_inherit() {
     svc.set_account_ttl(acc(7), QuoteTtl::Within(Duration::from_millis(40)));
     svc.clear_account_ttl(acc(7));
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[acc(7)], &[])
-        .expect("push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert!(
@@ -1541,16 +1574,22 @@ fn select_quote_stale_specific_bucket_blocks_fallthrough_to_default() {
 
     // Stale candidate in the per-account bucket; fresh quote in the default
     // ("everyone-else") bucket.
-    svc.push_for(id, Quote::new().with_mark(px("200")), &[acc(7)], &[])
-        .expect("per-account push must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("200")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("per-account push must succeed");
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("default push must succeed");
 
     // Age the per-account quote past its tier-1 TTL.
     std::thread::sleep(short + Duration::from_millis(60));
 
     // Re-stamp the default bucket so it is unambiguously fresh at read time.
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("default re-push must succeed");
 
     let err = svc
@@ -1612,8 +1651,14 @@ fn group_not_resolved_on_account_only_bucket_hit() {
     // group-free.
     svc.set_instrument_account_ttl(id, acc(7), QuoteTtl::Infinite)
         .expect("instrument-account ttl must set");
-    svc.push_for(id, Quote::new().with_mark(px("200")), &[acc(7)], &[])
-        .expect("per-account push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("200")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("per-account push must succeed");
 
     let info = CountingAccountInfo::new(Some(grp(3)));
     let got = svc
@@ -1636,8 +1681,14 @@ fn group_resolved_exactly_once_on_fallthrough() {
         .expect("register must succeed");
 
     // No per-account quote for account 8; the quote lives in the group bucket.
-    svc.push_for(id, Quote::new().with_mark(px("300")), &[], &[grp(5)])
-        .expect("group push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("300")),
+        Duration::ZERO,
+        &[],
+        &[grp(5)],
+    )
+    .expect("group push must succeed");
 
     let info = CountingAccountInfo::new(Some(grp(5)));
     let got = svc
@@ -1669,8 +1720,14 @@ fn ttl_cascade_instrument_group_is_sole_setting() {
     svc.set_instrument_account_group_ttl(id, grp(3), QuoteTtl::Within(Duration::from_millis(40)))
         .expect("instrument-group ttl must set");
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[], &[grp(3)])
-        .expect("group push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[],
+        &[grp(3)],
+    )
+    .expect("group push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert!(
@@ -1706,7 +1763,7 @@ fn ttl_cascade_instrument_default_group_is_sole_setting() {
     )
     .expect("instrument-default-group ttl must set");
 
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("default push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
@@ -1734,7 +1791,7 @@ fn ttl_cascade_service_default_group_is_sole_setting() {
         QuoteTtl::Within(Duration::from_millis(40)),
     );
 
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("default push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
@@ -1758,8 +1815,14 @@ fn ttl_cascade_clear_account_group_ttl_reverts_to_inherit() {
     svc.set_account_group_ttl(grp(3), QuoteTtl::Within(Duration::from_millis(40)));
     svc.clear_account_group_ttl(grp(3));
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[], &[grp(3)])
-        .expect("group push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[],
+        &[grp(3)],
+    )
+    .expect("group push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert!(
@@ -1793,7 +1856,7 @@ fn ttl_cascade_clear_instrument_ttl_reverts_to_inherit() {
     svc.clear_instrument_ttl(id)
         .expect("clear_instrument_ttl on registered id must succeed");
 
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("default push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
@@ -1820,8 +1883,14 @@ fn ttl_cascade_clear_instrument_account_ttl_reverts_to_inherit() {
     svc.clear_instrument_account_ttl(id, acc(7))
         .expect("clear_instrument_account_ttl must succeed");
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[acc(7)], &[])
-        .expect("per-account push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[acc(7)],
+        &[],
+    )
+    .expect("per-account push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert!(
@@ -1855,8 +1924,14 @@ fn ttl_cascade_clear_instrument_account_group_ttl_reverts_to_inherit() {
     svc.clear_instrument_account_group_ttl(id, grp(3))
         .expect("clear_instrument_account_group_ttl must succeed");
 
-    svc.push_for(id, Quote::new().with_mark(px("100")), &[], &[grp(3)])
-        .expect("group push must succeed");
+    svc.push_for(
+        id,
+        Quote::new().with_mark(px("100")),
+        Duration::ZERO,
+        &[],
+        &[grp(3)],
+    )
+    .expect("group push must succeed");
 
     std::thread::sleep(Duration::from_millis(90));
     assert!(
@@ -1888,7 +1963,7 @@ fn ttl_boundary_is_inclusive() {
     let id = svc
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
 
     // Comfortably before the deadline: still fresh.

@@ -36,7 +36,10 @@ static OpenPitMarketDataGetStatus openpit_marketdata_service_get_cb(
 */
 import "C"
 
-import "unsafe"
+import (
+	"time"
+	"unsafe"
+)
 
 //------------------------------------------------------------------------------
 // MarketDataQuote
@@ -204,16 +207,28 @@ func MarketDataServiceClear(service MarketDataService, instrumentID MarketDataIn
 	C.openpit_marketdata_service_clear(service, instrumentID)
 }
 
+func sourceAgeParts(sourceAge time.Duration) (C.uint64_t, C.uint32_t) {
+	if sourceAge < 0 {
+		return 0, 0
+	}
+	return C.uint64_t(sourceAge / time.Second),
+		C.uint32_t(sourceAge % time.Second)
+}
+
 func MarketDataServicePush(
 	service MarketDataService,
 	instrumentID MarketDataInstrumentID,
 	quote MarketDataQuote,
+	sourceAge time.Duration,
 ) (MarketDataRegisterStatus, error) {
 	var outError SharedString
+	secs, nanos := sourceAgeParts(sourceAge)
 	status := C.openpit_marketdata_service_push(
 		service,
 		instrumentID,
 		quote,
+		secs,
+		nanos,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	if status == MarketDataRegisterStatusError {
@@ -222,36 +237,21 @@ func MarketDataServicePush(
 	return status, nil
 }
 
-func MarketDataServicePushPatch(
-	service MarketDataService,
-	instrumentID MarketDataInstrumentID,
-	quote MarketDataQuote,
-) (MarketDataRegisterStatus, error) {
-	var outError SharedString
-	status := C.openpit_marketdata_service_push_patch(
-		service,
-		instrumentID,
-		quote,
-		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	)
-	if status == MarketDataRegisterStatusError {
-		return status,
-			consumeSharedStringAsError(outError, "openpit_marketdata_service_push_patch failed")
-	}
-	return status, nil
-}
-
 func MarketDataServicePushByInstrument(
 	service MarketDataService,
 	instrument Instrument,
 	quote MarketDataQuote,
+	sourceAge time.Duration,
 ) (MarketDataInstrumentID, error) {
 	var outID MarketDataInstrumentID
 	var outError SharedString
+	secs, nanos := sourceAgeParts(sourceAge)
 	if !C.openpit_marketdata_service_push_by_instrument(
 		service,
 		&instrument,
 		quote,
+		secs,
+		nanos,
 		&outID,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
@@ -261,33 +261,11 @@ func MarketDataServicePushByInstrument(
 	return outID, nil
 }
 
-func MarketDataServicePushByInstrumentPatch(
-	service MarketDataService,
-	instrument Instrument,
-	quote MarketDataQuote,
-) (MarketDataInstrumentID, error) {
-	var outID MarketDataInstrumentID
-	var outError SharedString
-	if !C.openpit_marketdata_service_push_by_instrument_patch(
-		service,
-		&instrument,
-		quote,
-		&outID,
-		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
-		return outID,
-			consumeSharedStringAsError(
-				outError,
-				"openpit_marketdata_service_push_by_instrument_patch failed",
-			)
-	}
-	return outID, nil
-}
-
 func MarketDataServicePushFor(
 	service MarketDataService,
 	instrumentID MarketDataInstrumentID,
 	quote MarketDataQuote,
+	sourceAge time.Duration,
 	accountIDs []ParamAccountID,
 	accountGroupIDs []ParamAccountGroupID,
 ) (MarketDataRegisterStatus, error) {
@@ -300,10 +278,13 @@ func MarketDataServicePushFor(
 	if len(accountGroupIDs) > 0 {
 		groupsPtr = &accountGroupIDs[0]
 	}
+	secs, nanos := sourceAgeParts(sourceAge)
 	status := C.openpit_marketdata_service_push_for(
 		service,
 		instrumentID,
 		quote,
+		secs,
+		nanos,
 		accountsPtr,
 		C.size_t(len(accountIDs)),
 		groupsPtr,
@@ -313,39 +294,6 @@ func MarketDataServicePushFor(
 	if status == MarketDataRegisterStatusError {
 		return status,
 			consumeSharedStringAsError(outError, "openpit_marketdata_service_push_for failed")
-	}
-	return status, nil
-}
-
-func MarketDataServicePushForPatch(
-	service MarketDataService,
-	instrumentID MarketDataInstrumentID,
-	quote MarketDataQuote,
-	accountIDs []ParamAccountID,
-	accountGroupIDs []ParamAccountGroupID,
-) (MarketDataRegisterStatus, error) {
-	var outError SharedString
-	var accountsPtr *C.OpenPitParamAccountId
-	var groupsPtr *C.OpenPitParamAccountGroupId
-	if len(accountIDs) > 0 {
-		accountsPtr = &accountIDs[0]
-	}
-	if len(accountGroupIDs) > 0 {
-		groupsPtr = &accountGroupIDs[0]
-	}
-	status := C.openpit_marketdata_service_push_for_patch(
-		service,
-		instrumentID,
-		quote,
-		accountsPtr,
-		C.size_t(len(accountIDs)),
-		groupsPtr,
-		C.size_t(len(accountGroupIDs)),
-		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	)
-	if status == MarketDataRegisterStatusError {
-		return status,
-			consumeSharedStringAsError(outError, "openpit_marketdata_service_push_for_patch failed")
 	}
 	return status, nil
 }

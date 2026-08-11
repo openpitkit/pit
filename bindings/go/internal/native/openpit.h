@@ -1328,8 +1328,8 @@ typedef uint8_t OpenPitMarketDataRegisterStatus;
 #define OpenPitMarketDataRegisterStatus_Error \
     ((OpenPitMarketDataRegisterStatus) 5)
 /**
- * A targeted push (`push_for` / `push_for_patch`) was called with both the
- * account list and the group list empty.
+ * A targeted push (`push_for`) was called with both the account list and the
+ * group list empty.
  */
 #define OpenPitMarketDataRegisterStatus_NoTarget \
     ((OpenPitMarketDataRegisterStatus) 6)
@@ -8524,6 +8524,10 @@ void openpit_marketdata_service_clear(
 /**
  * Publishes a quote for `instrument_id`, replacing the entire stored snapshot.
  *
+ * `source_age_secs` plus `source_age_nanos` is the time elapsed since the
+ * source observed the quote. The parts are normalized with saturating
+ * arithmetic.
+ *
  * Status:
  * - `Ok`: the snapshot was replaced;
  * - `UnknownInstrument`: `instrument_id` is not registered;
@@ -8535,19 +8539,8 @@ OpenPitMarketDataRegisterStatus openpit_marketdata_service_push(
     const OpenPitMarketDataService * service,
     OpenPitMarketDataInstrumentId instrument_id,
     OpenPitMarketDataQuote quote,
-    OpenPitOutError out_error
-);
-
-/**
- * Publishes a partial update for `instrument_id`, merging it into the stored
- * snapshot.
- *
- * Behaves like `openpit_marketdata_service_push` otherwise.
- */
-OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_patch(
-    const OpenPitMarketDataService * service,
-    OpenPitMarketDataInstrumentId instrument_id,
-    OpenPitMarketDataQuote quote,
+    uint64_t source_age_secs,
+    uint32_t source_age_nanos,
     OpenPitOutError out_error
 );
 
@@ -8555,6 +8548,10 @@ OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_patch(
  * Publishes a quote for `instrument_id` into the per-account bucket of every
  * account in `account_ids` and the per-group bucket of every group in
  * `account_group_ids`, replacing each target's snapshot.
+ *
+ * `source_age_secs` plus `source_age_nanos` is the time elapsed since the
+ * source observed the quote. The parts are normalized with saturating
+ * arithmetic.
  *
  * A null pointer with a matching length of `0` is a valid empty list.
  *
@@ -8571,25 +8568,8 @@ OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for(
     const OpenPitMarketDataService * service,
     OpenPitMarketDataInstrumentId instrument_id,
     OpenPitMarketDataQuote quote,
-    const OpenPitParamAccountId * account_ids,
-    size_t account_ids_len,
-    const OpenPitParamAccountGroupId * account_group_ids,
-    size_t account_group_ids_len,
-    OpenPitOutError out_error
-);
-
-/**
- * Publishes a partial update for `instrument_id` into the per-account bucket
- * of every account in `account_ids` and the per-group bucket of every group in
- * `account_group_ids`, merging independently into each target's existing
- * snapshot.
- *
- * Behaves like `openpit_marketdata_service_push_for` otherwise.
- */
-OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for_patch(
-    const OpenPitMarketDataService * service,
-    OpenPitMarketDataInstrumentId instrument_id,
-    OpenPitMarketDataQuote quote,
+    uint64_t source_age_secs,
+    uint32_t source_age_nanos,
     const OpenPitParamAccountId * account_ids,
     size_t account_ids_len,
     const OpenPitParamAccountGroupId * account_group_ids,
@@ -8602,6 +8582,10 @@ OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for_patch(
  *
  * If `instrument` is unregistered, a named slot is created with the
  * service-default TTL.
+ *
+ * `source_age_secs` plus `source_age_nanos` is the time elapsed since the
+ * source observed the quote. The parts are normalized with saturating
+ * arithmetic.
  *
  * Success:
  * - returns `true` and writes the instrument's id to `out_id`.
@@ -8616,20 +8600,8 @@ bool openpit_marketdata_service_push_by_instrument(
     const OpenPitMarketDataService * service,
     const OpenPitInstrument * instrument,
     OpenPitMarketDataQuote quote,
-    OpenPitMarketDataInstrumentId * out_id,
-    OpenPitOutError out_error
-);
-
-/**
- * Publishes a partial update for `instrument`, merging it into the stored
- * snapshot.
- *
- * Behaves like `openpit_marketdata_service_push_by_instrument` otherwise.
- */
-bool openpit_marketdata_service_push_by_instrument_patch(
-    const OpenPitMarketDataService * service,
-    const OpenPitInstrument * instrument,
-    OpenPitMarketDataQuote quote,
+    uint64_t source_age_secs,
+    uint32_t source_age_nanos,
     OpenPitMarketDataInstrumentId * out_id,
     OpenPitOutError out_error
 );

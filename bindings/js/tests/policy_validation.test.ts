@@ -273,6 +273,7 @@ describe("spot-funds validation", () => {
     marketData.pushByInstrument(
       { underlyingAsset: "AAPL", settlementAsset: "USD" },
       { mark: "100" },
+      0,
     );
     const withMarketData = Engine.builder()
       .builtin(

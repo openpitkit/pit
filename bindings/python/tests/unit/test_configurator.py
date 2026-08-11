@@ -49,7 +49,11 @@ def _market_data() -> tuple[
         .build()
     )
     instrument_id = service.register(openpit.Instrument("AAPL", "USD"))
-    service.push(instrument_id, openpit.marketdata.Quote(mark="100"))
+    service.push(
+        instrument_id,
+        openpit.marketdata.Quote(mark="100"),
+        datetime.timedelta(),
+    )
     return service, instrument_id
 
 
@@ -989,7 +993,7 @@ def test_account_pnl_halt_is_sticky_until_exact_force_set() -> None:
         first.account_pnls[0].halt_reason == openpit.pretrade.PnlHaltReason.MISSING_FX
     )
 
-    service.push(fx_id, openpit.marketdata.Quote(mark="0.9"))
+    service.push(fx_id, openpit.marketdata.Quote(mark="0.9"), datetime.timedelta())
     second = engine.apply_execution_report(
         report=_spot_funds_fee_fill_report(account_id, "1")
     )

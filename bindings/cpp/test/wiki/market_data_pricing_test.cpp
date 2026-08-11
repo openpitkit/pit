@@ -76,10 +76,12 @@ TEST(MarketDataPricingWiki, BookTopPricingAndMarkUnavailableReject) {
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
   const md::InstrumentId aaplId = registration.instrumentId.value();
-  ASSERT_EQ(marketData.Push(aaplId, md::Quote()
-                                        .WithMark(Price::FromString("200"))
-                                        .WithBid(Price::FromString("199.5"))
-                                        .WithAsk(Price::FromString("200.5"))),
+  ASSERT_EQ(marketData.Push(aaplId,
+                            md::Quote()
+                                .WithMark(Price::FromString("200"))
+                                .WithBid(Price::FromString("199.5"))
+                                .WithAsk(Price::FromString("200.5")),
+                            std::chrono::nanoseconds::zero()),
             md::RegisterStatus::Ok);
 
   // Price from the top of book; AAPL overrides the global 100 bps slippage to
@@ -120,7 +122,8 @@ TEST(MarketDataPricingWiki, BookTopPricingAndMarkUnavailableReject) {
   // Replace with a mark-only quote: bid and ask are gone, so BookTop can no
   // longer price a buy and the next market order is rejected.
   ASSERT_EQ(
-      marketData.Push(aaplId, md::Quote().WithMark(Price::FromString("215"))),
+      marketData.Push(aaplId, md::Quote().WithMark(Price::FromString("215")),
+                      std::chrono::nanoseconds::zero()),
       md::RegisterStatus::Ok);
   openpit::pretrade::ExecuteResult second = engine.ExecutePreTrade(marketBuy());
   ASSERT_FALSE(second.Passed());

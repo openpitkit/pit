@@ -427,12 +427,9 @@ static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_clear_in
 static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_set_instrument_account_group_ttl)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitParamAccountGroupId, OpenPitMarketDataQuoteTtl) = NULL;
 static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_clear_instrument_account_group_ttl)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitParamAccountGroupId) = NULL;
 static void (*_fn_openpit_marketdata_service_clear)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId) = NULL;
-static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_push)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, OpenPitOutError) = NULL;
-static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_push_patch)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, OpenPitOutError) = NULL;
-static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_push_for)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, const OpenPitParamAccountId *, size_t, const OpenPitParamAccountGroupId *, size_t, OpenPitOutError) = NULL;
-static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_push_for_patch)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, const OpenPitParamAccountId *, size_t, const OpenPitParamAccountGroupId *, size_t, OpenPitOutError) = NULL;
-static bool (*_fn_openpit_marketdata_service_push_by_instrument)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataQuote, OpenPitMarketDataInstrumentId *, OpenPitOutError) = NULL;
-static bool (*_fn_openpit_marketdata_service_push_by_instrument_patch)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataQuote, OpenPitMarketDataInstrumentId *, OpenPitOutError) = NULL;
+static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_push)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, uint64_t, uint32_t, OpenPitOutError) = NULL;
+static OpenPitMarketDataRegisterStatus (*_fn_openpit_marketdata_service_push_for)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, uint64_t, uint32_t, const OpenPitParamAccountId *, size_t, const OpenPitParamAccountGroupId *, size_t, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_marketdata_service_push_by_instrument)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataQuote, uint64_t, uint32_t, OpenPitMarketDataInstrumentId *, OpenPitOutError) = NULL;
 static OpenPitMarketDataGetStatus (*_fn_openpit_marketdata_service_get)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitParamAccountId, OpenPitMarketDataAccountGroupResolver, void *, OpenPitMarketDataQuoteResolution, OpenPitMarketDataQuote *) = NULL;
 static bool (*_fn_openpit_marketdata_service_resolve)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataInstrumentId *) = NULL;
 static OpenPitPretradePreTradeLock * (*_fn_openpit_create_pretrade_pre_trade_lock)(void) = NULL;
@@ -1263,18 +1260,12 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_marketdata_service_clear_instrument_account_group_ttl == NULL) return "openpit_marketdata_service_clear_instrument_account_group_ttl";
     _fn_openpit_marketdata_service_clear = (void (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId))openpit_dlsym(handle, "openpit_marketdata_service_clear");
     if (_fn_openpit_marketdata_service_clear == NULL) return "openpit_marketdata_service_clear";
-    _fn_openpit_marketdata_service_push = (OpenPitMarketDataRegisterStatus (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push");
+    _fn_openpit_marketdata_service_push = (OpenPitMarketDataRegisterStatus (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, uint64_t, uint32_t, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push");
     if (_fn_openpit_marketdata_service_push == NULL) return "openpit_marketdata_service_push";
-    _fn_openpit_marketdata_service_push_patch = (OpenPitMarketDataRegisterStatus (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push_patch");
-    if (_fn_openpit_marketdata_service_push_patch == NULL) return "openpit_marketdata_service_push_patch";
-    _fn_openpit_marketdata_service_push_for = (OpenPitMarketDataRegisterStatus (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, const OpenPitParamAccountId *, size_t, const OpenPitParamAccountGroupId *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push_for");
+    _fn_openpit_marketdata_service_push_for = (OpenPitMarketDataRegisterStatus (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, uint64_t, uint32_t, const OpenPitParamAccountId *, size_t, const OpenPitParamAccountGroupId *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push_for");
     if (_fn_openpit_marketdata_service_push_for == NULL) return "openpit_marketdata_service_push_for";
-    _fn_openpit_marketdata_service_push_for_patch = (OpenPitMarketDataRegisterStatus (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitMarketDataQuote, const OpenPitParamAccountId *, size_t, const OpenPitParamAccountGroupId *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push_for_patch");
-    if (_fn_openpit_marketdata_service_push_for_patch == NULL) return "openpit_marketdata_service_push_for_patch";
-    _fn_openpit_marketdata_service_push_by_instrument = (bool (*)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataQuote, OpenPitMarketDataInstrumentId *, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push_by_instrument");
+    _fn_openpit_marketdata_service_push_by_instrument = (bool (*)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataQuote, uint64_t, uint32_t, OpenPitMarketDataInstrumentId *, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push_by_instrument");
     if (_fn_openpit_marketdata_service_push_by_instrument == NULL) return "openpit_marketdata_service_push_by_instrument";
-    _fn_openpit_marketdata_service_push_by_instrument_patch = (bool (*)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataQuote, OpenPitMarketDataInstrumentId *, OpenPitOutError))openpit_dlsym(handle, "openpit_marketdata_service_push_by_instrument_patch");
-    if (_fn_openpit_marketdata_service_push_by_instrument_patch == NULL) return "openpit_marketdata_service_push_by_instrument_patch";
     _fn_openpit_marketdata_service_get = (OpenPitMarketDataGetStatus (*)(const OpenPitMarketDataService *, OpenPitMarketDataInstrumentId, OpenPitParamAccountId, OpenPitMarketDataAccountGroupResolver, void *, OpenPitMarketDataQuoteResolution, OpenPitMarketDataQuote *))openpit_dlsym(handle, "openpit_marketdata_service_get");
     if (_fn_openpit_marketdata_service_get == NULL) return "openpit_marketdata_service_get";
     _fn_openpit_marketdata_service_resolve = (bool (*)(const OpenPitMarketDataService *, const OpenPitInstrument *, OpenPitMarketDataInstrumentId *))openpit_dlsym(handle, "openpit_marketdata_service_resolve");
@@ -2922,28 +2913,16 @@ void openpit_marketdata_service_clear(const OpenPitMarketDataService * service, 
     _fn_openpit_marketdata_service_clear(service, instrument_id);
 }
 
-OpenPitMarketDataRegisterStatus openpit_marketdata_service_push(const OpenPitMarketDataService * service, OpenPitMarketDataInstrumentId instrument_id, OpenPitMarketDataQuote quote, OpenPitOutError out_error) {
-    return _fn_openpit_marketdata_service_push(service, instrument_id, quote, out_error);
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_push(const OpenPitMarketDataService * service, OpenPitMarketDataInstrumentId instrument_id, OpenPitMarketDataQuote quote, uint64_t source_age_secs, uint32_t source_age_nanos, OpenPitOutError out_error) {
+    return _fn_openpit_marketdata_service_push(service, instrument_id, quote, source_age_secs, source_age_nanos, out_error);
 }
 
-OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_patch(const OpenPitMarketDataService * service, OpenPitMarketDataInstrumentId instrument_id, OpenPitMarketDataQuote quote, OpenPitOutError out_error) {
-    return _fn_openpit_marketdata_service_push_patch(service, instrument_id, quote, out_error);
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for(const OpenPitMarketDataService * service, OpenPitMarketDataInstrumentId instrument_id, OpenPitMarketDataQuote quote, uint64_t source_age_secs, uint32_t source_age_nanos, const OpenPitParamAccountId * account_ids, size_t account_ids_len, const OpenPitParamAccountGroupId * account_group_ids, size_t account_group_ids_len, OpenPitOutError out_error) {
+    return _fn_openpit_marketdata_service_push_for(service, instrument_id, quote, source_age_secs, source_age_nanos, account_ids, account_ids_len, account_group_ids, account_group_ids_len, out_error);
 }
 
-OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for(const OpenPitMarketDataService * service, OpenPitMarketDataInstrumentId instrument_id, OpenPitMarketDataQuote quote, const OpenPitParamAccountId * account_ids, size_t account_ids_len, const OpenPitParamAccountGroupId * account_group_ids, size_t account_group_ids_len, OpenPitOutError out_error) {
-    return _fn_openpit_marketdata_service_push_for(service, instrument_id, quote, account_ids, account_ids_len, account_group_ids, account_group_ids_len, out_error);
-}
-
-OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for_patch(const OpenPitMarketDataService * service, OpenPitMarketDataInstrumentId instrument_id, OpenPitMarketDataQuote quote, const OpenPitParamAccountId * account_ids, size_t account_ids_len, const OpenPitParamAccountGroupId * account_group_ids, size_t account_group_ids_len, OpenPitOutError out_error) {
-    return _fn_openpit_marketdata_service_push_for_patch(service, instrument_id, quote, account_ids, account_ids_len, account_group_ids, account_group_ids_len, out_error);
-}
-
-bool openpit_marketdata_service_push_by_instrument(const OpenPitMarketDataService * service, const OpenPitInstrument * instrument, OpenPitMarketDataQuote quote, OpenPitMarketDataInstrumentId * out_id, OpenPitOutError out_error) {
-    return _fn_openpit_marketdata_service_push_by_instrument(service, instrument, quote, out_id, out_error);
-}
-
-bool openpit_marketdata_service_push_by_instrument_patch(const OpenPitMarketDataService * service, const OpenPitInstrument * instrument, OpenPitMarketDataQuote quote, OpenPitMarketDataInstrumentId * out_id, OpenPitOutError out_error) {
-    return _fn_openpit_marketdata_service_push_by_instrument_patch(service, instrument, quote, out_id, out_error);
+bool openpit_marketdata_service_push_by_instrument(const OpenPitMarketDataService * service, const OpenPitInstrument * instrument, OpenPitMarketDataQuote quote, uint64_t source_age_secs, uint32_t source_age_nanos, OpenPitMarketDataInstrumentId * out_id, OpenPitOutError out_error) {
+    return _fn_openpit_marketdata_service_push_by_instrument(service, instrument, quote, source_age_secs, source_age_nanos, out_id, out_error);
 }
 
 OpenPitMarketDataGetStatus openpit_marketdata_service_get(const OpenPitMarketDataService * service, OpenPitMarketDataInstrumentId instrument_id, OpenPitParamAccountId account_id, OpenPitMarketDataAccountGroupResolver resolve_account_group, void * user_data, OpenPitMarketDataQuoteResolution resolution, OpenPitMarketDataQuote * out_quote) {

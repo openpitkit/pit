@@ -420,6 +420,20 @@ impl JsQuoteTtl {
     }
 }
 
+fn source_age_from_ms(source_age_ms: f64) -> Result<Duration, JsValue> {
+    if !source_age_ms.is_finite() {
+        return Err(make_error(
+            ErrorKind::Range,
+            "sourceAgeMs must be finite",
+            None,
+        ));
+    }
+    Ok(match Duration::try_from_secs_f64(source_age_ms / 1000.0) {
+        Ok(duration) => duration,
+        Err(_) => Duration::ZERO,
+    })
+}
+
 // ─── Quote ─────────────────────────────────────────────────────────────────
 
 /// Market snapshot with optional mark, bid, and ask prices.
@@ -1079,112 +1093,89 @@ impl JsMarketDataService {
         Ok(())
     }
 
-    /// Publishes `quote` to the default bucket for `instrumentId`.
+    /// Publishes one quote observation to the default bucket for `instrumentId`.
     ///
     /// `instrumentId` accepts an `InstrumentId` or a numeric/string identifier;
-    /// `quote` accepts a `Quote` object or a plain `QuoteInit` literal.
+    /// `quote` accepts a `Quote` object or a plain `QuoteInit` literal. A field
+    /// absent from `quote` is absent from the observation, not retained from an
+    /// older quote. `sourceAgeMs` is the elapsed source age in milliseconds;
+    /// negative and unrepresentable values are clamped to zero. Non-finite
+    /// values are rejected.
     ///
     /// # Errors
     ///
     /// Throws `UnknownInstrumentId` when `instrumentId` is not registered, or
-    /// `ParamError` on an invalid identifier or quote literal.
+    /// `ParamError` on an invalid identifier or quote literal, or `RangeError`
+    /// when `sourceAgeMs` is non-finite.
     #[wasm_bindgen(js_name = push)]
-    pub fn push(&self, instrument_id: InstrumentIdLike, quote: QuoteLike) -> Result<(), JsValue> {
-        CallbackErrorScope::ensure_not_poisoned()?;
-        let instrument_id = resolve_instrument_id(instrument_id.into())?;
-        let quote = JsQuote::coerce(quote.into())?;
-        self.inner
-            .push(instrument_id, quote)
-            .map_err(unknown_instrument_id_to_js)
-    }
-
-    /// Merges a partial `quote` into the default bucket for `instrumentId`.
-    ///
-    /// `instrumentId` accepts an `InstrumentId` or a numeric/string identifier;
-    /// `quote` accepts a `Quote` object or a plain `QuoteInit` literal.
-    ///
-    /// # Errors
-    ///
-    /// Throws `UnknownInstrumentId` when `instrumentId` is not registered, or
-    /// `ParamError` on an invalid identifier or quote literal.
-    #[wasm_bindgen(js_name = pushPatch)]
-    pub fn push_patch(
+    pub fn push(
         &self,
         instrument_id: InstrumentIdLike,
         quote: QuoteLike,
+        source_age_ms: f64,
     ) -> Result<(), JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let quote = JsQuote::coerce(quote.into())?;
         self.inner
-            .push_patch(instrument_id, quote)
+            .push(instrument_id, quote, source_age_from_ms(source_age_ms)?)
             .map_err(unknown_instrument_id_to_js)
     }
 
-    /// Publishes `quote` to `instrument`'s default bucket, auto-registering it.
+    /// Publishes one quote observation to `instrument`'s default bucket,
+    /// auto-registering it.
     ///
     /// `instrument` accepts an `Instrument` object or a plain `InstrumentInit`
     /// literal; `quote` accepts a `Quote` object or a plain `QuoteInit`
-    /// literal. Returns the resolved (or newly assigned) instrument id.
+    /// literal. An absent quote field is not retained from an older quote.
+    /// `sourceAgeMs` is the elapsed source age in milliseconds; negative and
+    /// unrepresentable values are clamped to zero, while non-finite values are
+    /// rejected. Returns the resolved (or newly assigned) instrument id.
     ///
     /// # Errors
     ///
-    /// Throws `AssetError`/`ParamError` on an invalid instrument or quote.
+    /// Throws `AssetError`/`ParamError` on an invalid instrument or quote, or
+    /// `RangeError` when `sourceAgeMs` is non-finite.
     #[wasm_bindgen(js_name = pushByInstrument)]
     pub fn push_by_instrument(
         &self,
         instrument: InstrumentLike,
         quote: QuoteLike,
+        source_age_ms: f64,
     ) -> Result<JsInstrumentId, JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         let quote = JsQuote::coerce(quote.into())?;
-        Ok(JsInstrumentId::from_inner(
-            self.inner.push_by_instrument(&instrument, quote),
-        ))
+        Ok(JsInstrumentId::from_inner(self.inner.push_by_instrument(
+            &instrument,
+            quote,
+            source_age_from_ms(source_age_ms)?,
+        )))
     }
 
-    /// Merges a partial `quote` into `instrument`'s default bucket.
-    ///
-    /// `instrument` accepts an `Instrument` object or a plain `InstrumentInit`
-    /// literal; `quote` accepts a `Quote` object or a plain `QuoteInit`
-    /// literal. Returns the resolved (or newly assigned) instrument id.
-    ///
-    /// # Errors
-    ///
-    /// Throws `AssetError`/`ParamError` on an invalid instrument or quote.
-    #[wasm_bindgen(js_name = pushByInstrumentPatch)]
-    pub fn push_by_instrument_patch(
-        &self,
-        instrument: InstrumentLike,
-        quote: QuoteLike,
-    ) -> Result<JsInstrumentId, JsValue> {
-        CallbackErrorScope::ensure_not_poisoned()?;
-        let instrument = JsInstrument::coerce(instrument.into())?;
-        let quote = JsQuote::coerce(quote.into())?;
-        Ok(JsInstrumentId::from_inner(
-            self.inner.push_by_instrument_patch(&instrument, quote),
-        ))
-    }
-
-    /// Publishes `quote` to the given accounts and groups.
+    /// Publishes one quote observation to the given accounts and groups.
     ///
     /// `instrumentId` accepts an `InstrumentId` or a numeric/string id; `quote`
     /// accepts a `Quote` object or a plain `QuoteInit` literal; the target
     /// iterables accept `AccountId`/`AccountGroupId` or numeric/string ids. To
     /// target the default ("everyone-else") bucket, include
-    /// `AccountGroupId.DEFAULT` in `accountGroupIds`.
+    /// `AccountGroupId.DEFAULT` in `accountGroupIds`. An absent quote field is
+    /// not retained from an older quote. `sourceAgeMs` is the elapsed source
+    /// age in milliseconds; negative and unrepresentable values are clamped to
+    /// zero, while non-finite values are rejected.
     ///
     /// # Errors
     ///
     /// Throws `UnknownInstrumentId` when `instrumentId` is not registered,
-    /// `RangeError` when both target lists are empty, or
+    /// `RangeError` when both target lists are empty or `sourceAgeMs` is
+    /// non-finite, or
     /// `ParamError`/`AccountIdError` on an invalid input.
     #[wasm_bindgen(js_name = pushFor)]
     pub fn push_for(
         &self,
         instrument_id: InstrumentIdLike,
         quote: QuoteLike,
+        source_age_ms: f64,
         account_ids: AccountIdIterable,
         account_group_ids: AccountGroupIdIterable,
     ) -> Result<(), JsValue> {
@@ -1194,38 +1185,13 @@ impl JsMarketDataService {
         let accounts = collect_account_ids(account_ids.into())?;
         let groups = collect_account_group_ids(account_group_ids.into())?;
         self.inner
-            .push_for(instrument_id, quote, &accounts, &groups)
-            .map_err(push_for_error_to_js)
-    }
-
-    /// Merges a partial `quote` into the given accounts and groups.
-    ///
-    /// `instrumentId` accepts an `InstrumentId` or a numeric/string id; `quote`
-    /// accepts a `Quote` object or a plain `QuoteInit` literal; the target
-    /// iterables accept `AccountId`/`AccountGroupId` or numeric/string ids. To
-    /// target the default ("everyone-else") bucket, include
-    /// `AccountGroupId.DEFAULT` in `accountGroupIds`.
-    ///
-    /// # Errors
-    ///
-    /// Throws `UnknownInstrumentId` when `instrumentId` is not registered,
-    /// `RangeError` when both target lists are empty, or
-    /// `ParamError`/`AccountIdError` on an invalid input.
-    #[wasm_bindgen(js_name = pushForPatch)]
-    pub fn push_for_patch(
-        &self,
-        instrument_id: InstrumentIdLike,
-        quote: QuoteLike,
-        account_ids: AccountIdIterable,
-        account_group_ids: AccountGroupIdIterable,
-    ) -> Result<(), JsValue> {
-        CallbackErrorScope::ensure_not_poisoned()?;
-        let instrument_id = resolve_instrument_id(instrument_id.into())?;
-        let quote = JsQuote::coerce(quote.into())?;
-        let accounts = collect_account_ids(account_ids.into())?;
-        let groups = collect_account_group_ids(account_group_ids.into())?;
-        self.inner
-            .push_for_patch(instrument_id, quote, &accounts, &groups)
+            .push_for(
+                instrument_id,
+                quote,
+                source_age_from_ms(source_age_ms)?,
+                &accounts,
+                &groups,
+            )
             .map_err(push_for_error_to_js)
     }
 

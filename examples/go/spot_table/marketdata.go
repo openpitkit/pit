@@ -81,7 +81,7 @@ func (m *MarketFeed) Push(instrument, price string) error {
 	if err != nil {
 		return err
 	}
-	if err := m.service.Push(id, quote); err != nil {
+	if err := m.service.Push(id, quote, 0); err != nil {
 		return err
 	}
 	m.latest[instrument] = price
@@ -100,7 +100,7 @@ func (m *MarketFeed) PushFor(
 	if err != nil {
 		return err
 	}
-	if err := m.service.PushFor(id, quote, accounts, groups); err != nil {
+	if err := m.service.PushFor(id, quote, 0, accounts, groups); err != nil {
 		return err
 	}
 	m.latest[instrument] = price

@@ -52,15 +52,12 @@ impl std::error::Error for MarketDataError {}
 /// Error returned when an operation references an
 /// [`InstrumentId`] that is not registered with the service.
 ///
-/// Returned by [`MarketDataService::push`], [`MarketDataService::push_patch`],
-/// and the instrument-qualified TTL setters
+/// Returned by [`MarketDataService::push`] and the instrument-qualified TTL setters
 /// ([`MarketDataService::set_instrument_ttl`] and the
 /// `set_instrument_account_ttl` / `set_instrument_account_group_ttl` family).
 ///
 /// [`MarketDataService::push`]:
 ///     super::service::MarketDataService::push
-/// [`MarketDataService::push_patch`]:
-///     super::service::MarketDataService::push_patch
 /// [`MarketDataService::set_instrument_ttl`]:
 ///     super::service::MarketDataService::set_instrument_ttl
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,9 +128,7 @@ impl Display for RegistrationError {
 impl std::error::Error for RegistrationError {}
 
 /// Error returned by the targeted fan-out pushes
-/// [`MarketDataService::push_for`](super::service::MarketDataService::push_for)
-/// and
-/// [`MarketDataService::push_for_patch`](super::service::MarketDataService::push_for_patch).
+/// [`MarketDataService::push_for`](super::service::MarketDataService::push_for).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PushForError {

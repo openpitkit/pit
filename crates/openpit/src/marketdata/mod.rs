@@ -28,14 +28,20 @@
 //! `_with_id_and_ttl` variants); all registration calls are **strict** and
 //! return an error if the instrument or id is already registered.
 //!
-//! Quotes are published on the hot path via:
-//! - [`MarketDataService::push`] / [`MarketDataService::push_patch`] — by id
-//!   into the default bucket; the id must have been registered beforehand.
-//! - [`MarketDataService::push_for`] / [`MarketDataService::push_for_patch`] —
-//!   by id, fanned out to specific accounts and groups.
-//! - [`MarketDataService::push_by_instrument`] /
-//!   [`MarketDataService::push_by_instrument_patch`] — by instrument name into
-//!   the default bucket; auto-registers a named slot on first sight.
+//! Quotes are published on the hot path via [`MarketDataService::push`] by id
+//! into the default bucket, [`MarketDataService::push_for`] by id into specific
+//! accounts and groups, or [`MarketDataService::push_by_instrument`] by name
+//! into the default bucket.
+//!
+//! A quote is one observation. An absent field means that the field does not
+//! exist in that observation - never that an older field should be retained.
+//! Publishers merge observations before publication, because only they know
+//! whether fields belong to one observation and what source age it carries.
+//!
+//! Every publication carries the quote's source age as a
+//! [`Duration`](std::time::Duration). The service retains that age with the
+//! monotonic publication instant and checks their saturating sum against the
+//! effective TTL on every read.
 //!
 //! TTL is settable along the instrument, account, and group axes (plus the
 //! instrument × account and instrument × group cells and a global default) via

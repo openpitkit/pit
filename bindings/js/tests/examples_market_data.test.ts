@@ -64,9 +64,12 @@ describe("Market-Data.md wiki examples", () => {
     const aaplId = service.register(new Instrument("AAPL", "USD")).value;
 
     // Publish a full snapshot into the default ("everyone-else") bucket.
+    // Caller computes feed-observation-to-call age; the SDK cannot know it.
+    const quoteSourceAgeMs = 20;
     service.push(
       aaplId,
       new Quote({ mark: "150", bid: "149.5", ask: "150.5" }),
+      quoteSourceAgeMs,
     );
 
     // Read for an account with no group: the lookup falls through to the default
@@ -110,7 +113,7 @@ describe("Market-Data.md wiki examples", () => {
     const groupId = 7;
 
     // Fan out to two accounts and one group simultaneously.
-    service.pushFor(aaplId, new Quote({ mark: "150" }), [10, 11], [groupId]);
+    service.pushFor(aaplId, new Quote({ mark: "150" }), 0, [10, 11], [groupId]);
 
     // Read back for account 10 under ACCOUNT_ONLY - hits the per-account bucket.
     const accountInfo = { accountGroup: null };
@@ -125,15 +128,15 @@ describe("Market-Data.md wiki examples", () => {
     expect(quote.mark!.equals(Price.fromString("150"))).toBe(true);
   });
 
-  it("patches only the mark, preserving bid and ask", () => {
+  it("replaces the whole observation", () => {
     // Source: https://wiki.openpit.dev/Market-Data/ - Replace Versus Patch
     const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
     const aaplId = service.register(new Instrument("AAPL", "USD")).value;
 
-    service.push(aaplId, new Quote({ mark: "100", bid: "99", ask: "101" }));
+    service.push(aaplId, new Quote({ mark: "100", bid: "99", ask: "101" }), 0);
 
-    // Patch only the mark; bid and ask are preserved.
-    service.pushPatch(aaplId, new Quote({ mark: "105" }));
+    // A mark-only observation clears bid and ask.
+    service.push(aaplId, new Quote({ mark: "105" }), 0);
 
     const accountInfo = { accountGroup: null };
     const quote = service.get(
@@ -143,18 +146,18 @@ describe("Market-Data.md wiki examples", () => {
       "ACCOUNT_THEN_GROUP_THEN_DEFAULT",
     )!;
     if (!quote.mark!.equals(Price.fromString("105"))) {
-      throw new Error("unexpected mark after patch");
+      throw new Error("unexpected mark after replacement");
     }
-    if (!quote.bid!.equals(Price.fromString("99"))) {
-      throw new Error("bid must be preserved after patch");
+    if (quote.bid !== undefined) {
+      throw new Error("bid must be cleared by replacement");
     }
-    if (!quote.ask!.equals(Price.fromString("101"))) {
-      throw new Error("ask must be preserved after patch");
+    if (quote.ask !== undefined) {
+      throw new Error("ask must be cleared by replacement");
     }
 
     expect(quote.mark!.equals(Price.fromString("105"))).toBe(true);
-    expect(quote.bid!.equals(Price.fromString("99"))).toBe(true);
-    expect(quote.ask!.equals(Price.fromString("101"))).toBe(true);
+    expect(quote.bid).toBeUndefined();
+    expect(quote.ask).toBeUndefined();
   });
 
   it("clears a quote and recovers it with a fresh push", () => {
@@ -166,7 +169,7 @@ describe("Market-Data.md wiki examples", () => {
     const read = () =>
       service.get(aaplId, 1, accountInfo, "ACCOUNT_THEN_GROUP_THEN_DEFAULT");
 
-    service.push(aaplId, new Quote({ mark: "200" }));
+    service.push(aaplId, new Quote({ mark: "200" }), 0);
 
     // clear hides the quote but keeps the instrument registered.
     service.clear(aaplId);
@@ -175,7 +178,7 @@ describe("Market-Data.md wiki examples", () => {
     }
 
     // Pushing again restores a quote for the same id.
-    service.push(aaplId, new Quote({ mark: "210" }));
+    service.push(aaplId, new Quote({ mark: "210" }), 0);
     if (read() === undefined) {
       throw new Error("quote must be present after recovery push");
     }
@@ -206,7 +209,7 @@ describe("Market-Data-TTL.md wiki examples", () => {
         QuoteResolution.ACCOUNT_THEN_GROUP_THEN_DEFAULT(),
       );
 
-    service.push(aaplId, { mark: "200" });
+    service.push(aaplId, { mark: "200" }, 0);
     const fresh = read();
 
     // After the lifetime elapses, QuoteExpired preserves the stale snapshot.
@@ -224,7 +227,7 @@ describe("Market-Data-TTL.md wiki examples", () => {
     }
 
     // A fresh push restores visibility.
-    service.push(aaplId, { mark: "205" });
+    service.push(aaplId, { mark: "205" }, 0);
     const restored = read();
 
     if (
@@ -251,7 +254,7 @@ describe("Market-Data-Pricing.md wiki examples", () => {
       underlyingAsset: "AAPL",
       settlementAsset: "USD",
     }).value;
-    marketData.push(aaplId, { mark: "200", bid: "199.5", ask: "200.5" });
+    marketData.push(aaplId, { mark: "200", bid: "199.5", ask: "200.5" }, 0);
 
     // Price from the top of book; AAPL overrides the global 100 bps slippage to
     // zero, so a buy is priced exactly at the ask. An instrument-level override
@@ -296,7 +299,7 @@ describe("Market-Data-Pricing.md wiki examples", () => {
 
     // Replace with a mark-only quote: bid and ask are gone, so BookTop can no
     // longer price a buy and the next market order is rejected.
-    marketData.push(aaplId, { mark: "215" });
+    marketData.push(aaplId, { mark: "215" }, 0);
     const rejected = engine.executePreTrade(marketBuy());
     if (rejected.ok || rejected.rejects[0]?.code !== "MarkPriceUnavailable") {
       throw new Error("BookTop must reject a quote without bid and ask");

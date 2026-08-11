@@ -1747,7 +1747,7 @@ func TestExampleWikiSpotFundsMarketOrders(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 	mark, _ := param.NewPriceFromString("200")
-	if err := marketData.Push(aaplID, marketdata.NewQuote().WithMark(mark)); err != nil {
+	if err := marketData.Push(aaplID, marketdata.NewQuote().WithMark(mark), 0); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 

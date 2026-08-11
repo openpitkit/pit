@@ -1091,6 +1091,7 @@ fn build_spot_market_engine(slippage_bps: u16, mark: &str) -> (SpotEngine, Instr
         .push(
             instrument_id,
             Quote::new().with_mark(Price::from_str(mark).expect("price literal must be valid")),
+            Duration::ZERO,
         )
         .expect("quote push must succeed");
     let settings = SpotFundsSettings::new(slippage_bps, SpotFundsPricingSource::Mark, [])

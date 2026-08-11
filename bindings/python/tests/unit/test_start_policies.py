@@ -705,7 +705,11 @@ def _mock_market_data(*quotes: tuple[str, str]) -> openpit.marketdata.MarketData
     )
     for underlying, mark in quotes:
         instrument_id = service.register(openpit.Instrument(underlying, "USD"))
-        service.push(instrument_id, openpit.marketdata.Quote(mark=mark))
+        service.push(
+            instrument_id,
+            openpit.marketdata.Quote(mark=mark),
+            datetime.timedelta(),
+        )
     return service
 
 
@@ -841,7 +845,11 @@ def _mock_market_data_named(
     ids: dict[str, openpit.marketdata.InstrumentId] = {}
     for underlying, mark in quotes:
         instrument_id = service.register(openpit.Instrument(underlying, "USD"))
-        service.push(instrument_id, openpit.marketdata.Quote(mark=mark))
+        service.push(
+            instrument_id,
+            openpit.marketdata.Quote(mark=mark),
+            datetime.timedelta(),
+        )
         ids[underlying] = instrument_id
     return service, ids
 

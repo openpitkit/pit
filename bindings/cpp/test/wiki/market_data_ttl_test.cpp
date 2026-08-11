@@ -75,9 +75,9 @@ TEST(MarketDataTtlWiki, QuoteFreshnessFiniteTtlExpiresAndFreshPushRestores) {
                         md::QuoteResolution::AccountThenGroupThenDefault);
   };
 
-  ASSERT_EQ(
-      service.Push(aaplId, md::Quote().WithMark(Price::FromString("200"))),
-      md::RegisterStatus::Ok);
+  ASSERT_EQ(service.Push(aaplId, md::Quote().WithMark(Price::FromString("200")),
+                         std::chrono::nanoseconds::zero()),
+            md::RegisterStatus::Ok);
   ASSERT_TRUE(read().has_value());
 
   // After the lifetime elapses the quote reads as absent.
@@ -85,9 +85,9 @@ TEST(MarketDataTtlWiki, QuoteFreshnessFiniteTtlExpiresAndFreshPushRestores) {
   EXPECT_FALSE(read().has_value());
 
   // A fresh push restores visibility.
-  ASSERT_EQ(
-      service.Push(aaplId, md::Quote().WithMark(Price::FromString("205"))),
-      md::RegisterStatus::Ok);
+  ASSERT_EQ(service.Push(aaplId, md::Quote().WithMark(Price::FromString("205")),
+                         std::chrono::nanoseconds::zero()),
+            md::RegisterStatus::Ok);
   const std::optional<md::Quote> quote = read();
   ASSERT_TRUE(quote.has_value());
   EXPECT_EQ(quote->Mark()->ToString(), "205");

@@ -138,7 +138,7 @@ describe("panic boundary, poisoned surfaces", () => {
 
     // `push` is the market-data clock reader, so leaving it unguarded is what
     // would raise the unconvertible second panic.
-    expect(() => service.push(instrumentId, { mark: "200" })).toThrow(
+    expect(() => service.push(instrumentId, { mark: "200" }, 0)).toThrow(
       InternalError,
     );
     expect(() =>

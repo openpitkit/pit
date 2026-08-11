@@ -41,6 +41,7 @@ use crate::{
     Instrument, Mutations, OrderOperation, RequestFieldAccessError,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 struct BlockingAdjustmentRejectPolicy {
     entered: Arc<std::sync::Barrier>,
@@ -517,7 +518,7 @@ fn build_policy_with_market_data(
     let id = svc
         .register(instrument.clone())
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(price))
+    svc.push(id, Quote::new().with_mark(price), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     SpotFundsPolicy::new(settings(slip_bps), Some(bundle), b.storage_builder())
@@ -978,7 +979,7 @@ fn settings_set_global_slippage_bps_boundary_and_reject() {
         let id = svc
             .register(instr("AAPL", "USD"))
             .expect("register must succeed");
-        svc.push(id, Quote::new().with_mark(px("100")))
+        svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
             .expect("push must succeed");
         (svc, id)
     };
@@ -1017,7 +1018,7 @@ fn settings_set_override_then_clear_falls_back_to_global() {
     let id = svc
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
     let md = SpotFundsMarketData::<FullSync>::new(Arc::clone(&svc));
     let quote = md.quote(id, account(7), &None).expect("quote present");
@@ -1056,7 +1057,7 @@ fn settings_set_pricing_source_switches_quote_field() {
     let id = svc
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_ask(px("100")))
+    svc.push(id, Quote::new().with_ask(px("100")), Duration::ZERO)
         .expect("push must succeed");
     let md = SpotFundsMarketData::<FullSync>::new(Arc::clone(&svc));
     let quote = md.quote(id, account(7), &None).expect("quote present");
@@ -6764,7 +6765,7 @@ fn buy_market_group_override_reserves_group_slippage_not_global() {
     let id = svc
         .register(aapl_usd.clone())
         .expect("register must succeed");
-    svc.push(id, Quote::new().with_mark(px("100")))
+    svc.push(id, Quote::new().with_mark(px("100")), Duration::ZERO)
         .expect("push must succeed");
 
     // Account-scoped override at a different account (must not fire) and
@@ -7352,7 +7353,7 @@ fn fresh_fx_tracks_average_and_realized_pnl_in_account_currency() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(usd_eur).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("0.9")))
+    svc.push(fx_id, Quote::new().with_mark(px("0.9")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
@@ -7452,7 +7453,7 @@ fn zero_and_negative_fx_convert_third_currency_fee_in_both_directions() {
             .register(fx_instrument)
             .expect("FX instrument must register");
         market_data
-            .push(fx_id, Quote::new().with_mark(px(mark)))
+            .push(fx_id, Quote::new().with_mark(px(mark)), Duration::ZERO)
             .expect("FX quote must push");
         let policy = SpotFundsPolicy::new(
             settings(0),
@@ -7516,7 +7517,7 @@ fn reverse_zero_fx_realizes_zero_proceeds_without_halting_pnl() {
         .register(instr("EUR", "USD"))
         .expect("reverse FX instrument must register");
     market_data
-        .push(fx_id, Quote::new().with_mark(px("0")))
+        .push(fx_id, Quote::new().with_mark(px("0")), Duration::ZERO)
         .expect("reverse zero FX quote must push");
     let policy = SpotFundsPolicy::new(
         settings(0),
@@ -7568,9 +7569,9 @@ fn shared_asset_holding_tracks_two_quote_currencies_in_account_currency() {
     let gbp_eur = svc
         .register(instr("GBP", "EUR"))
         .expect("GBP/EUR must register");
-    svc.push(usd_eur, Quote::new().with_mark(px("0.9")))
+    svc.push(usd_eur, Quote::new().with_mark(px("0.9")), Duration::ZERO)
         .expect("USD/EUR quote must push");
-    svc.push(gbp_eur, Quote::new().with_mark(px("1.2")))
+    svc.push(gbp_eur, Quote::new().with_mark(px("1.2")), Duration::ZERO)
         .expect("GBP/EUR quote must push");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
@@ -7655,7 +7656,7 @@ fn stale_fx_quote_is_used_for_accounting() {
         MarketDataBuilder::<FullSync>::new(QuoteTtl::Within(std::time::Duration::from_millis(1)))
             .build();
     let fx_id = svc.register(usd_eur).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("0.8")))
+    svc.push(fx_id, Quote::new().with_mark(px("0.8")), Duration::ZERO)
         .expect("push must succeed");
     std::thread::sleep(std::time::Duration::from_millis(5));
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
@@ -7760,7 +7761,7 @@ fn missing_fx_on_opening_fill_halts_position_without_account_pnl() {
     let fx_id = svc
         .register(instr("USD", "EUR"))
         .expect("FX instrument must register");
-    svc.push(fx_id, Quote::new().with_mark(px("0.8")))
+    svc.push(fx_id, Quote::new().with_mark(px("0.8")), Duration::ZERO)
         .expect("FX quote must publish");
 
     let close_order = make_order(
@@ -8046,7 +8047,7 @@ fn arithmetic_overflow_halts_both_pnl_lines_before_currency_or_fx() {
     let fx_id = svc
         .register(instr("USD", "EUR"))
         .expect("FX instrument must register");
-    svc.push(fx_id, Quote::new().with_mark(px("2")))
+    svc.push(fx_id, Quote::new().with_mark(px("2")), Duration::ZERO)
         .expect("FX quote must publish");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     let cascade_policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
@@ -8236,7 +8237,7 @@ fn fee_in_foreign_currency_debits_fee_asset_and_contributes_to_account_pnl() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(eur_usd).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("1.2")))
+    svc.push(fx_id, Quote::new().with_mark(px("1.2")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
 
@@ -8270,7 +8271,7 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(eur_usd).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("1.2")))
+    svc.push(fx_id, Quote::new().with_mark(px("1.2")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
 
@@ -8635,7 +8636,7 @@ fn no_barrier_fill_reports_fx_converted_fee_inclusive_account_pnl() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(usd_eur).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("0.9")))
+    svc.push(fx_id, Quote::new().with_mark(px("0.9")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
@@ -8787,7 +8788,7 @@ fn fee_only_execution_report_untracked_slot_still_contributes_to_barrier() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(eur_usd).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("1.2")))
+    svc.push(fx_id, Quote::new().with_mark(px("1.2")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
 
@@ -9010,7 +9011,7 @@ fn fee_only_untracked_slot_pnl_conversion_overflow_halts_accumulators() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(eur_usd).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("2")))
+    svc.push(fx_id, Quote::new().with_mark(px("2")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
@@ -9085,7 +9086,7 @@ fn fee_report_delta_overflow_halts_position_and_account_pnl() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(eur_usd).expect("register must succeed");
-    svc.push(fx_id, Quote::new().with_mark(px("1")))
+    svc.push(fx_id, Quote::new().with_mark(px("1")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
@@ -9332,7 +9333,7 @@ fn fee_pnl_conversion_overflow_halts_position_and_account_pnl() {
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(eur_usd).expect("register must succeed");
     // EUR->USD mark of 2 turns a Decimal::MAX EUR fee into MAX * 2, overflowing.
-    svc.push(fx_id, Quote::new().with_mark(px("2")))
+    svc.push(fx_id, Quote::new().with_mark(px("2")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
 
@@ -12609,7 +12610,7 @@ fn account_halt_rearms_only_through_account_force_set() {
         Err(crate::PnlHaltReason::MissingFx)
     );
     market_data
-        .push(fx_id, Quote::new().with_mark(px("0.9")))
+        .push(fx_id, Quote::new().with_mark(px("0.9")), Duration::ZERO)
         .expect("FX quote must publish");
 
     let force_position = TestAdjustment {
@@ -12713,7 +12714,7 @@ fn position_halt_rearms_only_through_position_force_set() {
         )
         .expect("account force-set must succeed");
     market_data
-        .push(fx_id, Quote::new().with_mark(px("0.9")))
+        .push(fx_id, Quote::new().with_mark(px("0.9")), Duration::ZERO)
         .expect("FX quote must publish");
 
     let still_halted = engine.apply_execution_report(&report);
@@ -12801,7 +12802,7 @@ fn sticky_position_halt_does_not_zero_account_or_other_position_pnl() {
 
     let _previous = policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::ZERO));
     market_data
-        .push(fx_id, Quote::new().with_mark(px("1")))
+        .push(fx_id, Quote::new().with_mark(px("1")), Duration::ZERO)
         .expect("FX quote must publish");
 
     let halted_position_fill =
@@ -12928,7 +12929,7 @@ fn unpriced_flip_on_sticky_halted_position_clears_the_stale_average() {
     // Officer restores the account line and the FX quote returns.
     let _previous = policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::ZERO));
     market_data
-        .push(fx_id, Quote::new().with_mark(px("1")))
+        .push(fx_id, Quote::new().with_mark(px("1")), Duration::ZERO)
         .expect("FX quote must publish");
 
     // The next priced fill reduces the short. With no basis for it, the account
@@ -14977,7 +14978,7 @@ fn nonzero_fee_at_zero_fx_preserves_both_authoritative_zero_pnl_lines() {
         .register(instr("EUR", "USD"))
         .expect("FX instrument must register");
     market_data
-        .push(fx_id, Quote::new().with_mark(px("0")))
+        .push(fx_id, Quote::new().with_mark(px("0")), Duration::ZERO)
         .expect("FX quote must push");
     let policy: TestPolicy = SpotFundsPolicy::new(
         settings(0),

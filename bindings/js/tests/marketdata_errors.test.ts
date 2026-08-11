@@ -48,7 +48,7 @@ describe("QuoteExpired", () => {
       underlyingAsset: "AAPL",
       settlementAsset: "USD",
     }).value;
-    service.push(instrumentId, { mark: "200", bid: "199", ask: "201" });
+    service.push(instrumentId, { mark: "200", bid: "199", ask: "201" }, 0);
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -118,7 +118,7 @@ describe("MarketDataService reads", () => {
       underlyingAsset: "EXPIRED",
       settlementAsset: "USD",
     }).value;
-    expiredService.push(expiredId, { mark: "1" });
+    expiredService.push(expiredId, { mark: "1" }, 0);
     expect(
       expiredService.get(expiredId, 1, null, "ACCOUNT_THEN_GROUP_THEN_DEFAULT"),
     ).toBeUndefined();
@@ -131,7 +131,7 @@ describe("MarketDataService reads", () => {
       settlementAsset: "USD",
     }).value;
     const accountId = 7;
-    service.pushFor(instrumentId, { mark: "10" }, [accountId], []);
+    service.pushFor(instrumentId, { mark: "10" }, 0, [accountId], []);
     service.setInstrumentAccountTtl(
       instrumentId,
       accountId,
@@ -160,7 +160,7 @@ describe("MarketDataService reads", () => {
       underlyingAsset: "ONCE",
       settlementAsset: "USD",
     }).value;
-    service.push(instrumentId, { mark: "20" });
+    service.push(instrumentId, { mark: "20" }, 0);
 
     let reads = 0;
     const accountInfo = {
@@ -191,13 +191,13 @@ describe("MarketDataService reads", () => {
         underlyingAsset: `REENTRANT-${method}`,
         settlementAsset: "USD",
       }).value;
-      service.push(instrumentId, { mark: "30" });
+      service.push(instrumentId, { mark: "30" }, 0);
 
       let reads = 0;
       const accountInfo = {
         get accountGroup(): null {
           reads += 1;
-          service.push(instrumentId, { mark: "40" });
+          service.push(instrumentId, { mark: "40" }, 0);
           return null;
         },
       };
@@ -221,7 +221,7 @@ describe("MarketDataService reads", () => {
         underlyingAsset: `THROW-${method}`,
         settlementAsset: "USD",
       }).value;
-      service.push(instrumentId, { mark: "30" });
+      service.push(instrumentId, { mark: "30" }, 0);
 
       const getterError = new Error(`accountGroup failed in ${method}`);
       const accountInfo = {
@@ -263,6 +263,30 @@ describe("QuoteTtl.within", () => {
   it("preserves fractional millisecond precision", () => {
     expect(QuoteTtl.within(0.125).durationMs).toBeCloseTo(0.125, 12);
   });
+});
+
+describe("market-data publication", () => {
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects a non-finite source age: %s",
+    (sourceAgeMs) => {
+      const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
+      const instrument = {
+        underlyingAsset: "AAPL",
+        settlementAsset: "USD",
+      };
+      const instrumentId = service.register(instrument).value;
+
+      expect(() =>
+        service.push(instrumentId, { mark: "1" }, sourceAgeMs),
+      ).toThrow(RangeError);
+      expect(() =>
+        service.pushByInstrument(instrument, { mark: "1" }, sourceAgeMs),
+      ).toThrow(RangeError);
+      expect(() =>
+        service.pushFor(instrumentId, { mark: "1" }, sourceAgeMs, [1], []),
+      ).toThrow(RangeError);
+    },
+  );
 });
 
 describe("market-data error surface", () => {
@@ -352,7 +376,7 @@ describe("market-data error surface", () => {
 
     let unknownId: unknown;
     try {
-      service.push(99n, { mark: "1" });
+      service.push(99n, { mark: "1" }, 0);
     } catch (error) {
       unknownId = error;
     }

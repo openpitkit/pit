@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import openpit
 import openpit.marketdata as marketdata
 from builder import parse_instrument
@@ -60,7 +62,7 @@ class MarketFeed:
     def push(self, instrument: str, price: str) -> None:
         """Publish a global mark-price snapshot for instrument."""
         iid, quote = self._quote(instrument, price)
-        self.service.push(iid, quote)
+        self.service.push(iid, quote, datetime.timedelta())
         self._latest[instrument] = price
 
     def push_for(
@@ -72,7 +74,7 @@ class MarketFeed:
     ) -> None:
         """Publish an addressed mark-price snapshot for specific targets."""
         iid, quote = self._quote(instrument, price)
-        self.service.push_for(iid, quote, accounts, groups)
+        self.service.push_for(iid, quote, datetime.timedelta(), accounts, groups)
         self._latest[instrument] = price
 
     def latest_price(self, instrument: str) -> str | None:

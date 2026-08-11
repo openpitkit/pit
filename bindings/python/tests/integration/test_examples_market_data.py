@@ -62,9 +62,12 @@ def test_example_wiki_market_data_register_push_get() -> None:
     aapl_id = service.register(aapl)
 
     # Publish a full snapshot into the default ("everyone-else") bucket.
+    # Caller computes feed-observation-to-call age; the SDK cannot know it.
+    quote_source_age = timedelta(milliseconds=20)
     service.push(
         aapl_id,
         openpit.marketdata.Quote(mark="150", bid="149.5", ask="150.5"),
+        quote_source_age,
     )
 
     # Read for an account with no group: the lookup falls through to the
@@ -92,15 +95,20 @@ def test_example_wiki_market_data_replace_vs_patch() -> None:
     service.push(
         aapl_id,
         openpit.marketdata.Quote(mark="100", bid="99", ask="101"),
+        timedelta(),
     )
 
-    # Patch only the mark; bid and ask are preserved.
-    service.push_patch(aapl_id, openpit.marketdata.Quote(mark="105"))
+    # A mark-only observation clears bid and ask.
+    service.push(
+        aapl_id,
+        openpit.marketdata.Quote(mark="105"),
+        timedelta(),
+    )
 
     quote = service.get(aapl_id, account_id, _NO_GROUP, _DEFAULT)
     assert quote.mark == openpit.param.Price("105")
-    assert quote.bid == openpit.param.Price("99")
-    assert quote.ask == openpit.param.Price("101")
+    assert quote.bid is None
+    assert quote.ask is None
 
 
 @pytest.mark.integration
@@ -126,7 +134,7 @@ def test_example_wiki_market_data_finite_ttl_hides_stale_quote() -> None:
             openpit.marketdata.QuoteResolution.ACCOUNT_THEN_GROUP_THEN_DEFAULT,
         )
 
-    service.push(aapl_id, openpit.marketdata.Quote(mark="200"))
+    service.push(aapl_id, openpit.marketdata.Quote(mark="200"), timedelta())
     assert read() is not None
 
     # After the lifetime elapses the quote reads as absent.
@@ -134,7 +142,7 @@ def test_example_wiki_market_data_finite_ttl_hides_stale_quote() -> None:
     assert read() is None
 
     # A fresh push restores visibility.
-    service.push(aapl_id, openpit.marketdata.Quote(mark="205"))
+    service.push(aapl_id, openpit.marketdata.Quote(mark="205"), timedelta())
     assert read() is not None
 
 
@@ -152,7 +160,7 @@ def test_example_wiki_market_data_clear_then_recover() -> None:
     account_id = openpit.param.AccountId.from_int(1)
     account_info = types.SimpleNamespace(account_group=None)
 
-    service.push(aapl_id, openpit.marketdata.Quote(mark="200"))
+    service.push(aapl_id, openpit.marketdata.Quote(mark="200"), timedelta())
 
     # clear hides the quote but keeps the instrument registered.
     service.clear(aapl_id)
@@ -167,7 +175,7 @@ def test_example_wiki_market_data_clear_then_recover() -> None:
     )
 
     # Pushing again restores a quote for the same id.
-    service.push(aapl_id, openpit.marketdata.Quote(mark="210"))
+    service.push(aapl_id, openpit.marketdata.Quote(mark="210"), timedelta())
     assert (
         service.get_optional(
             aapl_id,
@@ -192,6 +200,7 @@ def test_example_wiki_market_data_market_orders_book_top_override() -> None:
     market_data.push(
         aapl_id,
         openpit.marketdata.Quote(mark="200", bid="199.5", ask="200.5"),
+        timedelta(),
     )
 
     # Price market orders from the top of book (ask for buys, bid for sells).
@@ -241,7 +250,11 @@ def test_example_wiki_market_data_market_orders_book_top_override() -> None:
 
     # A full replace that carries only the mark drops bid and ask. With the
     # BookTop source there is no ask to price a buy, so it is rejected.
-    market_data.push(aapl_id, openpit.marketdata.Quote(mark="215"))
+    market_data.push(
+        aapl_id,
+        openpit.marketdata.Quote(mark="215"),
+        timedelta(),
+    )
     rejected = engine.execute_pre_trade(order=market_buy())
     assert not rejected.ok
     assert (
@@ -267,6 +280,7 @@ def test_example_wiki_market_data_push_for_fan_out() -> None:
     service.push_for(
         aapl_id,
         openpit.marketdata.Quote(mark="150"),
+        timedelta(),
         [
             openpit.param.AccountId.from_int(10),
             openpit.param.AccountId.from_int(11),

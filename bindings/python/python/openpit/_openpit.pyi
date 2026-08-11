@@ -316,41 +316,34 @@ class MarketDataService:
     # ── Clear ─────────────────────────────────────────────────────────────────
     def clear(self, instrument_id: InstrumentId) -> None: ...
     # ── Push (default bucket) ─────────────────────────────────────────────────
-    def push(self, instrument_id: InstrumentId, quote: Quote) -> None: ...
-    def push_patch(self, instrument_id: InstrumentId, quote: Quote) -> None: ...
+    def push(
+        self,
+        instrument_id: InstrumentId,
+        quote: Quote,
+        source_age: datetime.timedelta,
+    ) -> None:
+        """Publish one quote observation; negative source_age is clamped to zero."""
+
     def push_by_instrument(
-        self, instrument: Instrument, quote: Quote
-    ) -> InstrumentId: ...
-    def push_by_instrument_patch(
         self,
         instrument: Instrument,
         quote: Quote,
+        source_age: datetime.timedelta,
     ) -> InstrumentId: ...
     # ── Targeted fan-out push ─────────────────────────────────────────────────
     def push_for(
         self,
         instrument_id: InstrumentId,
         quote: Quote,
+        source_age: datetime.timedelta,
         account_ids: typing.Iterable[AccountId],
         account_group_ids: typing.Iterable[AccountGroupId],
     ) -> None:
-        """Push a full quote snapshot to specific accounts and/or groups.
+        """Push one quote observation to specific accounts and/or groups.
 
         To target the default ("everyone-else") bucket, include
         ``AccountGroupId.DEFAULT`` in ``account_group_ids``.
-        """
-
-    def push_for_patch(
-        self,
-        instrument_id: InstrumentId,
-        quote: Quote,
-        account_ids: typing.Iterable[AccountId],
-        account_group_ids: typing.Iterable[AccountGroupId],
-    ) -> None:
-        """Push a partial quote patch to specific accounts and/or groups.
-
-        To target the default ("everyone-else") bucket, include
-        ``AccountGroupId.DEFAULT`` in ``account_group_ids``.
+        Negative ``source_age`` is clamped to zero.
         """
     # ── Get ───────────────────────────────────────────────────────────────────
     def get(

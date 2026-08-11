@@ -1021,7 +1021,7 @@ describe("Spot-Funds.md wiki examples", () => {
     const marketData = builder.marketData(QuoteTtl.infinite()).build();
     const aapl = new Instrument("AAPL", "USD");
     const aaplId = marketData.register(aapl);
-    marketData.push(aaplId, new Quote({ mark: "200" }));
+    marketData.push(aaplId, new Quote({ mark: "200" }), 0);
 
     // Spot funds with market orders enabled at 1500 bps worst-case slippage,
     // priced from the quote mark.

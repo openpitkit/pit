@@ -152,6 +152,7 @@ export class Session {
     this.instrumentId = this.market.pushByInstrument(
       new Instrument(TRADED_ASSET, SETTLE_ASSET),
       new Quote({ bid: QUOTE_BID, ask: QUOTE_ASK, mark: QUOTE_MARK }),
+      0,
     );
 
     // ---- Three built-in policies wired once, in order.

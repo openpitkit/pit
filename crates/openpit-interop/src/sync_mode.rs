@@ -451,6 +451,7 @@ mod tests {
             .push(
                 id,
                 Quote::new().with_mark(Price::from_str("150").expect("price")),
+                std::time::Duration::ZERO,
             )
             .expect("push");
         assert!(service
@@ -476,6 +477,7 @@ mod tests {
             .push(
                 id,
                 Quote::new().with_mark(Price::from_str("150").expect("price")),
+                std::time::Duration::ZERO,
             )
             .expect("push");
         assert!(service

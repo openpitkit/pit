@@ -71,7 +71,7 @@ export class MarketFeed {
   /** Publish a global mark-price snapshot for instrument. */
   public push(instrument: string, price: string): void {
     const { id, quote } = this.quote(instrument, price);
-    this.service.push(id, quote);
+    this.service.push(id, quote, 0);
     this.latest.set(instrument, price);
   }
 
@@ -83,7 +83,7 @@ export class MarketFeed {
     groups: AccountGroupId[],
   ): void {
     const { id, quote } = this.quote(instrument, price);
-    this.service.pushFor(id, quote, accounts, groups);
+    this.service.pushFor(id, quote, 0, accounts, groups);
     this.latest.set(instrument, price);
   }
 

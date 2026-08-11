@@ -21,6 +21,8 @@
 // - https://wiki.openpit.dev/Market-Data-Pricing/
 // If this file changes, update every linked documentation snippet.
 
+use std::time::Duration;
+
 #[test]
 fn example_wiki_market_data_register_push_get() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Market-Data/
@@ -38,12 +40,15 @@ fn example_wiki_market_data_register_push_get() -> Result<(), Box<dyn std::error
     let aapl_id = service.register(aapl.clone())?;
 
     // Publish a full snapshot into the default ("everyone-else") bucket.
+    // Caller computes feed-observation-to-call age; the SDK cannot know it.
+    let quote_source_age = Duration::from_millis(20);
     service.push(
         aapl_id,
         Quote::new()
             .with_mark(Price::from_str("150")?)
             .with_bid(Price::from_str("149.5")?)
             .with_ask(Price::from_str("150.5")?),
+        quote_source_age,
     )?;
 
     // Read for an account with no group: the lookup falls through to the
@@ -66,9 +71,9 @@ fn example_wiki_market_data_register_push_get() -> Result<(), Box<dyn std::error
 }
 
 #[test]
-fn example_wiki_market_data_replace_vs_patch() -> Result<(), Box<dyn std::error::Error>> {
+fn example_wiki_market_data_replaces_observations() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Market-Data/
-    // - Replace Versus Patch
+    // - Replace Quote Snapshots
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountGroupId, AccountId, Asset, Price};
     use openpit::{Engine, Instrument, Quote, QuoteResolution, QuoteTtl};
@@ -85,10 +90,15 @@ fn example_wiki_market_data_replace_vs_patch() -> Result<(), Box<dyn std::error:
             .with_mark(Price::from_str("100")?)
             .with_bid(Price::from_str("99")?)
             .with_ask(Price::from_str("101")?),
+        Duration::ZERO,
     )?;
 
-    // Patch only the mark; bid and ask are preserved.
-    service.push_patch(aapl_id, Quote::new().with_mark(Price::from_str("105")?))?;
+    // A mark-only observation clears bid and ask from the stored snapshot.
+    service.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("105")?),
+        Duration::ZERO,
+    )?;
 
     let account = AccountId::from_u64(1);
     let quote = service
@@ -100,8 +110,8 @@ fn example_wiki_market_data_replace_vs_patch() -> Result<(), Box<dyn std::error:
         )
         .expect("quote must be present");
     assert_eq!(quote.mark, Some(Price::from_str("105")?));
-    assert_eq!(quote.bid, Some(Price::from_str("99")?));
-    assert_eq!(quote.ask, Some(Price::from_str("101")?));
+    assert_eq!(quote.bid, None);
+    assert_eq!(quote.ask, None);
     Ok(())
 }
 
@@ -134,7 +144,11 @@ fn example_wiki_market_data_finite_ttl_hides_stale_quote() -> Result<(), Box<dyn
             .ok()
     };
 
-    service.push(aapl_id, Quote::new().with_mark(Price::from_str("200")?))?;
+    service.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("200")?),
+        Duration::ZERO,
+    )?;
     assert!(read(aapl_id).is_some());
 
     // After the lifetime elapses the quote is hidden until the next push.
@@ -142,7 +156,11 @@ fn example_wiki_market_data_finite_ttl_hides_stale_quote() -> Result<(), Box<dyn
     assert!(read(aapl_id).is_none());
 
     // A fresh push restores visibility.
-    service.push(aapl_id, Quote::new().with_mark(Price::from_str("205")?))?;
+    service.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("205")?),
+        Duration::ZERO,
+    )?;
     let quote = read(aapl_id).expect("quote must be present");
     assert_eq!(quote.mark, Some(Price::from_str("205")?));
     Ok(())
@@ -173,7 +191,11 @@ fn example_wiki_market_data_clear_then_recover() -> Result<(), Box<dyn std::erro
             .ok()
     };
 
-    service.push(aapl_id, Quote::new().with_mark(Price::from_str("200")?))?;
+    service.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("200")?),
+        Duration::ZERO,
+    )?;
     assert!(read(aapl_id).is_some());
 
     // clear hides the quote but keeps the instrument registered.
@@ -181,7 +203,11 @@ fn example_wiki_market_data_clear_then_recover() -> Result<(), Box<dyn std::erro
     assert!(read(aapl_id).is_none());
 
     // Pushing again restores a quote for the same id.
-    service.push(aapl_id, Quote::new().with_mark(Price::from_str("210")?))?;
+    service.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("210")?),
+        Duration::ZERO,
+    )?;
     let quote = read(aapl_id).expect("quote must be present");
     assert_eq!(quote.mark, Some(Price::from_str("210")?));
     Ok(())
@@ -227,6 +253,7 @@ fn example_wiki_market_data_market_orders_book_top_override(
             .with_mark(Price::from_str("200")?)
             .with_bid(Price::from_str("199.5")?)
             .with_ask(Price::from_str("200.5")?),
+        Duration::ZERO,
     )?;
 
     // Price market orders from the top of book (ask for buys, bid for sells).
@@ -283,7 +310,11 @@ fn example_wiki_market_data_market_orders_book_top_override(
 
     // A full replace that carries only the mark drops bid and ask. With the
     // BookTop source there is no ask to price a buy, so it is rejected.
-    market_data.push(aapl_id, Quote::new().with_mark(Price::from_str("215")?))?;
+    market_data.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("215")?),
+        Duration::ZERO,
+    )?;
     let rejects = match engine.execute_pre_trade(buy("1")) {
         Ok(_) => panic!("market buy must reject when the ask is missing"),
         Err(rejects) => rejects,
@@ -312,6 +343,7 @@ fn example_wiki_market_data_push_for_fan_out() -> Result<(), Box<dyn std::error:
     service.push_for(
         aapl_id,
         Quote::new().with_mark(Price::from_str("150")?),
+        Duration::ZERO,
         &[AccountId::from_u64(10), AccountId::from_u64(11)],
         &[group_id],
     )?;

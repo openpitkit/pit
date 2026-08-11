@@ -30,6 +30,7 @@
 
 #include <openpit.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -225,87 +226,68 @@ class Service {
   //----------------------------------------------------------------------------
   // Pushing
 
-  // Publishes `quote` for `instrumentId`, replacing the entire stored snapshot
-  // in the default ("everyone-else") bucket.
+  // Publishes one quote observation for `instrumentId`, replacing the entire
+  // stored snapshot in the default ("everyone-else") bucket. An absent field
+  // does not retain an older value. `sourceAge` is clamped to zero when
+  // negative.
   [[nodiscard]] RegisterStatus Push(InstrumentId instrumentId,
-                                    const Quote& quote) {
+                                    const Quote& quote,
+                                    std::chrono::nanoseconds sourceAge) {
+    const SourceAgeParts sourceAgeParts = ToSourceAgeParts(sourceAge);
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
         openpit_marketdata_service_push(
             m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(quote), &error);
+            ::openpit::detail::Native(quote), sourceAgeParts.secs,
+            sourceAgeParts.nanos, &error);
     return MapPush(status, error, "openpit_marketdata_service_push");
   }
 
-  // Publishes a partial update for `instrumentId`, merging it into the stored
-  // snapshot in the default bucket.
-  [[nodiscard]] RegisterStatus PushPatch(InstrumentId instrumentId,
-                                         const Quote& quote) {
-    OpenPitSharedString* error = nullptr;
-    const OpenPitMarketDataRegisterStatus status =
-        openpit_marketdata_service_push_patch(
-            m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(quote), &error);
-    return MapPush(status, error, "openpit_marketdata_service_push_patch");
-  }
-
-  // Publishes `quote` for `instrumentId` into the per-account bucket of every
-  // account in `accountIds` and the per-group bucket of every group in
-  // `accountGroupIds`, replacing each target's snapshot. At least one target
-  // must be supplied; both lists empty yields `RegisterStatus::NoTarget`. Pass
-  // `param::DefaultAccountGroup` in `accountGroupIds` to target the default
-  // bucket directly.
+  // Publishes one quote observation for `instrumentId` into the per-account
+  // bucket of every account in `accountIds` and the per-group bucket of every
+  // group in `accountGroupIds`, replacing each target's snapshot. An absent
+  // field does not retain an older value. `sourceAge` is clamped to zero when
+  // negative. At least one target must be supplied; both lists empty yields
+  // `RegisterStatus::NoTarget`. Pass `param::DefaultAccountGroup` in
+  // `accountGroupIds` to target the default bucket directly.
   [[nodiscard]] RegisterStatus PushFor(
       InstrumentId instrumentId, const Quote& quote,
+      std::chrono::nanoseconds sourceAge,
       const std::vector<param::AccountId>& accountIds,
       const std::vector<param::AccountGroupId>& accountGroupIds) {
     const std::vector<OpenPitParamAccountId> accounts = RawAccounts(accountIds);
     const std::vector<OpenPitParamAccountGroupId> groups =
         RawGroups(accountGroupIds);
+    const SourceAgeParts sourceAgeParts = ToSourceAgeParts(sourceAge);
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
         openpit_marketdata_service_push_for(
             m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(quote), DataOrNull(accounts),
-            accounts.size(), DataOrNull(groups), groups.size(), &error);
+            ::openpit::detail::Native(quote), sourceAgeParts.secs,
+            sourceAgeParts.nanos, DataOrNull(accounts), accounts.size(),
+            DataOrNull(groups), groups.size(), &error);
     return MapPush(status, error, "openpit_marketdata_service_push_for");
   }
 
-  // Publishes a partial update for `instrumentId` into each target bucket,
-  // merging independently into each existing snapshot. See `PushFor`.
-  [[nodiscard]] RegisterStatus PushForPatch(
-      InstrumentId instrumentId, const Quote& quote,
-      const std::vector<param::AccountId>& accountIds,
-      const std::vector<param::AccountGroupId>& accountGroupIds) {
-    const std::vector<OpenPitParamAccountId> accounts = RawAccounts(accountIds);
-    const std::vector<OpenPitParamAccountGroupId> groups =
-        RawGroups(accountGroupIds);
-    OpenPitSharedString* error = nullptr;
-    const OpenPitMarketDataRegisterStatus status =
-        openpit_marketdata_service_push_for_patch(
-            m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(quote), DataOrNull(accounts),
-            accounts.size(), DataOrNull(groups), groups.size(), &error);
-    return MapPush(status, error, "openpit_marketdata_service_push_for_patch");
-  }
-
-  // Publishes `quote` for `instrument`, replacing the stored snapshot, and
-  // returns the instrument's id. If `instrument` is unregistered, a named slot
-  // is created with the service-default TTL.
+  // Publishes one quote observation for `instrument`, replacing the stored
+  // snapshot, and returns the instrument's id. An absent field does not retain
+  // an older value. `sourceAge` is clamped to zero when negative. If
+  // `instrument` is unregistered, a named slot is created with the
+  // service-default TTL.
   [[nodiscard]] InstrumentId PushByInstrument(
-      const model::Instrument& instrument, const Quote& quote) {
-    return PushByInstrumentImpl(
-        instrument, quote, openpit_marketdata_service_push_by_instrument,
-        "openpit_marketdata_service_push_by_instrument");
-  }
-
-  // Publishes a partial update for `instrument`, merging it into the stored
-  // snapshot, and returns the instrument's id.
-  [[nodiscard]] InstrumentId PushByInstrumentPatch(
-      const model::Instrument& instrument, const Quote& quote) {
-    return PushByInstrumentImpl(
-        instrument, quote, openpit_marketdata_service_push_by_instrument_patch,
-        "openpit_marketdata_service_push_by_instrument_patch");
+      const model::Instrument& instrument, const Quote& quote,
+      std::chrono::nanoseconds sourceAge) {
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
+    const SourceAgeParts sourceAgeParts = ToSourceAgeParts(sourceAge);
+    OpenPitMarketDataInstrumentId id = 0;
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_marketdata_service_push_by_instrument(
+            m_handle.Get(), &raw, ::openpit::detail::Native(quote),
+            sourceAgeParts.secs, sourceAgeParts.nanos, &id, &error)) {
+      ::openpit::detail::ThrowFromSharedString(
+          error, "openpit_marketdata_service_push_by_instrument");
+    }
+    return InstrumentId(id);
   }
 
   // Hides the current quote for `instrumentId` across all buckets without
@@ -488,23 +470,21 @@ class Service {
     }
   }
 
-  using PushByInstrumentFn = bool (*)(const OpenPitMarketDataService*,
-                                      const OpenPitInstrument*,
-                                      OpenPitMarketDataQuote,
-                                      OpenPitMarketDataInstrumentId*,
-                                      OpenPitOutError);
+  struct SourceAgeParts {
+    std::uint64_t secs;
+    std::uint32_t nanos;
+  };
 
-  [[nodiscard]] InstrumentId PushByInstrumentImpl(
-      const model::Instrument& instrument, const Quote& quote,
-      PushByInstrumentFn fn, const char* fallback) {
-    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
-    OpenPitMarketDataInstrumentId id = 0;
-    OpenPitSharedString* error = nullptr;
-    if (!fn(m_handle.Get(), &raw, ::openpit::detail::Native(quote), &id,
-            &error)) {
-      ::openpit::detail::ThrowFromSharedString(error, fallback);
+  [[nodiscard]] static SourceAgeParts ToSourceAgeParts(
+      std::chrono::nanoseconds sourceAge) noexcept {
+    if (sourceAge < std::chrono::nanoseconds::zero()) {
+      sourceAge = std::chrono::nanoseconds::zero();
     }
-    return InstrumentId(id);
+    const auto secs =
+        std::chrono::duration_cast<std::chrono::seconds>(sourceAge);
+    const auto nanos = sourceAge - secs;
+    return {static_cast<std::uint64_t>(secs.count()),
+            static_cast<std::uint32_t>(nanos.count())};
   }
 
   // Maps a register-family status, throwing on the `Error` boundary case and
