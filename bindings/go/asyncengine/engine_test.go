@@ -28,6 +28,7 @@ import (
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/accounts"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/future"
@@ -86,7 +87,7 @@ func (d *fakeDriver) StartPreTrade(
 		d.startHook()
 	}
 	atomic.AddInt64(&d.startCount, 1)
-	return nil, []reject.Reject{}, nil
+	return nil, []reject.Reject{{}}, nil
 }
 
 func (d *fakeDriver) ExecutePreTrade(
@@ -97,7 +98,11 @@ func (d *fakeDriver) ExecutePreTrade(
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.executeCount, 1)
-	return nil, []reject.Reject{}, nil
+	return nil, []reject.Reject{{}}, nil
+}
+
+func (*fakeDriver) ExecutePreTradeDryRun(model.Order) (*pretrade.DryRunReport, error) {
+	return pretrade.NewDryRunReportFromHandle(nil), nil
 }
 
 func (d *fakeDriver) ApplyDropCopy(
@@ -108,7 +113,7 @@ func (d *fakeDriver) ApplyDropCopy(
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.executeCount, 1)
-	return pretrade.NewDropCopyOperationFromHandle(nil), nil, nil
+	return nil, []reject.Reject{{}}, nil
 }
 
 func (d *fakeDriver) ApplyExecutionReport(
@@ -136,11 +141,20 @@ func (*fakeDriver) Accounts() accounts.Accounts {
 	return accounts.Accounts{}
 }
 
+func (*fakeDriver) Configure() configure.Configurator {
+	return configure.Configurator{}
+}
+
 func buildTestOrder(t *testing.T, accountID uint64) model.Order {
 	t.Helper()
+	quantity, err := param.NewQuantityFromString("1")
+	if err != nil {
+		t.Fatalf("NewQuantityFromString() error = %v", err)
+	}
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
 	op.SetAccountID(param.NewAccountIDFromUint64(accountID))
+	op.SetTradeAmount(param.NewQuantityTradeAmount(quantity))
 	return order
 }
 
@@ -897,7 +911,7 @@ func TestAsyncEngineDynamicNoRetireDuringInFlightTask(t *testing.T) {
 	<-entered
 
 	strategy.mu.RLock()
-	q := strategy.queues[accountID]
+	q := strategy.queues[accountRoutingKey(accountID)]
 	strategy.mu.RUnlock()
 	if q == nil {
 		t.Fatalf("queue for account %d not created", account)
@@ -914,7 +928,7 @@ func TestAsyncEngineDynamicNoRetireDuringInFlightTask(t *testing.T) {
 		t.Fatalf("queue retired while a task was in flight")
 	}
 	strategy.mu.RLock()
-	stillMapped := strategy.queues[accountID] == q
+	stillMapped := strategy.queues[accountRoutingKey(accountID)] == q
 	strategy.mu.RUnlock()
 	if !stillMapped {
 		t.Fatalf("queue replaced in map while a task was in flight")
@@ -976,19 +990,30 @@ func TestAsyncEnginePreCancelledCtxFailsBeforeDriver(t *testing.T) {
 type recordingStrategy struct {
 	mu       sync.Mutex
 	accounts []param.AccountID
+	keys     []routingKey
 }
 
 func (s *recordingStrategy) submit(
-	_ context.Context, accountID param.AccountID, _ pendingTask,
+	_ context.Context, key routingKey, _ pendingTask,
 ) error {
 	s.mu.Lock()
-	s.accounts = append(s.accounts, accountID)
+	s.accounts = append(s.accounts, key.observerAccountID())
+	s.keys = append(s.keys, key)
 	s.mu.Unlock()
 	return nil
 }
 
+func (s *recordingStrategy) submitWithFailureHandoff(
+	ctx context.Context,
+	key routingKey,
+	task pendingTask,
+	_ func(error),
+) error {
+	return s.submit(ctx, key, task)
+}
+
 func (*recordingStrategy) scheduleSubmitFailureCleanup(
-	_ param.AccountID,
+	_ routingKey,
 	cleanup func(),
 ) {
 	cleanup()
@@ -1005,6 +1030,21 @@ func (s *recordingStrategy) last() (param.AccountID, bool) {
 		return param.AccountID{}, false
 	}
 	return s.accounts[len(s.accounts)-1], true
+}
+
+func (s *recordingStrategy) lastRoutingKey() (routingKey, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.keys) == 0 {
+		return routingKey{}, false
+	}
+	return s.keys[len(s.keys)-1], true
+}
+
+func (s *recordingStrategy) submitCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.keys)
 }
 
 func TestAsyncEngineApplyDropCopyRoutesWithAccountLane(t *testing.T) {
@@ -1105,4 +1145,274 @@ func TestAsyncEngineWrapperObjectsRouteToPinnedAccount(t *testing.T) {
 		dropCopy.RollbackAndClose(ctx),
 	)
 	assertRouted("AsyncDropCopyOperation.Close", dropCopy.Close(ctx))
+}
+
+func TestDynamicRoutingSeparatesAccountAndGroupWithSameID(t *testing.T) {
+	t.Parallel()
+
+	strategy := newDynamicStrategy(
+		baseConfig{queueCapacity: 1}, dynamicConfig{},
+	)
+	const id = 1
+	assertRoutingKeysExecuteIndependently(
+		t,
+		strategy,
+		accountRoutingKey(param.NewAccountIDFromUint64(id)),
+		groupRoutingKey(param.NewAccountGroupIDFromHandle(id)),
+	)
+}
+
+func TestDynamicRoutingSeparatesDefaultGroupAndEngineWide(t *testing.T) {
+	t.Parallel()
+
+	strategy := newDynamicStrategy(
+		baseConfig{queueCapacity: 1}, dynamicConfig{},
+	)
+	assertRoutingKeysExecuteIndependently(
+		t,
+		strategy,
+		groupRoutingKey(param.DefaultAccountGroup),
+		engineWideRoutingKey(),
+	)
+}
+
+func TestShardedRoutingSeparatesAccountAndGroupFixture(t *testing.T) {
+	t.Parallel()
+
+	strategy := newShardedStrategy(baseConfig{queueCapacity: 1}, 2)
+	const id = 1
+	accountKey := accountRoutingKey(param.NewAccountIDFromUint64(id))
+	groupKey := groupRoutingKey(param.NewAccountGroupIDFromHandle(id))
+	if strategy.shardFor(accountKey) ==
+		strategy.shardFor(groupKey) {
+		t.Fatal("account and group fixture routed to the same shard")
+	}
+	assertRoutingKeysExecuteIndependently(t, strategy, accountKey, groupKey)
+}
+
+func TestAsyncEngineAdministrativeRoutingKinds(t *testing.T) {
+	t.Parallel()
+
+	strategy := &recordingStrategy{}
+	engine := newAsyncEngine(newFakeDriver(), nil, strategy)
+	accounts := engine.Accounts()
+	account := param.NewAccountIDFromUint64(7)
+	group := param.NewAccountGroupIDFromHandle(7)
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		want routingKey
+		call func() *future.Future[struct{}]
+	}{
+		{
+			name: "register membership",
+			want: routingKey{kind: routingKeyAccount, id: 7},
+			call: func() *future.Future[struct{}] {
+				return accounts.RegisterGroup(ctx, []param.AccountID{account}, group)
+			},
+		},
+		{
+			name: "unregister membership",
+			want: routingKey{kind: routingKeyAccount, id: 7},
+			call: func() *future.Future[struct{}] {
+				return accounts.UnregisterGroup(ctx, []param.AccountID{account}, group)
+			},
+		},
+		{
+			name: "block group",
+			want: routingKey{kind: routingKeyAccountGroup, id: 7},
+			call: func() *future.Future[struct{}] {
+				return accounts.BlockGroup(ctx, group, "reason")
+			},
+		},
+		{
+			name: "unblock group",
+			want: routingKey{kind: routingKeyAccountGroup, id: 7},
+			call: func() *future.Future[struct{}] {
+				return accounts.UnblockGroup(ctx, group)
+			},
+		},
+		{
+			name: "replace group block reason",
+			want: routingKey{kind: routingKeyAccountGroup, id: 7},
+			call: func() *future.Future[struct{}] {
+				return accounts.ReplaceGroupBlockReason(ctx, group, "replacement")
+			},
+		},
+		{
+			name: "default group",
+			want: routingKey{kind: routingKeyAccountGroup, id: 0},
+			call: func() *future.Future[struct{}] {
+				return accounts.BlockGroup(ctx, param.DefaultAccountGroup, "reason")
+			},
+		},
+		{
+			name: "engine wide",
+			want: routingKey{kind: routingKeyEngineWide, id: 0},
+			call: func() *future.Future[struct{}] {
+				return accounts.UnblockAll(ctx)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := strategy.submitCount()
+			result := test.call()
+			if result.Done() {
+				t.Fatal("future resolved even though strategy did not run task")
+			}
+			got, ok := strategy.lastRoutingKey()
+			if !ok {
+				t.Fatal("strategy recorded no routing-key submit")
+			}
+			if got != test.want {
+				t.Errorf("routing key = %+v, want %+v", got, test.want)
+			}
+			if got := strategy.submitCount(); got != before+1 {
+				t.Errorf("submit count = %d, want %d", got, before+1)
+			}
+		})
+	}
+}
+
+func TestAsyncAccountsRejectsUninitializedAccountGroupID(t *testing.T) {
+	t.Parallel()
+
+	const missingGroupError = "openpit/asyncengine: uninitialized account group ID"
+	if got := ErrUninitializedAccountGroupID.Error(); got != missingGroupError {
+		t.Fatalf("ErrUninitializedAccountGroupID.Error() = %q, want %q", got, missingGroupError)
+	}
+
+	strategy := &recordingStrategy{}
+	engine := newAsyncEngine(newFakeDriver(), nil, strategy)
+	accounts := engine.Accounts()
+	account := param.NewAccountIDFromUint64(7)
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		call func() *future.Future[struct{}]
+	}{
+		{
+			name: "register group",
+			call: func() *future.Future[struct{}] {
+				return accounts.RegisterGroup(
+					ctx, []param.AccountID{account}, param.AccountGroupID{},
+				)
+			},
+		},
+		{
+			name: "unregister group",
+			call: func() *future.Future[struct{}] {
+				return accounts.UnregisterGroup(
+					ctx, []param.AccountID{account}, param.AccountGroupID{},
+				)
+			},
+		},
+		{
+			name: "block group",
+			call: func() *future.Future[struct{}] {
+				return accounts.BlockGroup(ctx, param.AccountGroupID{}, "reason")
+			},
+		},
+		{
+			name: "unblock group",
+			call: func() *future.Future[struct{}] {
+				return accounts.UnblockGroup(ctx, param.AccountGroupID{})
+			},
+		},
+		{
+			name: "replace group block reason",
+			call: func() *future.Future[struct{}] {
+				return accounts.ReplaceGroupBlockReason(
+					ctx, param.AccountGroupID{}, "replacement",
+				)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := strategy.submitCount()
+			result := test.call()
+			if !result.Done() {
+				t.Error("future is unresolved, want synchronous rejection")
+				return
+			}
+			_, err := result.Await(context.Background())
+			if !errors.Is(err, ErrUninitializedAccountGroupID) {
+				t.Errorf("Await() error = %v, want ErrUninitializedAccountGroupID", err)
+			}
+			if got := strategy.submitCount(); got != before {
+				t.Errorf("submit count = %d, want %d", got, before)
+			}
+		})
+	}
+}
+
+func assertRoutingKeysExecuteIndependently(
+	t *testing.T,
+	strategy strategy,
+	firstKey routingKey,
+	secondKey routingKey,
+) {
+	t.Helper()
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	released := false
+	stopped := false
+	defer func() {
+		if !released {
+			close(releaseFirst)
+		}
+		if !stopped {
+			_ = strategy.stopHard(context.Background())
+		}
+	}()
+
+	firstFuture := future.New[struct{}]()
+	firstTask := &submitTask{
+		f: firstFuture,
+		fn: func() error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		},
+	}
+	if err := strategy.submit(
+		context.Background(), firstKey, firstTask,
+	); err != nil {
+		t.Fatalf("first submit error = %v", err)
+	}
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first routing key did not start")
+	}
+
+	secondFuture := future.New[struct{}]()
+	secondTask := &submitTask{
+		f:  secondFuture,
+		fn: func() error { return nil },
+	}
+	if err := strategy.submit(
+		context.Background(), secondKey, secondTask,
+	); err != nil {
+		t.Fatalf("second submit error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := secondFuture.Await(ctx); err != nil {
+		t.Fatalf("second routing key did not execute independently: %v", err)
+	}
+
+	close(releaseFirst)
+	released = true
+	if _, err := firstFuture.Await(context.Background()); err != nil {
+		t.Fatalf("first routing key Await() error = %v", err)
+	}
+	if err := strategy.stopGraceful(context.Background()); err != nil {
+		t.Fatalf("StopGraceful() error = %v", err)
+	}
+	stopped = true
 }

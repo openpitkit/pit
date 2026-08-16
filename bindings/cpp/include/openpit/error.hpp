@@ -101,6 +101,13 @@ class ConfigureError : public Error {
   ConfigureErrorKind m_kind;
 };
 
+// Error thrown when an async handle is in the transient finalizing state.
+class FinalizationInProgressError : public Error {
+ public:
+  explicit FinalizationInProgressError(std::string message)
+      : Error(std::move(message)) {}
+};
+
 namespace detail {
 
 class ErrorAccess final {

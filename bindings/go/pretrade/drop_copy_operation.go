@@ -73,6 +73,11 @@ func NewDropCopyOperationFromHandle(
 	return &DropCopyOperation{handle: handle}
 }
 
+// IsClosed reports whether the operation no longer owns a native handle.
+func (o *DropCopyOperation) IsClosed() bool {
+	return o.handle == nil
+}
+
 // Close releases the operation.
 //
 // If neither Commit nor Rollback was called beforehand, Close rolls back

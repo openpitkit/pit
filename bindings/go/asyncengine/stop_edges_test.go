@@ -73,27 +73,14 @@ type submitFailureHandoffGateStrategy struct {
 	cleanupOnce    sync.Once
 }
 
-func (s *submitFailureHandoffGateStrategy) submit(
-	ctx context.Context,
-	accountID param.AccountID,
-	task pendingTask,
-) error {
-	err := s.strategy.submit(ctx, accountID, task)
-	if err != nil {
-		s.errorKnownOnce.Do(func() { close(s.errorKnown) })
-		<-s.releaseHandoff
-	}
-	return err
-}
-
 func (s *submitFailureHandoffGateStrategy) submitWithFailureHandoff(
 	ctx context.Context,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 	onFailure func(error),
 ) error {
-	return submitWithFailureHandoff(
-		ctx, s.strategy, accountID, task, func(err error) {
+	return s.strategy.submitWithFailureHandoff(
+		ctx, key, task, func(err error) {
 			s.errorKnownOnce.Do(func() { close(s.errorKnown) })
 			<-s.releaseHandoff
 			onFailure(err)
@@ -102,10 +89,10 @@ func (s *submitFailureHandoffGateStrategy) submitWithFailureHandoff(
 }
 
 func (s *submitFailureHandoffGateStrategy) scheduleSubmitFailureCleanup(
-	accountID param.AccountID,
+	key routingKey,
 	cleanup func(),
 ) {
-	s.strategy.scheduleSubmitFailureCleanup(accountID, func() {
+	s.strategy.scheduleSubmitFailureCleanup(key, func() {
 		s.cleanupOnce.Do(func() { close(s.cleanupStarted) })
 		<-s.releaseCleanup
 		cleanup()
@@ -128,14 +115,14 @@ func submitFailureCleanupTestQueue(
 	switch strategy := s.(type) {
 	case *dynamicStrategy:
 		strategy.mu.RLock()
-		q := strategy.queues[accountID]
+		q := strategy.queues[accountRoutingKey(accountID)]
 		strategy.mu.RUnlock()
 		if q == nil {
 			t.Fatal("Dynamic queue was not created")
 		}
 		return q
 	case *shardedStrategy:
-		return strategy.shardFor(accountID)
+		return strategy.shardFor(accountRoutingKey(accountID))
 	default:
 		t.Fatalf("strategy type = %T", s)
 		return nil
@@ -156,7 +143,7 @@ func TestWorkerRetiredLaneDoesNotAbandonQueuedCleanup(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(1)
 
 	cleanupRan := make(chan struct{})
-	if !b.enqueueSubmitFailureCleanup(q, accountID, func() {
+	if !b.enqueueSubmitFailureCleanup(q, accountRoutingKey(accountID), func() {
 		close(cleanupRan)
 	}, true) {
 		t.Fatal("live lane refused mandatory cleanup")
@@ -182,40 +169,42 @@ func TestWorkerRetiredLaneDoesNotAbandonQueuedCleanup(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not exit after draining its cleanup")
 	}
-	if b.enqueueSubmitFailureCleanup(q, accountID, func() {}, true) {
+	if b.enqueueSubmitFailureCleanup(q, accountRoutingKey(accountID), func() {}, true) {
 		t.Fatal("dead lane accepted cleanup that no worker can run")
 	}
 	b.workersWG.Wait()
 }
 
-// TestShardedMandatoryCleanupFencesOnlyItsAccount proves the ordering fence is
-// scoped to the account that owes a handle release. A Sharded queue carries
-// many accounts, so fencing the queue would stall accounts with nothing
-// pending; the account that owes the release must still stay ordered behind
-// it, and its producers must still honour their own context.
-func TestShardedMandatoryCleanupFencesOnlyItsAccount(t *testing.T) {
+// TestShardedMandatoryCleanupFencesOnlyItsRoutingKey proves the ordering fence
+// is scoped to the routing key that owes a handle release. A Sharded queue
+// carries many keys, so fencing the queue would stall keys with nothing pending;
+// the key that owes the release must still stay ordered behind it, and its
+// producers must still honour their own context.
+func TestShardedMandatoryCleanupFencesOnlyItsRoutingKey(t *testing.T) {
 	s := newShardedStrategy(baseConfig{queueCapacity: 4}, 1)
 	fenced := param.NewAccountIDFromUint64(1)
 	other := param.NewAccountIDFromUint64(2)
+	group := param.NewAccountGroupIDFromHandle(1)
+	engine := newAsyncEngine(newFakeDriver(), nil, s)
 	releaseWorker := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseWorker) }) }
 	defer release()
 
 	started := make(chan struct{}, 1)
-	if err := s.submit(context.Background(), fenced,
+	if err := s.submit(context.Background(), accountRoutingKey(fenced),
 		submitFailureCleanupTestTask{started: started, release: releaseWorker},
 	); err != nil {
 		t.Fatalf("blocking submit error = %v", err)
 	}
 	<-started
 	cleanupRan := make(chan struct{})
-	s.scheduleSubmitFailureCleanup(fenced, func() { close(cleanupRan) })
+	s.scheduleSubmitFailureCleanup(accountRoutingKey(fenced), func() { close(cleanupRan) })
 
 	otherSubmit := make(chan error, 1)
 	go func() {
 		otherSubmit <- s.submit(
-			context.Background(), other, submitFailureCleanupTestTask{},
+			context.Background(), accountRoutingKey(other), submitFailureCleanupTestTask{},
 		)
 	}()
 	select {
@@ -228,10 +217,24 @@ func TestShardedMandatoryCleanupFencesOnlyItsAccount(t *testing.T) {
 		t.Fatal("one account's cleanup fenced an unrelated account")
 	}
 
+	administrativeSubmit := make(chan struct{}, 1)
+	go func() {
+		_ = engine.Accounts().BlockGroup(
+			context.Background(), group, "reason",
+		)
+		administrativeSubmit <- struct{}{}
+	}()
+	select {
+	case <-administrativeSubmit:
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("account cleanup fenced an account-group operation with the same ID")
+	}
+
 	fencedSubmit := make(chan error, 1)
 	go func() {
 		fencedSubmit <- s.submit(
-			context.Background(), fenced, submitFailureCleanupTestTask{},
+			context.Background(), accountRoutingKey(fenced), submitFailureCleanupTestTask{},
 		)
 	}()
 	select {
@@ -245,7 +248,7 @@ func TestShardedMandatoryCleanupFencesOnlyItsAccount(t *testing.T) {
 	cancelledSubmit := make(chan error, 1)
 	go func() {
 		cancelledSubmit <- s.submit(
-			cancelledCtx, fenced, submitFailureCleanupTestTask{},
+			cancelledCtx, accountRoutingKey(fenced), submitFailureCleanupTestTask{},
 		)
 	}()
 	cancel()
@@ -312,7 +315,7 @@ func TestSubmitFailureCleanupHandoffRetainsLifecycleObligation(t *testing.T) {
 			}
 			underlyingStopped := make(chan struct{})
 			async := newAsyncEngine(
-				newFakeDriver(), func() { close(underlyingStopped) }, wrapped,
+				newAcceptingDriver(), func() { close(underlyingStopped) }, wrapped,
 			)
 
 			operation, rejects, err := async.ApplyDropCopy(
@@ -437,7 +440,7 @@ func TestDynamicQueueLimitFailureRetainsLifecycleObligation(t *testing.T) {
 			)
 			occupiedAccount := param.NewAccountIDFromUint64(1)
 			if err := dynamic.submit(
-				context.Background(), occupiedAccount, submitFailureCleanupTestTask{},
+				context.Background(), accountRoutingKey(occupiedAccount), submitFailureCleanupTestTask{},
 			); err != nil {
 				t.Fatalf("setup submit error = %v", err)
 			}
@@ -471,10 +474,10 @@ func TestDynamicQueueLimitFailureRetainsLifecycleObligation(t *testing.T) {
 			accountID := param.NewAccountIDFromUint64(2)
 			submitDone := make(chan error, 1)
 			go func() {
-				submitDone <- submitWithFailureHandoff(
-					context.Background(), wrapped, accountID,
+				submitDone <- wrapped.submitWithFailureHandoff(
+					context.Background(), accountRoutingKey(accountID),
 					submitFailureCleanupTestTask{}, func(error) {
-						wrapped.scheduleSubmitFailureCleanup(accountID, func() {})
+						wrapped.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() {})
 					},
 				)
 			}()
@@ -600,14 +603,14 @@ func TestDynamicRetiredRetryRetainsLifecycleObligation(t *testing.T) {
 			observer.onQueueCreated = func(createdAccount param.AccountID) {
 				defer close(retired)
 				dynamic.mu.RLock()
-				q := dynamic.queues[createdAccount]
+				q := dynamic.queues[accountRoutingKey(createdAccount)]
 				dynamic.mu.RUnlock()
 				if q == nil {
 					observerErr <- errors.New("created queue was not published")
 					return
 				}
 				removed, _ := dynamic.retireIfIdle(
-					idleCandidate{accountID: createdAccount, q: q},
+					idleCandidate{key: accountRoutingKey(createdAccount), q: q},
 					time.Now().Add(time.Second),
 				)
 				if !removed {
@@ -617,7 +620,7 @@ func TestDynamicRetiredRetryRetainsLifecycleObligation(t *testing.T) {
 				go func() {
 					defer close(barrierDone)
 					installed := dynamic.cleanupWithoutLiveLane(
-						createdAccount,
+						accountRoutingKey(createdAccount),
 						func() {
 							close(barrierHeld)
 							<-releaseBarrier
@@ -670,10 +673,10 @@ func TestDynamicRetiredRetryRetainsLifecycleObligation(t *testing.T) {
 			)
 			submitDone := make(chan error, 1)
 			go func() {
-				submitDone <- submitWithFailureHandoff(
-					context.Background(), wrapped, accountID,
+				submitDone <- wrapped.submitWithFailureHandoff(
+					context.Background(), accountRoutingKey(accountID),
 					submitFailureCleanupTestTask{}, func(error) {
-						wrapped.scheduleSubmitFailureCleanup(accountID, func() {})
+						wrapped.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() {})
 					},
 				)
 			}()
@@ -859,14 +862,14 @@ func TestSubmitFailureCleanupProducerHonorsStopDeadline(t *testing.T) {
 			})
 
 			started := make(chan struct{}, 1)
-			if err := s.submit(context.Background(), accountID,
+			if err := s.submit(context.Background(), accountRoutingKey(accountID),
 				submitFailureCleanupTestTask{started: started, release: release},
 			); err != nil {
 				t.Fatalf("first submit error = %v", err)
 			}
 			<-started
 			if err := s.submit(
-				context.Background(), accountID, submitFailureCleanupTestTask{},
+				context.Background(), accountRoutingKey(accountID), submitFailureCleanupTestTask{},
 			); err != nil {
 				t.Fatalf("second submit error = %v", err)
 			}
@@ -875,7 +878,7 @@ func TestSubmitFailureCleanupProducerHonorsStopDeadline(t *testing.T) {
 			cleanupQueued := make(chan struct{})
 			cleanupRan := make(chan struct{})
 			go func() {
-				s.scheduleSubmitFailureCleanup(accountID, func() {
+				s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() {
 					cleanupCalls.Add(1)
 					close(cleanupRan)
 				})
@@ -964,7 +967,7 @@ func TestMandatoryCleanupIncludedInSuccessfulStop(t *testing.T) {
 			defer releaseAll()
 
 			started := make(chan struct{}, 1)
-			if err := s.submit(context.Background(), accountID,
+			if err := s.submit(context.Background(), accountRoutingKey(accountID),
 				submitFailureCleanupTestTask{
 					started: started,
 					release: releaseWorker,
@@ -974,13 +977,13 @@ func TestMandatoryCleanupIncludedInSuccessfulStop(t *testing.T) {
 			}
 			<-started
 			if err := s.submit(
-				context.Background(), accountID, submitFailureCleanupTestTask{},
+				context.Background(), accountRoutingKey(accountID), submitFailureCleanupTestTask{},
 			); err != nil {
 				t.Fatalf("buffered submit error = %v", err)
 			}
 
 			cleanupEntered := make(chan struct{})
-			s.scheduleSubmitFailureCleanup(accountID, func() {
+			s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() {
 				close(cleanupEntered)
 				<-releaseCleanup
 			})
@@ -1039,7 +1042,7 @@ func TestMandatoryCleanupAfterSuccessfulStopRunsWithoutWorker(t *testing.T) {
 			}
 			cleanupRan := make(chan struct{})
 			s.scheduleSubmitFailureCleanup(
-				param.NewAccountIDFromUint64(1),
+				accountRoutingKey(param.NewAccountIDFromUint64(1)),
 				func() { close(cleanupRan) },
 			)
 			select {
@@ -1058,7 +1061,7 @@ func TestDynamicQueueLimitCleanupIncludedInStopFence(t *testing.T) {
 	liveAccount := param.NewAccountIDFromUint64(1)
 	cleanupAccount := param.NewAccountIDFromUint64(2)
 	ran := make(chan struct{}, 1)
-	if err := s.submit(context.Background(), liveAccount,
+	if err := s.submit(context.Background(), accountRoutingKey(liveAccount),
 		submitFailureCleanupTestTask{started: ran},
 	); err != nil {
 		t.Fatalf("submit error = %v", err)
@@ -1072,7 +1075,7 @@ func TestDynamicQueueLimitCleanupIncludedInStopFence(t *testing.T) {
 	cleanupEntered := make(chan struct{})
 	cleanupReturned := make(chan struct{})
 	go func() {
-		s.scheduleSubmitFailureCleanup(cleanupAccount, func() {
+		s.scheduleSubmitFailureCleanup(accountRoutingKey(cleanupAccount), func() {
 			close(cleanupEntered)
 			<-releaseCleanup
 		})
@@ -1112,7 +1115,7 @@ func TestMandatoryCleanupIsNotOvertakenByLaterNormalSubmit(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(1)
 	releaseWorker := make(chan struct{})
 	started := make(chan struct{}, 1)
-	if err := s.submit(context.Background(), accountID,
+	if err := s.submit(context.Background(), accountRoutingKey(accountID),
 		submitFailureCleanupTestTask{
 			started: started,
 			release: releaseWorker,
@@ -1126,13 +1129,13 @@ func TestMandatoryCleanupIsNotOvertakenByLaterNormalSubmit(t *testing.T) {
 	submitResults := make(chan error, pairs)
 	for i := 0; i < pairs; i++ {
 		cleanupEvent := fmt.Sprintf("cleanup-%d", i)
-		s.scheduleSubmitFailureCleanup(accountID, func() {
+		s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() {
 			events <- cleanupEvent
 		})
 		go func(index int) {
 			submitResults <- s.submit(
 				context.Background(),
-				accountID,
+				accountRoutingKey(accountID),
 				submitFailureCleanupOrderTask{
 					event:  fmt.Sprintf("normal-%d", index),
 					events: events,
@@ -1181,7 +1184,7 @@ func TestDynamicCleanupRunsAfterPartialStopWithoutRetry(t *testing.T) {
 	defer releaseAll()
 
 	started := make(chan struct{}, 1)
-	if err := s.submit(context.Background(), accountID,
+	if err := s.submit(context.Background(), accountRoutingKey(accountID),
 		submitFailureCleanupTestTask{
 			started: started,
 			release: releaseWorker,
@@ -1201,7 +1204,7 @@ func TestDynamicCleanupRunsAfterPartialStopWithoutRetry(t *testing.T) {
 		_ = s.sendToQueue(
 			context.Background(),
 			q,
-			accountID,
+			accountRoutingKey(accountID),
 			submitFailureCleanupTestTask{},
 			q.quit,
 		)
@@ -1219,7 +1222,7 @@ func TestDynamicCleanupRunsAfterPartialStopWithoutRetry(t *testing.T) {
 		t.Fatalf("partial stop error = %v, want DeadlineExceeded", err)
 	}
 	cleanupRan := make(chan struct{})
-	s.scheduleSubmitFailureCleanup(accountID, func() { close(cleanupRan) })
+	s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() { close(cleanupRan) })
 	releaseProducerOnce.Do(func() { close(releaseProducer) })
 	select {
 	case <-producerDone:
@@ -1283,7 +1286,7 @@ func testDynamicNoLaneCleanupIncludedInRetryStop(
 	cleanupLaneRan := make(chan struct{}, 1)
 	if err := s.submit(
 		context.Background(),
-		cleanupAccount,
+		accountRoutingKey(cleanupAccount),
 		submitFailureCleanupTestTask{started: cleanupLaneRan},
 	); err != nil {
 		t.Fatalf("cleanup-account submit error = %v", err)
@@ -1298,7 +1301,7 @@ func testDynamicNoLaneCleanupIncludedInRetryStop(
 		t.Fatal("cleanup account lane was not retired")
 	}
 	s.mu.RLock()
-	_, cleanupLaneLive := s.queues[cleanupAccount]
+	_, cleanupLaneLive := s.queues[accountRoutingKey(cleanupAccount)]
 	s.mu.RUnlock()
 	if cleanupLaneLive {
 		t.Fatal("cleanup account still has a live lane")
@@ -1307,7 +1310,7 @@ func testDynamicNoLaneCleanupIncludedInRetryStop(
 	producerLaneRan := make(chan struct{}, 1)
 	if err := s.submit(
 		context.Background(),
-		producerAccount,
+		accountRoutingKey(producerAccount),
 		submitFailureCleanupTestTask{started: producerLaneRan},
 	); err != nil {
 		t.Fatalf("producer-account submit error = %v", err)
@@ -1326,7 +1329,7 @@ func testDynamicNoLaneCleanupIncludedInRetryStop(
 		err := s.sendToQueue(
 			context.Background(),
 			producerQueue,
-			producerAccount,
+			accountRoutingKey(producerAccount),
 			submitFailureCleanupTestTask{},
 			producerQueue.quit,
 		)
@@ -1352,7 +1355,7 @@ func testDynamicNoLaneCleanupIncludedInRetryStop(
 	cleanupEntered := make(chan struct{})
 	cleanupReturned := make(chan struct{})
 	go func() {
-		s.scheduleSubmitFailureCleanup(cleanupAccount, func() {
+		s.scheduleSubmitFailureCleanup(accountRoutingKey(cleanupAccount), func() {
 			close(cleanupEntered)
 			<-releaseCleanup
 		})
@@ -1407,7 +1410,7 @@ func TestDynamicCleanupWithoutLiveLaneDoesNotSerializeAccounts(t *testing.T) {
 	cleanupAccount := param.NewAccountIDFromUint64(2)
 	otherCleanupAccount := param.NewAccountIDFromUint64(3)
 	ran := make(chan struct{}, 1)
-	if err := s.submit(ctx, liveAccount,
+	if err := s.submit(ctx, accountRoutingKey(liveAccount),
 		submitFailureCleanupTestTask{started: ran},
 	); err != nil {
 		t.Fatalf("submit error = %v", err)
@@ -1418,7 +1421,7 @@ func TestDynamicCleanupWithoutLiveLaneDoesNotSerializeAccounts(t *testing.T) {
 	releaseCleanup := make(chan struct{})
 	cleanupReturned := make(chan struct{})
 	go func() {
-		s.scheduleSubmitFailureCleanup(cleanupAccount, func() {
+		s.scheduleSubmitFailureCleanup(accountRoutingKey(cleanupAccount), func() {
 			close(cleanupStarted)
 			<-releaseCleanup
 		})
@@ -1439,7 +1442,7 @@ func TestDynamicCleanupWithoutLiveLaneDoesNotSerializeAccounts(t *testing.T) {
 	}
 
 	otherCleanupRan := make(chan struct{})
-	go s.scheduleSubmitFailureCleanup(otherCleanupAccount, func() {
+	go s.scheduleSubmitFailureCleanup(accountRoutingKey(otherCleanupAccount), func() {
 		close(otherCleanupRan)
 	})
 	select {
@@ -1452,7 +1455,7 @@ func TestDynamicCleanupWithoutLiveLaneDoesNotSerializeAccounts(t *testing.T) {
 	sameAccountSubmit := make(chan error, 1)
 	go func() {
 		sameAccountSubmit <- s.submit(
-			ctx, cleanupAccount, submitFailureCleanupTestTask{},
+			ctx, accountRoutingKey(cleanupAccount), submitFailureCleanupTestTask{},
 		)
 	}()
 	select {
@@ -1491,7 +1494,7 @@ func TestDynamicCleanupAfterStoppedLaneReturnsBeforeBlockedWorker(t *testing.T) 
 	defer release()
 
 	started := make(chan struct{}, 1)
-	if err := s.submit(context.Background(), accountID,
+	if err := s.submit(context.Background(), accountRoutingKey(accountID),
 		submitFailureCleanupTestTask{
 			started: started,
 			release: releaseWorker,
@@ -1512,7 +1515,7 @@ func TestDynamicCleanupAfterStoppedLaneReturnsBeforeBlockedWorker(t *testing.T) 
 	cleanupRan := make(chan struct{})
 	cleanupReturned := make(chan struct{})
 	go func() {
-		s.scheduleSubmitFailureCleanup(accountID, func() {
+		s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() {
 			close(cleanupRan)
 		})
 		close(cleanupReturned)
@@ -1562,7 +1565,7 @@ func TestDynamicStoppedLaneCleanupWaitsForRegisteredProducer(t *testing.T) {
 	defer releaseAll()
 
 	workerStarted := make(chan struct{}, 1)
-	if err := s.submit(context.Background(), accountID,
+	if err := s.submit(context.Background(), accountRoutingKey(accountID),
 		submitFailureCleanupTestTask{
 			started: workerStarted,
 			release: releaseWorker,
@@ -1584,7 +1587,7 @@ func TestDynamicStoppedLaneCleanupWaitsForRegisteredProducer(t *testing.T) {
 		err := s.sendToQueue(
 			context.Background(),
 			q,
-			accountID,
+			accountRoutingKey(accountID),
 			submitFailureCleanupTestTask{started: producerRan},
 			q.quit,
 		)
@@ -1610,7 +1613,7 @@ func TestDynamicStoppedLaneCleanupWaitsForRegisteredProducer(t *testing.T) {
 	cleanupRan := make(chan struct{})
 	cleanupReturned := make(chan struct{})
 	go func() {
-		s.scheduleSubmitFailureCleanup(accountID, func() {
+		s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() {
 			close(cleanupRan)
 		})
 		close(cleanupReturned)
@@ -1705,7 +1708,7 @@ func TestDynamicCleanupLoopRetiresIdleLane(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(1)
 	ran := make(chan struct{}, 1)
 	if err := s.submit(
-		ctx, accountID, submitFailureCleanupTestTask{started: ran},
+		ctx, accountRoutingKey(accountID), submitFailureCleanupTestTask{started: ran},
 	); err != nil {
 		t.Fatalf("submit error = %v", err)
 	}
@@ -1717,7 +1720,7 @@ func TestDynamicCleanupLoopRetiresIdleLane(t *testing.T) {
 		t.Fatal("the background scan never retired the idle lane")
 	}
 	s.mu.RLock()
-	_, live := s.queues[accountID]
+	_, live := s.queues[accountRoutingKey(accountID)]
 	s.mu.RUnlock()
 	if live {
 		t.Fatal("retired lane is still mapped to its account")
@@ -1757,7 +1760,7 @@ func TestDynamicSubmitFailureCleanupRetriesLaneRetiredByCleanupLoop(
 		switch created.Add(1) {
 		case 1:
 			s.mu.RLock()
-			retired := s.queues[createdAccount]
+			retired := s.queues[accountRoutingKey(createdAccount)]
 			s.mu.RUnlock()
 			if retired == nil {
 				observerErr <- errors.New("created queue was not published")
@@ -1773,7 +1776,7 @@ func TestDynamicSubmitFailureCleanupRetriesLaneRetiredByCleanupLoop(
 			// is idle until the probe task lands on it, survives the retry.
 			s.stopCleanup()
 		case 2:
-			if err := s.submit(ctx, createdAccount,
+			if err := s.submit(ctx, accountRoutingKey(createdAccount),
 				submitFailureCleanupTestTask{
 					started: started,
 					release: releaseWorker,
@@ -1787,7 +1790,7 @@ func TestDynamicSubmitFailureCleanupRetriesLaneRetiredByCleanupLoop(
 	}
 
 	cleanupRan := make(chan struct{})
-	s.scheduleSubmitFailureCleanup(accountID, func() { close(cleanupRan) })
+	s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() { close(cleanupRan) })
 	select {
 	case err := <-observerErr:
 		t.Fatal(err)
@@ -1831,20 +1834,23 @@ func TestDynamicSubmitFailureCleanupRetriesRetiredLane(t *testing.T) {
 		switch created.Add(1) {
 		case 1:
 			s.mu.RLock()
-			retiredQueue = s.queues[createdAccount]
+			retiredQueue = s.queues[accountRoutingKey(createdAccount)]
 			s.mu.RUnlock()
 			if retiredQueue == nil {
 				t.Fatal("created queue was not published")
 			}
 			removed, _ := s.retireIfIdle(
-				idleCandidate{accountID: createdAccount, q: retiredQueue},
+				idleCandidate{
+					key: accountRoutingKey(createdAccount),
+					q:   retiredQueue,
+				},
 				time.Now().Add(time.Second),
 			)
 			if !removed {
 				t.Fatal("probe could not retire queue before cleanup enqueue")
 			}
 		case 2:
-			if err := s.submit(ctx, createdAccount,
+			if err := s.submit(ctx, accountRoutingKey(createdAccount),
 				submitFailureCleanupTestTask{
 					started: started,
 					release: releaseWorker,
@@ -1857,7 +1863,7 @@ func TestDynamicSubmitFailureCleanupRetriesRetiredLane(t *testing.T) {
 	}
 
 	cleanupRan := make(chan struct{})
-	s.scheduleSubmitFailureCleanup(accountID, func() { close(cleanupRan) })
+	s.scheduleSubmitFailureCleanup(accountRoutingKey(accountID), func() { close(cleanupRan) })
 	if got := created.Load(); got != 2 {
 		close(releaseWorker)
 		t.Fatalf("queue creations = %d, want retired plus replacement", got)

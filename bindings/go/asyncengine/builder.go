@@ -71,8 +71,8 @@ func (b *Builder) WithObserver(o Observer) *Builder {
 	return b
 }
 
-// WithQueueCapacity sets the buffered channel size of each per-account or
-// per-shard queue. Zero or negative resets to the default (1024). Larger
+// WithQueueCapacity sets the buffered channel size of each routing or per-shard
+// queue. Zero or negative resets to the default (1024). Larger
 // capacities smooth bursts at the cost of memory and a longer tail
 // during graceful stop.
 func (b *Builder) WithQueueCapacity(capacity int) *Builder {
@@ -99,30 +99,30 @@ func (b *Builder) baseConfig() baseConfig {
 // Sharded selects the fixed N-shard strategy and advances to
 // ShardedBuilder where Build is available.
 //
-// Pros: cheapest hot path, O(1) memory regardless of account population,
+// Pros: cheapest hot path, O(1) memory regardless of routing-key population,
 // lock-free routing (no per-queue RWMutex on the send path); one short
 // shared read-lock per submit only to order against stop, so concurrent
-// submits are not serialized against each other. Cons: one hot account
-// saturates a single shard while others stay idle, no per-account
-// observability.
+// submits are not serialized against each other. Cons: one hot routing key
+// saturates a single shard while others stay idle, no routing-queue-created or
+// routing-queue-removed observer signals.
 //
-// Choose this when the active account set is broad and roughly balanced
+// Choose this when the active routing-key set is broad and roughly balanced
 // and you want the lowest possible per-call overhead.
 func (b *Builder) Sharded(workers int) *ShardedBuilder {
 	return &ShardedBuilder{parent: b, workers: workers}
 }
 
-// Dynamic selects the lazy per-account strategy with idle cleanup and
+// Dynamic selects the lazy per-routing-key strategy with idle cleanup and
 // advances to DynamicBuilder where MaxQueues, IdleCleanupAfter, and
 // Build are available.
 //
-// Pros: full per-account isolation, no hot-shard bottlenecks, queue-level
-// observer events per account. Cons: an RWMutex hit on each submit
-// lookup, background cleanup goroutine, slightly higher memory per
-// active account.
+// Pros: full routing-key isolation, no hot-shard bottlenecks, queue-level
+// observer events. Cons: an RWMutex hit on each submit lookup, background
+// cleanup goroutine, slightly higher memory per active routing key.
 //
-// Choose this when account activity is skewed, when you want per-account
-// dispatch metrics, or when the population is large enough that
+// Choose this when account activity is skewed, when routing-queue metrics with
+// non-unique cross-kind numeric IDs are sufficient, or when the population is
+// large enough that
 // statically allocating shards would be wasteful.
 func (b *Builder) Dynamic() *DynamicBuilder {
 	return &DynamicBuilder{
@@ -159,12 +159,13 @@ type DynamicBuilder struct {
 	idleCleanupAfter time.Duration
 }
 
-// MaxQueues caps the number of concurrent live per-account queues: a cap of n
-// means n usable account queues. Zero removes the cap; submit never fails for
-// new accounts. The default cap is runtime.NumCPU() * 32.
+// MaxQueues caps the number of concurrent live routing queues: a cap of n
+// means n usable queues across account, account-group, and engine-wide routing
+// lanes. Zero removes the cap; submit never fails for a new routing key. The
+// default cap is runtime.NumCPU() * 32.
 //
-// When the cap is reached, submitting for an unknown account returns
-// ErrQueueLimit; submits for known accounts continue normally.
+// When the cap is reached, submitting for an unknown routing key returns
+// ErrQueueLimit; submits for known routing keys continue normally.
 func (b *DynamicBuilder) MaxQueues(n int) *DynamicBuilder {
 	b.maxQueues = n
 	return b
@@ -183,8 +184,8 @@ func (b *DynamicBuilder) IdleCleanupAfter(d time.Duration) *DynamicBuilder {
 	return b
 }
 
-// Build constructs an AsyncEngine that creates per-account queues on
-// demand and retires idle ones in the background.
+// Build constructs an AsyncEngine that creates routing queues on demand and
+// retires idle ones in the background.
 func (b *DynamicBuilder) Build() (*AsyncEngine, error) {
 	if b.maxQueues < 0 {
 		return nil, fmt.Errorf(

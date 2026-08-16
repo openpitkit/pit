@@ -20,6 +20,7 @@ package asyncengine
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,15 +28,15 @@ import (
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/accounts"
+	"go.openpit.dev/openpit/configure"
+	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
 
-// acceptingDriver is a fake driver that returns nil rejects (happy-path accept)
-// for StartPreTrade and ExecutePreTrade. The returned request and reservation
-// are zero-valued with nil native handles; Close() on them is safe (no-op).
+// acceptingDriver is a fake driver that returns live handles and nil rejects.
 type acceptingDriver struct {
 	mu           sync.Mutex
 	startCount   int64
@@ -43,10 +44,40 @@ type acceptingDriver struct {
 	reportCount  int64
 	adjustCount  int64
 	startHook    func()
+	rejectStart  bool
 
 	concurrentByAccount map[uint64]int64
 	maxConcurrent       map[uint64]int64
 }
+
+type acceptingDriverEngineResult struct {
+	handle native.Engine
+	err    error
+}
+
+// The fixture engine intentionally lives for the test process. Accepted
+// handles outlive individual acceptingDriver values and remain caller-owned.
+var acceptingDriverEngine = sync.OnceValue(func() acceptingDriverEngineResult {
+	builder, err := native.CreateEngineBuilder(native.SyncPolicyAccount)
+	if err != nil {
+		return acceptingDriverEngineResult{err: err}
+	}
+	if err := native.EngineBuilderAddBuiltinOrderValidation(
+		builder, native.DefaultPolicyGroupID,
+	); err != nil {
+		native.DestroyEngineBuilder(builder)
+		return acceptingDriverEngineResult{err: err}
+	}
+	engine, buildErr, err := native.EngineBuilderBuild(builder)
+	native.DestroyEngineBuilder(builder)
+	if buildErr != nil {
+		native.DestroyEngineBuildError(buildErr)
+		return acceptingDriverEngineResult{
+			err: errors.New("accepting driver engine returned a build error"),
+		}
+	}
+	return acceptingDriverEngineResult{handle: engine, err: err}
+})
 
 func newAcceptingDriver() *acceptingDriver {
 	return &acceptingDriver{
@@ -82,9 +113,23 @@ func (d *acceptingDriver) StartPreTrade(
 		d.startHook()
 	}
 	atomic.AddInt64(&d.startCount, 1)
-	// Return a zero-valued Request (nil inner handle) with nil rejects - accept
-	// path.
-	return pretrade.NewRequestFromHandle(nil), nil, nil
+	if d.rejectStart {
+		return nil, []reject.Reject{{}}, nil
+	}
+	engine := acceptingDriverEngine()
+	if engine.err != nil {
+		return nil, nil, engine.err
+	}
+	handle, rejects, err := native.EngineStartPreTrade(engine.handle, order.Handle())
+	runtime.KeepAlive(order)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rejects != nil {
+		native.DestroyPretradeRejectList(rejects)
+		return nil, []reject.Reject{{}}, nil
+	}
+	return pretrade.NewRequestFromHandle(handle), nil, nil
 }
 
 func (d *acceptingDriver) ExecutePreTrade(
@@ -95,9 +140,26 @@ func (d *acceptingDriver) ExecutePreTrade(
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.executeCount, 1)
-	// Return a zero-valued Reservation (nil inner handle) with nil rejects -
-	// accept path.
-	return pretrade.NewReservationFromHandle(nil), nil, nil
+	engine := acceptingDriverEngine()
+	if engine.err != nil {
+		return nil, nil, engine.err
+	}
+	handle, rejects, err := native.EngineExecutePreTrade(engine.handle, order.Handle())
+	runtime.KeepAlive(order)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rejects != nil {
+		native.DestroyPretradeRejectList(rejects)
+		return nil, []reject.Reject{{}}, nil
+	}
+	return pretrade.NewReservationFromHandle(handle), nil, nil
+}
+
+func (*acceptingDriver) ExecutePreTradeDryRun(
+	model.Order,
+) (*pretrade.DryRunReport, error) {
+	return pretrade.NewDryRunReportFromHandle(nil), nil
 }
 
 func (d *acceptingDriver) ApplyDropCopy(
@@ -108,9 +170,20 @@ func (d *acceptingDriver) ApplyDropCopy(
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.executeCount, 1)
-	// Return a zero-valued DropCopyOperation (nil inner handle) with nil
-	// rejects - accept path.
-	return pretrade.NewDropCopyOperationFromHandle(nil), nil, nil
+	engine := acceptingDriverEngine()
+	if engine.err != nil {
+		return nil, nil, engine.err
+	}
+	handle, rejects, err := native.EngineApplyDropCopy(engine.handle, order.Handle())
+	runtime.KeepAlive(order)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rejects != nil {
+		native.DestroyPretradeRejectList(rejects)
+		return nil, []reject.Reject{{}}, nil
+	}
+	return pretrade.NewDropCopyOperationFromHandle(handle), nil, nil
 }
 
 func (d *acceptingDriver) ApplyExecutionReport(
@@ -138,12 +211,15 @@ func (*acceptingDriver) Accounts() accounts.Accounts {
 	return accounts.Accounts{}
 }
 
+func (*acceptingDriver) Configure() configure.Configurator {
+	return configure.Configurator{}
+}
+
 // TestAsyncEngineExecutePreTradeHappyPath tests that ExecutePreTrade returns a
-// *AsyncReservation (non-nil) when the driver succeeds, and that executeCount
+// live *AsyncReservation when the driver succeeds, and that executeCount
 // increments.
 func TestAsyncEngineExecutePreTradeHappyPath(t *testing.T) {
 	t.Parallel()
-	// Use acceptingDriver which returns nil rejects - the accept path.
 	driver := newAcceptingDriver()
 	async, err := NewBuilder(driver).Dynamic().Build()
 	if err != nil {
@@ -172,6 +248,9 @@ func TestAsyncEngineExecutePreTradeHappyPath(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&driver.executeCount); got != 1 {
 		t.Errorf("executeCount = %d, want 1", got)
+	}
+	if _, err := res.Close(context.Background()).Await(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 
@@ -269,6 +348,7 @@ func TestAsyncDropCopyFinalizersRunOnTheAccountWorker(t *testing.T) {
 func TestAsyncEngineApplyDropCopyWaitsForSameAccountLane(t *testing.T) {
 	t.Parallel()
 	driver := newAcceptingDriver()
+	driver.rejectStart = true
 	gate := make(chan struct{})
 	started := make(chan struct{})
 	var once sync.Once
@@ -300,8 +380,15 @@ func TestAsyncEngineApplyDropCopyWaitsForSameAccountLane(t *testing.T) {
 	}
 
 	close(gate)
-	if _, _, err := first.Await(context.Background()); err != nil {
+	request, rejects, err := first.Await(context.Background())
+	if err != nil {
 		t.Fatalf("start Await() error = %v", err)
+	}
+	if request != nil {
+		t.Fatal("start request != nil, want rejected start")
+	}
+	if len(rejects) == 0 {
+		t.Fatal("start rejects are empty, want non-empty rejects")
 	}
 	operation, _, err := dropCopy.Await(context.Background())
 	if err != nil {
@@ -395,46 +482,73 @@ func TestAsyncEngineApplyDropCopyFailsFastWithoutAccount(t *testing.T) {
 	}
 }
 
-// TestAsyncEngineExecutePreTradeSerializesReserveCommit tests that a
-// reserve→commit sequence for the same account is serialized through one
-// queue. The driver tracks peak concurrency; we assert it never exceeds 1 for
-// account 42.
-func TestAsyncEngineExecutePreTradeSerializesReserveCommit(t *testing.T) {
-	t.Parallel()
-	driver := newAcceptingDriver()
-	async, err := NewBuilder(driver).Dynamic().MaxQueues(0).Build()
+func TestAsyncReservationFinalizerSerializesSameAccountLane(t *testing.T) {
+	callbackEntered := make(chan struct{})
+	callbackRelease := make(chan struct{})
+	releaseCallback := sync.OnceFunc(func() { close(callbackRelease) })
+	defer releaseCallback()
+	probe := &chainMutationProbe{
+		onRollback: func() {
+			close(callbackEntered)
+			<-callbackRelease
+		},
+	}
+	order := buildChainCheckOrder(t)
+	inner := newChainEngineReservation(
+		t, newChainProbeEngine(t, probe), order,
+	)
+	engine := newChainEngine(t, &chainReservationDriver{
+		acceptingDriver: newAcceptingDriver(),
+		reservation:     inner,
+	})
+	waitCtx, cancel := context.WithTimeout(context.Background(), chainStopTimeout)
+	defer cancel()
+	reservation, rejects, err := engine.ExecutePreTrade(
+		context.Background(), order,
+	).Await(waitCtx)
 	if err != nil {
-		t.Fatalf("Build() error = %v", err)
+		t.Fatalf("ExecutePreTrade() error = %v", err)
 	}
-	defer func() {
-		if err := async.StopGraceful(context.Background()); err != nil {
-			t.Fatalf("StopGraceful() error = %v", err)
-		}
-	}()
-
-	const account = uint64(42)
-	const iterations = 10
-	for i := 0; i < iterations; i++ {
-		f := async.ExecutePreTrade(context.Background(), buildTestOrder(t, account))
-		res, _, err := f.Await(context.Background())
-		if err != nil {
-			t.Fatalf("iter %d ExecutePreTrade Await error = %v", i, err)
-		}
-		// The fake driver returns nil inner; Close would panic on a real handle,
-		// but AsyncReservation.Close with a nil inner calls Close() on nil which
-		// is fine because pretrade.Reservation.Close guards on nil handle.
-		// So just drop the reservation - we only care about counting.
-		_ = res
+	if len(rejects) != 0 {
+		t.Fatalf("ExecutePreTrade() rejects = %v, want none", rejects)
+	}
+	if reservation == nil {
+		t.Fatal("ExecutePreTrade() reservation = nil, want non-nil")
 	}
 
-	if got := atomic.LoadInt64(&driver.executeCount); got != iterations {
-		t.Errorf("executeCount = %d, want %d", got, iterations)
+	finalizer := reservation.RollbackAndClose(context.Background())
+	select {
+	case <-callbackEntered:
+	case <-waitCtx.Done():
+		t.Fatal("reservation rollback callback did not start")
 	}
-	driver.mu.Lock()
-	peak := driver.maxConcurrent[account]
-	driver.mu.Unlock()
-	if peak > 1 {
-		t.Errorf("account %d concurrency peak = %d, want <= 1", account, peak)
+	competingRan := make(chan struct{})
+	competing := engine.Submit(
+		context.Background(),
+		param.NewAccountIDFromUint64(chainOrderAccountID),
+		func() error {
+			close(competingRan)
+			return nil
+		},
+	)
+	if competing.Done() {
+		t.Fatal("same-account task completed while finalizer callback was blocked")
+	}
+	select {
+	case <-competingRan:
+		t.Fatal("same-account task ran while finalizer callback was blocked")
+	default:
+	}
+
+	releaseCallback()
+	if _, err := finalizer.Await(waitCtx); err != nil {
+		t.Fatalf("RollbackAndClose() error = %v", err)
+	}
+	if _, err := competing.Await(waitCtx); err != nil {
+		t.Fatalf("same-account task error = %v", err)
+	}
+	if _, err := reservation.Close(context.Background()).Await(waitCtx); err != nil {
+		t.Fatalf("Close() after RollbackAndClose error = %v", err)
 	}
 }
 
@@ -622,5 +736,258 @@ func TestAsyncEngineInstrumentationCountersAllDriverMethods(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&driver.adjustmentCount); got != 1 {
 		t.Errorf("adjustmentCount = %d, want 1", got)
+	}
+}
+
+type malformedLifetimeDriver struct {
+	*acceptingDriver
+	request     *pretrade.Request
+	reservation *pretrade.Reservation
+	operation   *pretrade.DropCopyOperation
+	rejects     []reject.Reject
+	err         error
+}
+
+func (d *malformedLifetimeDriver) StartPreTrade(
+	model.Order,
+) (*pretrade.Request, []reject.Reject, error) {
+	return d.request, d.rejects, d.err
+}
+
+func (d *malformedLifetimeDriver) ExecutePreTrade(
+	model.Order,
+) (*pretrade.Reservation, []reject.Reject, error) {
+	return d.reservation, d.rejects, d.err
+}
+
+func (d *malformedLifetimeDriver) ApplyDropCopy(
+	model.Order,
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
+	return d.operation, d.rejects, d.err
+}
+
+func newDirectPathRequest(
+	t *testing.T,
+	engine native.Engine,
+	order model.Order,
+) *pretrade.Request {
+	t.Helper()
+	handle, rejects, err := native.EngineStartPreTrade(engine, order.Handle())
+	runtime.KeepAlive(order)
+	if err != nil {
+		t.Fatalf("EngineStartPreTrade() error = %v", err)
+	}
+	if rejects != nil {
+		native.DestroyPretradeRejectList(rejects)
+		t.Fatal("EngineStartPreTrade() rejected a valid order")
+	}
+	request := pretrade.NewRequestFromHandle(handle)
+	t.Cleanup(request.Close)
+	return request
+}
+
+func TestAsyncEngineRejectsInvalidLifetimeResults(t *testing.T) {
+	driverErr := errors.New("driver returned an unusable handle and error")
+	for _, path := range []string{"start", "execute", "drop copy"} {
+		for _, invalid := range []struct {
+			name    string
+			state   string
+			rejects []reject.Reject
+			err     error
+		}{
+			{name: "missing handle"},
+			{name: "empty rejects", rejects: []reject.Reject{}},
+			{name: "nil native handle", state: "nil native handle"},
+			{
+				name: "nil native handle with rejects", state: "nil native handle",
+				rejects: []reject.Reject{{}},
+			},
+			{
+				name: "nil native handle with error", state: "nil native handle",
+				err: driverErr,
+			},
+			{name: "closed native handle", state: "closed native handle"},
+			{
+				name: "closed native handle with rejects", state: "closed native handle",
+				rejects: []reject.Reject{{}},
+			},
+			{
+				name: "closed native handle with error", state: "closed native handle",
+				err: driverErr,
+			},
+		} {
+			t.Run(path+" with "+invalid.name, func(t *testing.T) {
+				driver := &malformedLifetimeDriver{
+					acceptingDriver: newAcceptingDriver(),
+					rejects:         invalid.rejects,
+					err:             invalid.err,
+				}
+				order := buildChainCheckOrder(t)
+				var assertClosed func()
+				switch invalid.state {
+				case "nil native handle":
+					switch path {
+					case "start":
+						driver.request = pretrade.NewRequestFromHandle(nil)
+						assertClosed = func() {
+							if !driver.request.IsClosed() {
+								t.Error("request with nil native handle remains open")
+							}
+						}
+					case "execute":
+						driver.reservation = pretrade.NewReservationFromHandle(nil)
+						assertClosed = func() {
+							if !driver.reservation.IsClosed() {
+								t.Error("reservation with nil native handle remains open")
+							}
+						}
+					case "drop copy":
+						driver.operation = pretrade.NewDropCopyOperationFromHandle(nil)
+						assertClosed = func() {
+							if !driver.operation.IsClosed() {
+								t.Error("drop-copy operation with nil native handle remains open")
+							}
+						}
+					}
+				case "closed native handle":
+					switch path {
+					case "start":
+						driver.request = newDirectPathRequest(
+							t, newChainNativeEngine(t), order,
+						)
+						driver.request.Close()
+						assertClosed = func() {
+							if !driver.request.IsClosed() {
+								t.Error("request remains open")
+							}
+						}
+					case "execute":
+						driver.reservation = newChainReservation(t, order)
+						driver.reservation.Close()
+						assertClosed = func() {
+							if !driver.reservation.IsClosed() {
+								t.Error("reservation remains open")
+							}
+						}
+					case "drop copy":
+						driver.operation = newChainDropCopyOperation(t, order)
+						driver.operation.Close()
+						assertClosed = func() {
+							if !driver.operation.IsClosed() {
+								t.Error("drop-copy operation remains open")
+							}
+						}
+					}
+				}
+				engine := newChainEngine(t, driver)
+				var resultPresent bool
+				var rejects []reject.Reject
+				var err error
+				switch path {
+				case "start":
+					var request *AsyncRequest
+					request, rejects, err = engine.StartPreTrade(
+						context.Background(), order,
+					).Await(context.Background())
+					resultPresent = request != nil
+				case "execute":
+					var reservation *AsyncReservation
+					reservation, rejects, err = engine.ExecutePreTrade(
+						context.Background(), order,
+					).Await(context.Background())
+					resultPresent = reservation != nil
+				case "drop copy":
+					var operation *AsyncDropCopyOperation
+					operation, rejects, err = engine.ApplyDropCopy(
+						context.Background(), order,
+					).Await(context.Background())
+					resultPresent = operation != nil
+				}
+				if !errors.Is(err, ErrDriverResult) {
+					t.Errorf("%s error = %v, want ErrDriverResult", path, err)
+				}
+				if invalid.err != nil && !errors.Is(err, invalid.err) {
+					t.Errorf("%s error = %v, want driver error", path, err)
+				}
+				if resultPresent {
+					t.Errorf("%s result is non-nil, want nil", path)
+				}
+				if rejects != nil {
+					t.Errorf("%s rejects = %v, want nil", path, rejects)
+				}
+				if assertClosed != nil {
+					assertClosed()
+				}
+			})
+		}
+	}
+}
+
+func TestAsyncEngineClosesContradictoryDriverHandles(t *testing.T) {
+	driverErr := errors.New("driver returned a handle and an error")
+	for _, path := range []string{"start", "execute", "drop copy"} {
+		for _, conflict := range []string{"rejects", "error"} {
+			t.Run(path+" with "+conflict, func(t *testing.T) {
+				order := buildChainCheckOrder(t)
+				driver := &malformedLifetimeDriver{
+					acceptingDriver: newAcceptingDriver(),
+				}
+				if conflict == "rejects" {
+					driver.rejects = []reject.Reject{{}}
+				} else {
+					driver.err = driverErr
+				}
+				var assertClosed func()
+				switch path {
+				case "start":
+					driver.request = newDirectPathRequest(
+						t, newChainNativeEngine(t), order,
+					)
+					assertClosed = func() {
+						_, _, err := driver.request.Execute()
+						if !errors.Is(err, pretrade.ErrRequestClosed) {
+							t.Errorf(
+								"request Execute() after invalid result error = %v, "+
+									"want ErrRequestClosed",
+								err,
+							)
+						}
+					}
+				case "execute":
+					driver.reservation = newChainReservation(t, order)
+					assertClosed = func() {
+						assertChainClosedReservation(t, driver.reservation)
+					}
+				case "drop copy":
+					driver.operation = newChainDropCopyOperation(t, order)
+					assertClosed = func() {
+						assertChainClosedDropCopyOperation(t, driver.operation)
+					}
+				}
+				engine := newChainEngine(t, driver)
+				var err error
+				switch path {
+				case "start":
+					_, _, err = engine.StartPreTrade(
+						context.Background(), order,
+					).Await(context.Background())
+				case "execute":
+					_, _, err = engine.ExecutePreTrade(
+						context.Background(), order,
+					).Await(context.Background())
+				case "drop copy":
+					_, _, err = engine.ApplyDropCopy(
+						context.Background(), order,
+					).Await(context.Background())
+				}
+				if !errors.Is(err, ErrDriverResult) {
+					t.Errorf("%s error = %v, want ErrDriverResult", path, err)
+				}
+				if conflict == "error" && !errors.Is(err, driverErr) {
+					t.Errorf("%s error = %v, want driver error", path, err)
+				}
+				assertClosed()
+			})
+		}
 	}
 }

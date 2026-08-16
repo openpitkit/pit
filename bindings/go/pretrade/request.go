@@ -46,6 +46,11 @@ func NewRequestFromHandle(handle native.PretradePreTradeRequest) *Request {
 	return &Request{handle: handle}
 }
 
+// IsClosed reports whether the request no longer owns a native handle.
+func (r *Request) IsClosed() bool {
+	return r.handle == nil
+}
+
 // Close releases the request.
 //
 // The request is owned by the caller from the moment the engine returns

@@ -191,6 +191,27 @@ func TestDryRunReportCloseIsIdempotent(t *testing.T) {
 	r.Close() // must not panic or double-free
 }
 
+func TestDryRunReportReportsClosedState(t *testing.T) {
+	if !NewDryRunReportFromHandle(nil).IsClosed() {
+		t.Fatal("report with nil native handle reports live")
+	}
+
+	engine := newNativeEngineForPreTradeTests(t)
+	order := newValidOrderForPreTradeTests(t)
+	report, err := native.EngineExecutePreTradeDryRun(engine, order.Handle())
+	if err != nil {
+		t.Fatalf("EngineExecutePreTradeDryRun() error = %v", err)
+	}
+	r := NewDryRunReportFromHandle(report)
+	if r.IsClosed() {
+		t.Fatal("live report reports closed")
+	}
+	r.Close()
+	if !r.IsClosed() {
+		t.Fatal("closed report reports live")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DryRunReport accessors after Close
 

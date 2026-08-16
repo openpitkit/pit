@@ -19,6 +19,7 @@ package asyncengine
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"go.openpit.dev/openpit/accountadjustment"
@@ -32,20 +33,64 @@ import (
 // Rollback, Close, CommitAndClose, and RollbackAndClose are routed
 // through the same per-account queue as the call that produced the
 // operation. This preserves the AccountSync invariant up to and
-// including drop-copy finalization.
-//
-// Finalization is idempotent. Accessors are serialized with finalization on
-// this wrapper and report pretrade.ErrDropCopyOperationClosed after Close.
+// including drop-copy finalization. Lock, AccountAdjustments, AccountBlock,
+// and IsAccountBlocked are synchronous. Finalization is idempotent. Snapshot
+// reads distinguish three states. While open, an admitted read completes
+// before native finalization starts. While finalizing, a read returns
+// ErrFinalizationInProgress immediately. That signal is transient, the read
+// may succeed later, and the caller still owns the handle and owes it a
+// terminal call. Once closed, reads return
+// pretrade.ErrDropCopyOperationClosed permanently. Reads resume after Commit
+// or Rollback; closing operations leave the wrapper closed.
 type AsyncDropCopyOperation struct {
-	inner     *pretrade.DropCopyOperation
-	engine    *AsyncEngine
-	accountID param.AccountID
-	mu        sync.Mutex
+	inner       *pretrade.DropCopyOperation
+	engine      *AsyncEngine
+	accountID   param.AccountID
+	lifecycleMu sync.Mutex
+	methodMu    sync.Mutex
+	mu          sync.Mutex
+	readersDone chan struct{}
+	readers     int
+	state       dropCopyOperationState
+	closed      bool
 }
 
+type dropCopyOperationState uint8
+
+const (
+	dropCopyOperationOpen dropCopyOperationState = iota
+	dropCopyOperationFinalizing
+	dropCopyOperationClosed
+)
+
 func (o *AsyncDropCopyOperation) runInner(op dropCopyOperationOp) {
+	o.lifecycleMu.Lock()
 	o.mu.Lock()
-	defer o.mu.Unlock()
+	o.state = dropCopyOperationFinalizing
+	var readersDone <-chan struct{}
+	if o.readers != 0 {
+		o.readersDone = make(chan struct{})
+		readersDone = o.readersDone
+	}
+	o.mu.Unlock()
+	if readersDone != nil {
+		<-readersDone
+	}
+	closes := op == dropCopyOperationCommitAndClose ||
+		op == dropCopyOperationRollbackAndClose || op == dropCopyOperationClose
+	defer func() {
+		o.mu.Lock()
+		if closes {
+			o.closed = true
+		}
+		if o.closed {
+			o.state = dropCopyOperationClosed
+		} else {
+			o.state = dropCopyOperationOpen
+		}
+		o.mu.Unlock()
+		o.lifecycleMu.Unlock()
+	}()
 	switch op {
 	case dropCopyOperationCommit:
 		o.inner.Commit()
@@ -57,6 +102,38 @@ func (o *AsyncDropCopyOperation) runInner(op dropCopyOperationOp) {
 		o.inner.RollbackAndClose()
 	case dropCopyOperationClose:
 		o.inner.Close()
+	}
+}
+
+func (o *AsyncDropCopyOperation) beginRead() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return pretrade.ErrDropCopyOperationClosed
+	}
+	switch o.state {
+	case dropCopyOperationOpen:
+		o.readers++
+		return nil
+	case dropCopyOperationFinalizing:
+		return ErrFinalizationInProgress
+	case dropCopyOperationClosed:
+		return pretrade.ErrDropCopyOperationClosed
+	default:
+		return fmt.Errorf(
+			"openpit/asyncengine: invalid drop-copy operation lifecycle state %d",
+			o.state,
+		)
+	}
+}
+
+func (o *AsyncDropCopyOperation) endRead() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.readers--
+	if o.readers == 0 && o.readersDone != nil {
+		close(o.readersDone)
+		o.readersDone = nil
 	}
 }
 
@@ -77,31 +154,63 @@ func (o *AsyncDropCopyOperation) AccountID() param.AccountID {
 	return o.accountID
 }
 
-// Lock returns the operation's pre-trade lock snapshot.
+// Lock returns the operation's pre-trade lock snapshot. While open, it returns
+// the snapshot. While finalizing, it returns ErrFinalizationInProgress with a
+// zero Lock; this signal is transient and a later read may succeed. Once
+// closed, it returns pretrade.ErrDropCopyOperationClosed with a zero Lock
+// permanently.
 func (o *AsyncDropCopyOperation) Lock() (pretrade.Lock, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	if err := o.beginRead(); err != nil {
+		return pretrade.Lock{}, err
+	}
+	defer o.endRead()
+	o.methodMu.Lock()
+	defer o.methodMu.Unlock()
 	return o.inner.Lock()
 }
 
 // AccountAdjustments returns the operation's account-adjustment outcomes.
+// While open, it returns the outcomes. While finalizing, it returns
+// ErrFinalizationInProgress with a nil slice; this signal is transient and a
+// later read may succeed. Once closed, it returns
+// pretrade.ErrDropCopyOperationClosed with a nil slice permanently.
 func (o *AsyncDropCopyOperation) AccountAdjustments() ([]accountadjustment.Outcome, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	if err := o.beginRead(); err != nil {
+		return nil, err
+	}
+	defer o.endRead()
+	o.methodMu.Lock()
+	defer o.methodMu.Unlock()
 	return o.inner.AccountAdjustments()
 }
 
-// AccountBlock returns the first account block requested by the operation.
+// AccountBlock returns the first account block requested by the operation, or
+// nil with a nil error when no block was requested. While open, it returns the
+// snapshot. While finalizing, it returns ErrFinalizationInProgress with a nil
+// block; this signal is transient and a later read may succeed. Once closed,
+// it returns pretrade.ErrDropCopyOperationClosed with a nil block permanently.
 func (o *AsyncDropCopyOperation) AccountBlock() (*reject.AccountBlock, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	if err := o.beginRead(); err != nil {
+		return nil, err
+	}
+	defer o.endRead()
+	o.methodMu.Lock()
+	defer o.methodMu.Unlock()
 	return o.inner.AccountBlock()
 }
 
-// IsAccountBlocked returns the apply-time blocked-state snapshot.
+// IsAccountBlocked returns the apply-time blocked-state snapshot. While open,
+// it returns the snapshot. While finalizing, it returns
+// ErrFinalizationInProgress with false; this signal is transient and a later
+// read may succeed. Once closed, it returns
+// pretrade.ErrDropCopyOperationClosed with false permanently.
 func (o *AsyncDropCopyOperation) IsAccountBlocked() (bool, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	if err := o.beginRead(); err != nil {
+		return false, err
+	}
+	defer o.endRead()
+	o.methodMu.Lock()
+	defer o.methodMu.Unlock()
 	return o.inner.IsAccountBlocked()
 }
 
@@ -111,11 +220,16 @@ func (o *AsyncDropCopyOperation) IsAccountBlocked() (bool, error) {
 // ErrStopped) the underlying operation is not released either, so the
 // caller must still Close it (or use CommitAndClose) to avoid leaking the
 // native handle.
+// With a chain hook context for this engine, the future resolves with
+// ErrReentrantLane; the caller retains the handle and must retry outside
+// the hook.
 func (o *AsyncDropCopyOperation) Commit(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationCommit, false)
 }
 
-// CommitAndClose enqueues Commit followed by Close.
+// CommitAndClose enqueues Commit followed by Close. With a chain hook context
+// for this engine, the future resolves with ErrReentrantLane; the caller
+// retains the handle and must retry outside the hook.
 func (o *AsyncDropCopyOperation) CommitAndClose(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationCommitAndClose, true)
 }
@@ -125,17 +239,25 @@ func (o *AsyncDropCopyOperation) CommitAndClose(ctx context.Context) *future.Fut
 // stop (the future resolves with ErrStopped) the underlying operation
 // is not released either, so the caller must still Close it (or use
 // RollbackAndClose) to avoid leaking the native handle.
+// With a chain hook context for this engine, the future resolves with
+// ErrReentrantLane; the caller retains the handle and must retry outside
+// the hook.
 func (o *AsyncDropCopyOperation) Rollback(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationRollback, false)
 }
 
-// RollbackAndClose enqueues Rollback followed by Close.
+// RollbackAndClose enqueues Rollback followed by Close. With a chain hook
+// context for this engine, the future resolves with ErrReentrantLane; the
+// caller retains the handle and must retry outside the hook.
 func (o *AsyncDropCopyOperation) RollbackAndClose(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationRollbackAndClose, true)
 }
 
 // Close enqueues Close on the underlying operation. If Commit was not
 // called first, the prepared state is rolled back implicitly.
+// With a chain hook context for this engine, the future resolves with
+// ErrReentrantLane; the caller retains the handle and must retry outside
+// the hook.
 func (o *AsyncDropCopyOperation) Close(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationClose, true)
 }
@@ -162,19 +284,25 @@ func (o *AsyncDropCopyOperation) runVoid(
 	abortCloses bool,
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
+	if o.engine.reentrantLane(ctx) {
+		f.Resolve(struct{}{}, ErrReentrantLane)
+		return f
+	}
 	task := &dropCopyOperationTask{f: f, operation: o, op: op, abortCloses: abortCloses}
 	if abortCloses {
-		_ = submitWithFailureHandoff(
-			ctx, o.engine.strategy, o.accountID, task, func(err error) {
-				o.engine.strategy.scheduleSubmitFailureCleanup(o.accountID, func() {
-					o.runInner(dropCopyOperationClose)
-					f.Resolve(struct{}{}, err)
-				})
+		_ = o.engine.strategy.submitWithFailureHandoff(
+			ctx, accountRoutingKey(o.accountID), task, func(err error) {
+				o.engine.strategy.scheduleSubmitFailureCleanup(
+					accountRoutingKey(o.accountID), func() {
+						o.runInner(dropCopyOperationClose)
+						f.Resolve(struct{}{}, err)
+					},
+				)
 			},
 		)
 		return f
 	}
-	if err := o.engine.strategy.submit(ctx, o.accountID, task); err != nil {
+	if err := o.engine.strategy.submit(ctx, accountRoutingKey(o.accountID), task); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f

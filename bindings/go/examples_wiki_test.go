@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -2115,8 +2116,8 @@ func TestExampleWikiAsyncEngine(t *testing.T) {
 	}
 
 	// Pick a dispatch strategy. Use Sharded for cheap routing across a
-	// balanced account population; use Dynamic for per-account isolation
-	// and per-account metrics.
+	// balanced routing-key population; use Dynamic for routing-key isolation
+	// and routing-queue metrics.
 	async, err := asyncBuilder.Dynamic().
 		MaxQueues(0).
 		IdleCleanupAfter(5 * time.Minute).
@@ -2185,6 +2186,169 @@ func TestExampleWikiAsyncEngine(t *testing.T) {
 		context.Background(),
 	).Await(context.Background()); err != nil {
 		t.Fatalf("CommitAndClose Await error = %v", err)
+	}
+}
+
+// Source: https://wiki.openpit.dev/Async-Engine/ - Chains
+// Keep the shared user-code flow in sync with the wiki.
+func TestExampleWikiAsyncEngineChains(t *testing.T) {
+	asyncBuilder, err := NewEngineBuilder().
+		AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		BuildAsync()
+	if err != nil {
+		t.Fatalf("BuildAsync() error = %v", err)
+	}
+	async, err := asyncBuilder.Dynamic().Build()
+	if err != nil {
+		t.Fatalf("Dynamic Build() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Errorf("StopGraceful() error = %v", err)
+		}
+	})
+
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset(AAPL) error = %v", err)
+	}
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
+	accountID := param.NewAccountIDFromUint64(99224416)
+	instrument := param.NewInstrument(aapl, usd)
+	order := model.NewOrder()
+	orderOperation := order.EnsureOperationView()
+	orderOperation.SetAccountID(accountID)
+	orderOperation.SetInstrument(instrument)
+	orderOperation.SetSide(param.SideBuy)
+	quantity, err := param.NewQuantityFromString("100")
+	if err != nil {
+		t.Fatalf("NewQuantityFromString(100) error = %v", err)
+	}
+	orderOperation.SetTradeAmount(param.NewQuantityTradeAmount(quantity))
+	price, err := param.NewPriceFromString("185")
+	if err != nil {
+		t.Fatalf("NewPriceFromString(185) error = %v", err)
+	}
+	orderOperation.SetPrice(price)
+
+	type state struct {
+		report          model.ExecutionReport
+		reservationLock pretrade.Lock
+		instrument      param.Instrument
+		accountID       param.AccountID
+		adjustmentCount int
+		settled         bool
+		persisted       bool
+	}
+	var chainState *state
+
+	runner := asyncengine.Chain(order, func(context.Context) (*state, error) {
+		chainState = &state{
+			accountID:  accountID,
+			instrument: instrument,
+		}
+		return chainState, nil
+	}).
+		ExecutePreTrade(asyncengine.PreTradeHooks[*state]{
+			OnRejected: func(
+				context.Context,
+				*state,
+				[]reject.Reject,
+			) error {
+				return fmt.Errorf("pre-trade order was rejected")
+			},
+			OnReserved: func(
+				_ context.Context,
+				got *state,
+				result asyncengine.OperationResult,
+			) (asyncengine.Decision, error) {
+				lock, err := result.Lock()
+				if err != nil {
+					return asyncengine.DecisionRollback, err
+				}
+				adjustments, err := result.AccountAdjustments()
+				if err != nil {
+					return asyncengine.DecisionRollback, err
+				}
+				got.reservationLock = lock
+				got.adjustmentCount = len(adjustments)
+				return asyncengine.DecisionCommit, nil
+			},
+		}).
+		ApplyExecutionReport(asyncengine.ExecutionReportHooks[*state]{
+			Report: func(
+				_ context.Context,
+				got *state,
+			) (model.ExecutionReport, error) {
+				report := model.NewExecutionReport()
+				reportOperation := report.EnsureOperationView()
+				reportOperation.SetAccountID(got.accountID)
+				reportOperation.SetInstrument(got.instrument)
+				reportOperation.SetSide(param.SideBuy)
+				got.report = report
+				return report, nil
+			},
+			OnSettled: func(
+				_ context.Context,
+				got *state,
+				_ pretrade.PostTradeResult,
+			) error {
+				got.settled = true
+				return nil
+			},
+		}).
+		Then(func(_ context.Context, got *state) error {
+			// Persist caller-owned metadata after the execution report settles.
+			got.persisted = true
+			return nil
+		}).
+		Finally(func(
+			_ context.Context,
+			got *state,
+			outcome asyncengine.ChainOutcome,
+		) error {
+			if outcome.Status != asyncengine.ChainOutcomeCompleted {
+				return fmt.Errorf("chain finished with %v", outcome.Status)
+			}
+			log.Printf("settled=%t persisted=%t", got.settled, got.persisted)
+			return nil
+		})
+
+	chainFuture := runner.Run(context.Background(), async)
+	// context.Background cannot be cancelled, so Await always yields a verdict
+	// and ChainOutcomeUnknown is unreachable here. With a bounded context,
+	// Unknown means only that the wait ended: the chain may still be running or
+	// may already have finished. Re-await with another caller-controlled context
+	// or use TryGet before interpreting the outcome.
+	outcome, err := chainFuture.Await(context.Background())
+	if outcome.Status == asyncengine.ChainOutcomeUnknown {
+		t.Fatal("chain Await() returned no outcome with a non-cancellable context")
+	}
+	if err != nil {
+		if outcome.RetryUnsafe {
+			t.Fatalf("chain failed and must not be retried: %v", err)
+		} else {
+			t.Fatalf("chain failed before retry became unsafe: %v", err)
+		}
+	}
+	log.Printf(
+		"chain status=%v retryUnsafe=%t",
+		outcome.Status,
+		outcome.RetryUnsafe,
+	)
+	if chainState == nil {
+		t.Fatal("chain State was not created")
+	}
+	if !chainState.settled || !chainState.persisted {
+		t.Fatalf(
+			"settled=%t persisted=%t, want true true",
+			chainState.settled,
+			chainState.persisted,
+		)
 	}
 }
 

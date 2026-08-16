@@ -22,6 +22,7 @@
 #include "openpit/asyncengine/engine.hpp"
 #include "openpit/asyncengine/future.hpp"
 #include "openpit/engine.hpp"
+#include "openpit/error.hpp"
 #include "openpit/model/model.hpp"
 #include "openpit/param/account_id.hpp"
 #include "openpit/pretrade/decision.hpp"
@@ -29,6 +30,7 @@
 #include <openpit.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <exception>
 #include <functional>
@@ -227,6 +229,98 @@ struct AdjustmentOutcome {
 
 namespace detail {
 
+enum class AsyncHandleState { Open, Finalizing, Closed };
+
+class AsyncHandleLifecycle {
+ public:
+  class ReadGuard {
+   public:
+    explicit ReadGuard(const AsyncHandleLifecycle* lifecycle) noexcept
+        : m_lifecycle(lifecycle) {}
+
+    ReadGuard(ReadGuard&& other) noexcept
+        : m_lifecycle(std::exchange(other.m_lifecycle, nullptr)) {}
+
+    ~ReadGuard() {
+      if (m_lifecycle != nullptr) {
+        m_lifecycle->FinishRead();
+      }
+    }
+
+    ReadGuard(const ReadGuard&) = delete;
+    ReadGuard& operator=(const ReadGuard&) = delete;
+    ReadGuard& operator=(ReadGuard&&) = delete;
+
+   private:
+    const AsyncHandleLifecycle* m_lifecycle;
+  };
+
+  explicit AsyncHandleLifecycle(const char* resourceName) noexcept
+      : m_resourceName(resourceName) {}
+
+  [[nodiscard]] ReadGuard BeginRead() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    RequireOpen();
+    ++m_activeReaders;
+    return ReadGuard(this);
+  }
+
+  void BeginFinalization() {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_finalizationDone.wait(
+        lock, [this] { return m_state != AsyncHandleState::Finalizing; });
+    m_state = AsyncHandleState::Finalizing;
+    m_readersDone.wait(lock, [this] { return m_activeReaders == 0; });
+  }
+
+  void FinishFinalization(bool closed) {
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_closed = m_closed || closed;
+      m_state = m_closed ? AsyncHandleState::Closed : AsyncHandleState::Open;
+    }
+    m_finalizationDone.notify_one();
+  }
+
+ private:
+  void RequireOpen() const {
+    if (m_closed) {
+      throw ::openpit::Error(std::string(m_resourceName) + " is closed");
+    }
+    switch (m_state) {
+      case AsyncHandleState::Open:
+        return;
+      case AsyncHandleState::Finalizing:
+        throw ::openpit::FinalizationInProgressError(
+            std::string(m_resourceName) + " finalization is in progress");
+      case AsyncHandleState::Closed:
+        throw ::openpit::Error(std::string(m_resourceName) + " is closed");
+    }
+    throw ::openpit::Error(std::string(m_resourceName) +
+                           " has invalid lifecycle state");
+  }
+
+  void FinishRead() const {
+    bool notify = false;
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      --m_activeReaders;
+      notify = m_activeReaders == 0;
+    }
+    if (notify) {
+      m_readersDone.notify_one();
+    }
+  }
+
+  const char* m_resourceName;
+  std::condition_variable m_finalizationDone;
+  mutable std::condition_variable m_readersDone;
+  mutable std::mutex m_mutex;
+  mutable std::size_t m_activeReaders = 0;
+  AsyncHandleState m_state = AsyncHandleState::Open;
+  bool m_closed = false;
+};
+
 // Reads the account id off an order's operation view without mutating it.
 [[nodiscard]] inline std::optional<::openpit::param::AccountId> OrderAccountId(
     const ::openpit::Order& order) {
@@ -265,6 +359,23 @@ namespace detail {
                "report");
 }
 
+template <typename LifecycleHandle>
+void ValidatePreTradeResultShape(
+    const char* operationName, const char* handleName,
+    const std::optional<LifecycleHandle>& handle,
+    const std::vector<::openpit::pretrade::Reject>& rejects) {
+  const bool accepted =
+      handle.has_value() && static_cast<bool>(*handle) && rejects.empty();
+  const bool rejected = !handle.has_value() && !rejects.empty();
+  if (!accepted && !rejected) {
+    throw ::openpit::Error(
+        std::string(operationName) +
+        " returned invalid result shape: expected either a live " + handleName +
+        " with empty rejects or an absent " + handleName +
+        " with non-empty rejects");
+  }
+}
+
 // Hands a failed submit's handle release to the account lane and deliberately
 // drops the future that tracks it. The error the caller is already waiting for
 // is the actionable outcome, and a cleanup failure must never replace or mask
@@ -299,19 +410,24 @@ void CompleteMandatoryCleanup(PromiseType promise, Error originalError,
 //------------------------------------------------------------------------------
 // AsyncReservation
 
-// Wraps a `pretrade::Reservation` so that finalization re-enters the same
-// per-account queue as the call that produced it, preserving AccountSync up to
 /// \brief Async wrapper around an accepted pre-trade reservation.
 //
 // Wraps the reservation lifecycle after `ExecutePreTrade` or request
-// execution. Obtained from an `ExecuteOutcome`; held
-// by `shared_ptr`.
+// execution, so that finalization re-enters the same per-account queue as the
+// call that produced it, preserving AccountSync through finalization. Obtained
+// from an `ExecuteOutcome`; held by `shared_ptr`.
 //
 // Like the synchronous reservation, misuse (commit after close, double commit)
 // is a programmer error. The async layer does not invent a failure mode the
 // synchronous API lacks: `Commit` has no error channel, so a misuse is not
 // turned into a resolved-with-error future. The void futures resolve with
-// `std::monostate` on success.
+// `std::monostate` on success. Snapshot reads distinguish three states. While
+// open, an admitted read completes before native finalization starts. While
+// finalizing, a read throws `openpit::FinalizationInProgressError`
+// immediately. That signal is transient, the read may succeed later, and the
+// caller still owns the handle and owes it a terminal call. Once closed, reads
+// throw `openpit::Error` permanently. Reads resume after Commit or Rollback;
+// closing operations leave the wrapper closed.
 template <typename Driver>
 class AsyncReservation
     : public std::enable_shared_from_this<AsyncReservation<Driver>> {
@@ -319,12 +435,33 @@ class AsyncReservation
   AsyncReservation(::openpit::pretrade::Reservation reservation,
                    AsyncEngine<Driver>* engine,
                    ::openpit::param::AccountId accountId)
-      : m_reservation(std::move(reservation)),
+      : m_lifecycle("async reservation"),
+        m_reservation(std::move(reservation)),
         m_engine(engine),
         m_accountId(accountId) {}
 
   [[nodiscard]] ::openpit::param::AccountId AccountId() const noexcept {
     return m_accountId;
+  }
+
+  // Returns an owned lock snapshot. While open, it returns the snapshot. While
+  // finalizing, it throws `openpit::FinalizationInProgressError` immediately;
+  // this signal is transient and a later read may succeed. Once closed, it
+  // throws `openpit::Error` permanently.
+  [[nodiscard]] ::openpit::pretrade::PreTradeLock Lock() const {
+    const auto reader = m_lifecycle.BeginRead();
+    return m_reservation.Lock();
+  }
+
+  // Returns detached account-adjustment outcomes. While open, it returns the
+  // outcomes. While finalizing, it throws
+  // `openpit::FinalizationInProgressError` immediately; this signal is
+  // transient and a later read may succeed. Once closed, it throws
+  // `openpit::Error` permanently.
+  [[nodiscard]] std::vector<::openpit::accountadjustment::Outcome>
+  AccountAdjustments() const {
+    const auto reader = m_lifecycle.BeginRead();
+    return m_reservation.AccountAdjustments();
   }
 
   // Enqueues Commit; the reservation is not closed. Pair with Close. A throwing
@@ -400,10 +537,22 @@ class AsyncReservation
                                            std::chrono::nanoseconds timeout,
                                            bool abortCloses);
 
+  template <typename Op>
+  void Finalize(const Op& op) {
+    m_lifecycle.BeginFinalization();
+    try {
+      op(m_reservation);
+    } catch (...) {
+      m_lifecycle.FinishFinalization(!m_reservation);
+      throw;
+    }
+    m_lifecycle.FinishFinalization(!m_reservation);
+  }
+
+  detail::AsyncHandleLifecycle m_lifecycle;
   ::openpit::pretrade::Reservation m_reservation;
   AsyncEngine<Driver>* m_engine;
   ::openpit::param::AccountId m_accountId;
-  mutable std::mutex m_mutex;
 };
 
 //------------------------------------------------------------------------------
@@ -415,9 +564,14 @@ class AsyncReservation
 // re-enters the same per-account queue as the call that produced it. Obtained
 // from a `DropCopyOutcome`; held by `shared_ptr`.
 //
-// Finalization is idempotent. Snapshot accessors serialize with queued
-// finalization on this wrapper. The void futures resolve with `std::monostate`
-// on success.
+// Finalization is idempotent. Snapshot reads distinguish three states. While
+// open, an admitted read completes before native finalization starts. While
+// finalizing, a read throws `openpit::FinalizationInProgressError`
+// immediately. That signal is transient, the read may succeed later, and the
+// caller still owns the handle and owes it a terminal call. Once closed, reads
+// throw `openpit::Error` permanently. Reads resume after Commit or Rollback;
+// closing operations leave the wrapper closed. The void futures resolve with
+// `std::monostate` on success.
 template <typename Driver>
 class AsyncDropCopyOperation
     : public std::enable_shared_from_this<AsyncDropCopyOperation<Driver>> {
@@ -425,7 +579,8 @@ class AsyncDropCopyOperation
   AsyncDropCopyOperation(::openpit::pretrade::DropCopyOperation operation,
                          AsyncEngine<Driver>* engine,
                          ::openpit::param::AccountId accountId)
-      : m_operation(std::move(operation)),
+      : m_lifecycle("async drop-copy operation"),
+        m_operation(std::move(operation)),
         m_engine(engine),
         m_accountId(accountId) {}
 
@@ -433,25 +588,44 @@ class AsyncDropCopyOperation
     return m_accountId;
   }
 
+  // Returns an owned lock snapshot. While open, it returns the snapshot. While
+  // finalizing, it throws `openpit::FinalizationInProgressError` immediately;
+  // this signal is transient and a later read may succeed. Once closed, it
+  // throws `openpit::Error` permanently.
   [[nodiscard]] ::openpit::pretrade::PreTradeLock Lock() const {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto reader = m_lifecycle.BeginRead();
     return m_operation.Lock();
   }
 
+  // Returns detached account-adjustment outcomes. While open, it returns the
+  // outcomes. While finalizing, it throws
+  // `openpit::FinalizationInProgressError` immediately; this signal is
+  // transient and a later read may succeed. Once closed, it throws
+  // `openpit::Error` permanently.
   [[nodiscard]] std::vector<::openpit::accountadjustment::Outcome>
   AccountAdjustments() const {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto reader = m_lifecycle.BeginRead();
     return m_operation.AccountAdjustments();
   }
 
+  // Returns the first account-block snapshot, if any. While open, it returns
+  // the snapshot. While finalizing, it throws
+  // `openpit::FinalizationInProgressError` immediately; this signal is
+  // transient and a later read may succeed. Once closed, it throws
+  // `openpit::Error` permanently.
   [[nodiscard]] std::optional<::openpit::accounts::AccountBlock> AccountBlock()
       const {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto reader = m_lifecycle.BeginRead();
     return m_operation.AccountBlock();
   }
 
+  // Returns the apply-time blocked-state snapshot. While open, it returns the
+  // snapshot. While finalizing, it throws
+  // `openpit::FinalizationInProgressError` immediately; this signal is
+  // transient and a later read may succeed. Once closed, it throws
+  // `openpit::Error` permanently.
   [[nodiscard]] bool IsAccountBlocked() const {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto reader = m_lifecycle.BeginRead();
     return m_operation.IsAccountBlocked();
   }
 
@@ -534,10 +708,22 @@ class AsyncDropCopyOperation
                                            std::chrono::nanoseconds timeout,
                                            bool abortCloses);
 
+  template <typename Op>
+  void Finalize(const Op& op) {
+    m_lifecycle.BeginFinalization();
+    try {
+      op(m_operation);
+    } catch (...) {
+      m_lifecycle.FinishFinalization(!m_operation);
+      throw;
+    }
+    m_lifecycle.FinishFinalization(!m_operation);
+  }
+
+  detail::AsyncHandleLifecycle m_lifecycle;
   ::openpit::pretrade::DropCopyOperation m_operation;
   AsyncEngine<Driver>* m_engine;
   ::openpit::param::AccountId m_accountId;
-  mutable std::mutex m_mutex;
 };
 
 //------------------------------------------------------------------------------
@@ -757,7 +943,9 @@ class TypedAsyncEngine {
         [engine, pinned, order = std::move(order)](Driver& driver) mutable {
           ::openpit::pretrade::StartResult result =
               driver.StartPreTrade(std::move(order));
-          if (!result.Passed()) {
+          detail::ValidatePreTradeResultShape("StartPreTrade", "request",
+                                              result.request, result.rejects);
+          if (!result.request.has_value()) {
             return StartOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
           auto request = std::make_shared<AsyncRequest<Driver>>(
@@ -807,7 +995,10 @@ class TypedAsyncEngine {
         [engine, pinned, order = std::move(order)](Driver& driver) mutable {
           ::openpit::pretrade::ExecuteResult result =
               driver.ExecutePreTrade(std::move(order));
-          if (!result.Passed()) {
+          detail::ValidatePreTradeResultShape("ExecutePreTrade", "reservation",
+                                              result.reservation,
+                                              result.rejects);
+          if (!result.reservation.has_value()) {
             return ExecuteOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
           auto reservation = std::make_shared<AsyncReservation<Driver>>(
@@ -870,7 +1061,9 @@ class TypedAsyncEngine {
         [engine, pinned, order = std::move(order)](Driver& driver) mutable {
           ::openpit::pretrade::DropCopyResult result =
               driver.ApplyDropCopy(std::move(order));
-          if (!result.Passed()) {
+          detail::ValidatePreTradeResultShape("ApplyDropCopy", "operation",
+                                              result.operation, result.rejects);
+          if (!result.operation.has_value()) {
             return DropCopyOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
           auto operation = std::make_shared<AsyncDropCopyOperation<Driver>>(
@@ -1087,28 +1280,21 @@ template <typename Op>
   auto self = this->shared_from_this();
   if (!abortCloses) {
     return m_engine->Submit(
-        m_accountId,
-        [self, op = std::move(op)]() {
-          std::lock_guard<std::mutex> lock(self->m_mutex);
-          op(self->m_reservation);
-        },
+        m_accountId, [self, op = std::move(op)]() { self->Finalize(op); },
         timeout);
   }
 
   AsyncEngine<Driver>* engine = m_engine;
   const ::openpit::param::AccountId accountId = m_accountId;
   return m_engine->Submit(
-      accountId,
-      [self, op = std::move(op)]() {
-        std::lock_guard<std::mutex> lock(self->m_mutex);
-        op(self->m_reservation);
-      },
+      accountId, [self, op = std::move(op)]() { self->Finalize(op); },
       [self, engine, accountId](Promise<std::monostate> promise, Error error,
                                 bool inAccountLane) mutable {
         auto cleanup = [self, promise, error = std::move(error)]() mutable {
           detail::CompleteMandatoryCleanup(promise, std::move(error), [self] {
-            std::lock_guard<std::mutex> lock(self->m_mutex);
-            self->m_reservation = ::openpit::pretrade::Reservation();
+            self->Finalize([](::openpit::pretrade::Reservation& reservation) {
+              reservation = ::openpit::pretrade::Reservation();
+            });
           });
         };
         if (inAccountLane) {
@@ -1127,28 +1313,22 @@ template <typename Op>
   auto self = this->shared_from_this();
   if (!abortCloses) {
     return m_engine->Submit(
-        m_accountId,
-        [self, op = std::move(op)]() {
-          std::lock_guard<std::mutex> lock(self->m_mutex);
-          op(self->m_operation);
-        },
+        m_accountId, [self, op = std::move(op)]() { self->Finalize(op); },
         timeout);
   }
 
   AsyncEngine<Driver>* engine = m_engine;
   const ::openpit::param::AccountId accountId = m_accountId;
   return m_engine->Submit(
-      accountId,
-      [self, op = std::move(op)]() {
-        std::lock_guard<std::mutex> lock(self->m_mutex);
-        op(self->m_operation);
-      },
+      accountId, [self, op = std::move(op)]() { self->Finalize(op); },
       [self, engine, accountId](Promise<std::monostate> promise, Error error,
                                 bool inAccountLane) mutable {
         auto cleanup = [self, promise, error = std::move(error)]() mutable {
           detail::CompleteMandatoryCleanup(promise, std::move(error), [self] {
-            std::lock_guard<std::mutex> lock(self->m_mutex);
-            self->m_operation = ::openpit::pretrade::DropCopyOperation();
+            self->Finalize(
+                [](::openpit::pretrade::DropCopyOperation& operation) {
+                  operation = ::openpit::pretrade::DropCopyOperation();
+                });
           });
         };
         if (inAccountLane) {

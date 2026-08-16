@@ -42,6 +42,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -163,10 +164,8 @@ struct StubAdjustment {
 //
 // Mirrors the five `EngineAdapter` members so
 // `TypedAsyncEngine<MockEngineAdapter>` compiles and exercises
-// dispatch/threading deterministically. Each pre-trade returns a passing result
-// with a default (null-handle) Request/Reservation, which is sufficient: the
-// typed layer only inspects `Passed()` and wraps the handle, and the void
-// finalizers are no-ops on a null handle.
+// dispatch/threading deterministically. An owned real engine supplies valid
+// lifecycle handles while the mock records the dispatch observations.
 
 class ConcurrencyProbe {
  public:
@@ -394,6 +393,234 @@ class BlockingRollbackPolicy {
   Gate* m_release;
 };
 
+enum class ReentrantFinalizer { Commit, Rollback };
+
+enum class SnapshotProbeResult {
+  NotRun,
+  Returned,
+  Closed,
+  FinalizationInProgress,
+  WrongFinalizationMessage,
+  OtherOpenPitError,
+  OtherException,
+};
+
+template <typename Read>
+[[nodiscard]] SnapshotProbeResult ProbeSnapshot(
+    Read&& read, const char* expectedMessage) noexcept {
+  try {
+    std::forward<Read>(read)();
+    return SnapshotProbeResult::Returned;
+  } catch (const openpit::Error& err) {
+    const auto* finalizing =
+        dynamic_cast<const openpit::FinalizationInProgressError*>(&err);
+    if (finalizing == nullptr) {
+      return SnapshotProbeResult::OtherOpenPitError;
+    }
+    if (finalizing->Message() != expectedMessage) {
+      return SnapshotProbeResult::WrongFinalizationMessage;
+    }
+    return SnapshotProbeResult::FinalizationInProgress;
+  } catch (...) {
+    return SnapshotProbeResult::OtherException;
+  }
+}
+
+void ExpectAsyncHandleLifecycleClosedReadDuringLaterFinalization() {
+  constexpr char kResourceName[] = "async handle";
+  ae::detail::AsyncHandleLifecycle lifecycle(kResourceName);
+  lifecycle.BeginFinalization();
+  lifecycle.FinishFinalization(true);
+
+  Gate finalizerEntered;
+  Gate releaseFinalizer;
+  std::atomic<bool> finalizerFailed{false};
+  std::thread finalizer([&] {
+    try {
+      lifecycle.BeginFinalization();
+      finalizerEntered.Open();
+      releaseFinalizer.Wait();
+      lifecycle.FinishFinalization(false);
+    } catch (...) {
+      finalizerFailed.store(true, std::memory_order_release);
+      finalizerEntered.Open();
+    }
+  });
+
+  if (!finalizerEntered.WaitFor(kAwaitCap)) {
+    releaseFinalizer.Open();
+    finalizer.join();
+    ADD_FAILURE() << "later finalization did not start";
+    return;
+  }
+
+  SnapshotProbeResult readResult = SnapshotProbeResult::NotRun;
+  try {
+    const auto reader = lifecycle.BeginRead();
+    (void)reader;
+    readResult = SnapshotProbeResult::Returned;
+  } catch (const openpit::FinalizationInProgressError&) {
+    readResult = SnapshotProbeResult::FinalizationInProgress;
+  } catch (const openpit::Error& err) {
+    readResult = err.Message() == std::string(kResourceName) + " is closed"
+                     ? SnapshotProbeResult::Closed
+                     : SnapshotProbeResult::OtherOpenPitError;
+  } catch (...) {
+    readResult = SnapshotProbeResult::OtherException;
+  }
+
+  releaseFinalizer.Open();
+  finalizer.join();
+  EXPECT_FALSE(finalizerFailed.load(std::memory_order_acquire));
+  EXPECT_EQ(readResult, SnapshotProbeResult::Closed);
+
+  try {
+    const auto reader = lifecycle.BeginRead();
+    (void)reader;
+    ADD_FAILURE() << "read after later finalization returned";
+  } catch (const openpit::FinalizationInProgressError& err) {
+    ADD_FAILURE() << "read after later finalization reported transient state: "
+                  << err.Message();
+  } catch (const openpit::Error& err) {
+    EXPECT_EQ(err.Message(), std::string(kResourceName) + " is closed");
+  } catch (...) {
+    ADD_FAILURE() << "read after later finalization threw an unexpected error";
+  }
+}
+
+void ExpectAsyncHandleLifecycleAdmittedReaderDelaysFinalization() {
+  static constexpr char kResourceName[] = "async handle";
+  struct FinalizerState {
+    explicit FinalizerState(const char* resourceName)
+        : lifecycle(resourceName) {}
+
+    ae::detail::AsyncHandleLifecycle lifecycle;
+    Gate finalizerReturned;
+    std::atomic<bool> finalizerFailed{false};
+  };
+
+  auto state = std::make_unique<FinalizerState>(kResourceName);
+  auto& lifecycle = state->lifecycle;
+  std::optional<ae::detail::AsyncHandleLifecycle::ReadGuard> reader(
+      lifecycle.BeginRead());
+  FinalizerState* const finalizerState = state.get();
+  std::thread finalizer([finalizerState] {
+    try {
+      finalizerState->lifecycle.BeginFinalization();
+    } catch (...) {
+      finalizerState->finalizerFailed.store(true, std::memory_order_release);
+    }
+    finalizerState->finalizerReturned.Open();
+  });
+
+  const auto joinFinalizerAfterReaderRelease = [&] {
+    if (state->finalizerReturned.WaitFor(kAwaitCap)) {
+      finalizer.join();
+      return true;
+    }
+    ADD_FAILURE()
+        << "finalization did not return after admitted reader release";
+    finalizer.detach();
+    // Intentionally leak state so the detached worker cannot outlive it.
+    (void)state.release();
+    return false;
+  };
+
+  bool finalizerEntered = false;
+  bool entryProbeFailed = false;
+  const auto entryDeadline = std::chrono::steady_clock::now() + kAwaitCap;
+  while (std::chrono::steady_clock::now() < entryDeadline) {
+    try {
+      const auto probeReader = lifecycle.BeginRead();
+      (void)probeReader;
+    } catch (const openpit::FinalizationInProgressError&) {
+      finalizerEntered = true;
+      break;
+    } catch (const openpit::Error& err) {
+      ADD_FAILURE() << "finalization entry probe failed: " << err.Message();
+      entryProbeFailed = true;
+      break;
+    } catch (...) {
+      ADD_FAILURE() << "finalization entry probe threw an unexpected error";
+      entryProbeFailed = true;
+      break;
+    }
+    std::this_thread::yield();
+  }
+  if (!finalizerEntered && !entryProbeFailed) {
+    ADD_FAILURE() << "finalization did not enter the readers wait";
+  }
+  if (!finalizerEntered) {
+    reader.reset();
+    (void)joinFinalizerAfterReaderRelease();
+    return;
+  }
+
+  EXPECT_FALSE(state->finalizerReturned.WaitFor(kNegativeProbe));
+  reader.reset();
+  if (!joinFinalizerAfterReaderRelease()) {
+    return;
+  }
+
+  if (state->finalizerFailed.load(std::memory_order_acquire)) {
+    ADD_FAILURE() << "finalization with an admitted reader threw";
+    return;
+  }
+
+  lifecycle.FinishFinalization(false);
+  try {
+    const auto laterReader = lifecycle.BeginRead();
+    (void)laterReader;
+  } catch (const openpit::Error& err) {
+    ADD_FAILURE() << "read after non-closing finalization failed: "
+                  << err.Message();
+  } catch (...) {
+    ADD_FAILURE()
+        << "read after non-closing finalization threw an unexpected error";
+  }
+
+  lifecycle.BeginFinalization();
+  lifecycle.FinishFinalization(true);
+  try {
+    const auto closedReader = lifecycle.BeginRead();
+    (void)closedReader;
+    ADD_FAILURE() << "read after closing finalization returned";
+  } catch (const openpit::FinalizationInProgressError& err) {
+    ADD_FAILURE()
+        << "read after closing finalization reported transient state: "
+        << err.Message();
+  } catch (const openpit::Error& err) {
+    EXPECT_EQ(err.Message(), std::string(kResourceName) + " is closed");
+  } catch (...) {
+    ADD_FAILURE()
+        << "read after closing finalization threw an unexpected error";
+  }
+}
+
+class ReentrantSnapshotPolicy {
+ public:
+  ReentrantSnapshotPolicy(std::function<void()>* snapshotProbe,
+                          ReentrantFinalizer finalizer)
+      : m_snapshotProbe(snapshotProbe), m_finalizer(finalizer) {}
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    std::function<void()>* snapshotProbe = m_snapshotProbe;
+    auto probe = [snapshotProbe] { (*snapshotProbe)(); };
+    if (m_finalizer == ReentrantFinalizer::Commit) {
+      mutations.Push(std::move(probe), [] {});
+      return;
+    }
+    mutations.Push([] {}, std::move(probe));
+  }
+
+ private:
+  std::function<void()>* m_snapshotProbe;
+  ReentrantFinalizer m_finalizer;
+};
+
 class CountingRollbackPolicy {
  public:
   explicit CountingRollbackPolicy(
@@ -450,6 +677,7 @@ class MockAccounts {
 };
 
 struct MockEngineAdapter {
+  Engine engine = OrderValidationEngine();
   ConcurrencyProbe* probe = nullptr;
   std::atomic<std::size_t> starts{0};
   std::atomic<std::size_t> blocks{0};
@@ -469,24 +697,18 @@ struct MockEngineAdapter {
       span.emplace(*probe, account);
     }
     starts.fetch_add(1, std::memory_order_relaxed);
-    openpit::pretrade::StartResult result;
-    result.request.emplace(openpit::pretrade::Request());  // null-handle pass.
-    return result;
+    return engine.StartPreTrade(std::move(order));
   }
 
   [[nodiscard]] openpit::pretrade::ExecuteResult ExecutePreTrade(
-      std::unique_ptr<const openpit::Order>) {
-    openpit::pretrade::ExecuteResult result;
-    result.reservation.emplace(openpit::pretrade::Reservation());
-    return result;
+      std::unique_ptr<const openpit::Order> order) {
+    return engine.ExecutePreTrade(*order);
   }
 
   [[nodiscard]] openpit::pretrade::DropCopyResult ApplyDropCopy(
-      std::unique_ptr<const openpit::Order>) {
+      std::unique_ptr<const openpit::Order> order) {
     dropCopies.fetch_add(1, std::memory_order_relaxed);
-    openpit::pretrade::DropCopyResult result;
-    result.operation.emplace(openpit::pretrade::DropCopyOperation());
-    return result;
+    return engine.ApplyDropCopy(*order);
   }
 
   [[nodiscard]] std::size_t DropCopyCalls() const {
@@ -508,6 +730,120 @@ struct MockEngineAdapter {
     return MockAccounts(&blocks, &globalUnblocks);
   }
 };
+
+enum class MalformedEntryPoint {
+  StartPreTrade,
+  ExecutePreTrade,
+  ApplyDropCopy
+};
+
+enum class MalformedResultShape {
+  HandleAndRejects,
+  Empty,
+  ClosedHandle,
+  ClosedHandleAndRejects
+};
+
+class MalformedResultAdapter {
+ public:
+  MalformedResultAdapter(const Engine& engine, MalformedEntryPoint entryPoint,
+                         MalformedResultShape shape) noexcept
+      : m_engine(&engine), m_entryPoint(entryPoint), m_shape(shape) {}
+
+  [[nodiscard]] openpit::pretrade::StartResult StartPreTrade(
+      std::unique_ptr<const openpit::Order> order) const {
+    if (m_entryPoint == MalformedEntryPoint::StartPreTrade) {
+      if (m_shape == MalformedResultShape::Empty) {
+        return {};
+      }
+      if (m_shape == MalformedResultShape::ClosedHandle ||
+          m_shape == MalformedResultShape::ClosedHandleAndRejects) {
+        openpit::pretrade::StartResult result;
+        result.request.emplace();
+        if (m_shape == MalformedResultShape::ClosedHandleAndRejects) {
+          AddInjectedReject(result.rejects);
+        }
+        return result;
+      }
+    }
+    openpit::pretrade::StartResult result =
+        m_engine->StartPreTrade(std::move(order));
+    if (m_entryPoint == MalformedEntryPoint::StartPreTrade) {
+      AddInjectedReject(result.rejects);
+    }
+    return result;
+  }
+
+  [[nodiscard]] openpit::pretrade::ExecuteResult ExecutePreTrade(
+      std::unique_ptr<const openpit::Order> order) const {
+    if (m_entryPoint == MalformedEntryPoint::ExecutePreTrade) {
+      if (m_shape == MalformedResultShape::Empty) {
+        return {};
+      }
+      if (m_shape == MalformedResultShape::ClosedHandle ||
+          m_shape == MalformedResultShape::ClosedHandleAndRejects) {
+        openpit::pretrade::ExecuteResult result;
+        result.reservation.emplace();
+        if (m_shape == MalformedResultShape::ClosedHandleAndRejects) {
+          AddInjectedReject(result.rejects);
+        }
+        return result;
+      }
+    }
+    openpit::pretrade::ExecuteResult result = m_engine->ExecutePreTrade(*order);
+    if (m_entryPoint == MalformedEntryPoint::ExecutePreTrade) {
+      AddInjectedReject(result.rejects);
+    }
+    return result;
+  }
+
+  [[nodiscard]] openpit::pretrade::DropCopyResult ApplyDropCopy(
+      std::unique_ptr<const openpit::Order> order) const {
+    if (m_entryPoint == MalformedEntryPoint::ApplyDropCopy) {
+      if (m_shape == MalformedResultShape::Empty) {
+        return {};
+      }
+      if (m_shape == MalformedResultShape::ClosedHandle ||
+          m_shape == MalformedResultShape::ClosedHandleAndRejects) {
+        openpit::pretrade::DropCopyResult result;
+        result.operation.emplace();
+        if (m_shape == MalformedResultShape::ClosedHandleAndRejects) {
+          AddInjectedReject(result.rejects);
+        }
+        return result;
+      }
+    }
+    openpit::pretrade::DropCopyResult result = m_engine->ApplyDropCopy(*order);
+    if (m_entryPoint == MalformedEntryPoint::ApplyDropCopy) {
+      AddInjectedReject(result.rejects);
+    }
+    return result;
+  }
+
+ private:
+  static void AddInjectedReject(
+      std::vector<openpit::pretrade::Reject>& rejects) {
+    rejects.emplace_back("MalformedResultAdapter",
+                         openpit::pretrade::RejectScope::Order,
+                         RejectCode::Other, "injected contradictory reject",
+                         "accepted result also contains rejects");
+  }
+
+  const Engine* m_engine;
+  MalformedEntryPoint m_entryPoint;
+  MalformedResultShape m_shape;
+};
+
+struct MalformedResultCase {
+  MalformedEntryPoint entryPoint;
+  MalformedResultShape shape;
+  const char* name;
+  const char* operationName;
+  const char* handleName;
+};
+
+class TypedAsyncMalformedResultTest
+    : public ::testing::TestWithParam<MalformedResultCase> {};
 
 struct MakeTypedAsyncEngineCallable {
   template <typename EngineT>
@@ -583,6 +919,33 @@ TEST(TypedAsyncLifecycle, RealEngineExecutePreTradeThenCommit) {
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
 
+TEST(TypedAsyncLifecycle, ReservationSnapshotsRemainAvailableUntilClose) {
+  Engine engine = OrderValidationEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::ExecuteOutcome<ae::EngineAdapter> executed =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.Passed());
+
+  EXPECT_TRUE(executed.reservation->Lock().IsEmpty());
+  EXPECT_TRUE(executed.reservation->AccountAdjustments().empty());
+  EXPECT_TRUE(executed.reservation->Commit().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(executed.reservation->Lock().IsEmpty());
+  EXPECT_TRUE(executed.reservation->AccountAdjustments().empty());
+
+  ASSERT_TRUE(executed.reservation->Close().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(executed.reservation->Close().Await(kAwaitCap).has_value());
+  try {
+    (void)executed.reservation->Lock();
+    FAIL() << "expected closed reservation snapshot failure";
+  } catch (const openpit::Error& err) {
+    EXPECT_EQ(err.Message(), "async reservation is closed");
+  }
+  EXPECT_THROW(
+      { (void)executed.reservation->AccountAdjustments(); }, openpit::Error);
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
 TEST(TypedAsyncLifecycle, RealEngineDropCopyThenCommitAndClose) {
   Engine engine = SingleOrderEngine();
   auto async = ae::MakeTypedAsyncEngine(engine, 1);
@@ -599,6 +962,9 @@ TEST(TypedAsyncLifecycle, RealEngineDropCopyThenCommitAndClose) {
   EXPECT_FALSE(outcome.operation->AccountBlock().has_value());
   EXPECT_FALSE(outcome.operation->IsAccountBlocked());
   EXPECT_TRUE(outcome.operation->CommitAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(outcome.operation->Close().Await(kAwaitCap).has_value());
+  EXPECT_THROW(
+      { (void)outcome.operation->AccountAdjustments(); }, openpit::Error);
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
 
@@ -733,6 +1099,139 @@ TEST(TypedAsyncErrorModel, DropCopyFatalRejectIsValueNotThrow) {
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
 
+TEST(AsyncHandleLifecycle, ClosedReadWinsDuringLaterFinalization) {
+  ExpectAsyncHandleLifecycleClosedReadDuringLaterFinalization();
+}
+
+TEST(AsyncHandleLifecycle, AdmittedReaderDelaysFinalization) {
+  ExpectAsyncHandleLifecycleAdmittedReaderDelaysFinalization();
+}
+
+TEST(TypedAsyncThreading,
+     ReservationSnapshotFailsPromptlyInsideCommitCallback) {
+  std::function<void()> snapshotProbe;
+  std::atomic<SnapshotProbeResult> probeResult{SnapshotProbeResult::NotRun};
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<ReentrantSnapshotPolicy> policy(
+      "ReentrantSnapshotPolicy",
+      ReentrantSnapshotPolicy(&snapshotProbe, ReentrantFinalizer::Commit));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::ExecuteOutcome<ae::EngineAdapter> executed =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.Passed());
+  const std::shared_ptr<ae::AsyncReservation<ae::EngineAdapter>> reservation =
+      executed.reservation;
+  snapshotProbe = [reservation, &probeResult] {
+    probeResult.store(
+        ProbeSnapshot([&] { (void)reservation->Lock(); },
+                      "async reservation finalization is in progress"),
+        std::memory_order_release);
+  };
+
+  EXPECT_TRUE(reservation->Commit().Await(kAwaitCap).has_value());
+  EXPECT_EQ(probeResult.load(std::memory_order_acquire),
+            SnapshotProbeResult::FinalizationInProgress);
+  EXPECT_TRUE(reservation->Lock().IsEmpty());
+  EXPECT_TRUE(reservation->Close().Await(kAwaitCap).has_value());
+  try {
+    (void)reservation->Lock();
+    FAIL() << "expected closed reservation snapshot failure";
+  } catch (const openpit::FinalizationInProgressError&) {
+    FAIL() << "closed reservation reported finalization in progress";
+  } catch (const openpit::Error& err) {
+    EXPECT_EQ(err.Message(), "async reservation is closed");
+  }
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncThreading, DropCopySnapshotFailsPromptlyInsideRollbackCallback) {
+  std::function<void()> snapshotProbe;
+  std::atomic<SnapshotProbeResult> probeResult{SnapshotProbeResult::NotRun};
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<ReentrantSnapshotPolicy> policy(
+      "ReentrantSnapshotPolicy",
+      ReentrantSnapshotPolicy(&snapshotProbe, ReentrantFinalizer::Rollback));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  const std::shared_ptr<ae::AsyncDropCopyOperation<ae::EngineAdapter>>
+      operation = outcome.operation;
+  snapshotProbe = [operation, &probeResult] {
+    probeResult.store(
+        ProbeSnapshot([&] { (void)operation->AccountAdjustments(); },
+                      "async drop-copy operation finalization is in progress"),
+        std::memory_order_release);
+  };
+
+  EXPECT_TRUE(operation->Rollback().Await(kAwaitCap).has_value());
+  EXPECT_EQ(probeResult.load(std::memory_order_acquire),
+            SnapshotProbeResult::FinalizationInProgress);
+  EXPECT_TRUE(operation->AccountAdjustments().empty());
+  EXPECT_TRUE(operation->Close().Await(kAwaitCap).has_value());
+  try {
+    (void)operation->AccountAdjustments();
+    FAIL() << "expected closed drop-copy snapshot failure";
+  } catch (const openpit::FinalizationInProgressError&) {
+    FAIL() << "closed drop-copy operation reported finalization in progress";
+  } catch (const openpit::Error& err) {
+    EXPECT_EQ(err.Message(), "async drop-copy operation is closed");
+  }
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncLifecycle, ReservationStaysClosedAfterLaterClose) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::ExecuteOutcome<ae::EngineAdapter> executed =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.Passed());
+  const std::shared_ptr<ae::AsyncReservation<ae::EngineAdapter>> reservation =
+      executed.reservation;
+
+  EXPECT_TRUE(reservation->Close().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(reservation->Close().Await(kAwaitCap).has_value());
+  try {
+    (void)reservation->Lock();
+    FAIL() << "expected closed reservation snapshot failure";
+  } catch (const openpit::FinalizationInProgressError&) {
+    FAIL() << "closed reservation reported finalization in progress";
+  } catch (const openpit::Error& err) {
+    EXPECT_EQ(err.Message(), "async reservation is closed");
+  }
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncLifecycle, DropCopyStaysClosedAfterLaterClose) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  const std::shared_ptr<ae::AsyncDropCopyOperation<ae::EngineAdapter>>
+      operation = outcome.operation;
+
+  EXPECT_TRUE(operation->Close().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(operation->Close().Await(kAwaitCap).has_value());
+  try {
+    (void)operation->Lock();
+    FAIL() << "expected closed drop-copy snapshot failure";
+  } catch (const openpit::FinalizationInProgressError&) {
+    FAIL() << "closed drop-copy operation reported finalization in progress";
+  } catch (const openpit::Error& err) {
+    EXPECT_EQ(err.Message(), "async drop-copy operation is closed");
+  }
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
 TEST(TypedAsyncThreading, DropCopyFinalizationBlocksNextSameAccountCall) {
   Gate rollbackStarted;
   Gate releaseRollback;
@@ -751,7 +1250,10 @@ TEST(TypedAsyncThreading, DropCopyFinalizationBlocksNextSameAccountCall) {
       operation = outcome.operation;
 
   ae::Future<std::monostate> rollback = operation->Rollback();
-  rollbackStarted.Wait();
+  if (!rollbackStarted.WaitFor(kAwaitCap)) {
+    releaseRollback.Open();
+    FAIL() << "rollback callback did not start";
+  }
   ae::Future<ae::StartOutcome<ae::EngineAdapter>> next =
       async.StartPreTrade(TestOrder(kAccountA));
   EXPECT_FALSE(next.Done());
@@ -831,6 +1333,104 @@ TEST(TypedAsyncErrorModel, DropCopyMissingAccountFailsWithMissingAccountId) {
 
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
+
+TEST_P(TypedAsyncMalformedResultTest, RejectsInvalidTupleShape) {
+  const MalformedResultCase testCase = GetParam();
+  std::atomic<std::size_t> rollbacks{0};
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<CountingRollbackPolicy> policy(
+      "CountingRollbackPolicy", CountingRollbackPolicy(&rollbacks));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  MalformedResultAdapter driver(engine, testCase.entryPoint, testCase.shape);
+  auto async =
+      ae::TypedBuilder<MalformedResultAdapter>(driver).Sharded(1).Build();
+
+  const std::string expectedMessage =
+      std::string(testCase.operationName) +
+      " returned invalid result shape: expected either a live " +
+      testCase.handleName + " with empty rejects or an absent " +
+      testCase.handleName + " with non-empty rejects";
+  auto expectFailure = [&expectedMessage](auto&& future) {
+    try {
+      (void)future.Await(kAwaitCap);
+      FAIL() << "expected TaskFailed for malformed result";
+    } catch (const ae::Error& err) {
+      EXPECT_EQ(err.Code(), ae::ErrorCode::TaskFailed);
+      EXPECT_EQ(err.Message(), expectedMessage);
+    }
+  };
+
+  switch (testCase.entryPoint) {
+    case MalformedEntryPoint::StartPreTrade:
+      expectFailure(async.StartPreTrade(TestOrder(kAccountA)));
+      break;
+    case MalformedEntryPoint::ExecutePreTrade:
+      expectFailure(async.ExecutePreTrade(TestOrder(kAccountA)));
+      break;
+    case MalformedEntryPoint::ApplyDropCopy:
+      expectFailure(async.ApplyDropCopy(TestOrder(kAccountA)));
+      break;
+  }
+
+  if (testCase.shape != MalformedResultShape::HandleAndRejects) {
+    EXPECT_EQ(rollbacks.load(std::memory_order_relaxed), 0u);
+  } else if (testCase.entryPoint != MalformedEntryPoint::StartPreTrade) {
+    EXPECT_EQ(rollbacks.load(std::memory_order_relaxed), 1u);
+  }
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    StartExecuteAndDropCopy, TypedAsyncMalformedResultTest,
+    ::testing::Values(
+        MalformedResultCase{MalformedEntryPoint::StartPreTrade,
+                            MalformedResultShape::HandleAndRejects,
+                            "StartHandleAndRejects", "StartPreTrade",
+                            "request"},
+        MalformedResultCase{MalformedEntryPoint::StartPreTrade,
+                            MalformedResultShape::Empty, "StartEmpty",
+                            "StartPreTrade", "request"},
+        MalformedResultCase{MalformedEntryPoint::StartPreTrade,
+                            MalformedResultShape::ClosedHandle,
+                            "StartClosedHandle", "StartPreTrade", "request"},
+        MalformedResultCase{MalformedEntryPoint::StartPreTrade,
+                            MalformedResultShape::ClosedHandleAndRejects,
+                            "StartClosedHandleAndRejects", "StartPreTrade",
+                            "request"},
+        MalformedResultCase{MalformedEntryPoint::ExecutePreTrade,
+                            MalformedResultShape::HandleAndRejects,
+                            "ExecuteHandleAndRejects", "ExecutePreTrade",
+                            "reservation"},
+        MalformedResultCase{MalformedEntryPoint::ExecutePreTrade,
+                            MalformedResultShape::Empty, "ExecuteEmpty",
+                            "ExecutePreTrade", "reservation"},
+        MalformedResultCase{MalformedEntryPoint::ExecutePreTrade,
+                            MalformedResultShape::ClosedHandle,
+                            "ExecuteClosedHandle", "ExecutePreTrade",
+                            "reservation"},
+        MalformedResultCase{MalformedEntryPoint::ExecutePreTrade,
+                            MalformedResultShape::ClosedHandleAndRejects,
+                            "ExecuteClosedHandleAndRejects", "ExecutePreTrade",
+                            "reservation"},
+        MalformedResultCase{MalformedEntryPoint::ApplyDropCopy,
+                            MalformedResultShape::HandleAndRejects,
+                            "DropCopyHandleAndRejects", "ApplyDropCopy",
+                            "operation"},
+        MalformedResultCase{MalformedEntryPoint::ApplyDropCopy,
+                            MalformedResultShape::Empty, "DropCopyEmpty",
+                            "ApplyDropCopy", "operation"},
+        MalformedResultCase{MalformedEntryPoint::ApplyDropCopy,
+                            MalformedResultShape::ClosedHandle,
+                            "DropCopyClosedHandle", "ApplyDropCopy",
+                            "operation"},
+        MalformedResultCase{MalformedEntryPoint::ApplyDropCopy,
+                            MalformedResultShape::ClosedHandleAndRejects,
+                            "DropCopyClosedHandleAndRejects", "ApplyDropCopy",
+                            "operation"}),
+    [](const ::testing::TestParamInfo<MalformedResultCase>& info) {
+      return std::string(info.param.name);
+    });
 
 // An ABI/boundary failure inside a driver call (here: a null-handle engine)
 // surfaces as a TaskFailed error VALUE on the future; the engine's thrown

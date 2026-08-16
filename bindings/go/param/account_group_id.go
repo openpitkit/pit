@@ -23,16 +23,24 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 )
 
-// AccountGroupID is a type-safe account-group identifier.
+// AccountGroupID is a type-safe account-group identifier. Its zero value is
+// uninitialized and names no account group. It must stay distinguishable from
+// [DefaultAccountGroup]: handle 0 legally selects the global default currency
+// tier, so an unset value cannot be caught further down. Every constructor
+// initializes its result, including [NewAccountGroupIDFromHandle] when passed 0.
 type AccountGroupID struct {
-	native native.ParamAccountGroupID
+	native      native.ParamAccountGroupID
+	initialized bool
 }
 
 // DefaultAccountGroup is the reserved account group that every account belongs
 // to until it is assigned to another group. It is the only account-group
 // identifier that cannot be produced by NewAccountGroupIDFromUint32 or
 // NewAccountGroupIDFromString.
-var DefaultAccountGroup = AccountGroupID{native: native.DefaultAccountGroup}
+var DefaultAccountGroup = AccountGroupID{
+	native:      native.DefaultAccountGroup,
+	initialized: true,
+}
 
 // NewAccountGroupIDFromUint32 constructs an account-group identifier from an
 // unsigned 32-bit integer value. Returns an error when source is the reserved
@@ -42,7 +50,7 @@ func NewAccountGroupIDFromUint32(source uint32) (AccountGroupID, error) {
 	if err != nil {
 		return AccountGroupID{}, err
 	}
-	return AccountGroupID{native: value}, nil
+	return AccountGroupID{native: value, initialized: true}, nil
 }
 
 // NewAccountGroupIDFromString constructs an account-group identifier by hashing
@@ -54,12 +62,18 @@ func NewAccountGroupIDFromString(source string) (AccountGroupID, error) {
 	if err != nil {
 		return AccountGroupID{}, err
 	}
-	return AccountGroupID{native: value}, nil
+	return AccountGroupID{native: value, initialized: true}, nil
 }
 
 // NewAccountGroupIDFromHandle creates an AccountGroupID from a native handle.
 func NewAccountGroupIDFromHandle(source native.ParamAccountGroupID) AccountGroupID {
-	return AccountGroupID{native: source}
+	return AccountGroupID{native: source, initialized: true}
+}
+
+// IsInitialized reports whether the identifier was explicitly constructed or
+// is [DefaultAccountGroup].
+func (v AccountGroupID) IsInitialized() bool {
+	return v.initialized
 }
 
 // String formats the account-group identifier as a decimal string.

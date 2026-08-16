@@ -19,7 +19,9 @@ package asyncengine
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/model"
@@ -32,15 +34,17 @@ import (
 
 // AsyncEngine is a concurrent facade over an AccountSync engine. Every
 // public method queues the corresponding engine operation behind the
-// per-account dispatcher chosen at build time and returns a Future that
+// keyed dispatcher chosen at build time and returns a Future that
 // resolves once the worker has run the call.
 //
 // The facade adds whole-pipeline isolation beyond a fully synchronized direct
-// engine. Every operation is routed by account ID to one queue drained by one
-// worker, so two complete pipelines for the same account never overlap, and
-// follow-up calls on AsyncRequest, AsyncReservation, and
-// AsyncDropCopyOperation re-enter that same queue. Callers need no locking of
-// their own on top.
+// engine. Operations routed by the same account ID share one queue drained by
+// one worker, so their complete pipelines never overlap. Account-group
+// membership changes use the first supplied account ID. Group blocking and
+// group currency operations instead use an account-group key and do not join
+// member-account lanes. Engine-wide operations use a third key kind. Follow-up
+// calls on AsyncRequest, AsyncReservation, and AsyncDropCopyOperation re-enter
+// their original account queue. Callers need no locking of their own on top.
 type AsyncEngine struct {
 	driver         Driver
 	strategy       strategy
@@ -56,13 +60,75 @@ func newAsyncEngine(driver Driver, stopUnderlying func(), strategy strategy) *As
 	}
 }
 
+type chainLaneContextKey struct{}
+
+type chainLaneActivity struct {
+	engine   *AsyncEngine
+	previous *chainLaneActivity
+	active   atomic.Bool
+}
+
+func withChainLaneContext(
+	ctx context.Context,
+	lane *chainLaneActivity,
+) context.Context {
+	lane.previous, _ = ctx.Value(chainLaneContextKey{}).(*chainLaneActivity)
+	return context.WithValue(ctx, chainLaneContextKey{}, lane)
+}
+
+func (e *AsyncEngine) submit(
+	ctx context.Context,
+	key routingKey,
+	task pendingTask,
+) error {
+	if e.reentrantLane(ctx) {
+		return ErrReentrantLane
+	}
+	return e.strategy.submit(ctx, key, task)
+}
+
+func (e *AsyncEngine) reentrantLane(ctx context.Context) bool {
+	lane, _ := ctx.Value(chainLaneContextKey{}).(*chainLaneActivity)
+	for ; lane != nil; lane = lane.previous {
+		if lane.engine == e && lane.active.Load() {
+			return true
+		}
+	}
+	return false
+}
+
+func validateDriverResult(
+	hasHandle bool,
+	hasLiveHandle bool,
+	rejects []reject.Reject,
+	err error,
+) error {
+	if hasHandle && !hasLiveHandle {
+		return errors.Join(ErrDriverResult, err)
+	}
+	resultCount := 0
+	if hasLiveHandle {
+		resultCount++
+	}
+	if len(rejects) > 0 {
+		resultCount++
+	}
+	if err != nil {
+		resultCount++
+	}
+	if resultCount == 1 {
+		return nil
+	}
+	return errors.Join(ErrDriverResult, err)
+}
+
 // StartPreTrade enqueues a start-stage call for the order. The supplied
 // order must have an account ID set on its operation view; otherwise the
 // returned future is resolved immediately with ErrMissingAccountID.
 //
 // The future mirrors the synchronous start-stage tuple: on accept it
 // resolves with a non-nil *AsyncRequest and nil rejects; on a policy reject
-// it resolves with a nil request and non-nil rejects; on transport error
+// it resolves with a nil request and non-empty rejects; on transport error
 // both are nil and err is set. Finalize an accepted request via
 // AsyncRequest.Execute or AsyncRequest.Close (both route through the same
 // per-account queue).
@@ -77,7 +143,7 @@ func (e *AsyncEngine) StartPreTrade(
 		return f
 	}
 	task := &startPreTradeTask{f: f, engine: e, order: order, accountID: accountID}
-	if err := e.strategy.submit(ctx, accountID, task); err != nil {
+	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
 		f.Resolve(nil, nil, err)
 	}
 	return f
@@ -93,11 +159,23 @@ type startPreTradeTask struct {
 
 func (t *startPreTradeTask) run() {
 	request, rejects, err := t.engine.driver.StartPreTrade(t.order)
+	if shapeErr := validateDriverResult(
+		request != nil,
+		request != nil && !request.IsClosed(),
+		rejects,
+		err,
+	); shapeErr != nil {
+		if request != nil {
+			request.Close()
+		}
+		t.f.Resolve(nil, nil, shapeErr)
+		return
+	}
 	if err != nil {
 		t.f.Resolve(nil, nil, err)
 		return
 	}
-	if rejects != nil {
+	if len(rejects) > 0 {
 		t.f.Resolve(nil, rejects, nil)
 		return
 	}
@@ -120,7 +198,7 @@ func (e *AsyncEngine) ExecutePreTrade(
 		return f
 	}
 	task := &executePreTradeTask{f: f, engine: e, order: order, accountID: accountID}
-	if err := e.strategy.submit(ctx, accountID, task); err != nil {
+	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
 		f.Resolve(nil, nil, err)
 	}
 	return f
@@ -136,15 +214,40 @@ type executePreTradeTask struct {
 
 func (t *executePreTradeTask) run() {
 	reservation, rejects, err := t.engine.driver.ExecutePreTrade(t.order)
+	resolveReservationDriverResult(
+		t.f, reservation, rejects, err, t.engine, t.accountID,
+	)
+}
+
+func resolveReservationDriverResult(
+	f *future.Future2[*AsyncReservation, []reject.Reject],
+	reservation *pretrade.Reservation,
+	rejects []reject.Reject,
+	err error,
+	engine *AsyncEngine,
+	accountID param.AccountID,
+) {
+	if shapeErr := validateDriverResult(
+		reservation != nil,
+		reservation != nil && !reservation.IsClosed(),
+		rejects,
+		err,
+	); shapeErr != nil {
+		if reservation != nil {
+			reservation.Close()
+		}
+		f.Resolve(nil, nil, shapeErr)
+		return
+	}
 	if err != nil {
-		t.f.Resolve(nil, nil, err)
+		f.Resolve(nil, nil, err)
 		return
 	}
-	if rejects != nil {
-		t.f.Resolve(nil, rejects, nil)
+	if len(rejects) > 0 {
+		f.Resolve(nil, rejects, nil)
 		return
 	}
-	t.f.Resolve(newAsyncReservation(reservation, t.engine, t.accountID), nil, nil)
+	f.Resolve(newAsyncReservation(reservation, engine, accountID), nil, nil)
 }
 
 func (t *executePreTradeTask) abort(err error) { t.f.Resolve(nil, nil, err) }
@@ -177,7 +280,7 @@ func (e *AsyncEngine) ApplyDropCopy(
 		return f
 	}
 	task := &applyDropCopyTask{f: f, engine: e, order: order, accountID: accountID}
-	if err := e.strategy.submit(ctx, accountID, task); err != nil {
+	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
 		f.Resolve(nil, nil, err)
 	}
 	return f
@@ -193,11 +296,23 @@ type applyDropCopyTask struct {
 
 func (t *applyDropCopyTask) run() {
 	operation, rejects, err := t.engine.driver.ApplyDropCopy(t.order)
+	if shapeErr := validateDriverResult(
+		operation != nil,
+		operation != nil && !operation.IsClosed(),
+		rejects,
+		err,
+	); shapeErr != nil {
+		if operation != nil {
+			operation.Close()
+		}
+		t.f.Resolve(nil, nil, shapeErr)
+		return
+	}
 	if err != nil {
 		t.f.Resolve(nil, nil, err)
 		return
 	}
-	if rejects != nil {
+	if len(rejects) > 0 {
 		t.f.Resolve(nil, rejects, nil)
 		return
 	}
@@ -224,7 +339,7 @@ func (e *AsyncEngine) ApplyExecutionReport(
 		return f
 	}
 	task := &applyReportTask{f: f, engine: e, report: report}
-	if err := e.strategy.submit(ctx, accountID, task); err != nil {
+	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
 		f.Resolve(pretrade.PostTradeResult{}, err)
 	}
 	return f
@@ -264,7 +379,7 @@ func (e *AsyncEngine) ApplyAccountAdjustment(
 		adjustments: adjustments,
 		accountID:   accountID,
 	}
-	if err := e.strategy.submit(ctx, accountID, task); err != nil {
+	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
 		f.Resolve(accountadjustment.BatchResult{}, err)
 	}
 	return f
@@ -305,16 +420,16 @@ func (e *AsyncEngine) Submit(
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
 	task := &submitTask{f: f, fn: fn}
-	if err := e.strategy.submit(ctx, accountID, task); err != nil {
+	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
 }
 
 // Accounts returns an accessor for account-group management bound to this
-// engine. Each accessor method queues its operation behind the per-account
-// dispatcher and returns a Future, mirroring the rest of the AsyncEngine
-// surface.
+// engine. Each accessor method queues behind the routing key selected for its
+// account, account group, or engine-wide lane and returns a Future, mirroring
+// the rest of the AsyncEngine surface.
 func (e *AsyncEngine) Accounts() AsyncAccounts {
 	return AsyncAccounts{engine: e}
 }
@@ -328,7 +443,7 @@ type AsyncAccounts struct {
 
 // RegisterGroup enqueues a group-registration call routed through the queue of
 // the first account in accounts. Returns ErrMissingAccountID when accounts is
-// empty.
+// empty and ErrUninitializedAccountGroupID when group is uninitialized.
 //
 // The future resolves with a non-nil error on a domain conflict
 // (*reject.AccountGroupError) or a transport failure.
@@ -342,8 +457,12 @@ func (a AsyncAccounts) RegisterGroup(
 		f.Resolve(struct{}{}, ErrMissingAccountID)
 		return f
 	}
+	if err := validateAccountGroupID(group); err != nil {
+		f.Resolve(struct{}{}, err)
+		return f
+	}
 	task := &registerGroupTask{f: f, engine: a.engine, accounts: accounts, group: group}
-	if err := a.engine.strategy.submit(ctx, accounts[0], task); err != nil {
+	if err := a.engine.submit(ctx, accountRoutingKey(accounts[0]), task); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -365,7 +484,7 @@ func (t *registerGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 
 // UnregisterGroup enqueues a group-unregistration call routed through the queue
 // of the first account in accounts. Returns ErrMissingAccountID when accounts
-// is empty.
+// is empty and ErrUninitializedAccountGroupID when group is uninitialized.
 //
 // The future resolves with a non-nil error on a domain conflict
 // (*reject.AccountGroupError) or a transport failure.
@@ -379,8 +498,12 @@ func (a AsyncAccounts) UnregisterGroup(
 		f.Resolve(struct{}{}, ErrMissingAccountID)
 		return f
 	}
+	if err := validateAccountGroupID(group); err != nil {
+		f.Resolve(struct{}{}, err)
+		return f
+	}
 	task := &unregisterGroupTask{f: f, engine: a.engine, accounts: accounts, group: group}
-	if err := a.engine.strategy.submit(ctx, accounts[0], task); err != nil {
+	if err := a.engine.submit(ctx, accountRoutingKey(accounts[0]), task); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -409,7 +532,7 @@ func (a AsyncAccounts) GroupOf(
 ) *future.Future[optional.Option[param.AccountGroupID]] {
 	f := future.New[optional.Option[param.AccountGroupID]]()
 	task := &groupOfTask{f: f, engine: a.engine, account: account}
-	if err := a.engine.strategy.submit(ctx, account, task); err != nil {
+	if err := a.engine.submit(ctx, accountRoutingKey(account), task); err != nil {
 		f.Resolve(optional.None[param.AccountGroupID](), err)
 	}
 	return f
@@ -441,7 +564,7 @@ func (a AsyncAccounts) Block(
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
 	task := &blockTask{f: f, engine: a.engine, account: account, reason: reason}
-	if err := a.engine.strategy.submit(ctx, account, task); err != nil {
+	if err := a.engine.submit(ctx, accountRoutingKey(account), task); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -472,7 +595,7 @@ func (a AsyncAccounts) Unblock(
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
 	task := &unblockTask{f: f, engine: a.engine, account: account}
-	if err := a.engine.strategy.submit(ctx, account, task); err != nil {
+	if err := a.engine.submit(ctx, accountRoutingKey(account), task); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -507,7 +630,9 @@ func (t *unblockTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 func (a AsyncAccounts) UnblockAll(ctx context.Context) *future.Future[struct{}] {
 	f := future.New[struct{}]()
 	task := &unblockAllTask{f: f, engine: a.engine}
-	if err := a.engine.strategy.submit(ctx, engineWideRoutingKey(), task); err != nil {
+	if err := a.engine.submit(
+		ctx, engineWideRoutingKey(), task,
+	); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -538,7 +663,7 @@ func (a AsyncAccounts) ReplaceBlockReason(
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
 	task := &replaceBlockReasonTask{f: f, engine: a.engine, account: account, reason: reason}
-	if err := a.engine.strategy.submit(ctx, account, task); err != nil {
+	if err := a.engine.submit(ctx, accountRoutingKey(account), task); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -562,16 +687,23 @@ func (t *replaceBlockReasonTask) abort(err error) { t.f.Resolve(struct{}{}, err)
 // group, so calls for the same group are serialized.
 //
 // The future resolves with a non-nil error (*reject.AccountBlockError with kind
-// ReservedGroup) when group is the reserved param.DefaultAccountGroup, or on
-// transport failure.
+// ReservedGroup) when group is the reserved param.DefaultAccountGroup,
+// ErrUninitializedAccountGroupID when group is uninitialized, or a transport
+// failure.
 func (a AsyncAccounts) BlockGroup(
 	ctx context.Context,
 	group param.AccountGroupID,
 	reason string,
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
+	if err := validateAccountGroupID(group); err != nil {
+		f.Resolve(struct{}{}, err)
+		return f
+	}
 	task := &blockGroupTask{f: f, engine: a.engine, group: group, reason: reason}
-	if err := a.engine.strategy.submit(ctx, groupRoutingKey(group), task); err != nil {
+	if err := a.engine.submit(
+		ctx, groupRoutingKey(group), task,
+	); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -595,15 +727,22 @@ func (t *blockGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 // from group, so calls for the same group are serialized.
 //
 // The future resolves with a non-nil error (*reject.AccountBlockError with kind
-// ReservedGroup) when group is the reserved param.DefaultAccountGroup, or on
-// transport failure.
+// ReservedGroup) when group is the reserved param.DefaultAccountGroup,
+// ErrUninitializedAccountGroupID when group is uninitialized, or a transport
+// failure.
 func (a AsyncAccounts) UnblockGroup(
 	ctx context.Context,
 	group param.AccountGroupID,
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
+	if err := validateAccountGroupID(group); err != nil {
+		f.Resolve(struct{}{}, err)
+		return f
+	}
 	task := &unblockGroupTask{f: f, engine: a.engine, group: group}
-	if err := a.engine.strategy.submit(ctx, groupRoutingKey(group), task); err != nil {
+	if err := a.engine.submit(
+		ctx, groupRoutingKey(group), task,
+	); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -628,15 +767,22 @@ func (t *unblockGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 //
 // The future resolves with a non-nil error (*reject.AccountBlockError with kind
 // ReservedGroup when group is the reserved param.DefaultAccountGroup, or
-// GroupNotBlocked when group is not blocked), or on transport failure.
+// GroupNotBlocked when group is not blocked), ErrUninitializedAccountGroupID when
+// group is uninitialized, or a transport failure.
 func (a AsyncAccounts) ReplaceGroupBlockReason(
 	ctx context.Context,
 	group param.AccountGroupID,
 	reason string,
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
+	if err := validateAccountGroupID(group); err != nil {
+		f.Resolve(struct{}{}, err)
+		return f
+	}
 	task := &replaceGroupBlockReasonTask{f: f, engine: a.engine, group: group, reason: reason}
-	if err := a.engine.strategy.submit(ctx, groupRoutingKey(group), task); err != nil {
+	if err := a.engine.submit(
+		ctx, groupRoutingKey(group), task,
+	); err != nil {
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -660,23 +806,22 @@ func (t *replaceGroupBlockReasonTask) run() {
 
 func (t *replaceGroupBlockReasonTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 
-// groupRoutingKey derives a stable per-group routing key for the dispatcher.
-// Group-level block operations carry no account, so they are pinned to a
-// deterministic queue keyed by the group id. Group ids (uint32) share the
-// numeric routing space with account ids (uint64), so a group op with id N
-// is co-serialized with any account op whose id equals N. This is benign:
-// admin block operations are rare, and the native layer is independently
-// concurrency-safe regardless of dispatch order.
-func groupRoutingKey(group param.AccountGroupID) param.AccountID {
-	return param.NewAccountIDFromUint64(uint64(group.Handle()))
+func groupRoutingKey(group param.AccountGroupID) routingKey {
+	return routingKey{
+		kind: routingKeyAccountGroup,
+		id:   uint64(group.Handle()),
+	}
 }
 
-// engineWideRoutingKey derives the routing key for admin operations that carry
-// neither an account nor a group, so they are pinned to a deterministic queue.
-// The collision with account and group keys is benign for the same reason it is
-// in groupRoutingKey.
-func engineWideRoutingKey() param.AccountID {
-	return param.NewAccountIDFromUint64(0)
+func validateAccountGroupID(group param.AccountGroupID) error {
+	if !group.IsInitialized() {
+		return ErrUninitializedAccountGroupID
+	}
+	return nil
+}
+
+func engineWideRoutingKey() routingKey {
+	return routingKey{kind: routingKeyEngineWide}
 }
 
 // submitTask carries one caller-supplied Submit closure to its worker.
@@ -693,11 +838,15 @@ func (t *submitTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 // to run to completion. Returns ctx.Err() if ctx fires before workers
 // finish; in that case the engine is partially stopped and StopHard may
 // be called to complete the shutdown.
+// Returns ErrReentrantLane when ctx is a chain hook context for this engine.
 //
 // After a successful return the wrapped engine has been released (when
 // WithStopUnderlying was wired) and the AsyncEngine handle must not be
 // used for any further operation.
 func (e *AsyncEngine) StopGraceful(ctx context.Context) error {
+	if e.reentrantLane(ctx) {
+		return ErrReentrantLane
+	}
 	err := e.strategy.stopGraceful(ctx)
 	if err == nil {
 		e.releaseUnderlying()
@@ -709,7 +858,11 @@ func (e *AsyncEngine) StopGraceful(ctx context.Context) error {
 // started with ErrStopped, and waits for the currently running task in
 // each worker to finish. Returns ctx.Err() if ctx fires before the
 // in-flight tasks finish.
+// Returns ErrReentrantLane when ctx is a chain hook context for this engine.
 func (e *AsyncEngine) StopHard(ctx context.Context) error {
+	if e.reentrantLane(ctx) {
+		return ErrReentrantLane
+	}
 	err := e.strategy.stopHard(ctx)
 	if err == nil {
 		e.releaseUnderlying()

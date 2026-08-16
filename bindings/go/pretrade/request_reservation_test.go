@@ -274,6 +274,56 @@ func TestRequestCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestLifetimeObjectsReportClosedState(t *testing.T) {
+	request := newRequestForPreTradeTests(t)
+	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
+	operation := newDropCopyOperationForPreTradeTests(t)
+
+	for _, object := range []struct {
+		name     string
+		isClosed func() bool
+		close    func()
+	}{
+		{name: "request", isClosed: request.IsClosed, close: request.Close},
+		{name: "reservation", isClosed: reservation.IsClosed, close: reservation.Close},
+		{name: "drop copy", isClosed: operation.IsClosed, close: operation.Close},
+	} {
+		t.Run(object.name, func(t *testing.T) {
+			if object.isClosed() {
+				t.Fatal("live object reports closed")
+			}
+			object.close()
+			if !object.isClosed() {
+				t.Fatal("closed object reports live")
+			}
+		})
+	}
+
+	for _, object := range []struct {
+		name     string
+		isClosed func() bool
+	}{
+		{
+			name:     "request with nil handle",
+			isClosed: NewRequestFromHandle(nil).IsClosed,
+		},
+		{
+			name:     "reservation with nil handle",
+			isClosed: NewReservationFromHandle(nil).IsClosed,
+		},
+		{
+			name:     "drop copy with nil handle",
+			isClosed: NewDropCopyOperationFromHandle(nil).IsClosed,
+		},
+	} {
+		t.Run(object.name, func(t *testing.T) {
+			if !object.isClosed() {
+				t.Fatal("object with nil native handle reports live")
+			}
+		})
+	}
+}
+
 func TestReservationLockOnFreshReservationProducesNonZeroBlob(t *testing.T) {
 	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
 	lock, err := reservation.Lock()
@@ -373,6 +423,26 @@ func newNativeEngineForPreTradeTests(t *testing.T) native.Engine {
 	}
 	t.Cleanup(func() { native.DestroyEngine(engine) })
 	return engine
+}
+
+func newRequestForPreTradeTests(t *testing.T) *Request {
+	t.Helper()
+
+	engine := newNativeEngineForPreTradeTests(t)
+	requestHandle, rejects, err := native.EngineStartPreTrade(
+		engine,
+		newValidOrderForPreTradeTests(t).Handle(),
+	)
+	if err != nil {
+		t.Fatalf("EngineStartPreTrade() error = %v", err)
+	}
+	if rejects != nil {
+		native.DestroyPretradeRejectList(rejects)
+		t.Fatalf("EngineStartPreTrade() rejects = %v, want nil", rejects)
+	}
+	request := NewRequestFromHandle(requestHandle)
+	t.Cleanup(request.Close)
+	return request
 }
 
 func newReservationForPreTradeTests(t *testing.T, order model.Order) *Reservation {

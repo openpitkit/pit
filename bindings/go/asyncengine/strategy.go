@@ -65,7 +65,7 @@ func (t submitFailureCleanupTask) abort(error) { t.cleanup() }
 // callbacks.
 type queuedTask struct {
 	task       pendingTask
-	accountID  param.AccountID
+	key        routingKey
 	enqueuedAt time.Time
 }
 
@@ -79,7 +79,7 @@ type submitFailureCleanupEntry struct {
 	waitSubmitFence bool
 }
 
-// keyQueue is a single per-account-or-shard channel-backed queue. The
+// keyQueue is a single per-routing-key-or-shard channel-backed queue. The
 // gate serializes producers against the cleanup path that retires idle
 // queues: Dynamic producers hold an RLock while sending and cleanup holds
 // the WLock while closing. Sharded queues are never retired, so the
@@ -164,14 +164,14 @@ func (q *keyQueue) markRetired() bool {
 	return true
 }
 
-// pendingCleanupForLocked returns the first queued cleanup for accountID.
-// Cleanup for one account must not fence producers of another, which matters
-// for Sharded, where one queue carries many accounts.
+// pendingCleanupForLocked returns the first queued cleanup for key. Cleanup for
+// one routing key must not fence producers of another, which matters for
+// Sharded, where one queue carries many routing keys.
 func (q *keyQueue) pendingCleanupForLocked(
-	accountID param.AccountID,
+	key routingKey,
 ) (submitFailureCleanupEntry, bool) {
 	for _, entry := range q.mandatory {
-		if entry.task.accountID == accountID {
+		if entry.task.key == key {
 			return entry, true
 		}
 	}
@@ -189,47 +189,42 @@ func (q *keyQueue) noteMandatoryProgressLocked() {
 	q.mandatoryProgress = make(chan struct{})
 }
 
-// strategy is the internal interface that dispatches a task to a worker
-// goroutine bound to the given account. The chosen strategy is selected
-// at build time.
-type strategy interface {
-	submit(ctx context.Context, accountID param.AccountID, task pendingTask) error
-	scheduleSubmitFailureCleanup(accountID param.AccountID, cleanup func())
+type routingKeyKind uint8
 
-	stopGraceful(ctx context.Context) error
-	stopHard(ctx context.Context) error
+const (
+	routingKeyAccount routingKeyKind = iota
+	routingKeyAccountGroup
+	routingKeyEngineWide
+)
+
+type routingKey struct {
+	kind routingKeyKind
+	id   uint64
 }
 
-// submitFailureHandoffStrategy keeps a failed pre-stop producer registered
-// until its caller transfers handle ownership to mandatory cleanup. Concrete
-// production strategies implement it; the fallback preserves compatibility
-// with narrow test strategies that only implement strategy.
-type submitFailureHandoffStrategy interface {
+func accountRoutingKey(accountID param.AccountID) routingKey {
+	return routingKey{kind: routingKeyAccount, id: uint64(accountID.Handle())}
+}
+
+func (k routingKey) observerAccountID() param.AccountID {
+	return param.NewAccountIDFromUint64(k.id)
+}
+
+// strategy is the internal interface that dispatches a task to a worker
+// goroutine bound to the given routing key. The chosen strategy is selected at
+// build time.
+type strategy interface {
+	submit(ctx context.Context, key routingKey, task pendingTask) error
 	submitWithFailureHandoff(
 		ctx context.Context,
-		accountID param.AccountID,
+		key routingKey,
 		task pendingTask,
 		onFailure func(error),
 	) error
-}
+	scheduleSubmitFailureCleanup(key routingKey, cleanup func())
 
-func submitWithFailureHandoff(
-	ctx context.Context,
-	s strategy,
-	accountID param.AccountID,
-	task pendingTask,
-	onFailure func(error),
-) error {
-	if handoffStrategy, ok := s.(submitFailureHandoffStrategy); ok {
-		return handoffStrategy.submitWithFailureHandoff(
-			ctx, accountID, task, onFailure,
-		)
-	}
-	err := s.submit(ctx, accountID, task)
-	if err != nil {
-		onFailure(err)
-	}
-	return err
+	stopGraceful(ctx context.Context) error
+	stopHard(ctx context.Context) error
 }
 
 // baseConfig is the configuration shared by every concrete strategy.
@@ -240,7 +235,7 @@ type baseConfig struct {
 }
 
 // base implements the producer/worker/stop logic common to every
-// strategy. Concrete strategies own the routing of accountID -> *keyQueue.
+// strategy. Concrete strategies own the routing of routingKey -> *keyQueue.
 type base struct {
 	cfg baseConfig
 	// submitMu orders inFlightSubmits increments against stop. beginSubmit
@@ -339,7 +334,7 @@ func (b *base) endSubmit() {
 func (b *base) submitToRegisteredQueue(
 	ctx context.Context,
 	q *keyQueue,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 ) error {
 	q.gate.RLock()
@@ -347,7 +342,7 @@ func (b *base) submitToRegisteredQueue(
 	if q.closed.Load() {
 		return errQueueRetired
 	}
-	return b.sendToQueue(ctx, q, accountID, task, q.quit)
+	return b.sendToQueue(ctx, q, key, task, q.quit)
 }
 
 // submitToShardWithFailureHandoff enqueues task into a Sharded queue. Sharded
@@ -358,7 +353,7 @@ func (b *base) submitToRegisteredQueue(
 func (b *base) submitToShardWithFailureHandoff(
 	ctx context.Context,
 	q *keyQueue,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 	onFailure func(error),
 ) error {
@@ -369,7 +364,7 @@ func (b *base) submitToShardWithFailureHandoff(
 		return ErrStopped
 	}
 	defer b.endSubmit()
-	err := b.sendToQueue(ctx, q, accountID, task, nil)
+	err := b.sendToQueue(ctx, q, key, task, nil)
 	if err != nil && onFailure != nil {
 		onFailure(err)
 	}
@@ -383,24 +378,24 @@ func (b *base) submitToShardWithFailureHandoff(
 func (b *base) sendToQueue(
 	ctx context.Context,
 	q *keyQueue,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 	quit <-chan struct{},
 ) error {
-	if err := b.waitForMandatoryCleanup(ctx, q, accountID, quit); err != nil {
+	if err := b.waitForMandatoryCleanup(ctx, q, key, quit); err != nil {
 		return err
 	}
 	// Honor an already-cancelled ctx before any enqueue: the fast-path send
 	// below would otherwise sneak a task in when the queue has space, even
 	// though the producer's ctx is already done.
 	if err := ctx.Err(); err != nil {
-		b.cfg.observer.OnSubmitCancelled(accountID, err)
+		b.cfg.observer.OnSubmitCancelled(key.observerAccountID(), err)
 		return err
 	}
 
 	qt := queuedTask{
-		task:      task,
-		accountID: accountID,
+		task: task,
+		key:  key,
 	}
 	if b.observerActive {
 		qt.enqueuedAt = time.Now()
@@ -415,7 +410,7 @@ func (b *base) sendToQueue(
 	select {
 	case q.ch <- qt:
 		b.markSent(q)
-		b.cfg.observer.OnEnqueue(accountID, len(q.ch))
+		b.cfg.observer.OnEnqueue(key.observerAccountID(), len(q.ch))
 		return nil
 	default:
 	}
@@ -435,14 +430,14 @@ func (b *base) sendToQueue(
 		select {
 		case q.ch <- qt:
 			b.markSent(q)
-			b.cfg.observer.OnEnqueue(accountID, len(q.ch))
+			b.cfg.observer.OnEnqueue(key.observerAccountID(), len(q.ch))
 			return nil
 		case <-quit:
 			b.unmarkSent(q)
 			return errQueueRetired
 		case <-ctx.Done():
 			b.unmarkSent(q)
-			b.cfg.observer.OnSubmitCancelled(accountID, ctx.Err())
+			b.cfg.observer.OnSubmitCancelled(key.observerAccountID(), ctx.Err())
 			return ctx.Err()
 		case <-b.stopCh:
 			b.unmarkSent(q)
@@ -450,25 +445,25 @@ func (b *base) sendToQueue(
 		case <-tick:
 			elapsed := time.Since(start)
 			attempt++
-			b.cfg.observer.OnQueueFullBlocked(accountID, elapsed)
-			b.cfg.observer.OnSlowSubmit(accountID, elapsed, attempt)
+			b.cfg.observer.OnQueueFullBlocked(key.observerAccountID(), elapsed)
+			b.cfg.observer.OnSlowSubmit(key.observerAccountID(), elapsed, attempt)
 		}
 	}
 }
 
-// waitForMandatoryCleanup holds a producer back until this account has no
-// queued handle release left, so nothing the account submits later overtakes
-// it. The fence is per account, not per queue: a Sharded queue carries many
-// accounts and one account's cleanup must not stall the others.
+// waitForMandatoryCleanup holds a producer back until this routing key has no
+// queued handle release left, so nothing it submits later overtakes it. The
+// fence is per routing key, not per queue: a Sharded queue carries many keys
+// and one key's cleanup must not stall the others.
 func (b *base) waitForMandatoryCleanup(
 	ctx context.Context,
 	q *keyQueue,
-	accountID param.AccountID,
+	key routingKey,
 	quit <-chan struct{},
 ) error {
 	for {
 		q.mandatoryMu.Lock()
-		entry, fenced := q.pendingCleanupForLocked(accountID)
+		entry, fenced := q.pendingCleanupForLocked(key)
 		if !fenced {
 			q.mandatoryMu.Unlock()
 			return nil
@@ -487,7 +482,7 @@ func (b *base) waitForMandatoryCleanup(
 		case <-quit:
 			return errQueueRetired
 		case <-ctx.Done():
-			b.cfg.observer.OnSubmitCancelled(accountID, ctx.Err())
+			b.cfg.observer.OnSubmitCancelled(key.observerAccountID(), ctx.Err())
 			return ctx.Err()
 		case <-b.stopCh:
 			return ErrStopped
@@ -571,13 +566,13 @@ func (b *base) waitForCleanupRelease(q *keyQueue, waitSubmitFence bool) {
 // was signalled, which must not overtake producers registered before it.
 func (b *base) enqueueSubmitFailureCleanup(
 	q *keyQueue,
-	accountID param.AccountID,
+	key routingKey,
 	cleanup func(),
 	waitSubmitFence bool,
 ) bool {
 	qt := queuedTask{
-		task:      submitFailureCleanupTask{cleanup: cleanup},
-		accountID: accountID,
+		task: submitFailureCleanupTask{cleanup: cleanup},
+		key:  key,
 	}
 	if b.observerActive {
 		qt.enqueuedAt = time.Now()
@@ -600,7 +595,7 @@ func (b *base) enqueueSubmitFailureCleanup(
 	})
 	q.mandatoryMu.Unlock()
 	b.markSent(q)
-	b.cfg.observer.OnEnqueue(accountID, len(q.ch))
+	b.cfg.observer.OnEnqueue(key.observerAccountID(), len(q.ch))
 	select {
 	case q.mandatoryWake <- struct{}{}:
 	default:
@@ -666,7 +661,7 @@ func (b *base) handleTask(q *keyQueue, qt queuedTask) {
 	}
 	if b.hardStopped() {
 		qt.task.abort(ErrStopped)
-		b.cfg.observer.OnComplete(qt.accountID, 0)
+		b.cfg.observer.OnComplete(qt.key.observerAccountID(), 0)
 		return
 	}
 	if !b.observerActive {
@@ -676,10 +671,10 @@ func (b *base) handleTask(q *keyQueue, qt queuedTask) {
 		}
 		return
 	}
-	b.cfg.observer.OnDequeue(qt.accountID, time.Since(qt.enqueuedAt))
+	b.cfg.observer.OnDequeue(qt.key.observerAccountID(), time.Since(qt.enqueuedAt))
 	started := time.Now()
 	qt.task.run()
-	b.cfg.observer.OnComplete(qt.accountID, time.Since(started))
+	b.cfg.observer.OnComplete(qt.key.observerAccountID(), time.Since(started))
 	if b.tracksIdle {
 		q.touch()
 	}
@@ -701,7 +696,7 @@ func (b *base) drainAndAbort(q *keyQueue) {
 			}
 			qt.task.abort(ErrStopped)
 			q.settle()
-			b.cfg.observer.OnComplete(qt.accountID, 0)
+			b.cfg.observer.OnComplete(qt.key.observerAccountID(), 0)
 		default:
 			return
 		}

@@ -20,16 +20,14 @@ package asyncengine
 import (
 	"context"
 	"math/bits"
-
-	"go.openpit.dev/openpit/param"
 )
 
-// shardedStrategy fans accounts across a fixed pool of worker channels
+// shardedStrategy fans routing keys across a fixed pool of worker channels
 // chosen at build time. Routing is a single multiply-shift operation per
 // submit and the send path takes no per-queue lock; a short shared
 // read-lock is taken only to order against stop and does not serialize
 // concurrent submits against each other. This makes it the cheapest
-// option when the active account set is large and roughly evenly
+// option when the active key set is large and roughly evenly
 // distributed.
 //
 // Caveat: a single account that produces a hot stream of orders saturates
@@ -45,6 +43,12 @@ type shardedStrategy struct {
 // hash constant used by Knuth in TAOCP, vol. 3.
 const fibonacciHashMultiplier uint64 = 11400714819323198485
 
+// routingKindHashMultiplier is the odd multiplier from the degski64 hash
+// mixer. It must remain odd so multiplication permutes all uint64 values.
+// XORing that independent mix with the numeric-ID mix preserves distribution
+// within each kind, but cannot force different kinds onto different shards.
+const routingKindHashMultiplier uint64 = 15485907386658061715
+
 func newShardedStrategy(cfg baseConfig, shardCount int) *shardedStrategy {
 	s := &shardedStrategy{
 		base:   newBase(cfg, false),
@@ -58,44 +62,45 @@ func newShardedStrategy(cfg baseConfig, shardCount int) *shardedStrategy {
 	return s
 }
 
-func (s *shardedStrategy) shardFor(accountID param.AccountID) *keyQueue {
-	// Lemire multiply-shift over the HIGH bits of the Fibonacci mix: the low
-	// bits of an odd-constant multiply are poorly mixed, so map via the high
-	// half of the 128-bit product instead of a modulo. hi is in [0, len).
-	h := uint64(accountID.Handle()) * fibonacciHashMultiplier
+func (s *shardedStrategy) shardFor(key routingKey) *keyQueue {
+	// The routing kind is mixed independently from the numeric ID before the
+	// Lemire multiply-shift. The low bits of an odd-constant multiply are poorly
+	// mixed, so map via the high half of the 128-bit product instead of a modulo.
+	h := key.id*fibonacciHashMultiplier ^
+		uint64(key.kind)*routingKindHashMultiplier
 	hi, _ := bits.Mul64(h, uint64(len(s.shards)))
 	return s.shards[hi]
 }
 
 func (s *shardedStrategy) submit(
 	ctx context.Context,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 ) error {
-	return s.submitWithFailureHandoff(ctx, accountID, task, nil)
+	return s.submitWithFailureHandoff(ctx, key, task, nil)
 }
 
 func (s *shardedStrategy) submitWithFailureHandoff(
 	ctx context.Context,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 	onFailure func(error),
 ) error {
-	q := s.shardFor(accountID)
+	q := s.shardFor(key)
 	// Sharded queues are never retired, so the send never reports
 	// errQueueRetired; a stopped strategy short-circuits with ErrStopped.
 	return s.submitToShardWithFailureHandoff(
-		ctx, q, accountID, task, onFailure,
+		ctx, q, key, task, onFailure,
 	)
 }
 
 func (s *shardedStrategy) scheduleSubmitFailureCleanup(
-	accountID param.AccountID,
+	key routingKey,
 	cleanup func(),
 ) {
-	q := s.shardFor(accountID)
+	q := s.shardFor(key)
 	if s.beginSubmit() {
-		scheduled := s.enqueueSubmitFailureCleanup(q, accountID, cleanup, false)
+		scheduled := s.enqueueSubmitFailureCleanup(q, key, cleanup, false)
 		s.endSubmit()
 		if scheduled {
 			return
@@ -104,7 +109,7 @@ func (s *shardedStrategy) scheduleSubmitFailureCleanup(
 	// Stop was already signalled, so the handoff must not overtake producers
 	// registered before it. A shard whose worker has exited takes nothing:
 	// then the release is accounted against stop instead.
-	if !s.enqueueSubmitFailureCleanup(q, accountID, cleanup, true) {
+	if !s.enqueueSubmitFailureCleanup(q, key, cleanup, true) {
 		s.runLifecycleCleanup(cleanup)
 	}
 }

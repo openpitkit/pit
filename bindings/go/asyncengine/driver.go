@@ -20,6 +20,7 @@ package asyncengine
 import (
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/accounts"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
@@ -35,9 +36,30 @@ import (
 // every method returns a future over the same values the synchronous engine
 // returns (see pkg/future.Future and pkg/future.Future2); the post-trade
 // result is the canonical pretrade.PostTradeResult.
+//
+// Entering StartPreTrade, ExecutePreTrade, ApplyDropCopy,
+// ApplyExecutionReport, ApplyAccountAdjustment, an Accounts mutation, or a
+// Configure mutation is potentially state-changing regardless of the result:
+// the implementation can consume budget or alter account state before it
+// returns.
+//
+// StartPreTrade, ExecutePreTrade, and ApplyDropCopy hand caller-owned pending
+// state back as handles. Each call must return exactly one of a live handle,
+// non-empty rejects, or a non-nil error. Every accepted Request returned by
+// StartPreTrade must be Execute'd or Close'd. Every accepted Reservation or
+// DropCopyOperation must reach one terminal path: CommitAndClose,
+// RollbackAndClose, or Close. If an implementation leaves pending state
+// without returning its handle, AsyncEngine can neither finalize nor release
+// it; a chain can only report that retrying is unsafe.
+//
+// ExecutePreTradeDryRun exists for Chain.CheckOrder, the asynchronous
+// full-pipeline dry-run path. It must return exactly one of a live report or a
+// non-nil error; Chain closes every non-nil report. Start-stage dry run remains
+// synchronous-only and is intentionally absent from Driver.
 type Driver interface {
 	StartPreTrade(model.Order) (*pretrade.Request, []reject.Reject, error)
 	ExecutePreTrade(model.Order) (*pretrade.Reservation, []reject.Reject, error)
+	ExecutePreTradeDryRun(model.Order) (*pretrade.DryRunReport, error)
 	ApplyDropCopy(
 		model.Order,
 	) (*pretrade.DropCopyOperation, []reject.Reject, error)
@@ -46,5 +68,8 @@ type Driver interface {
 		param.AccountID,
 		[]model.AccountAdjustment,
 	) (accountadjustment.BatchResult, error)
+	// Accounts returns the driver's account-administration surface.
 	Accounts() accounts.Accounts
+	// Configure returns the driver's runtime-configuration surface.
+	Configure() configure.Configurator
 }

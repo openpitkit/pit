@@ -66,6 +66,11 @@ func NewReservationFromHandle(handle native.PretradePreTradeReservation) *Reserv
 	return &Reservation{handle: handle}
 }
 
+// IsClosed reports whether the reservation no longer owns a native handle.
+func (r *Reservation) IsClosed() bool {
+	return r.handle == nil
+}
+
 // Close releases the reservation.
 //
 // If neither Commit nor Rollback was called beforehand, Close rolls back

@@ -47,6 +47,11 @@ func NewDryRunReportFromHandle(handle native.PretradePreTradeDryRunReport) *DryR
 	return &DryRunReport{handle: handle}
 }
 
+// IsClosed reports whether the report no longer owns a native handle.
+func (r *DryRunReport) IsClosed() bool {
+	return r.handle == nil
+}
+
 // Close releases the report.
 //
 // Idempotency: safe to call more than once; subsequent calls are no-ops.

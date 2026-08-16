@@ -319,3 +319,40 @@ func TestDefaultAccountGroup(t *testing.T) {
 		t.Fatalf("DefaultAccountGroup.Handle() = %v, want %v", got, native.DefaultAccountGroup)
 	}
 }
+
+func TestAccountGroupIDInitialization(t *testing.T) {
+	t.Parallel()
+
+	fromUint32, err := NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatalf("NewAccountGroupIDFromUint32(7) error = %v", err)
+	}
+	fromString, err := NewAccountGroupIDFromString("desk-a")
+	if err != nil {
+		t.Fatalf("NewAccountGroupIDFromString() error = %v", err)
+	}
+	fromZeroHandle := NewAccountGroupIDFromHandle(native.DefaultAccountGroup)
+
+	tests := []struct {
+		name string
+		id   AccountGroupID
+		want bool
+	}{
+		{name: "zero value", id: AccountGroupID{}, want: false},
+		{name: "default group", id: DefaultAccountGroup, want: true},
+		{name: "uint32 constructor", id: fromUint32, want: true},
+		{name: "string constructor", id: fromString, want: true},
+		{name: "zero handle constructor", id: fromZeroHandle, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.id.IsInitialized(); got != test.want {
+				t.Errorf("IsInitialized() = %t, want %t", got, test.want)
+			}
+			copied := test.id
+			if copied != test.id {
+				t.Errorf("copied AccountGroupID = %v, want %v", copied, test.id)
+			}
+		})
+	}
+}

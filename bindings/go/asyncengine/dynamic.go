@@ -23,15 +23,13 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
-	"go.openpit.dev/openpit/param"
 )
 
-// dynamicStrategy lazily creates one keyQueue per active account. Idle
-// queues are retired by a background cleanup goroutine. The live per-account
-// queue count is bounded by maxQueues (0 means unlimited).
+// dynamicStrategy lazily creates one keyQueue per active routing key. Idle
+// queues are retired by a background cleanup goroutine. The live queue count
+// is bounded by maxQueues (0 means unlimited).
 //
-// Strengths: every account is fully isolated, no hot-shard bottlenecks,
+// Strengths: every routing key is fully isolated, no hot-shard bottlenecks,
 // memory scales with active set rather than total population.
 // Weaknesses: a small read-mutex hit on the submit hot path; cleanup
 // overhead in the background.
@@ -42,8 +40,8 @@ type dynamicStrategy struct {
 	// It fences getOrCreate so no worker is started after the snapshot,
 	// guaranteeing every workersWG.Add happens-before workersWG.Wait.
 	stopping         bool
-	queues           map[param.AccountID]*keyQueue
-	cleanupBarriers  map[param.AccountID]chan struct{}
+	queues           map[routingKey]*keyQueue
+	cleanupBarriers  map[routingKey]chan struct{}
 	maxQueues        int
 	idleCleanupAfter time.Duration
 	cleanupPeriod    time.Duration
@@ -92,8 +90,8 @@ func newDynamicStrategy(
 	tracksIdle := dyn.idleCleanupAfter > 0
 	s := &dynamicStrategy{
 		base:             newBase(cfg, tracksIdle),
-		queues:           map[param.AccountID]*keyQueue{},
-		cleanupBarriers:  map[param.AccountID]chan struct{}{},
+		queues:           map[routingKey]*keyQueue{},
+		cleanupBarriers:  map[routingKey]chan struct{}{},
 		maxQueues:        dyn.maxQueues,
 		idleCleanupAfter: dyn.idleCleanupAfter,
 		cleanupPeriod:    period,
@@ -116,20 +114,20 @@ const (
 	dynamicQueueLimit
 )
 
-// getOrCreate returns the queue for accountID, creating it on first use.
+// getOrCreate returns the queue for key, creating it on first use.
 // When a queue is created, created is true and total is the live queue
 // count snapshotted under s.mu; the caller fires OnQueueCreated after the
 // lock is released to keep user callbacks off the critical section.
 func (s *dynamicStrategy) getOrCreate(
-	accountID param.AccountID,
+	key routingKey,
 ) (q *keyQueue, created bool, total int, state dynamicQueueState) {
 	for {
 		if s.isStopped() {
 			return nil, false, 0, dynamicQueueStopped
 		}
 		s.mu.RLock()
-		q, ok := s.queues[accountID]
-		barrier := s.cleanupBarriers[accountID]
+		q, ok := s.queues[key]
+		barrier := s.cleanupBarriers[key]
 		stopping := s.stopping
 		s.mu.RUnlock()
 		if ok && !q.closed.Load() {
@@ -148,11 +146,11 @@ func (s *dynamicStrategy) getOrCreate(
 			s.mu.Unlock()
 			return nil, false, 0, dynamicQueueStopped
 		}
-		if q, ok := s.queues[accountID]; ok && !q.closed.Load() {
+		if q, ok := s.queues[key]; ok && !q.closed.Load() {
 			s.mu.Unlock()
 			return q, false, 0, dynamicQueueReady
 		}
-		if barrier = s.cleanupBarriers[accountID]; barrier != nil {
+		if barrier = s.cleanupBarriers[key]; barrier != nil {
 			s.mu.Unlock()
 			<-barrier
 			continue
@@ -162,7 +160,7 @@ func (s *dynamicStrategy) getOrCreate(
 			return nil, false, 0, dynamicQueueLimit
 		}
 		q = newKeyQueue(s.cfg.queueCapacity)
-		s.queues[accountID] = q
+		s.queues[key] = q
 		total = len(s.queues)
 		s.workersWG.Add(1)
 		s.mu.Unlock()
@@ -173,15 +171,15 @@ func (s *dynamicStrategy) getOrCreate(
 
 func (s *dynamicStrategy) submit(
 	ctx context.Context,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 ) error {
-	return s.submitWithFailureHandoff(ctx, accountID, task, nil)
+	return s.submitWithFailureHandoff(ctx, key, task, nil)
 }
 
 func (s *dynamicStrategy) submitWithFailureHandoff(
 	ctx context.Context,
-	accountID param.AccountID,
+	key routingKey,
 	task pendingTask,
 	onFailure func(error),
 ) error {
@@ -200,7 +198,7 @@ func (s *dynamicStrategy) submitWithFailureHandoff(
 			}
 			return ErrStopped
 		}
-		q, created, total, state := s.getOrCreate(accountID)
+		q, created, total, state := s.getOrCreate(key)
 		switch state {
 		case dynamicQueueStopped:
 			if onFailure != nil {
@@ -217,9 +215,9 @@ func (s *dynamicStrategy) submitWithFailureHandoff(
 		if created {
 			// Fire the callback after s.mu is released by getOrCreate to
 			// avoid deadlock with a reentrant observer and tail latency.
-			s.cfg.observer.OnQueueCreated(accountID, total)
+			s.cfg.observer.OnQueueCreated(key.observerAccountID(), total)
 		}
-		err := s.submitToRegisteredQueue(ctx, q, accountID, task)
+		err := s.submitToRegisteredQueue(ctx, q, key, task)
 		if err == nil {
 			return nil
 		}
@@ -236,30 +234,30 @@ func (s *dynamicStrategy) submitWithFailureHandoff(
 }
 
 func (s *dynamicStrategy) scheduleSubmitFailureCleanup(
-	accountID param.AccountID,
+	key routingKey,
 	cleanup func(),
 ) {
 	for {
 		if s.isStopped() {
-			s.cleanupAfterStoppedLane(accountID, cleanup)
+			s.cleanupAfterStoppedLane(key, cleanup)
 			return
 		}
-		q, created, total, state := s.getOrCreate(accountID)
+		q, created, total, state := s.getOrCreate(key)
 		if state == dynamicQueueReady && created {
 			// Fire the callback after s.mu is released by getOrCreate to
 			// avoid deadlock with a reentrant observer and tail latency.
-			s.cfg.observer.OnQueueCreated(accountID, total)
+			s.cfg.observer.OnQueueCreated(key.observerAccountID(), total)
 		}
 		switch state {
 		case dynamicQueueStopped:
-			s.cleanupAfterStoppedLane(accountID, cleanup)
+			s.cleanupAfterStoppedLane(key, cleanup)
 			return
 		case dynamicQueueLimit:
 			if !s.beginSubmit() {
-				s.cleanupAfterStoppedLane(accountID, cleanup)
+				s.cleanupAfterStoppedLane(key, cleanup)
 				return
 			}
-			cleaned := s.cleanupWithoutLiveLane(accountID, cleanup)
+			cleaned := s.cleanupWithoutLiveLane(key, cleanup)
 			s.endSubmit()
 			if cleaned {
 				return
@@ -267,44 +265,46 @@ func (s *dynamicStrategy) scheduleSubmitFailureCleanup(
 			continue
 		}
 		if !s.beginSubmit() {
-			s.cleanupAfterStoppedLane(accountID, cleanup)
+			s.cleanupAfterStoppedLane(key, cleanup)
 			return
 		}
-		scheduled := s.enqueueSubmitFailureCleanup(q, accountID, cleanup, false)
+		scheduled := s.enqueueSubmitFailureCleanup(q, key, cleanup, false)
 		s.endSubmit()
 		if scheduled {
 			return
 		}
 		// The lane refused the handoff because it was retired between lookup
 		// and handoff, or because its worker has already exited. Retry the
-		// same way submit does: the next pass either finds a live account
+		// same way submit does: the next pass either finds a live routing
 		// lane or takes the stopped-lane path above.
 	}
 }
 
-// cleanupAfterStoppedLane transfers cleanup to the account lane without
+// cleanupAfterStoppedLane transfers cleanup to the routing lane without
 // waiting for a blocked worker. The worker waits for the submit fence before
 // consuming it, so producers registered before stop stay ordered first.
 func (s *dynamicStrategy) cleanupAfterStoppedLane(
-	accountID param.AccountID,
+	key routingKey,
 	cleanup func(),
 ) {
 	s.mu.RLock()
-	q := s.queues[accountID]
+	q := s.queues[key]
 	s.mu.RUnlock()
 	if q != nil {
-		if s.enqueueSubmitFailureCleanup(q, accountID, cleanup, true) {
+		if s.enqueueSubmitFailureCleanup(
+			q, key, cleanup, true,
+		) {
 			return
 		}
 	}
 	s.runLifecycleCleanup(cleanup)
 }
 
-// cleanupWithoutLiveLane installs an account-local barrier before running
-// cleanup off-lock. The barrier prevents a lane for this account from being
-// created without serializing unrelated accounts.
+// cleanupWithoutLiveLane installs a key-local barrier before running
+// cleanup off-lock. The barrier prevents a lane for this routing key from being
+// created without serializing unrelated keys.
 func (s *dynamicStrategy) cleanupWithoutLiveLane(
-	accountID param.AccountID,
+	key routingKey,
 	cleanup func(),
 ) bool {
 	s.mu.Lock()
@@ -312,22 +312,22 @@ func (s *dynamicStrategy) cleanupWithoutLiveLane(
 		s.mu.Unlock()
 		return false
 	}
-	if q, ok := s.queues[accountID]; ok && !q.closed.Load() {
+	if q, ok := s.queues[key]; ok && !q.closed.Load() {
 		s.mu.Unlock()
 		return false
 	}
-	if _, ok := s.cleanupBarriers[accountID]; ok {
+	if _, ok := s.cleanupBarriers[key]; ok {
 		s.mu.Unlock()
 		return false
 	}
 	barrier := make(chan struct{})
-	s.cleanupBarriers[accountID] = barrier
+	s.cleanupBarriers[key] = barrier
 	s.mu.Unlock()
 
 	func() {
 		defer func() {
 			s.mu.Lock()
-			delete(s.cleanupBarriers, accountID)
+			delete(s.cleanupBarriers, key)
 			close(barrier)
 			s.mu.Unlock()
 		}()
@@ -350,11 +350,11 @@ func (s *dynamicStrategy) cleanupLoop() {
 	}
 }
 
-// idleCandidate pairs an account with the queue snapshotted as idle so the
+// idleCandidate pairs a routing key with the queue snapshotted as idle so the
 // retirement phase can verify the map still maps to the same queue.
 type idleCandidate struct {
-	accountID param.AccountID
-	q         *keyQueue
+	key routingKey
+	q   *keyQueue
 }
 
 // cleanupIdle retires queues that have been empty and untouched longer
@@ -379,10 +379,10 @@ func (s *dynamicStrategy) cleanupIdle() {
 
 	s.mu.RLock()
 	var candidates []idleCandidate
-	for accountID, q := range s.queues {
+	for key, q := range s.queues {
 		if q.pending.Load() == 0 && len(q.ch) == 0 &&
 			!q.lastActiveAt().After(cutoff) {
-			candidates = append(candidates, idleCandidate{accountID, q})
+			candidates = append(candidates, idleCandidate{key, q})
 		}
 	}
 	s.mu.RUnlock()
@@ -391,7 +391,7 @@ func (s *dynamicStrategy) cleanupIdle() {
 		if removed, remaining := s.retireIfIdle(c, cutoff); removed {
 			// Fire the callback after s.mu is released by retireIfIdle to
 			// avoid deadlock with a reentrant observer and tail latency.
-			s.cfg.observer.OnQueueRemoved(c.accountID, remaining)
+			s.cfg.observer.OnQueueRemoved(c.key.observerAccountID(), remaining)
 		}
 	}
 }
@@ -407,7 +407,7 @@ func (s *dynamicStrategy) retireIfIdle(
 ) (removed bool, remaining int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cur, ok := s.queues[c.accountID]; !ok || cur != c.q {
+	if cur, ok := s.queues[c.key]; !ok || cur != c.q {
 		return false, 0
 	}
 	if c.q.pending.Load() != 0 || len(c.q.ch) > 0 ||
@@ -431,7 +431,7 @@ func (s *dynamicStrategy) retireIfIdle(
 	c.q.closed.Store(true)
 	close(c.q.quit)
 	c.q.gate.Unlock()
-	delete(s.queues, c.accountID)
+	delete(s.queues, c.key)
 	return true, len(s.queues)
 }
 

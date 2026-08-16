@@ -24,6 +24,7 @@ import (
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/accounts"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
@@ -61,6 +62,10 @@ func (d *rejectDriver) ExecutePreTrade(
 	return nil, d.executeRejects, nil
 }
 
+func (*rejectDriver) ExecutePreTradeDryRun(model.Order) (*pretrade.DryRunReport, error) {
+	return pretrade.NewDryRunReportFromHandle(nil), nil
+}
+
 func (d *rejectDriver) ApplyDropCopy(
 	_ model.Order,
 ) (*pretrade.DropCopyOperation, []reject.Reject, error) {
@@ -82,6 +87,10 @@ func (*rejectDriver) ApplyAccountAdjustment(
 
 func (*rejectDriver) Accounts() accounts.Accounts {
 	return accounts.Accounts{}
+}
+
+func (*rejectDriver) Configure() configure.Configurator {
+	return configure.Configurator{}
 }
 
 // transportErrorDriver is a fake driver that returns a non-nil transport error
@@ -110,6 +119,12 @@ func (d *transportErrorDriver) ExecutePreTrade(
 	return nil, nil, d.executeErr
 }
 
+func (d *transportErrorDriver) ExecutePreTradeDryRun(
+	model.Order,
+) (*pretrade.DryRunReport, error) {
+	return nil, d.executeErr
+}
+
 func (d *transportErrorDriver) ApplyDropCopy(
 	_ model.Order,
 ) (*pretrade.DropCopyOperation, []reject.Reject, error) {
@@ -131,6 +146,10 @@ func (*transportErrorDriver) ApplyAccountAdjustment(
 
 func (*transportErrorDriver) Accounts() accounts.Accounts {
 	return accounts.Accounts{}
+}
+
+func (*transportErrorDriver) Configure() configure.Configurator {
+	return configure.Configurator{}
 }
 
 // TestAsyncEngineStartPreTradeRejectsPath asserts that a non-nil rejects

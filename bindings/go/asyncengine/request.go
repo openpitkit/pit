@@ -76,6 +76,10 @@ func newAsyncRequest(
 // non-nil rejects slice on a policy reject, or a set error on transport
 // failure.
 //
+// With a chain hook context for this engine, the future resolves with
+// ErrReentrantLane; the caller retains the handle and must retry outside
+// the hook.
+//
 // Execute always closes the underlying *pretrade.Request once the
 // main-stage call has been issued, mirroring the contract that callers
 // must Close the request afterwards regardless of outcome.
@@ -83,13 +87,19 @@ func (r *AsyncRequest) Execute(
 	ctx context.Context,
 ) *future.Future2[*AsyncReservation, []reject.Reject] {
 	f := future.New2[*AsyncReservation, []reject.Reject]()
+	if r.engine.reentrantLane(ctx) {
+		f.Resolve(nil, nil, ErrReentrantLane)
+		return f
+	}
 	task := &executeRequestTask{f: f, req: r}
-	_ = submitWithFailureHandoff(
-		ctx, r.engine.strategy, r.accountID, task, func(err error) {
-			r.engine.strategy.scheduleSubmitFailureCleanup(r.accountID, func() {
-				r.closeInner()
-				f.Resolve(nil, nil, err)
-			})
+	_ = r.engine.strategy.submitWithFailureHandoff(
+		ctx, accountRoutingKey(r.accountID), task, func(err error) {
+			r.engine.strategy.scheduleSubmitFailureCleanup(
+				accountRoutingKey(r.accountID), func() {
+					r.closeInner()
+					f.Resolve(nil, nil, err)
+				},
+			)
 		},
 	)
 	return f
@@ -106,15 +116,9 @@ type executeRequestTask struct {
 func (t *executeRequestTask) run() {
 	r := t.req
 	reservation, rejects, err := r.executeInner()
-	if err != nil {
-		t.f.Resolve(nil, nil, err)
-		return
-	}
-	if rejects != nil {
-		t.f.Resolve(nil, rejects, nil)
-		return
-	}
-	t.f.Resolve(newAsyncReservation(reservation, r.engine, r.accountID), nil, nil)
+	resolveReservationDriverResult(
+		t.f, reservation, rejects, err, r.engine, r.accountID,
+	)
 }
 
 func (t *executeRequestTask) abort(err error) {
@@ -126,17 +130,27 @@ func (t *executeRequestTask) abort(err error) {
 // the main stage. Use it to abandon a request that should not be
 // executed.
 //
+// With a chain hook context for this engine, the future resolves with
+// ErrReentrantLane; the caller retains the handle and must retry outside
+// the hook.
+//
 // Close still serializes through the account's queue so concurrent
 // engine calls on the same account remain disallowed.
 func (r *AsyncRequest) Close(ctx context.Context) *future.Future[struct{}] {
 	f := future.New[struct{}]()
+	if r.engine.reentrantLane(ctx) {
+		f.Resolve(struct{}{}, ErrReentrantLane)
+		return f
+	}
 	task := &closeRequestTask{f: f, req: r}
-	_ = submitWithFailureHandoff(
-		ctx, r.engine.strategy, r.accountID, task, func(err error) {
-			r.engine.strategy.scheduleSubmitFailureCleanup(r.accountID, func() {
-				r.closeInner()
-				f.Resolve(struct{}{}, err)
-			})
+	_ = r.engine.strategy.submitWithFailureHandoff(
+		ctx, accountRoutingKey(r.accountID), task, func(err error) {
+			r.engine.strategy.scheduleSubmitFailureCleanup(
+				accountRoutingKey(r.accountID), func() {
+					r.closeInner()
+					f.Resolve(struct{}{}, err)
+				},
+			)
 		},
 	)
 	return f

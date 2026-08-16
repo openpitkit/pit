@@ -31,9 +31,11 @@ import (
 // pipeline, accumulate counters and dispatch the heavy work to a separate
 // goroutine.
 //
-// Every callback carries the account id the task was routed by, so a reported
-// account is always a real account: the dispatcher never queues work it cannot
-// key, and never substitutes a sentinel such as AccountID(0).
+// Every callback carries the routing key's numeric id projected into an
+// AccountID. For account lanes it is the account id, for account-group lanes it
+// is the account-group id, and for the engine-wide lane it is 0. The payload
+// does not identify the routing kind, so equal numeric ids from different kinds
+// are not unique lane identifiers.
 //
 // Callback asymmetries to be aware of:
 //   - OnComplete fires for aborted tasks (ran = 0), but OnDequeue is NOT
@@ -66,13 +68,15 @@ type Observer interface {
 	// hand the task to a worker within the configured threshold.
 	OnQueueFullBlocked(accountID param.AccountID, waiting time.Duration)
 
-	// OnQueueCreated is reported by Dynamic strategies when a new
-	// per-account queue is created. totalQueues is the number of live
-	// queues after the creation.
+	// OnQueueCreated is reported by Dynamic strategies when a new routing
+	// queue is created. accountID is the numeric projection described above;
+	// it is not unique across routing kinds. totalQueues is the number of
+	// live queues after the creation.
 	OnQueueCreated(accountID param.AccountID, totalQueues int)
 
-	// OnQueueRemoved is reported by Dynamic strategies when an idle
-	// per-account queue is retired. remainingQueues is the number of
+	// OnQueueRemoved is reported by Dynamic strategies when an idle routing
+	// queue is retired. accountID is the numeric projection described above;
+	// it is not unique across routing kinds. remainingQueues is the number of
 	// live queues after the removal.
 	OnQueueRemoved(accountID param.AccountID, remainingQueues int)
 

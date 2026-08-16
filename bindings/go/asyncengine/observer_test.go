@@ -187,8 +187,8 @@ func TestAsyncEngineObserverEnqueueDequeueCompletePerTask(t *testing.T) {
 	}
 }
 
-// TestAsyncEngineObserverQueueCreatedDynamic asserts that OnQueueCreated
-// fires once per new Dynamic per-account queue.
+// TestAsyncEngineObserverQueueCreatedDynamic asserts that OnQueueCreated fires
+// once per new Dynamic routing queue.
 func TestAsyncEngineObserverQueueCreatedDynamic(t *testing.T) {
 	t.Parallel()
 	obs := &recordingObserver{}

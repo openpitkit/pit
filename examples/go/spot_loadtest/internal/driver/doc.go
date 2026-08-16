@@ -119,11 +119,11 @@
 //     predicted Post exactly, per affected asset, for FUNDING and SETTLEMENT
 //     operations.
 //   - ExecutePreTrade (order-check) resolves with a reservation, not an outcome
-//     list. The inner pretrade.Reservation does expose AccountAdjustments(), but
-//     the asyncengine.AsyncReservation wrapper does not surface it (and reaching
-//     into binding internals is forbidden). So an accepted ORDER-CHECK's post-op
-//     balances cannot be read through the public async surface; only its
-//     accept/reject decision is observable.
+//     list. AsyncReservation.AccountAdjustments exposes the reservation's
+//     predicted adjustments, but the load test does not retain the per-operation
+//     expected balance state at the point where the reservation is observed.
+//     Comparing those outcomes would therefore require a broader oracle
+//     redesign. The current ORDER-CHECK oracle remains decision-only.
 //
 // This means the oracle is balance-exact for funding and settlement, and
 // decision-only for the order-check itself. That is not a silent weakening: a
