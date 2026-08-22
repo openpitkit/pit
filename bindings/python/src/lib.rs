@@ -3381,7 +3381,7 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<Execution
             ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
                 last_trade: f.last_trade,
                 fee: f.fee.clone(),
-                leaves_quantity: f.leaves_quantity,
+                remaining_reserved_quantity: f.remaining_reserved_quantity,
                 lock: Some(f.lock.clone()),
                 is_final: f.is_final,
             }))
@@ -8120,7 +8120,7 @@ impl PyFinancialImpact {
 struct PyExecutionReportFillDetails {
     last_trade: Option<Trade>,
     fee: Option<MonetaryAmount>,
-    leaves_quantity: Option<Quantity>,
+    remaining_reserved_quantity: Option<Quantity>,
     lock: PreTradeLock,
     is_final: Option<bool>,
 }
@@ -8128,11 +8128,11 @@ struct PyExecutionReportFillDetails {
 #[pymethods]
 impl PyExecutionReportFillDetails {
     #[new]
-    #[pyo3(signature = (*, last_trade = None, fee = None, leaves_quantity = None, lock, is_final = None))]
+    #[pyo3(signature = (*, last_trade = None, fee = None, remaining_reserved_quantity = None, lock, is_final = None))]
     fn new(
         last_trade: Option<&Bound<'_, PyAny>>,
         fee: Option<&Bound<'_, PyAny>>,
-        leaves_quantity: Option<&Bound<'_, PyAny>>,
+        remaining_reserved_quantity: Option<&Bound<'_, PyAny>>,
         lock: &Bound<'_, PyAny>,
         is_final: Option<bool>,
     ) -> PyResult<Self> {
@@ -8147,7 +8147,9 @@ impl PyExecutionReportFillDetails {
             fee: fee
                 .map(|value| parse_monetary_amount_input("fee", value))
                 .transpose()?,
-            leaves_quantity: leaves_quantity.map(parse_quantity_input).transpose()?,
+            remaining_reserved_quantity: remaining_reserved_quantity
+                .map(parse_quantity_input)
+                .transpose()?,
             lock: lock.extract::<PyRef<'_, PyPreTradeLock>>()?.inner.clone(),
             is_final,
         })
@@ -8187,13 +8189,17 @@ impl PyExecutionReportFillDetails {
     }
 
     #[getter]
-    fn leaves_quantity(&self) -> Option<PyQuantity> {
-        self.leaves_quantity.map(|inner| PyQuantity { inner })
+    fn remaining_reserved_quantity(&self) -> Option<PyQuantity> {
+        self.remaining_reserved_quantity
+            .map(|inner| PyQuantity { inner })
     }
 
     #[setter]
-    fn set_leaves_quantity(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.leaves_quantity = value.map(parse_quantity_input).transpose()?;
+    fn set_remaining_reserved_quantity(
+        &mut self,
+        value: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        self.remaining_reserved_quantity = value.map(parse_quantity_input).transpose()?;
         Ok(())
     }
 
@@ -8224,10 +8230,10 @@ impl PyExecutionReportFillDetails {
 
     fn __repr__(&self) -> String {
         format!(
-            "ExecutionReportFillDetails(last_trade={:?}, fee={:?}, leaves_quantity={:?}, lock={:?}, is_final={:?})",
+            "ExecutionReportFillDetails(last_trade={:?}, fee={:?}, remaining_reserved_quantity={:?}, lock={:?}, is_final={:?})",
             self.last_trade().map(|trade| trade.__repr__()),
             self.fee,
-            self.leaves_quantity()
+            self.remaining_reserved_quantity()
                 .map(|quantity| quantity.inner.to_string()),
             self.lock().__repr__(),
             self.is_final(),

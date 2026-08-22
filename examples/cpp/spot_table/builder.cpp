@@ -187,7 +187,8 @@ FillReport BuildFillReport(const Row &row, param::AccountId acc,
     throw BuildError("pnl \"" + row.pnl + "\": " + err.what());
   }
 
-  const param::Quantity leaves = param::Quantity::FromString("0");
+  const param::Quantity remainingReservedQuantity =
+      param::Quantity::FromString("0");
 
   // The fill carries the pre-trade lock that ties it back to the reservation
   // the matching ORDER committed: one entry under the default policy group.
@@ -209,7 +210,7 @@ FillReport BuildFillReport(const Row &row, param::AccountId acc,
 
   model::Fill fill;
   fill.lastTrade = model::Trade(price, qty);
-  fill.leavesQuantity = leaves;
+  fill.remainingReservedQuantity = remainingReservedQuantity;
   fill.isFinal = true;
 
   model::ExecutionReport report;

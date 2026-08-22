@@ -392,7 +392,7 @@ export class Session {
       fill: {
         lock,
         lastTrade: { price: DEFAULT_PRICE, quantity: "1" },
-        leavesQuantity: "0",
+        remainingReservedQuantity: "0",
         isFinal: true,
       },
     };

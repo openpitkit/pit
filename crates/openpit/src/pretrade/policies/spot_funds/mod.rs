@@ -28,8 +28,8 @@ use crate::core::{
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
     HasAccountAdjustmentPnlOperation, HasAccountId, HasBalanceAsset, HasExecutionReportFillFee,
-    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity,
-    HasOrderPrice, HasPreTradeLock, HasSide, HasTradeAmount,
+    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasInstrument, HasOrderPrice,
+    HasPreTradeLock, HasRemainingReservedQuantity, HasSide, HasTradeAmount,
 };
 use crate::marketdata::MarketDataSync;
 use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
@@ -786,7 +786,7 @@ where
         + HasSide
         + HasExecutionReportLastTrade
         + HasExecutionReportFillFee
-        + HasLeavesQuantity
+        + HasRemainingReservedQuantity
         + HasExecutionReportIsFinal
         + HasPreTradeLock,
     AccountAdjustment: HasBalanceAsset

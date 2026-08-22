@@ -436,17 +436,17 @@ func ExecutionReportFillUnsetFee(fill *ExecutionReportFill) {
 	fill.fee = NewParamMonetaryAmountOptionalUnset()
 }
 
-func ExecutionReportFillGetLeavesQuantity(fill ExecutionReportFill) ParamQuantityOptional {
-	return fill.leaves_quantity
+func ExecutionReportFillGetRemainingReservedQuantity(fill ExecutionReportFill) ParamQuantityOptional {
+	return fill.remaining_reserved_quantity
 }
 
-func ExecutionReportFillSetLeavesQuantity(fill *ExecutionReportFill, quantity ParamQuantity) {
-	fill.leaves_quantity.value = quantity
-	fill.leaves_quantity.is_set = true
+func ExecutionReportFillSetRemainingReservedQuantity(fill *ExecutionReportFill, quantity ParamQuantity) {
+	fill.remaining_reserved_quantity.value = quantity
+	fill.remaining_reserved_quantity.is_set = true
 }
 
-func ExecutionReportFillUnsetLeavesQuantity(fill *ExecutionReportFill) {
-	fill.leaves_quantity = ParamQuantityOptional{}
+func ExecutionReportFillUnsetRemainingReservedQuantity(fill *ExecutionReportFill) {
+	fill.remaining_reserved_quantity = ParamQuantityOptional{}
 }
 
 func ExecutionReportFillGetLock(fill ExecutionReportFill) PretradePreTradeLock {

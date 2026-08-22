@@ -1198,7 +1198,7 @@ def test_example_wiki_pre_trade_lock_persistence() -> None:
                 price=openpit.param.Price("200"),
                 quantity=openpit.param.Quantity("10"),
             ),
-            leaves_quantity=openpit.param.Quantity("0"),
+            remaining_reserved_quantity=openpit.param.Quantity("0"),
             lock=restored,
             is_final=True,
         ),

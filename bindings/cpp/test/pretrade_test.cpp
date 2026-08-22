@@ -1179,7 +1179,7 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   fill.lock = std::move(lock);
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
                                          Quantity::FromString("1"));
-  fill.leavesQuantity = Quantity::FromString("0");
+  fill.remainingReservedQuantity = Quantity::FromString("0");
   fill.isFinal = true;
 
   openpit::model::ExecutionReport report;
@@ -1317,7 +1317,7 @@ TEST(BuiltinPolicy, SpotFundsAbsentFillLockBlocksAccount) {
   EXPECT_FALSE(fill.lock.has_value());
   fill.lastTrade = openpit::model::Trade(Price::FromString("150"),
                                          Quantity::FromString("2"));
-  fill.leavesQuantity = Quantity::FromString("0");
+  fill.remainingReservedQuantity = Quantity::FromString("0");
   fill.isFinal = true;
 
   openpit::model::ExecutionReport report;
@@ -1342,7 +1342,7 @@ TEST(BuiltinPolicy, SpotFundsEmptyFillLockBlocksAccount) {
   EXPECT_TRUE(fill.lock->IsEmpty());
   fill.lastTrade = openpit::model::Trade(Price::FromString("150"),
                                          Quantity::FromString("2"));
-  fill.leavesQuantity = Quantity::FromString("0");
+  fill.remainingReservedQuantity = Quantity::FromString("0");
   fill.isFinal = true;
 
   openpit::model::ExecutionReport report;
@@ -1542,7 +1542,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   // would omit the account line instead.
   fill.fee = openpit::param::MonetaryAmount(
       openpit::param::Fee::FromString("0.25"), openpit::param::Asset("USD"));
-  fill.leavesQuantity = Quantity::FromString("0");
+  fill.remainingReservedQuantity = Quantity::FromString("0");
   fill.isFinal = true;
   fill.lock = std::move(lock);
   openpit::model::ExecutionReport report;
@@ -1627,7 +1627,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeBarrierRechecksChangedCurrency) {
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
                                          Quantity::FromString("1"));
   fill.fee = fee;
-  fill.leavesQuantity = Quantity::FromString("0");
+  fill.remainingReservedQuantity = Quantity::FromString("0");
   fill.isFinal = true;
   openpit::model::ExecutionReport report;
   report.operation = std::move(operation);

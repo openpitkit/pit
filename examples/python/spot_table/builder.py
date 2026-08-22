@@ -136,7 +136,7 @@ def build_fill_report(
                 price=price,
                 quantity=openpit.param.Quantity(row.qty),
             ),
-            leaves_quantity=openpit.param.Quantity("0"),
+            remaining_reserved_quantity=openpit.param.Quantity("0"),
             lock=pretrade.Lock(entries=[(pretrade.DEFAULT_POLICY_GROUP_ID, price)]),
             is_final=True,
         ),

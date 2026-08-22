@@ -685,7 +685,9 @@ struct Fill {
   std::optional<Trade> lastTrade{};
   // Structured fee amount and currency reported for this fill.
   std::optional<param::MonetaryAmount> fee{};
-  std::optional<param::Quantity> leavesQuantity{};
+  // Caller-calculated reservation remainder released by the engine on
+  // finalization, not a venue-reported remaining order quantity.
+  std::optional<param::Quantity> remainingReservedQuantity{};
   std::optional<bool> isFinal{};
 
  private:
@@ -707,9 +709,10 @@ struct Fill {
           ::openpit::detail::FromNative<Trade>(raw.last_trade.value);
     }
     out.fee = param::detail::MonetaryAmountAccess::FromNative(raw.fee);
-    if (raw.leaves_quantity.is_set) {
-      out.leavesQuantity = ::openpit::detail::FromNative<param::Quantity>(
-          raw.leaves_quantity.value);
+    if (raw.remaining_reserved_quantity.is_set) {
+      out.remainingReservedQuantity =
+          ::openpit::detail::FromNative<param::Quantity>(
+              raw.remaining_reserved_quantity.value);
     }
     if (raw.is_final.is_set) {
       out.isFinal = raw.is_final.value;
@@ -730,9 +733,10 @@ struct Fill {
       raw.last_trade.is_set = true;
     }
     raw.fee = param::detail::MonetaryAmountAccess::Native(fee);
-    if (leavesQuantity) {
-      raw.leaves_quantity.value = ::openpit::detail::Native(*leavesQuantity);
-      raw.leaves_quantity.is_set = true;
+    if (remainingReservedQuantity) {
+      raw.remaining_reserved_quantity.value =
+          ::openpit::detail::Native(*remainingReservedQuantity);
+      raw.remaining_reserved_quantity.is_set = true;
     }
     if (isFinal) {
       raw.is_final.value = *isFinal;

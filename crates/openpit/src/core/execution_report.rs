@@ -26,9 +26,9 @@ use crate::pretrade::PreTradeLock;
 use super::{
     HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportFillFee,
     HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
-    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity,
-    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
-    HasReduceOnly, HasSide, HasTradeAmount, Instrument,
+    HasExecutionReportPositionSide, HasFee, HasInstrument, HasOrderCollateralAsset,
+    HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly,
+    HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -67,7 +67,7 @@ impl_request_has_field_passthrough!(
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
-    HasLeavesQuantity, leaves_quantity, Quantity;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, Quantity;
     HasPreTradeLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
@@ -100,7 +100,7 @@ impl_request_has_field_passthrough!(
     HasReduceOnly, reduce_only, bool;
     HasClosePosition, close_position, bool;
     HasAutoBorrow, auto_borrow, bool;
-    HasLeavesQuantity, leaves_quantity, Quantity;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, Quantity;
     HasPreTradeLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
@@ -181,8 +181,11 @@ pub struct ExecutionReportFillDetails {
     pub last_trade: Option<Trade>,
     /// Fee amount and currency reported for this fill.
     pub fee: Option<MonetaryAmount>,
-    /// Remaining order quantity after this fill.
-    pub leaves_quantity: Quantity,
+    /// Caller-calculated reservation remainder released by the engine on
+    /// finalization.
+    ///
+    /// This is not a venue-reported remaining order quantity.
+    pub remaining_reserved_quantity: Quantity,
     /// Order lock payload.
     pub lock: PreTradeLock,
     /// Whether this report closes the order's report stream.
@@ -204,7 +207,7 @@ impl_request_has_field!(
     WithExecutionReportFillDetails,
     fill,
     HasExecutionReportLastTrade, last_trade, Option<Trade>, last_trade;
-    HasLeavesQuantity, leaves_quantity, Quantity, leaves_quantity;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, Quantity, remaining_reserved_quantity;
     HasPreTradeLock, lock, PreTradeLock, lock;
     HasExecutionReportIsFinal, is_final, bool, is_final;
 );
@@ -237,7 +240,7 @@ impl_request_has_field_passthrough!(
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
-    HasLeavesQuantity, leaves_quantity, Quantity;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, Quantity;
     HasPreTradeLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
@@ -294,7 +297,7 @@ mod tests {
         ExecutionReportFillDetails {
             last_trade: None,
             fee: None,
-            leaves_quantity: Quantity::from_str("0").expect("must be valid"),
+            remaining_reserved_quantity: Quantity::from_str("0").expect("must be valid"),
             lock: PreTradeLock::default(),
             is_final: false,
         }
@@ -329,7 +332,7 @@ mod tests {
         assert_eq!(f.last_trade, None);
         assert_eq!(f.fee, None);
         assert_eq!(
-            f.leaves_quantity,
+            f.remaining_reserved_quantity,
             Quantity::from_str("0").expect("must be valid")
         );
         assert_eq!(f.lock, PreTradeLock::default());

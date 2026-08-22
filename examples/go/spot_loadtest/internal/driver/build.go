@@ -167,8 +167,8 @@ func buildOrder(ev *generator.Event) (model.Order, param.AccountID, error) {
 	return order, acc, nil
 }
 
-// buildReport maps a Settlement event to a full-fill (leaves = 0, is_final =
-// true) model.ExecutionReport. The fill's Lock ties it back to the reservation
+// buildReport maps a Settlement event to a final report with no reservation
+// remainder. The fill's Lock ties it back to the reservation
 // the order committed: a single entry under the spot funds default policy group
 // at the SAME price the order reserved at (contract section 3).
 func buildReport(ev *generator.Event) (model.ExecutionReport, param.AccountID, error) {
@@ -192,7 +192,7 @@ func buildReport(ev *generator.Event) (model.ExecutionReport, param.AccountID, e
 	if err != nil {
 		return model.ExecutionReport{}, param.AccountID{}, fmt.Errorf("price %q: %w", ev.Price.String(), err)
 	}
-	leaves, err := param.NewQuantityFromString("0")
+	remainingReservedQty, err := param.NewQuantityFromString("0")
 	if err != nil {
 		return model.ExecutionReport{}, param.AccountID{}, err
 	}
@@ -224,10 +224,10 @@ func buildReport(ev *generator.Event) (model.ExecutionReport, param.AccountID, e
 			})),
 		Fill: optional.Some(model.NewExecutionReportFillFromValues(
 			model.ExecutionReportFillValues{
-				LastTrade:      optional.Some(model.NewExecutionReportTrade(price, qty)),
-				LeavesQuantity: optional.Some(leaves),
-				Lock:           lock.Bytes(),
-				IsFinal:        optional.BoolSome(true),
+				LastTrade:                 optional.Some(model.NewExecutionReportTrade(price, qty)),
+				RemainingReservedQuantity: optional.Some(remainingReservedQty),
+				Lock:                      lock.Bytes(),
+				IsFinal:                   optional.BoolSome(true),
 			})),
 	})
 	return report, acc, nil

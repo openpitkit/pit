@@ -258,7 +258,7 @@ export function makeExecutionReportPolicyPayload(normalized, original) {
   return normalizedPolicyPayload(normalized, original, {
     operation: ["underlyingAsset", "settlementAsset", "accountId", "side"],
     financialImpact: ["pnl", "fee"],
-    fill: ["lastTrade", "fee", "leavesQuantity", "lock", "isFinal"],
+    fill: ["lastTrade", "fee", "remainingReservedQuantity", "lock", "isFinal"],
     positionImpact: ["positionEffect", "positionSide"],
   });
 }

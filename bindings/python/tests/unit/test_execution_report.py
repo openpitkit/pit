@@ -125,7 +125,7 @@ def test_financial_impact_requires_explicit_fee() -> None:
 def test_fill_details_requires_explicit_lock() -> None:
     with pytest.raises(TypeError):
         openpit.ExecutionReportFillDetails(
-            leaves_quantity=openpit.param.Quantity(0),
+            remaining_reserved_quantity=openpit.param.Quantity(0),
         )  # type: ignore[call-arg]
 
 
@@ -133,13 +133,13 @@ def test_fill_details_requires_explicit_lock() -> None:
 def test_fill_details_happy_path_without_last_trade() -> None:
     pgid = openpit.pretrade.DEFAULT_POLICY_GROUP_ID
     fill = openpit.ExecutionReportFillDetails(
-        leaves_quantity=openpit.param.Quantity(3),
+        remaining_reserved_quantity=openpit.param.Quantity(3),
         lock=openpit.pretrade.Lock(
             entries=[(pgid, openpit.param.Price(101))],
         ),
     )
 
-    assert str(fill.leaves_quantity) == "3"
+    assert str(fill.remaining_reserved_quantity) == "3"
     assert str(fill.lock.prices_of(pgid)[0]) == "101"
     assert fill.last_trade is None
     assert fill.fee is None
@@ -155,7 +155,7 @@ def test_fill_details_accepts_optional_fee() -> None:
     )
     fill = openpit.ExecutionReportFillDetails(
         fee=fee,
-        leaves_quantity=openpit.param.Quantity(3),
+        remaining_reserved_quantity=openpit.param.Quantity(3),
         lock=openpit.pretrade.Lock(
             entries=[(pgid, openpit.param.Price(101))],
         ),
@@ -187,14 +187,14 @@ def test_fill_details_happy_path_with_last_trade_and_final_flag() -> None:
             price=openpit.param.Price(102),
             quantity=openpit.param.Quantity(7),
         ),
-        leaves_quantity=openpit.param.Quantity(0),
+        remaining_reserved_quantity=openpit.param.Quantity(0),
         lock=openpit.pretrade.Lock(
             entries=[(pgid, openpit.param.Price(102))],
         ),
         is_final=True,
     )
 
-    assert str(fill.leaves_quantity) == "0"
+    assert str(fill.remaining_reserved_quantity) == "0"
     assert str(fill.lock.prices_of(pgid)[0]) == "102"
     assert fill.last_trade is not None
     assert str(fill.last_trade.price) == "102"
@@ -203,7 +203,7 @@ def test_fill_details_happy_path_with_last_trade_and_final_flag() -> None:
 
 
 @pytest.mark.unit
-def test_fill_details_happy_path_without_leaves_quantity() -> None:
+def test_fill_details_happy_path_without_remaining_reserved_quantity() -> None:
     pgid = openpit.pretrade.DEFAULT_POLICY_GROUP_ID
     fill = openpit.ExecutionReportFillDetails(
         lock=openpit.pretrade.Lock(
@@ -211,14 +211,14 @@ def test_fill_details_happy_path_without_leaves_quantity() -> None:
         ),
     )
 
-    assert fill.leaves_quantity is None
+    assert fill.remaining_reserved_quantity is None
 
 
 @pytest.mark.unit
 def test_fill_details_accepts_explicit_non_final_flag() -> None:
     pgid = openpit.pretrade.DEFAULT_POLICY_GROUP_ID
     fill = openpit.ExecutionReportFillDetails(
-        leaves_quantity=openpit.param.Quantity(3),
+        remaining_reserved_quantity=openpit.param.Quantity(3),
         lock=openpit.pretrade.Lock(
             entries=[(pgid, openpit.param.Price(101))],
         ),

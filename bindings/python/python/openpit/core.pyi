@@ -255,7 +255,7 @@ class ExecutionReportFillDetails:
         *,
         last_trade: Trade | None = None,
         fee: MonetaryAmount | None = None,
-        leaves_quantity: Quantity | None = None,
+        remaining_reserved_quantity: Quantity | None = None,
         lock: Lock,
         is_final: bool | None = None,
     ) -> None: ...
@@ -268,8 +268,11 @@ class ExecutionReportFillDetails:
         """Fee amount and currency reported for this fill."""
 
     @property
-    def leaves_quantity(self) -> Quantity | None:
-        """Remaining order quantity after this fill."""
+    def remaining_reserved_quantity(self) -> Quantity | None:
+        """Caller-calculated reservation remainder released on finalization.
+
+        This is not a venue-reported remaining order quantity.
+        """
 
     @property
     def lock(self) -> Lock:

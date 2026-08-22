@@ -75,7 +75,7 @@ pub(super) struct ExecutionRequestView<'i> {
     pub(super) side: Side,
     pub(super) last_trade: Option<Trade>,
     pub(super) fee: Option<MonetaryAmount>,
-    pub(super) leaves_quantity: Quantity,
+    pub(super) remaining_reserved_quantity: Quantity,
     pub(super) is_final: bool,
     pub(super) lock: PreTradeLock,
 }

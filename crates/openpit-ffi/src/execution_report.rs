@@ -77,8 +77,11 @@ pub struct OpenPitExecutionReportFill {
     pub last_trade: OpenPitExecutionReportTradeOptional,
     /// Optional fill fee amount and currency.
     pub fee: OpenPitParamMonetaryAmountOptional,
-    /// Remaining quantity after applying this report.
-    pub leaves_quantity: OpenPitParamQuantityOptional,
+    /// Caller-calculated reservation remainder released by the engine on
+    /// finalization.
+    ///
+    /// This is not a venue-reported remaining order quantity.
+    pub remaining_reserved_quantity: OpenPitParamQuantityOptional,
     /// Pre-trade lock attached to the order.
     ///
     /// Optional field: null means the lock is absent (maps to `None`), not
@@ -100,7 +103,7 @@ impl Default for OpenPitExecutionReportFill {
         Self {
             last_trade: OpenPitExecutionReportTradeOptional::default(),
             fee: OpenPitParamMonetaryAmountOptional::default(),
-            leaves_quantity: OpenPitParamQuantityOptional::default(),
+            remaining_reserved_quantity: OpenPitParamQuantityOptional::default(),
             lock: std::ptr::null(),
             is_final: OpenPitExecutionReportIsFinalOptional::default(),
         }
@@ -226,8 +229,8 @@ fn import_fill(
         return Ok(ExecutionReportFillAccess::Absent);
     }
 
-    let leaves_quantity = if value.value.leaves_quantity.is_set {
-        Some(value.value.leaves_quantity.value.to_param()?)
+    let remaining_reserved_quantity = if value.value.remaining_reserved_quantity.is_set {
+        Some(value.value.remaining_reserved_quantity.value.to_param()?)
     } else {
         None
     };
@@ -246,7 +249,7 @@ fn import_fill(
             } else {
                 None
             },
-            leaves_quantity,
+            remaining_reserved_quantity,
             lock,
             is_final: if value.value.is_final.is_set {
                 Some(value.value.is_final.value)
@@ -362,10 +365,12 @@ fn export_fill(value: &ExecutionReportFillAccess) -> OpenPitExecutionReportFillO
                         value: export_monetary_amount(fee),
                     },
                 ),
-                leaves_quantity: match fill.leaves_quantity {
-                    Some(leaves_quantity) => OpenPitParamQuantityOptional {
+                remaining_reserved_quantity: match fill.remaining_reserved_quantity {
+                    Some(remaining_reserved_quantity) => OpenPitParamQuantityOptional {
                         is_set: true,
-                        value: OpenPitParamQuantity(leaves_quantity.to_decimal().into()),
+                        value: OpenPitParamQuantity(
+                            remaining_reserved_quantity.to_decimal().into(),
+                        ),
                     },
                     None => OpenPitParamQuantityOptional::default(),
                 },
@@ -534,7 +539,7 @@ mod tests {
                             amount: Fee::from_str("0.25").expect("fee amount must be valid"),
                             currency: Asset::new("USD").expect("asset code must be valid"),
                         }),
-                        leaves_quantity: Some(
+                        remaining_reserved_quantity: Some(
                             Quantity::from_str("1").expect("quantity must be valid"),
                         ),
                         lock: Some(PreTradeLock::from_entries([(
@@ -613,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn import_execution_report_preserves_unset_leaves_quantity() {
+    fn import_execution_report_preserves_unset_remaining_reserved_quantity() {
         let report = OpenPitExecutionReport {
             operation: OpenPitExecutionReportOperationOptional::default(),
             financial_impact: OpenPitFinancialImpactOptional::default(),
@@ -622,7 +627,7 @@ mod tests {
                 value: OpenPitExecutionReportFill {
                     last_trade: OpenPitExecutionReportTradeOptional::default(),
                     fee: OpenPitParamMonetaryAmountOptional::default(),
-                    leaves_quantity: OpenPitParamQuantityOptional::default(),
+                    remaining_reserved_quantity: OpenPitParamQuantityOptional::default(),
                     lock: std::ptr::null(),
                     is_final: OpenPitExecutionReportIsFinalOptional::default(),
                 },
@@ -633,7 +638,7 @@ mod tests {
 
         let imported = import_execution_report(&report).expect("import");
         if let ExecutionReportFillAccess::Populated(fill) = &imported.request.fill {
-            assert!(fill.leaves_quantity.is_none());
+            assert!(fill.remaining_reserved_quantity.is_none());
         } else {
             panic!("fill must be present");
         }
@@ -650,7 +655,7 @@ mod tests {
                 value: OpenPitExecutionReportFill {
                     last_trade: OpenPitExecutionReportTradeOptional::default(),
                     fee: OpenPitParamMonetaryAmountOptional::default(),
-                    leaves_quantity: OpenPitParamQuantityOptional {
+                    remaining_reserved_quantity: OpenPitParamQuantityOptional {
                         is_set: true,
                         value: OpenPitParamQuantity(
                             Quantity::from_str("1")
@@ -686,7 +691,7 @@ mod tests {
                 value: OpenPitExecutionReportFill {
                     last_trade: OpenPitExecutionReportTradeOptional::default(),
                     fee: OpenPitParamMonetaryAmountOptional::default(),
-                    leaves_quantity: OpenPitParamQuantityOptional::default(),
+                    remaining_reserved_quantity: OpenPitParamQuantityOptional::default(),
                     lock: std::ptr::null(),
                     is_final: OpenPitExecutionReportIsFinalOptional::default(),
                 },
@@ -799,7 +804,7 @@ mod tests {
                             },
                         },
                     },
-                    leaves_quantity: OpenPitParamQuantityOptional {
+                    remaining_reserved_quantity: OpenPitParamQuantityOptional {
                         is_set: true,
                         value: OpenPitParamQuantity(
                             Quantity::from_str("1")

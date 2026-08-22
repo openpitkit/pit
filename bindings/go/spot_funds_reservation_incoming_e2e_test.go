@@ -460,7 +460,7 @@ func TestSpotFundsReservationIncoming_SellFillWithoutLockBlocksAccount(t *testin
 								sfReservationQuantity(t, "2"),
 							),
 						),
-						LeavesQuantity: optional.Some(sfReservationQuantity(t, "0")),
+						RemainingReservedQuantity: optional.Some(sfReservationQuantity(t, "0")),
 						// Lock intentionally absent: the engine must block the account.
 						Lock:    nil,
 						IsFinal: optional.BoolSome(true),
@@ -488,10 +488,11 @@ func TestSpotFundsReservationIncoming_SellFillWithoutLockBlocksAccount(t *testin
 	}
 }
 
-// TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount proves
-// that a sell cancel (is_final, leaves_quantity > 0, no fill trade) arriving
-// without its pre-trade lock blocks the account with MissingRequiredField,
-// exactly like a sell fill. The lock is mandatory on both paths.
+// TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount
+// proves that a sell cancel (is_final, remaining_reserved_quantity > 0, no
+// fill trade) arriving without its pre-trade lock blocks the account with
+// MissingRequiredField, exactly like a sell fill. The lock is mandatory on
+// both paths.
 func TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(99224416)
 
@@ -554,9 +555,9 @@ func TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount(t *test
 	}
 	reservation.CommitAndClose()
 
-	// Deliver a cancel (is_final, full leaves_quantity, no last_trade) WITHOUT
-	// attaching the lock. The engine must block the account with
-	// MissingRequiredField before releasing any reservation.
+	// Deliver a cancel (is_final, full remaining_reserved_quantity, no
+	// last_trade) WITHOUT attaching the lock. The engine must block the account
+	// with MissingRequiredField before releasing any reservation.
 	cancelReport := model.NewExecutionReportFromValues(
 		model.ExecutionReportValues{
 			Operation: optional.Some(
@@ -577,7 +578,7 @@ func TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount(t *test
 				model.NewExecutionReportFillFromValues(
 					model.ExecutionReportFillValues{
 						// No LastTrade: this is a cancel, not a partial fill.
-						LeavesQuantity: optional.Some(sfReservationQuantity(t, "2")),
+						RemainingReservedQuantity: optional.Some(sfReservationQuantity(t, "2")),
 						// Lock intentionally absent: the engine must block the account.
 						Lock:    nil,
 						IsFinal: optional.BoolSome(true),

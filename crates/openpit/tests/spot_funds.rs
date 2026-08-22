@@ -40,7 +40,7 @@ use openpit::{
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
     HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, Mutations,
+    HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity, HasSide, Instrument, Mutations,
     OrderOperation, OutcomeAmount, RequestFieldAccessError, SpotFundsMarketData, SyncMode,
 };
 
@@ -81,7 +81,7 @@ struct TestReport {
     side: Side,
     last_trade: Option<Trade>,
     fee: Option<MonetaryAmount>,
-    leaves_quantity: Quantity,
+    remaining_reserved_quantity: Quantity,
     is_final: bool,
     lock: PreTradeLock,
 }
@@ -116,9 +116,9 @@ impl HasExecutionReportFillFee for TestReport {
     }
 }
 
-impl HasLeavesQuantity for TestReport {
-    fn leaves_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
-        Ok(self.leaves_quantity)
+impl HasRemainingReservedQuantity for TestReport {
+    fn remaining_reserved_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
+        Ok(self.remaining_reserved_quantity)
     }
 }
 
@@ -277,7 +277,7 @@ fn make_report(
     instrument: Instrument,
     side: Side,
     last_trade: Option<Trade>,
-    leaves: Quantity,
+    remaining_reserved_quantity: Quantity,
     is_final: bool,
     order_price: Option<Price>,
 ) -> TestReport {
@@ -290,7 +290,7 @@ fn make_report(
         side,
         last_trade,
         fee: None,
-        leaves_quantity: leaves,
+        remaining_reserved_quantity,
         is_final,
         lock,
     }
@@ -436,7 +436,7 @@ fn buy_limit_full_fill_reduces_settlement_and_credits_underlying() {
         .expect("pre-trade must accept");
     reservation.commit();
 
-    // Final fill: 10 @ 200, leaves = 0.
+    // Final fill: 10 @ 200, remaining reserved quantity = 0.
     // Consumes 2000 from held; credits 10 AAPL.
     let report = make_report(
         aapl_usd.clone(),
@@ -935,7 +935,8 @@ fn cancel_with_leftover_releases_unfilled_held() {
     // Init: USD = 10000.
     // Reserve Buy 10 @ 200 → held = 2000, available = 8000.
     // Partial fill 4 @ 200: consume 800 from held → held = 1200; AAPL available = 4.
-    // Cancel leaves = 6: release 6 * 200 = 1200 → held = 0, available = 8000 + 1200 = 9200.
+    // Cancel with remaining reserved quantity 6: release 6 * 200 = 1200,
+    // leaving held = 0 and available = 8000 + 1200 = 9200.
     let engine = build_engine();
     seed(&engine, "USD", "10000");
 
@@ -964,7 +965,7 @@ fn cancel_with_leftover_releases_unfilled_held() {
         Some(px("200")),
     ));
 
-    // Cancel: leaves = 6, final, no new trade.
+    // Final cancel: remaining reserved quantity = 6, no new trade.
     engine.apply_execution_report(&make_report(
         aapl_usd.clone(),
         Side::Buy,
@@ -1777,7 +1778,7 @@ fn fill_with_fee(
             quantity: qty(quantity),
         }),
         fee: Some(fee),
-        leaves_quantity: qty("0"),
+        remaining_reserved_quantity: qty("0"),
         is_final: true,
         lock: PreTradeLock::from_entries([(DEFAULT_POLICY_GROUP_ID, price)]),
     }

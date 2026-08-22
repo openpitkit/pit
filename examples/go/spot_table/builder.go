@@ -218,7 +218,7 @@ func buildFillReport(
 			"pnl %q: %w", row.Pnl, err,
 		)
 	}
-	leaves, err := param.NewQuantityFromString("0")
+	remainingReservedQty, err := param.NewQuantityFromString("0")
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -257,9 +257,9 @@ func buildFillReport(
 						LastTrade: optional.Some(
 							model.NewExecutionReportTrade(price, qty),
 						),
-						LeavesQuantity: optional.Some(leaves),
-						Lock:           lock.Bytes(),
-						IsFinal:        optional.BoolSome(true),
+						RemainingReservedQuantity: optional.Some(remainingReservedQty),
+						Lock:                      lock.Bytes(),
+						IsFinal:                   optional.BoolSome(true),
 					},
 				),
 			),

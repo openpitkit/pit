@@ -629,9 +629,12 @@ type ExecutionReportFill struct {
 
 // ExecutionReportFillValues holds the optional fill fields.
 type ExecutionReportFillValues struct {
-	LastTrade      optional.Option[ExecutionReportTrade]
-	Fee            optional.Option[param.MonetaryAmount]
-	LeavesQuantity optional.Option[param.Quantity]
+	LastTrade optional.Option[ExecutionReportTrade]
+	Fee       optional.Option[param.MonetaryAmount]
+	// RemainingReservedQuantity is the caller-calculated reservation remainder
+	// that the engine releases on finalization, not a venue-reported remaining
+	// order quantity.
+	RemainingReservedQuantity optional.Option[param.Quantity]
 	// Lock carries the raw pre-trade lock representation, or nil when no lock is
 	// set. These bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes
 	// and Lock.Bytes.
@@ -669,11 +672,11 @@ func (f *ExecutionReportFill) Reset() {
 // Values returns a copy of the current fill fields.
 func (f ExecutionReportFill) Values() ExecutionReportFillValues {
 	return ExecutionReportFillValues{
-		LastTrade:      f.LastTrade(),
-		Fee:            f.Fee(),
-		LeavesQuantity: f.LeavesQuantity(),
-		Lock:           f.Lock(),
-		IsFinal:        f.IsFinal(),
+		LastTrade:                 f.LastTrade(),
+		Fee:                       f.Fee(),
+		RemainingReservedQuantity: f.RemainingReservedQuantity(),
+		Lock:                      f.Lock(),
+		IsFinal:                   f.IsFinal(),
 	}
 }
 
@@ -690,8 +693,8 @@ func (f *ExecutionReportFill) setValues(values ExecutionReportFillValues) {
 	if value, ok := values.Fee.Get(); ok {
 		f.SetFee(value)
 	}
-	if value, ok := values.LeavesQuantity.Get(); ok {
-		f.SetLeavesQuantity(value)
+	if value, ok := values.RemainingReservedQuantity.Get(); ok {
+		f.SetRemainingReservedQuantity(value)
 	}
 	if values.Lock != nil {
 		f.SetLock(values.Lock)
@@ -739,19 +742,23 @@ func (f *ExecutionReportFill) UnsetFee() {
 	f.retainFeeCurrency = param.Asset{}
 }
 
-// LeavesQuantity returns the optional remaining unfilled quantity.
-func (f ExecutionReportFill) LeavesQuantity() optional.Option[param.Quantity] {
-	return param.NewQuantityOptionFromHandle(native.ExecutionReportFillGetLeavesQuantity(f.value))
+// RemainingReservedQuantity returns the optional caller-calculated reservation
+// remainder that the engine releases on finalization. It is not a
+// venue-reported remaining order quantity.
+func (f ExecutionReportFill) RemainingReservedQuantity() optional.Option[param.Quantity] {
+	return param.NewQuantityOptionFromHandle(native.ExecutionReportFillGetRemainingReservedQuantity(f.value))
 }
 
-// SetLeavesQuantity sets the remaining unfilled quantity on the fill.
-func (f *ExecutionReportFill) SetLeavesQuantity(quantity param.Quantity) {
-	native.ExecutionReportFillSetLeavesQuantity(&f.value, quantity.Handle())
+// SetRemainingReservedQuantity sets the caller-calculated reservation remainder
+// that the engine releases on finalization.
+func (f *ExecutionReportFill) SetRemainingReservedQuantity(quantity param.Quantity) {
+	native.ExecutionReportFillSetRemainingReservedQuantity(&f.value, quantity.Handle())
 }
 
-// UnsetLeavesQuantity clears the remaining unfilled quantity on the fill.
-func (f *ExecutionReportFill) UnsetLeavesQuantity() {
-	native.ExecutionReportFillUnsetLeavesQuantity(&f.value)
+// UnsetRemainingReservedQuantity clears the caller-calculated reservation
+// remainder on the fill.
+func (f *ExecutionReportFill) UnsetRemainingReservedQuantity() {
+	native.ExecutionReportFillUnsetRemainingReservedQuantity(&f.value)
 }
 
 // Lock returns the raw pre-trade lock attached to the fill, or nil when none is
@@ -843,19 +850,22 @@ func (v *ExecutionReportFillView) UnsetFee() {
 	*v.retainFeeCurrency = param.Asset{}
 }
 
-// LeavesQuantity returns the optional remaining unfilled quantity from the view.
-func (v ExecutionReportFillView) LeavesQuantity() optional.Option[param.Quantity] {
-	return param.NewQuantityOptionFromHandle(native.ExecutionReportFillGetLeavesQuantity(*v.ref))
+// RemainingReservedQuantity returns the optional caller-calculated reservation
+// remainder from the view. It is not a venue-reported remaining order quantity.
+func (v ExecutionReportFillView) RemainingReservedQuantity() optional.Option[param.Quantity] {
+	return param.NewQuantityOptionFromHandle(native.ExecutionReportFillGetRemainingReservedQuantity(*v.ref))
 }
 
-// SetLeavesQuantity sets the remaining unfilled quantity on the view.
-func (v *ExecutionReportFillView) SetLeavesQuantity(quantity param.Quantity) {
-	native.ExecutionReportFillSetLeavesQuantity(v.ref, quantity.Handle())
+// SetRemainingReservedQuantity sets the caller-calculated reservation remainder
+// on the view that the engine releases on finalization.
+func (v *ExecutionReportFillView) SetRemainingReservedQuantity(quantity param.Quantity) {
+	native.ExecutionReportFillSetRemainingReservedQuantity(v.ref, quantity.Handle())
 }
 
-// UnsetLeavesQuantity clears the remaining unfilled quantity on the view.
-func (v *ExecutionReportFillView) UnsetLeavesQuantity() {
-	native.ExecutionReportFillUnsetLeavesQuantity(v.ref)
+// UnsetRemainingReservedQuantity clears the caller-calculated reservation
+// remainder on the view.
+func (v *ExecutionReportFillView) UnsetRemainingReservedQuantity() {
+	native.ExecutionReportFillUnsetRemainingReservedQuantity(v.ref)
 }
 
 // Lock returns the raw pre-trade lock attached to the view, or nil when none is

@@ -882,7 +882,7 @@ describe("Pre-Trade-Lock.md wiki examples", () => {
       },
       fill: {
         lastTrade: { price: "200", quantity: "10" },
-        leavesQuantity: "0",
+        remainingReservedQuantity: "0",
         lock: restored,
         isFinal: true,
       },

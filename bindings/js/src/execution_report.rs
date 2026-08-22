@@ -80,7 +80,11 @@ export interface ExecutionReportFillDetailsInit {
   lock?: Lock;
   fee?: MonetaryAmount | MonetaryAmountInit;
   lastTrade?: Trade | TradeInit;
-  leavesQuantity?: Quantity | string | number | bigint;
+  /**
+   * Caller-calculated reservation remainder released by the engine on
+   * finalization. This is not a venue-reported remaining order quantity.
+   */
+  remainingReservedQuantity?: Quantity | string | number | bigint;
   isFinal?: boolean;
 }
 
@@ -441,13 +445,14 @@ impl JsFinancialImpact {
     }
 }
 
-/// Fill-details group: lock, fee, remaining quantity, last trade, and finality.
+/// Fill-details group: lock, fee, caller-calculated reservation remainder,
+/// last trade, and finality.
 #[wasm_bindgen(js_name = ExecutionReportFillDetails)]
 #[derive(Clone)]
 pub struct JsExecutionReportFillDetails {
     last_trade: Option<Trade>,
     fee: Option<MonetaryAmount>,
-    leaves_quantity: Option<Quantity>,
+    remaining_reserved_quantity: Option<Quantity>,
     lock: Option<JsLock>,
     is_final: Option<bool>,
 }
@@ -463,7 +468,7 @@ impl JsExecutionReportFillDetails {
         Self {
             last_trade: None,
             fee: None,
-            leaves_quantity: None,
+            remaining_reserved_quantity: None,
             lock: Some(JsLock::from_inner(lock.inner())),
             is_final: None,
         }
@@ -504,20 +509,30 @@ impl JsExecutionReportFillDetails {
         Ok(())
     }
 
-    /// The remaining (unfilled) quantity, or `undefined`.
-    #[wasm_bindgen(getter, js_name = leavesQuantity)]
-    pub fn leaves_quantity(&self) -> Option<JsQuantity> {
-        self.leaves_quantity.map(JsQuantity::from_inner)
+    /// The caller-calculated reservation remainder, or `undefined`.
+    ///
+    /// The engine releases this value on finalization. It is not a
+    /// venue-reported remaining order quantity.
+    #[wasm_bindgen(getter, js_name = remainingReservedQuantity)]
+    pub fn remaining_reserved_quantity(&self) -> Option<JsQuantity> {
+        self.remaining_reserved_quantity.map(JsQuantity::from_inner)
     }
 
-    /// Sets the remaining quantity (accepts a value object or `DecimalInput`).
+    /// Sets the caller-calculated reservation remainder.
+    ///
+    /// The engine releases this value on finalization. It is not a
+    /// venue-reported remaining order quantity. Accepts a value object or
+    /// `DecimalInput`.
     ///
     /// # Errors
     ///
     /// Throws `ParamError` on an invalid value.
-    #[wasm_bindgen(setter, js_name = leavesQuantity)]
-    pub fn set_leaves_quantity(&mut self, value: OptionalQuantityLike) -> Result<(), JsValue> {
-        self.leaves_quantity = resolve_optional_quantity(value.into())?;
+    #[wasm_bindgen(setter, js_name = remainingReservedQuantity)]
+    pub fn set_remaining_reserved_quantity(
+        &mut self,
+        value: OptionalQuantityLike,
+    ) -> Result<(), JsValue> {
+        self.remaining_reserved_quantity = resolve_optional_quantity(value.into())?;
         Ok(())
     }
 
@@ -566,7 +581,7 @@ impl JsExecutionReportFillDetails {
     /// # Errors
     ///
     /// Throws `ParamError` when a present `lock` is not a `Lock`, or on an
-    /// invalid `lastTrade`/`leavesQuantity`.
+    /// invalid `lastTrade`/`remainingReservedQuantity`.
     fn from_object(value: &JsValue) -> Result<Self, JsValue> {
         let lock_value = read_field(value, "lock")?;
         let lock = if lock_value.is_undefined() || lock_value.is_null() {
@@ -580,13 +595,15 @@ impl JsExecutionReportFillDetails {
         let mut fill = Self {
             last_trade: None,
             fee: None,
-            leaves_quantity: None,
+            remaining_reserved_quantity: None,
             lock: lock.map(|lock| JsLock::from_inner(lock.inner())),
             is_final: None,
         };
         fill.set_fee(read_field(value, "fee")?.unchecked_into())?;
         fill.set_last_trade(read_field(value, "lastTrade")?.unchecked_into())?;
-        fill.set_leaves_quantity(read_field(value, "leavesQuantity")?.unchecked_into())?;
+        fill.set_remaining_reserved_quantity(
+            read_field(value, "remainingReservedQuantity")?.unchecked_into(),
+        )?;
         fill.is_final = read_optional_bool(value, "isFinal")?;
         Ok(fill)
     }
@@ -863,9 +880,9 @@ impl JsExecutionReportFillDetails {
         self.fee.clone()
     }
 
-    /// Returns the wrapped leaves quantity.
-    pub(crate) fn leaves_quantity_inner(&self) -> Option<Quantity> {
-        self.leaves_quantity
+    /// Returns the wrapped remaining reserved quantity.
+    pub(crate) fn remaining_reserved_quantity_inner(&self) -> Option<Quantity> {
+        self.remaining_reserved_quantity
     }
 
     /// Returns the wrapped lock payload.
@@ -982,7 +999,7 @@ impl JsExecutionReport {
                 ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
                     last_trade: f.last_trade_inner(),
                     fee: f.fee_inner(),
-                    leaves_quantity: f.leaves_quantity_inner(),
+                    remaining_reserved_quantity: f.remaining_reserved_quantity_inner(),
                     lock: f.lock_inner(),
                     is_final: f.is_final_inner(),
                 }))

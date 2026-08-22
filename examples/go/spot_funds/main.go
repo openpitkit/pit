@@ -344,8 +344,8 @@ func buildFillReport(
 			"qty %q: %w", scenarioOrderQty, err,
 		)
 	}
-	// A full fill of a 30-lot order leaves nothing outstanding.
-	leaves, err := param.NewQuantityFromString("0")
+	// A full fill of a 30-lot order has no reservation remainder.
+	remainingReservedQty, err := param.NewQuantityFromString("0")
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -385,9 +385,9 @@ func buildFillReport(
 						LastTrade: optional.Some(
 							model.NewExecutionReportTrade(price, qty),
 						),
-						LeavesQuantity: optional.Some(leaves),
-						Lock:           lock,
-						IsFinal:        optional.BoolSome(true),
+						RemainingReservedQuantity: optional.Some(remainingReservedQty),
+						Lock:                      lock,
+						IsFinal:                   optional.BoolSome(true),
 					},
 				),
 			),

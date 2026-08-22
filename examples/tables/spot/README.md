@@ -111,8 +111,10 @@ market-data service — there is no load-time pre-aggregation.
 ## Limitations
 
 - `FILL` rows always emit final (`IsFinal = true`) execution reports with
-  `LeavesQuantity = 0`. Partial fills and cancel-with-leftover scenarios are not
-  modelled.
+  `RemainingReservedQuantity = 0`. This caller-calculated value tells the
+  engine that no reservation remains to release; it is not a venue-reported
+  remaining order quantity. Partial fills and cancel-with-leftover scenarios
+  are not modelled.
 - Account IDs are derived from the table label via `param.NewAccountIDFromString`,
   and account-group IDs via `param.NewAccountGroupIDFromString`; both FNV-1a hash
   the input. Two different labels produce two different engine identifiers.

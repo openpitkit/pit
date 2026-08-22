@@ -77,7 +77,7 @@ def _spot_funds_fee_fill_report(
                 amount=openpit.param.Fee(fee),
                 currency="USD",
             ),
-            leaves_quantity=openpit.param.Quantity(0),
+            remaining_reserved_quantity=openpit.param.Quantity(0),
             lock=openpit.pretrade.Lock(
                 entries=[(openpit.pretrade.DEFAULT_POLICY_GROUP_ID, price)],
             ),

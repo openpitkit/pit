@@ -97,7 +97,7 @@ function applySpotFundsFill(
     },
     fill: {
       lastTrade: { price: "100", quantity: "1" },
-      leavesQuantity: "0",
+      remainingReservedQuantity: "0",
       lock,
       isFinal: true,
       ...(fee === undefined ? {} : { fee: { amount: fee, currency: "USD" } }),
@@ -691,7 +691,7 @@ describe("runtime configurator", () => {
         },
         fill: {
           lastTrade: { price: "100", quantity: "1" },
-          leavesQuantity: "0",
+          remainingReservedQuantity: "0",
           lock,
           isFinal: true,
           fee: { amount: fee, currency: "USD" },

@@ -25,8 +25,8 @@ use rust_decimal::Decimal;
 use crate::core::sync_mode::SyncMode;
 use crate::core::{
     AccountOutcomeEntry, HasAccountId, HasExecutionReportFillFee, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
-    Instrument,
+    HasExecutionReportLastTrade, HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity,
+    HasSide, Instrument,
 };
 use crate::marketdata::{MarketDataError, MarketDataSync, Quote, QuoteResolution};
 use crate::param::{
@@ -735,7 +735,7 @@ where
             + HasSide
             + HasExecutionReportLastTrade
             + HasExecutionReportFillFee
-            + HasLeavesQuantity
+            + HasRemainingReservedQuantity
             + HasExecutionReportIsFinal
             + HasPreTradeLock,
     {
@@ -754,9 +754,9 @@ where
         let fee = report
             .fill_fee()
             .map_err(|e| missing_required_field_account_block(self, "fill fee", &e))?;
-        let leaves_quantity = report
-            .leaves_quantity()
-            .map_err(|e| missing_required_field_account_block(self, "remaining quantity", &e))?;
+        let remaining_reserved_quantity = report.remaining_reserved_quantity().map_err(|e| {
+            missing_required_field_account_block(self, "remaining reserved quantity", &e)
+        })?;
         let is_final = report
             .is_final()
             .map_err(|e| missing_required_field_account_block(self, "order finality", &e))?;
@@ -769,7 +769,7 @@ where
             side,
             last_trade,
             fee,
-            leaves_quantity,
+            remaining_reserved_quantity,
             is_final,
             lock,
         })
@@ -1354,7 +1354,7 @@ where
         underlying_asset: &Asset,
         settlement_asset: &Asset,
         side: Side,
-        leaves_quantity: Quantity,
+        remaining_reserved_quantity: Quantity,
         lock: &PreTradeLock,
         deltas: &mut FillCancelDeltas,
     ) -> Result<(), AccountBlock>
@@ -1367,19 +1367,23 @@ where
         // lock price; computing them first keeps the block ahead of the
         // underlying mutation below.
         let settlement_held_release =
-            self.settlement_release(settlement_asset, side, leaves_quantity, lock)?;
-        let settlement_incoming_release =
-            self.settlement_incoming_release(settlement_asset, side, leaves_quantity, lock)?;
+            self.settlement_release(settlement_asset, side, remaining_reserved_quantity, lock)?;
+        let settlement_incoming_release = self.settlement_incoming_release(
+            settlement_asset,
+            side,
+            remaining_reserved_quantity,
+            lock,
+        )?;
 
         // Underlying release: only sells reserved underlying held, by quantity;
         // only buys projected base incoming, by quantity. The unfilled remainder
         // of each is released here.
         let underlying_held_release = match side {
             Side::Buy => PositionSize::ZERO,
-            Side::Sell => leaves_quantity.to_position_size(),
+            Side::Sell => remaining_reserved_quantity.to_position_size(),
         };
         let underlying_incoming_release = match side {
-            Side::Buy => leaves_quantity.to_position_size(),
+            Side::Buy => remaining_reserved_quantity.to_position_size(),
             Side::Sell => PositionSize::ZERO,
         };
         self.release_leg(
@@ -1406,13 +1410,14 @@ where
     }
 
     /// Computes the settlement `held` released on cancel: the reserved
-    /// remainder `max(0, settlement_outflow_at_lock)` for `leaves_quantity`.
+    /// remainder `max(0, settlement_outflow_at_lock)` for
+    /// `remaining_reserved_quantity`.
     /// Lock handling mirrors [`Self::settlement_fill_consume`].
     fn settlement_release(
         &self,
         settlement_asset: &Asset,
         side: Side,
-        leaves_quantity: Quantity,
+        remaining_reserved_quantity: Quantity,
         lock: &PreTradeLock,
     ) -> Result<PositionSize, AccountBlock> {
         let lock_price =
@@ -1421,19 +1426,20 @@ where
             Self::NAME,
             side,
             lock_price,
-            leaves_quantity,
+            remaining_reserved_quantity,
             settlement_asset,
         )
     }
 
     /// Computes the settlement `incoming` released on cancel: the projected
-    /// proceeds remainder `max(0, lock_price * leaves_quantity)` for a priced
-    /// sell, zero otherwise. Mirrors [`Self::settlement_incoming_amount`].
+    /// proceeds remainder `max(0, lock_price * remaining_reserved_quantity)`
+    /// for a priced sell, zero otherwise. Mirrors
+    /// [`Self::settlement_incoming_amount`].
     fn settlement_incoming_release(
         &self,
         settlement_asset: &Asset,
         side: Side,
-        leaves_quantity: Quantity,
+        remaining_reserved_quantity: Quantity,
         lock: &PreTradeLock,
     ) -> Result<PositionSize, AccountBlock> {
         let lock_price = settlement_lock_price(Self::NAME, lock, self.group_id(), "sell release")?;
@@ -1441,7 +1447,7 @@ where
             Self::NAME,
             side,
             lock_price,
-            leaves_quantity,
+            remaining_reserved_quantity,
             settlement_asset,
         )
     }
@@ -1531,7 +1537,7 @@ where
             + HasSide
             + HasExecutionReportLastTrade
             + HasExecutionReportFillFee
-            + HasLeavesQuantity
+            + HasRemainingReservedQuantity
             + HasExecutionReportIsFinal
             + HasPreTradeLock,
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
@@ -1605,13 +1611,13 @@ where
             }
         }
 
-        if request.is_final && !request.leaves_quantity.is_zero() {
+        if request.is_final && !request.remaining_reserved_quantity.is_zero() {
             if let Err(block) = self.apply_cancel_release(
                 request.account_id,
                 &underlying_asset,
                 &settlement_asset,
                 request.side,
-                request.leaves_quantity,
+                request.remaining_reserved_quantity,
                 &request.lock,
                 &mut deltas,
             ) {

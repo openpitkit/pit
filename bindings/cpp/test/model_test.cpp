@@ -258,7 +258,7 @@ TEST(ModelExecutionReport, FullModelPreservesEveryGroup) {
       model::Trade(Price::FromString("100.5"), Quantity::FromString("1"));
   fill.fee =
       MonetaryAmount(Fee::FromString("0.25"), ::openpit::param::Asset("USD"));
-  fill.leavesQuantity = Quantity::FromString("2");
+  fill.remainingReservedQuantity = Quantity::FromString("2");
   fill.isFinal = true;
   report.fill = fill;
 
@@ -290,8 +290,8 @@ TEST(ModelExecutionReport, FullModelPreservesEveryGroup) {
   ASSERT_TRUE(restored.fill->fee.has_value());
   EXPECT_EQ(restored.fill->fee->Amount().ToString(), "0.25");
   EXPECT_EQ(restored.fill->fee->Currency().View(), "USD");
-  ASSERT_TRUE(restored.fill->leavesQuantity.has_value());
-  EXPECT_EQ(restored.fill->leavesQuantity->ToString(), "2");
+  ASSERT_TRUE(restored.fill->remainingReservedQuantity.has_value());
+  EXPECT_EQ(restored.fill->remainingReservedQuantity->ToString(), "2");
   EXPECT_EQ(restored.fill->isFinal, std::optional<bool>(true));
 
   ASSERT_TRUE(restored.positionImpact.has_value());

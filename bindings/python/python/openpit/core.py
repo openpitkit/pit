@@ -512,14 +512,16 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
         *,
         last_trade: Trade | None = None,
         fee: MonetaryAmount | None = None,
-        leaves_quantity: Quantity | None = None,
+        remaining_reserved_quantity: Quantity | None = None,
         lock: Lock,
         is_final: bool | None = None,
     ) -> None:
         _require_instance(fee, MonetaryAmount, name="fee")
         _ExecutionReportFillDetails.last_trade.__set__(self, last_trade)
         _ExecutionReportFillDetails.fee.__set__(self, fee)
-        _ExecutionReportFillDetails.leaves_quantity.__set__(self, leaves_quantity)
+        _ExecutionReportFillDetails.remaining_reserved_quantity.__set__(
+            self, remaining_reserved_quantity
+        )
         _ExecutionReportFillDetails.lock.__set__(self, lock)
         _ExecutionReportFillDetails.is_final.__set__(self, is_final)
 
@@ -540,9 +542,14 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
 
     # @typing.override
     @property
-    def leaves_quantity(self) -> Quantity | None:
-        """Remaining order quantity after this fill."""
-        return _ExecutionReportFillDetails.leaves_quantity.__get__(self, type(self))
+    def remaining_reserved_quantity(self) -> Quantity | None:
+        """Caller-calculated reservation remainder released on finalization.
+
+        This is not a venue-reported remaining order quantity.
+        """
+        return _ExecutionReportFillDetails.remaining_reserved_quantity.__get__(
+            self, type(self)
+        )
 
     # @typing.override
     @property

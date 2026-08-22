@@ -32,7 +32,7 @@ use openpit::{
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
     HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, LocalSync,
+    HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity, HasSide, Instrument, LocalSync,
     MarketDataBuilder, MarketDataError, MarketDataService, OrderOperation, PushForError, Quote,
     QuoteResolution, QuoteTtl, RegistrationError, RequestFieldAccessError, SpotFundsMarketData,
     SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource, UnknownInstrumentId,
@@ -650,7 +650,7 @@ struct SfTestReport {
     account_id: AccountId,
     side: Side,
     last_trade: Option<Trade>,
-    leaves_quantity: Quantity,
+    remaining_reserved_quantity: Quantity,
     is_final: bool,
     lock: PreTradeLock,
 }
@@ -680,9 +680,9 @@ impl HasExecutionReportFillFee for SfTestReport {
         Ok(None)
     }
 }
-impl HasLeavesQuantity for SfTestReport {
-    fn leaves_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
-        Ok(self.leaves_quantity)
+impl HasRemainingReservedQuantity for SfTestReport {
+    fn remaining_reserved_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
+        Ok(self.remaining_reserved_quantity)
     }
 }
 impl HasExecutionReportIsFinal for SfTestReport {

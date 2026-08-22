@@ -315,8 +315,8 @@ export function buildFillReport(lock: Lock): ExecutionReportInit {
     fill: {
       lock,
       lastTrade: { price: SCENARIO_ORDER_PRICE, quantity: SCENARIO_ORDER_QTY },
-      // A full fill of a 30-lot order leaves nothing outstanding.
-      leavesQuantity: "0",
+      // A full fill of a 30-lot order has no reservation remainder.
+      remainingReservedQuantity: "0",
       isFinal: true,
     },
   };

@@ -156,7 +156,7 @@ export function buildFillReport(
     fill: {
       lock,
       lastTrade: { price: priceStr, quantity: row.qty },
-      leavesQuantity: "0",
+      remainingReservedQuantity: "0",
       isFinal: true,
     },
   };

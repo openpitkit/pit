@@ -2201,9 +2201,12 @@ struct OpenPitExecutionReportFill {
      */
     OpenPitParamMonetaryAmountOptional fee;
     /**
-     * Remaining quantity after applying this report.
+     * Caller-calculated reservation remainder released by the engine on
+     * finalization.
+     *
+     * This is not a venue-reported remaining order quantity.
      */
-    OpenPitParamQuantityOptional leaves_quantity;
+    OpenPitParamQuantityOptional remaining_reserved_quantity;
     /**
      * Pre-trade lock attached to the order.
      *

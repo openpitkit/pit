@@ -1764,7 +1764,7 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
                     quantity: Quantity::from_str("10")?,
                 }),
                 fee: None,
-                leaves_quantity: Quantity::from_str("0")?,
+                remaining_reserved_quantity: Quantity::from_str("0")?,
                 lock: restored,
                 is_final: true,
             },

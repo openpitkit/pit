@@ -21,8 +21,8 @@ use crate::{impl_request_has_field, impl_request_has_field_passthrough};
 use crate::{
     HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
-    HasOrderPositionSide, HasOrderPrice, HasPnl, HasPreTradeLock, HasReduceOnly, HasSide,
+    HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
+    HasOrderPrice, HasPnl, HasPreTradeLock, HasReduceOnly, HasRemainingReservedQuantity, HasSide,
     HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
@@ -66,7 +66,7 @@ impl_request_has_field_passthrough!(
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
-    HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, crate::param::Quantity;
     HasPreTradeLock, lock, crate::pretrade::PreTradeLock;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<Leverage>;
@@ -100,7 +100,7 @@ impl_request_has_field_passthrough!(
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
-    HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, crate::param::Quantity;
     HasPreTradeLock, lock, crate::pretrade::PreTradeLock;
     HasOrderLeverage, leverage, Option<Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
@@ -211,7 +211,7 @@ impl_request_has_field_passthrough!(
     HasClosePosition, close_position, bool;
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
-    HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, crate::param::Quantity;
     HasPreTradeLock, lock, crate::pretrade::PreTradeLock;
     HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
     HasExecutionReportIsFinal, is_final, bool;

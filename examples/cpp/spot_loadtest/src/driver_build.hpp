@@ -85,7 +85,7 @@ BuildOrder(const generator::Event &ev,
   return order;
 }
 
-// Maps a Settlement event to a full-fill (leaves = 0, is_final = true) report
+// Maps a Settlement event to a final report with no reservation remainder,
 // plus the matching reserved-price lock under the default policy group.
 [[nodiscard]] inline ::openpit::model::ExecutionReport
 BuildReport(const generator::Event &ev,
@@ -95,7 +95,7 @@ BuildReport(const generator::Event &ev,
       ::openpit::param::Price::FromString(ev.price.ToString());
   const ::openpit::param::Quantity qty =
       ::openpit::param::Quantity::FromString(ev.quantity.ToString());
-  const ::openpit::param::Quantity leaves =
+  const ::openpit::param::Quantity remainingReservedQuantity =
       ::openpit::param::Quantity::FromString("0");
   const ::openpit::param::Fee fee = ::openpit::param::Fee::FromString("0");
   const ::openpit::param::Pnl pnl = ::openpit::param::Pnl::FromString("0");
@@ -114,7 +114,7 @@ BuildReport(const generator::Event &ev,
 
   ::openpit::model::Fill fill;
   fill.lastTrade = ::openpit::model::Trade(price, qty);
-  fill.leavesQuantity = leaves;
+  fill.remainingReservedQuantity = remainingReservedQuantity;
   fill.isFinal = true;
   report.fill = std::move(fill);
 

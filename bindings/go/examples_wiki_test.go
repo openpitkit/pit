@@ -1995,10 +1995,10 @@ func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	report.SetOperation(reportOp)
 
 	filledQty, _ := param.NewQuantityFromString("10")
-	leaves, _ := param.NewQuantityFromString("0")
+	remainingReservedQty, _ := param.NewQuantityFromString("0")
 	fill := report.EnsureFillView()
 	fill.SetLastTrade(model.NewExecutionReportTrade(price, filledQty))
-	fill.SetLeavesQuantity(leaves)
+	fill.SetRemainingReservedQuantity(remainingReservedQty)
 	fill.SetLock(restored.Bytes())
 	fill.SetIsFinal(true)
 

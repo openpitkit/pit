@@ -194,8 +194,8 @@ BuildFillReport(::openpit::param::AccountId account) {
   fill.lastTrade = ::openpit::model::Trade(
       ::openpit::param::Price::FromString(kScenarioOrderPrice),
       ::openpit::param::Quantity::FromString(kScenarioOrderQty));
-  // A full fill of a 30-lot order leaves nothing outstanding.
-  fill.leavesQuantity = ::openpit::param::Quantity::FromString("0");
+  // A full fill of a 30-lot order has no reservation remainder.
+  fill.remainingReservedQuantity = ::openpit::param::Quantity::FromString("0");
   fill.isFinal = true;
 
   ::openpit::model::ExecutionReport report;

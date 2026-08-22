@@ -1120,12 +1120,12 @@ class ExecutionReportFillDetails:
         *,
         last_trade: Trade | None = None,
         fee: param.MonetaryAmount | None = None,
-        leaves_quantity: param.Quantity | None = None,
+        remaining_reserved_quantity: param.Quantity | None = None,
         lock: Lock,
         is_final: bool | None = None,
     ) -> None:
         """Create a fill details group."""
-        _ = (last_trade, fee, leaves_quantity, lock, is_final)
+        _ = (last_trade, fee, remaining_reserved_quantity, lock, is_final)
 
     @property
     def last_trade(self) -> Trade | None:
@@ -1140,11 +1140,14 @@ class ExecutionReportFillDetails:
     @fee.setter
     def fee(self, value: param.MonetaryAmount | None) -> None: ...
     @property
-    def leaves_quantity(self) -> param.Quantity | None:
-        """Remaining order quantity."""
+    def remaining_reserved_quantity(self) -> param.Quantity | None:
+        """Caller-calculated reservation remainder released on finalization.
 
-    @leaves_quantity.setter
-    def leaves_quantity(self, value: param.Quantity | None) -> None: ...
+        This is not a venue-reported remaining order quantity.
+        """
+
+    @remaining_reserved_quantity.setter
+    def remaining_reserved_quantity(self, value: param.Quantity | None) -> None: ...
     @property
     def lock(self) -> Lock:
         """Order lock payload."""

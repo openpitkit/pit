@@ -29,9 +29,9 @@ use openpit::{
     HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
     HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
-    HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
-    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
-    HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
+    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
+    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
+    HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
 use crate::{
@@ -204,9 +204,11 @@ impl HasExecutionReportPositionSide for ExecutionReport {
     }
 }
 
-impl HasLeavesQuantity for ExecutionReport {
-    fn leaves_quantity(&self) -> Result<openpit::param::Quantity, RequestFieldAccessError> {
-        self.fill.leaves_quantity()
+impl HasRemainingReservedQuantity for ExecutionReport {
+    fn remaining_reserved_quantity(
+        &self,
+    ) -> Result<openpit::param::Quantity, RequestFieldAccessError> {
+        self.fill.remaining_reserved_quantity()
     }
 }
 
@@ -460,11 +462,13 @@ impl<Request: HasFee, Payload> HasFee for RequestWithPayload<Request, Payload> {
     }
 }
 
-impl<Request: HasLeavesQuantity, Payload> HasLeavesQuantity
+impl<Request: HasRemainingReservedQuantity, Payload> HasRemainingReservedQuantity
     for RequestWithPayload<Request, Payload>
 {
-    fn leaves_quantity(&self) -> Result<openpit::param::Quantity, RequestFieldAccessError> {
-        self.request.leaves_quantity()
+    fn remaining_reserved_quantity(
+        &self,
+    ) -> Result<openpit::param::Quantity, RequestFieldAccessError> {
+        self.request.remaining_reserved_quantity()
     }
 }
 

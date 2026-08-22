@@ -5003,7 +5003,8 @@ mod tests {
                     last_trade:
                         crate::execution_report::OpenPitExecutionReportTradeOptional::default(),
                     fee: crate::param::OpenPitParamMonetaryAmountOptional::default(),
-                    leaves_quantity: crate::param::OpenPitParamQuantityOptional::default(),
+                    remaining_reserved_quantity:
+                        crate::param::OpenPitParamQuantityOptional::default(),
                     lock: input_lock,
                     is_final:
                         crate::execution_report::OpenPitExecutionReportIsFinalOptional::default(),

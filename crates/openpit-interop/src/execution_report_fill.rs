@@ -21,7 +21,7 @@ use openpit::param::{MonetaryAmount, Quantity, Trade};
 use openpit::pretrade::PreTradeLock;
 use openpit::{
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasLeavesQuantity, HasPreTradeLock, RequestFieldAccessError,
+    HasPreTradeLock, HasRemainingReservedQuantity, RequestFieldAccessError,
 };
 
 /// Populated execution-report fill group.
@@ -31,8 +31,11 @@ pub struct PopulatedExecutionReportFill {
     pub last_trade: Option<Trade>,
     /// Fee charged or rebated for this fill.
     pub fee: Option<MonetaryAmount>,
-    /// Remaining order quantity after this fill.
-    pub leaves_quantity: Option<Quantity>,
+    /// Caller-calculated reservation remainder released by the engine on
+    /// finalization.
+    ///
+    /// This is not a venue-reported remaining order quantity.
+    pub remaining_reserved_quantity: Option<Quantity>,
     /// Order lock payload, if provided.
     pub lock: Option<PreTradeLock>,
     /// Whether this report closes the order's report stream.
@@ -59,10 +62,10 @@ impl HasExecutionReportFillFee for PopulatedExecutionReportFill {
     }
 }
 
-impl HasLeavesQuantity for PopulatedExecutionReportFill {
-    fn leaves_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
-        self.leaves_quantity
-            .ok_or_else(|| RequestFieldAccessError::new("fill.leaves_quantity"))
+impl HasRemainingReservedQuantity for PopulatedExecutionReportFill {
+    fn remaining_reserved_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
+        self.remaining_reserved_quantity
+            .ok_or_else(|| RequestFieldAccessError::new("fill.remaining_reserved_quantity"))
     }
 }
 
@@ -113,11 +116,13 @@ impl HasExecutionReportFillFee for ExecutionReportFillAccess {
     }
 }
 
-impl HasLeavesQuantity for ExecutionReportFillAccess {
-    fn leaves_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
+impl HasRemainingReservedQuantity for ExecutionReportFillAccess {
+    fn remaining_reserved_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
         match self {
-            Self::Populated(f) => f.leaves_quantity(),
-            Self::Absent => Err(RequestFieldAccessError::new("fill.leaves_quantity")),
+            Self::Populated(f) => f.remaining_reserved_quantity(),
+            Self::Absent => Err(RequestFieldAccessError::new(
+                "fill.remaining_reserved_quantity",
+            )),
         }
     }
 }
@@ -140,12 +145,15 @@ mod tests {
         let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
             last_trade: None,
             fee: None,
-            leaves_quantity: Some(Quantity::ZERO),
+            remaining_reserved_quantity: Some(Quantity::ZERO),
             lock: Some(PreTradeLock::new()),
             is_final: Some(true),
         }));
         assert_eq!(access.last_trade().unwrap(), None);
-        assert_eq!(access.leaves_quantity().unwrap(), Quantity::ZERO);
+        assert_eq!(
+            access.remaining_reserved_quantity().unwrap(),
+            Quantity::ZERO
+        );
         assert_eq!(access.lock().unwrap(), PreTradeLock::new());
         assert!(access.is_final().unwrap());
     }
@@ -155,7 +163,7 @@ mod tests {
         let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
             last_trade: None,
             fee: None,
-            leaves_quantity: Some(Quantity::ZERO),
+            remaining_reserved_quantity: Some(Quantity::ZERO),
             lock: Some(PreTradeLock::new()),
             is_final: None,
         }));
@@ -163,15 +171,15 @@ mod tests {
     }
 
     #[test]
-    fn populated_without_leaves_quantity_returns_err() {
+    fn populated_without_remaining_reserved_quantity_returns_err() {
         let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
             last_trade: None,
             fee: None,
-            leaves_quantity: None,
+            remaining_reserved_quantity: None,
             lock: Some(PreTradeLock::new()),
             is_final: Some(true),
         }));
-        assert!(access.leaves_quantity().is_err());
+        assert!(access.remaining_reserved_quantity().is_err());
     }
 
     #[test]
@@ -179,7 +187,7 @@ mod tests {
         let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
             last_trade: None,
             fee: None,
-            leaves_quantity: Some(Quantity::ZERO),
+            remaining_reserved_quantity: Some(Quantity::ZERO),
             lock: None,
             is_final: Some(true),
         }));
@@ -212,8 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn absent_leaves_quantity_returns_err() {
-        assert!(ExecutionReportFillAccess::Absent.leaves_quantity().is_err());
+    fn absent_remaining_reserved_quantity_returns_err() {
+        assert!(ExecutionReportFillAccess::Absent
+            .remaining_reserved_quantity()
+            .is_err());
     }
 
     #[test]

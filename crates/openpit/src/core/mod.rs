@@ -86,9 +86,9 @@ pub use request_trait::{
     HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
     HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
-    HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
-    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
-    HasSide, HasTradeAmount, RequestFieldAccessError,
+    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
+    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
+    HasRemainingReservedQuantity, HasSide, HasTradeAmount, RequestFieldAccessError,
 };
 pub use sync_mode::{
     AccountSync, AccountSyncHandle, AccountSyncHandleWeak, FullSync, LocalSync, SyncMode,

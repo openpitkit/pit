@@ -262,8 +262,8 @@ def build_fill_report(
     """
     price = openpit.param.Price(SCENARIO_ORDER_PRICE)
     qty = openpit.param.Quantity(SCENARIO_ORDER_QTY)
-    # A full fill of a 30-lot order leaves nothing outstanding.
-    leaves = openpit.param.Quantity("0")
+    # A full fill of a 30-lot order has no reservation remainder.
+    remaining_reserved_quantity = openpit.param.Quantity("0")
     # Combined-mode impact: the fee is embedded in pnl, so both are zero for
     # a plain settlement. See the SpotFunds wiki page for the "separate" fee
     # convention.
@@ -279,7 +279,7 @@ def build_fill_report(
         ),
         fill=openpit.ExecutionReportFillDetails(
             last_trade=openpit.param.Trade(price=price, quantity=qty),
-            leaves_quantity=leaves,
+            remaining_reserved_quantity=remaining_reserved_quantity,
             lock=lock,
             is_final=True,
         ),

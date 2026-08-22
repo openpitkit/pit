@@ -140,7 +140,7 @@ describe("execution-report required fields", () => {
     const result = engine.applyExecutionReport({
       operation,
       fill: {
-        leavesQuantity: "0",
+        remainingReservedQuantity: "0",
         isFinal: true,
       },
     });

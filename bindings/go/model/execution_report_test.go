@@ -26,18 +26,19 @@ import (
 )
 
 type executionReportFixture struct {
-	instrument     param.Instrument
-	accountID      param.AccountID
-	side           param.Side
-	pnl            param.Pnl
-	fee            param.Fee
-	feeCurrency    param.Asset
-	tradePrice     param.Price
-	tradeQuantity  param.Quantity
-	leavesQuantity param.Quantity
-	lockPrice      param.Price
-	positionEffect param.PositionEffect
-	positionSide   param.PositionSide
+	instrument                param.Instrument
+	accountID                 param.AccountID
+	side                      param.Side
+	pnl                       param.Pnl
+	fee                       param.Fee
+	feeCurrency               param.Asset
+	tradePrice                param.Price
+	tradeQuantity             param.Quantity
+	secondQuantity            param.Quantity
+	remainingReservedQuantity param.Quantity
+	lockPrice                 param.Price
+	positionEffect            param.PositionEffect
+	positionSide              param.PositionSide
 }
 
 func TestExecutionReportLifecycle(t *testing.T) {
@@ -167,10 +168,10 @@ func TestExecutionReportTradeFieldRoundTrip(t *testing.T) {
 
 	trade.Reset()
 	trade.SetPrice(fixture.lockPrice)
-	trade.SetQuantity(fixture.leavesQuantity)
+	trade.SetQuantity(fixture.secondQuantity)
 
 	assertPriceEqual(t, trade.Price(), fixture.lockPrice)
-	assertQuantityEqual(t, trade.Quantity(), fixture.leavesQuantity)
+	assertQuantityEqual(t, trade.Quantity(), fixture.secondQuantity)
 
 	assertPriceEqual(
 		t,
@@ -196,10 +197,10 @@ func TestExecutionReportFillFieldRoundTrip(t *testing.T) {
 	fill.UnsetFee()
 	assertMonetaryAmountOptionUnset(t, fill.Fee())
 
-	fill.SetLeavesQuantity(fixture.leavesQuantity)
-	assertQuantityOptionEqual(t, fill.LeavesQuantity(), fixture.leavesQuantity)
-	fill.UnsetLeavesQuantity()
-	assertQuantityOptionUnset(t, fill.LeavesQuantity())
+	fill.SetRemainingReservedQuantity(fixture.remainingReservedQuantity)
+	assertQuantityOptionEqual(t, fill.RemainingReservedQuantity(), fixture.remainingReservedQuantity)
+	fill.UnsetRemainingReservedQuantity()
+	assertQuantityOptionUnset(t, fill.RemainingReservedQuantity())
 
 	lock := newFixtureLock(t, fixture.lockPrice)
 	fill.SetLock(lock)
@@ -223,11 +224,11 @@ func TestExecutionReportFillFieldRoundTrip(t *testing.T) {
 	assertOptionalBoolUnset(t, fill.IsFinal())
 
 	values := ExecutionReportFillValues{
-		LastTrade:      optional.Some(lastTrade),
-		Fee:            optional.Some(fillFee),
-		LeavesQuantity: optional.Some(fixture.leavesQuantity),
-		Lock:           newFixtureLock(t, fixture.lockPrice),
-		IsFinal:        optional.BoolSome(true),
+		LastTrade:                 optional.Some(lastTrade),
+		Fee:                       optional.Some(fillFee),
+		RemainingReservedQuantity: optional.Some(fixture.remainingReservedQuantity),
+		Lock:                      newFixtureLock(t, fixture.lockPrice),
+		IsFinal:                   optional.BoolSome(true),
 	}
 	fill.SetValues(values)
 	got := fill.Values()
@@ -348,7 +349,12 @@ func newExecutionReportFixture(t *testing.T) executionReportFixture {
 		t.Fatalf("NewQuantityFromString() error = %v", err)
 	}
 
-	leavesQuantity, err := param.NewQuantityFromString("3")
+	secondQuantity, err := param.NewQuantityFromString("3")
+	if err != nil {
+		t.Fatalf("NewQuantityFromString() error = %v", err)
+	}
+
+	remainingReservedQuantity, err := param.NewQuantityFromString("3")
 	if err != nil {
 		t.Fatalf("NewQuantityFromString() error = %v", err)
 	}
@@ -361,18 +367,19 @@ func newExecutionReportFixture(t *testing.T) executionReportFixture {
 	return executionReportFixture{
 		// Keep same asset on both legs to avoid depending on current
 		// NewInstrumentFromHandle settlement-leg mapping behavior.
-		instrument:     param.NewInstrument(mustModelAsset(t, "USD"), mustModelAsset(t, "USD")),
-		accountID:      param.NewAccountIDFromUint64(42),
-		side:           param.SideBuy,
-		pnl:            pnl,
-		fee:            fee,
-		feeCurrency:    mustModelAsset(t, "USD"),
-		tradePrice:     tradePrice,
-		tradeQuantity:  tradeQuantity,
-		leavesQuantity: leavesQuantity,
-		lockPrice:      lockPrice,
-		positionEffect: param.PositionEffectOpen,
-		positionSide:   param.PositionSideLong,
+		instrument:                param.NewInstrument(mustModelAsset(t, "USD"), mustModelAsset(t, "USD")),
+		accountID:                 param.NewAccountIDFromUint64(42),
+		side:                      param.SideBuy,
+		pnl:                       pnl,
+		fee:                       fee,
+		feeCurrency:               mustModelAsset(t, "USD"),
+		tradePrice:                tradePrice,
+		tradeQuantity:             tradeQuantity,
+		secondQuantity:            secondQuantity,
+		remainingReservedQuantity: remainingReservedQuantity,
+		lockPrice:                 lockPrice,
+		positionEffect:            param.PositionEffectOpen,
+		positionSide:              param.PositionSideLong,
 	}
 }
 
@@ -398,10 +405,10 @@ func executionReportValuesFromFixture(t *testing.T, fixture executionReportFixtu
 			LastTrade: optional.Some(
 				NewExecutionReportTrade(fixture.tradePrice, fixture.tradeQuantity),
 			),
-			Fee:            optional.Some(param.NewMonetaryAmount(fixture.fee, fixture.feeCurrency)),
-			LeavesQuantity: optional.Some(fixture.leavesQuantity),
-			Lock:           newFixtureLock(t, fixture.lockPrice),
-			IsFinal:        optional.BoolSome(true),
+			Fee:                       optional.Some(param.NewMonetaryAmount(fixture.fee, fixture.feeCurrency)),
+			RemainingReservedQuantity: optional.Some(fixture.remainingReservedQuantity),
+			Lock:                      newFixtureLock(t, fixture.lockPrice),
+			IsFinal:                   optional.BoolSome(true),
 		},
 	)
 
@@ -497,7 +504,7 @@ func assertExecutionReportFillUnset(t *testing.T, fill ExecutionReportFill) {
 	t.Helper()
 	assertExecutionReportTradeOptionUnset(t, fill.LastTrade())
 	assertMonetaryAmountOptionUnset(t, fill.Fee())
-	assertQuantityOptionUnset(t, fill.LeavesQuantity())
+	assertQuantityOptionUnset(t, fill.RemainingReservedQuantity())
 	if fill.Lock() != nil {
 		t.Fatal("fill.Lock() = non-nil, want nil")
 	}
@@ -512,7 +519,7 @@ func assertExecutionReportFillValuesEqual(
 	t.Helper()
 	assertExecutionReportTradeOptionValuesEqual(t, got.LastTrade, want.LastTrade)
 	assertMonetaryAmountOptionValuesEqual(t, got.Fee, want.Fee)
-	assertQuantityOptionValuesEqual(t, got.LeavesQuantity, want.LeavesQuantity)
+	assertQuantityOptionValuesEqual(t, got.RemainingReservedQuantity, want.RemainingReservedQuantity)
 	if (got.Lock == nil) != (want.Lock == nil) {
 		t.Fatalf("Lock presence mismatch: got nil=%v, want nil=%v", got.Lock == nil, want.Lock == nil)
 	}

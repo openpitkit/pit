@@ -109,7 +109,7 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
   fill.lastTrade =
       openpit::model::Trade(openpit::param::Price::FromString("200"),
                             openpit::param::Quantity::FromString("10"));
-  fill.leavesQuantity = openpit::param::Quantity::FromString("0");
+  fill.remainingReservedQuantity = openpit::param::Quantity::FromString("0");
   fill.isFinal = true;
   fill.lock = std::move(restored);
 

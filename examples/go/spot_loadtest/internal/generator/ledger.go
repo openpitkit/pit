@@ -210,7 +210,7 @@ type settlementResult struct {
 }
 
 // settleFullFill mirrors SpotFundsPolicy fill handling (contract §2.3) for a
-// full fill (leaves = 0, is_final = true):
+// full fill (RemainingReservedQuantity = 0, IsFinal = true):
 //
 //   - Buy:  held(settlement) -= q*p; available(underlying) += q.
 //   - Sell: held(underlying) -= q;  available(settlement) += q*p.

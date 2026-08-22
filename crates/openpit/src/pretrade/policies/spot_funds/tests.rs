@@ -37,8 +37,8 @@ use crate::{
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
     HasBalanceAsset, HasExecutionReportFillFee, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
-    Instrument, Mutations, OrderOperation, RequestFieldAccessError,
+    HasExecutionReportLastTrade, HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity,
+    HasSide, Instrument, Mutations, OrderOperation, RequestFieldAccessError,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -225,7 +225,7 @@ struct TestReport {
     side: Side,
     last_trade: Option<Trade>,
     fee: Option<MonetaryAmount>,
-    leaves_quantity: Quantity,
+    remaining_reserved_quantity: Quantity,
     is_final: bool,
     lock: PreTradeLock,
 }
@@ -260,9 +260,9 @@ impl HasExecutionReportFillFee for TestReport {
     }
 }
 
-impl HasLeavesQuantity for TestReport {
-    fn leaves_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
-        Ok(self.leaves_quantity)
+impl HasRemainingReservedQuantity for TestReport {
+    fn remaining_reserved_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
+        Ok(self.remaining_reserved_quantity)
     }
 }
 
@@ -557,7 +557,7 @@ fn make_report(
     instrument: Instrument,
     side: Side,
     last_trade: Option<Trade>,
-    leaves: Quantity,
+    remaining_reserved_quantity: Quantity,
     is_final: bool,
     lock: Option<PreTradeLock>,
 ) -> TestReport {
@@ -567,7 +567,7 @@ fn make_report(
         side,
         last_trade,
         fee: None,
-        leaves_quantity: leaves,
+        remaining_reserved_quantity,
         is_final,
         lock: lock.unwrap_or_default(),
     }
@@ -612,7 +612,7 @@ fn fee_only_report(
     account_id: AccountId,
     instrument: Instrument,
     side: Side,
-    leaves_quantity: &str,
+    remaining_reserved_quantity: &str,
     is_final: bool,
     fee: MonetaryAmount,
 ) -> TestReport {
@@ -621,7 +621,7 @@ fn fee_only_report(
         instrument,
         side,
         None,
-        qty(leaves_quantity),
+        qty(remaining_reserved_quantity),
         is_final,
         None,
     );
@@ -2108,7 +2108,7 @@ fn missing_and_duplicate_lock_blocks_identify_policy_group() {
 // ── Cancel with leftover - Buy limit ──────────────────────────────────────
 
 #[test]
-fn buy_limit_cancel_leftover_releases_held_by_leaves_times_price() {
+fn buy_limit_cancel_leftover_releases_held_by_remaining_reserved_quantity_times_price() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy(None, None);
@@ -2400,9 +2400,10 @@ fn sell_cancel_leftover_releases_underlying_held() {
     );
     assert!(report_blocks(&policy, &fill).is_empty());
 
-    // Cancel leaves=6 (lock replayed): Side::Sell → release=6 directly; held=0;
-    // available=6. The settlement incoming drains to zero too. A sell cancel
-    // missing its lock would block the account like a buy.
+    // Cancel with remaining reserved quantity 6 (lock replayed): Side::Sell
+    // releases 6 directly; held=0; available=6. The settlement incoming drains
+    // to zero too. A sell cancel missing its lock would block the account like
+    // a buy.
     let cancel = make_report(
         acc,
         aapl_usd,
@@ -2423,10 +2424,10 @@ fn sell_cancel_leftover_releases_underlying_held() {
     assert_eq!(incoming_of(&policy, acc, "USD"), ps("0"));
 }
 
-// ── is_final + leaves=0 ───────────────────────────────────────────────────
+// ── is_final + zero remaining reserved quantity ───────────────────────────
 
 #[test]
-fn final_report_with_zero_leaves_triggers_no_release() {
+fn final_report_with_zero_remaining_reserved_quantity_triggers_no_release() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy(None, None);
@@ -2444,7 +2445,7 @@ fn final_report_with_zero_leaves_triggers_no_release() {
     let _ = mutations.commit_all();
     // held=2000
 
-    // Full fill, leaves=0, is_final=true: consume(2000), no release triggered
+    // Full fill with no remaining reservation: consume 2000, no release.
     let final_fill = make_report(
         acc,
         aapl_usd,
@@ -4327,7 +4328,8 @@ fn cancel_release_missing_charge_slot_applies_release_delta() {
     let policy = build_policy(None, None);
     // No USD slot seeded intentionally.
 
-    // Final cancel: leaves=10, lock price=200, no trade.
+    // Final cancel: remaining reserved quantity = 10, lock price = 200, no
+    // trade.
     let report = make_report(
         acc,
         aapl_usd,
@@ -14460,16 +14462,18 @@ fn track_only_dry_run_still_rejects_arithmetic_overflow_without_panicking() {
 
 // ── Volume orders reconcile under price divergence (fill price ≠ lock) ─────
 //
-// Volume orders reconcile under the venue contract
-// Σ(fill qty) + leaves == v / |lock_price|; base-incoming and settlement-held
-// share the same quantity basis, so price divergence alone leaves no residual.
-// The SDK does not compensate a venue that violates this contract.
+// Volume orders reconcile when the caller maintains
+// Σ(fill qty) + remaining reserved quantity == v / |lock_price|;
+// base-incoming and settlement-held share the same quantity basis, so price
+// divergence alone leaves no residual. The SDK does not calculate or repair
+// the caller-supplied reservation remainder.
 //
 // The existing Volume tests use clean numbers where the fill price equals the
 // lock price, so they never exercise a price divergence. These tests deliver
-// fills at prices ≠ the lock while keeping Σ(fill qty) + leaves equal to
-// v / |lock_price|, proving the price gap nets into `available` and leaves
-// neither base-incoming nor settlement-held residual.
+// fills at prices ≠ the lock while keeping the sum of fill quantity and
+// remaining reserved quantity equal to v / |lock_price|, proving the price gap
+// nets into `available` and leaves neither base-incoming nor settlement-held
+// residual.
 
 #[test]
 fn buy_volume_price_divergent_full_fill_nets_incoming_and_held_to_zero() {
@@ -14517,7 +14521,8 @@ fn buy_volume_price_divergent_full_fill_nets_incoming_and_held_to_zero() {
     // Final fill 4 @ 110 (price above the lock): the settlement leg releases the
     // remaining 100*4=400 held (-> 0) and debits the deficit (100-110)*4=-40
     // from available; the base leg drains the last 4 incoming (-> 0).
-    // Σ(fill qty) 6+4 + leaves 0 == 10 == v / |lock|, so both legs converge.
+    // Fill qty 6+4 plus remaining reserved quantity 0 equals 10, so both legs
+    // converge.
     let fill_b = make_report(
         acc,
         aapl_usd,
@@ -14564,7 +14569,8 @@ fn buy_volume_price_divergent_partial_then_fill_nets_incoming_and_held_to_zero()
     let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
 
-    // Partial fill 6 @ 90 (leaves 4, non-final): drains base incoming by 6.
+    // Partial fill 6 @ 90 with remaining reserved quantity 4 drains base
+    // incoming by 6.
     let partial = make_report(
         acc,
         aapl_usd.clone(),
@@ -14583,8 +14589,9 @@ fn buy_volume_price_divergent_partial_then_fill_nets_incoming_and_held_to_zero()
     assert!(report_blocks(&policy, &partial).is_empty());
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("4"));
 
-    // Final fill 4 @ 110 (leaves 0): drains the remaining base incoming and the
-    // remaining settlement held. Σ(fill qty) 6+4 + leaves 0 == 10 == v / |lock|.
+    // Final fill 4 @ 110 with no remaining reservation drains the remaining
+    // base incoming and settlement held. Fill qty 6+4 plus remaining reserved
+    // quantity 0 equals 10.
     let fill = make_report(
         acc,
         aapl_usd,
@@ -14627,8 +14634,9 @@ fn buy_volume_price_divergent_partial_then_cancel_nets_incoming_and_held_to_zero
     let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
 
-    // Partial fill 6 @ 90 (leaves 4, non-final): drains base incoming by 6, and
-    // releases 100*6=600 settlement held while crediting (100-90)*6=60 back.
+    // Partial fill 6 @ 90 with remaining reserved quantity 4 drains base
+    // incoming by 6 and releases 100*6=600 settlement held while crediting
+    // (100-90)*6=60 back.
     let partial = make_report(
         acc,
         aapl_usd.clone(),
@@ -14647,7 +14655,7 @@ fn buy_volume_price_divergent_partial_then_cancel_nets_incoming_and_held_to_zero
     assert!(report_blocks(&policy, &partial).is_empty());
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("4"));
 
-    // Final report with no trade, leaves 4: the cancel releases the unfilled
+    // Final report with no trade and remaining reserved quantity 4 releases the
     // base incoming remainder (4 -> 0) and the settlement held remainder
     // (100*4=400 -> 0). Convergence: drained 6 + released 4 == reserved 10.
     let cancel = make_report(
@@ -14718,7 +14726,8 @@ fn sell_volume_price_divergent_full_fill_nets_held_and_incoming_to_zero() {
 
     // Final fill 4 @ 90 (price below the lock): the underlying leg consumes the
     // last 4 held (-> 0); the settlement leg credits 90*4=360 and drains the
-    // remaining incoming lock*4=400 (-> 0). Σ(fill qty) 6+4 + leaves 0 == 10.
+    // remaining incoming lock*4=400 (-> 0). Fill qty 6+4 plus remaining
+    // reserved quantity 0 equals 10.
     let fill_b = make_report(
         acc,
         aapl_usd,

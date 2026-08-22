@@ -204,7 +204,7 @@ func applySpotFundsLifecycleFillWithFee(
 	if value, ok := fee.Get(); ok {
 		fill.SetFee(value)
 	}
-	fill.SetLeavesQuantity(mustQuantity(t, "0"))
+	fill.SetRemainingReservedQuantity(mustQuantity(t, "0"))
 	fill.SetLock(lock.Bytes())
 	fill.SetIsFinal(true)
 
@@ -238,7 +238,7 @@ func directSpotFundsFillReport(
 	if err != nil {
 		t.Fatalf("NewLockFromEntries() error = %v", err)
 	}
-	fill.SetLeavesQuantity(mustQuantity(t, "0"))
+	fill.SetRemainingReservedQuantity(mustQuantity(t, "0"))
 	fill.SetLock(lock.Bytes())
 	fill.SetIsFinal(true)
 	return report

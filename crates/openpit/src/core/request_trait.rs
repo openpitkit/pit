@@ -98,9 +98,12 @@ has_request_field_trait!(HasPnl, pnl -> Pnl);
 has_request_field_trait!(HasFee, fee -> Fee);
 
 has_request_field_trait!(
-    /// Remaining order quantity after the fill.
-    HasLeavesQuantity,
-    leaves_quantity -> Quantity
+    /// Caller-calculated reservation remainder released by the engine on
+    /// finalization.
+    ///
+    /// This is not a venue-reported remaining order quantity.
+    HasRemainingReservedQuantity,
+    remaining_reserved_quantity -> Quantity
 );
 
 has_request_field_trait!(
