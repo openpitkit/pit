@@ -42,6 +42,9 @@ import {
   buildRateLimit,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
+  OrderSizeAssetBarrier,
+  OrderSizeLimit,
+  type OrderSizeLimitInit,
   SpotFundsPnlBoundsBarrier,
 } from "@openpit/engine/pretrade/policies";
 import { type AccountAdjustmentContext } from "@openpit/engine/accountadjustment";
@@ -145,6 +148,18 @@ ready.builtin(buildSpotFunds().withPolicyGroupId(3));
 
 // Barrier-driven builders become ready only after a barrier-stage call.
 const orderSizeReady = buildOrderSizeLimit().assetBarriers([]);
+const quantityOnlyLimit = new OrderSizeLimit("10", undefined);
+const notionalOnlyLimit = new OrderSizeLimit(undefined, "1000");
+const quantityOnlyInit: OrderSizeLimitInit = { maxQuantity: "10" };
+const notionalOnlyInit: OrderSizeLimitInit = { maxNotional: "1000" };
+const emptyLimitInit: OrderSizeLimitInit = {};
+buildOrderSizeLimit().assetBarriers([
+  new OrderSizeAssetBarrier(quantityOnlyLimit, "AAPL"),
+  new OrderSizeAssetBarrier(notionalOnlyLimit, "USD"),
+  new OrderSizeAssetBarrier(quantityOnlyInit, "MSFT"),
+  new OrderSizeAssetBarrier(notionalOnlyInit, "EUR"),
+]);
+void emptyLimitInit;
 const rateLimitReady = buildRateLimit().assetBarriers([]);
 const pnlReady = buildPnlBoundsKillswitch().brokerBarriers([]);
 const spotFundsBarrier = new SpotFundsPnlBoundsBarrier(

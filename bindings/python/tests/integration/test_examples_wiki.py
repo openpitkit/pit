@@ -837,6 +837,8 @@ def test_example_wiki_policies_order_size_limit() -> None:
     import openpit
     import openpit.pretrade.policies
 
+    # Quantity is keyed by the underlying asset, notional by the
+    # settlement asset; broker caps apply on top.
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -846,16 +848,23 @@ def test_example_wiki_policies_order_size_limit() -> None:
                 openpit.pretrade.policies.OrderSizeAssetBarrier(
                     limit=openpit.pretrade.policies.OrderSizeLimit(
                         max_quantity=openpit.param.Quantity(100),
+                        max_notional=None,
+                    ),
+                    asset="AAPL",
+                ),
+                openpit.pretrade.policies.OrderSizeAssetBarrier(
+                    limit=openpit.pretrade.policies.OrderSizeLimit(
+                        max_quantity=None,
                         max_notional=openpit.param.Volume(50000),
                     ),
-                    settlement_asset="USD",
+                    asset="USD",
                 ),
             )
             .broker_barrier(
                 openpit.pretrade.policies.OrderSizeBrokerBarrier(
                     limit=openpit.pretrade.policies.OrderSizeLimit(
-                        max_quantity=openpit.param.Quantity(100),
-                        max_notional=openpit.param.Volume(50000),
+                        max_quantity=openpit.param.Quantity(500),
+                        max_notional=openpit.param.Volume(100000),
                     ),
                 ),
             )

@@ -24,6 +24,11 @@
  * ready immediately; barrier-driven builders become tokens accepted by
  * `EngineBuilder.builtin` after a barrier configuration call.
  *
+ * Order-size quantity caps resolve by underlying asset and notional caps by
+ * settlement asset. Either cap may be absent and then constrains nothing; its
+ * chain skips a matching barrier without that metric. Zero is a present cap
+ * that rejects positive metric values and admits a value of exactly zero.
+ *
  * @packageDocumentation
  */
 
@@ -64,7 +69,7 @@ export {
   buildSpotFundsPnlBoundsKillswitch,
 } from "../../wasm/openpit_js.js";
 
-// Plain-object configuration inputs for the limit builders.
+// Plain-object configuration inputs, including one-sided order-size limits.
 export type {
   OrderValidationReadyBuilder,
   OrderSizeLimitReadyBuilder,

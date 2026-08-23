@@ -278,7 +278,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             quantity = openpit.param.Quantity("1")
             price = openpit.param.Price("100")
         elif case == "order_size_quantity":
-            limit_asset = "USD"
+            limit_asset = "AAPL"
             quantity = openpit.param.Quantity("11")
             price = openpit.param.Price("90")
         elif case == "order_size_notional":
@@ -291,27 +291,22 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             price = openpit.param.Price("100")
 
         policies = openpit.pretrade.policies
-        asset_limit = policies.OrderSizeLimit(
-            max_quantity=openpit.param.Quantity("10"),
-            max_notional=openpit.param.Volume("1000"),
-        )
+        if limit_asset == "AAPL":
+            asset_limit = policies.OrderSizeLimit(
+                max_quantity=openpit.param.Quantity("10")
+            )
+        else:
+            asset_limit = policies.OrderSizeLimit(
+                max_notional=openpit.param.Volume("1000")
+            )
         engine = (
             openpit.Engine.builder()
             .no_sync()
             .builtin(
-                policies.build_order_size_limit()
-                .broker_barrier(
-                    policies.OrderSizeBrokerBarrier(
-                        limit=policies.OrderSizeLimit(
-                            max_quantity=openpit.param.Quantity("1000000"),
-                            max_notional=openpit.param.Volume("1000000000"),
-                        )
-                    )
-                )
-                .asset_barriers(
+                policies.build_order_size_limit().asset_barriers(
                     policies.OrderSizeAssetBarrier(
                         limit=asset_limit,
-                        settlement_asset=limit_asset,
+                        asset=limit_asset,
                     )
                 )
             )

@@ -117,7 +117,10 @@ class Configurator {
     OpenPitPretradePoliciesOrderSizeBrokerBarrier brokerRaw{};
     const OpenPitPretradePoliciesOrderSizeBrokerBarrier* brokerPtr = nullptr;
     if (broker.Barrier()) {
-      brokerRaw.limit = ::openpit::detail::Native(broker.Barrier()->limit);
+      brokerRaw.limit.max_quantity = ::openpit::pretrade::policies::detail::
+          OrderSizeOptionalAccess::Native(broker.Barrier()->limit.maxQuantity);
+      brokerRaw.limit.max_notional = ::openpit::pretrade::policies::detail::
+          OrderSizeOptionalAccess::Native(broker.Barrier()->limit.maxNotional);
       brokerPtr = &brokerRaw;
     }
 
@@ -126,9 +129,11 @@ class Configurator {
       assetRaw.reserve(assets->size());
       for (const auto& barrier : *assets) {
         OpenPitPretradePoliciesOrderSizeAssetBarrier raw{};
-        raw.limit = ::openpit::detail::Native(barrier.limit);
-        raw.settlement_asset =
-            ::openpit::detail::Native(barrier.settlementAsset);
+        raw.limit.max_quantity = ::openpit::pretrade::policies::detail::
+            OrderSizeOptionalAccess::Native(barrier.limit.maxQuantity);
+        raw.limit.max_notional = ::openpit::pretrade::policies::detail::
+            OrderSizeOptionalAccess::Native(barrier.limit.maxNotional);
+        raw.asset = ::openpit::detail::Native(barrier.asset);
         assetRaw.push_back(raw);
       }
     }
@@ -139,10 +144,12 @@ class Configurator {
       accountAssetRaw.reserve(accountAssets->size());
       for (const auto& barrier : *accountAssets) {
         OpenPitPretradePoliciesOrderSizeAccountAssetBarrier raw{};
-        raw.limit = ::openpit::detail::Native(barrier.limit);
+        raw.limit.max_quantity = ::openpit::pretrade::policies::detail::
+            OrderSizeOptionalAccess::Native(barrier.limit.maxQuantity);
+        raw.limit.max_notional = ::openpit::pretrade::policies::detail::
+            OrderSizeOptionalAccess::Native(barrier.limit.maxNotional);
         raw.account_id = ::openpit::detail::Native(barrier.accountId);
-        raw.settlement_asset =
-            ::openpit::detail::Native(barrier.settlementAsset);
+        raw.asset = ::openpit::detail::Native(barrier.asset);
         accountAssetRaw.push_back(raw);
       }
     }

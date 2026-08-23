@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -30,6 +31,16 @@ static_assert(!std::is_invocable_v<decltype(openpit::detail::Native),
 static_assert(!std::is_invocable_v<
               decltype(openpit::detail::FromNative<openpit::param::Price>),
               OpenPitParamPrice>);
+static_assert(!std::is_default_constructible_v<
+              openpit::pretrade::policies::OrderSizeLimit>);
+static_assert(
+    std::is_same_v<
+        decltype(openpit::pretrade::policies::OrderSizeLimit::maxQuantity),
+        std::optional<openpit::param::Quantity>>);
+static_assert(
+    std::is_same_v<
+        decltype(openpit::pretrade::policies::OrderSizeLimit::maxNotional),
+        std::optional<openpit::param::Volume>>);
 
 TEST(Runtime, VersionIsNonEmpty) {
   const std::string version = openpit::GetVersion();

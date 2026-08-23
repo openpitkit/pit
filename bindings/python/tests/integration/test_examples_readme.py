@@ -127,8 +127,10 @@ def test_readme_quickstart() -> None:
 
     # 1. Build the engine (one time at the platform initialization).
     policies = openpit.pretrade.policies
-    max_qty = openpit.param.Quantity("500")
-    max_notional = openpit.param.Volume("100000")
+    broker_max_qty = openpit.param.Quantity("500")
+    broker_max_notional = openpit.param.Volume("100000")
+    asset_max_qty = openpit.param.Quantity("200")
+    asset_max_notional = openpit.param.Volume("50000")
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -152,23 +154,32 @@ def test_readme_quickstart() -> None:
             )
         )
         .builtin(
+            # Quantity is keyed by the underlying asset, notional by the
+            # settlement asset; broker caps apply on top.
             policies.build_order_size_limit()
             .broker_barrier(
                 policies.OrderSizeBrokerBarrier(
                     limit=policies.OrderSizeLimit(
-                        max_quantity=max_qty,
-                        max_notional=max_notional,
+                        max_quantity=broker_max_qty,
+                        max_notional=broker_max_notional,
                     )
                 )
             )
             .asset_barriers(
                 policies.OrderSizeAssetBarrier(
                     limit=policies.OrderSizeLimit(
-                        max_quantity=max_qty,
-                        max_notional=max_notional,
+                        max_quantity=asset_max_qty,
+                        max_notional=None,
                     ),
-                    settlement_asset="USD",
-                )
+                    asset="AAPL",
+                ),
+                policies.OrderSizeAssetBarrier(
+                    limit=policies.OrderSizeLimit(
+                        max_quantity=None,
+                        max_notional=asset_max_notional,
+                    ),
+                    asset="USD",
+                ),
             )
         )
         .build()

@@ -1717,18 +1717,25 @@ struct OpenPitParamError {
 };
 
 /**
- * Shared order-size limits for
+ * Shared optional order-size limits for
  * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ *
+ * Each cap is present when its wrapper's `is_set` field is `true`. When
+ * `is_set` is `false`, the wrapper's `value` field is ignored. An unset cap
+ * does not constrain that metric, and lookup continues down that metric's
+ * barrier chain. A cap rejects an order whose value on that metric is above
+ * it; a cap of zero rejects positive metric values and admits a value of
+ * exactly zero. At least one cap must be present in every limit.
  */
 struct OpenPitPretradePoliciesOrderSizeLimit {
     /**
-     * Maximum allowed quantity for one order.
+     * Optional maximum allowed quantity for one order.
      */
-    OpenPitParamQuantity max_quantity;
+    OpenPitParamQuantityOptional max_quantity;
     /**
-     * Maximum allowed notional for one order.
+     * Optional maximum allowed notional for one order.
      */
-    OpenPitParamVolume max_notional;
+    OpenPitParamVolumeOptional max_notional;
 };
 
 /**
@@ -2331,8 +2338,10 @@ struct OpenPitPretradeAccountBlockOutcome {
 };
 
 /**
- * Per-settlement-asset order-size barrier for
+ * Per-asset order-size barrier for
  * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ *
+ * An asset key may appear at most once within one asset-barrier array.
  */
 struct OpenPitPretradePoliciesOrderSizeAssetBarrier {
     /**
@@ -2340,14 +2349,18 @@ struct OpenPitPretradePoliciesOrderSizeAssetBarrier {
      */
     OpenPitPretradePoliciesOrderSizeLimit limit;
     /**
-     * Settlement asset this barrier applies to.
+     * Asset key: `max_quantity` matches the instrument's underlying asset, while
+     * `max_notional` matches its settlement asset.
      */
-    OpenPitStringView settlement_asset;
+    OpenPitStringView asset;
 };
 
 /**
- * Per-(account, settlement-asset) order-size barrier for
+ * Per-(account, asset) order-size barrier for
  * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ *
+ * An `(account_id, asset)` key may appear at most once within one
+ * account+asset-barrier array.
  */
 struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
     /**
@@ -2359,9 +2372,10 @@ struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
      */
     OpenPitParamAccountId account_id;
     /**
-     * Settlement asset this barrier applies to.
+     * Asset key: `max_quantity` matches the instrument's underlying asset, while
+     * `max_notional` matches its settlement asset.
      */
-    OpenPitStringView settlement_asset;
+    OpenPitStringView asset;
 };
 
 /**
@@ -6918,23 +6932,42 @@ bool openpit_mutations_push(
  * Adds the built-in order-size limit policy to the engine builder.
  *
  * Contract:
- * - `builder` must be a valid engine builder pointer.
- * - `policy_group_id` assigns the policy to a policy group (pass `0` for
- *   default).
+ * - A null or already-consumed `builder` is a handled error.
+ * - `policy_group_id` assigns the policy to a policy group (pass `0` for the
+ *   default group).
  * - At least one barrier axis must be configured: `broker` non-null,
  *   `asset_len > 0`, or `account_asset_len > 0`.
- * - When a length is greater than zero the corresponding pointer must point
- *   to that many readable entries.
- * - Each `settlement_asset` string view inside an array entry must be valid
+ * - A pointer may be null when its array length is zero.
+ * - Each non-null `asset` string view must contain UTF-8 and a valid asset
+ *   for the call to succeed.
+ * - Each optional cap with `is_set == true` must contain a valid value. When
+ *   `is_set == false`, its `value` field is ignored. Every limit must set at
+ *   least one cap.
+ *
+ * # Safety
+ *
+ * - A non-null `builder` must be properly aligned and point to a live,
+ *   initialized engine builder for the duration of the call.
+ * - A non-null `broker` must be properly aligned and point to one
+ *   initialized, readable barrier for the duration of the call.
+ * - When an array length is greater than zero, its pointer must be non-null,
+ *   properly aligned, and point to that many initialized, readable entries
  *   for the duration of the call.
- * - `max_quantity` and `max_notional` inside each limit must be valid.
+ * - Every optional wrapper's `is_set` field in each supplied barrier must
+ *   hold a valid `bool` value.
+ * - Each non-null `asset` string-view pointer must point to `len`
+ *   initialized, readable bytes for the duration of the call.
+ * - `out_error` may be null; otherwise it must be properly aligned and point
+ *   to writable storage for an `OpenPitSharedString` handle.
  *
  * Success:
  * - returns `true`; the builder retains the policy.
  *
  * Error:
  * - returns `false` when the builder is null or already consumed, when no
- *   barrier axis is configured, or when argument parsing fails;
+ *   barrier axis is configured, when any limit has no cap, when an asset or
+ *   `(account_id, asset)` key is duplicated within its axis, or when
+ *   argument parsing fails;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
  */
@@ -6957,8 +6990,8 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(
  * settings setters.
  *
  * Contract:
- * - `engine` must be a valid non-null engine pointer.
- * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+ * - A null `engine` is a handled error.
+ * - `name` selects the policy and is interpreted as UTF-8. A built-in policy
  *   added via `openpit_engine_builder_add_builtin_order_size_limit_policy`
  *   registers under its fixed name `"OrderSizeLimitPolicy"`, so pass that
  *   string here.
@@ -6968,11 +7001,37 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(
  *   `asset_len` entries at `asset`.
  * - When `has_account_asset` is `true`, the per-(account, asset) axis is
  *   replaced by the `account_asset_len` entries at `account_asset`.
- * - Each `settlement_asset` view and every `max_quantity`/`max_notional`
- *   must be valid for the duration of the call.
- * - A `has_*` flag set to `false` leaves that axis untouched. The policy's
- *   "at least one barrier" rule still applies to the resulting
- *   configuration.
+ * - A `has_*` flag set to `false` leaves that axis untouched and ignores the
+ *   corresponding pointer and length. The policy's "at least one barrier"
+ *   rule still applies to the resulting configuration.
+ * - Each non-null `asset` view must contain UTF-8 and a valid asset for the
+ *   call to succeed.
+ * - Each optional cap with `is_set == true` must contain a valid value. When
+ *   `is_set == false`, its `value` field is ignored. Every supplied limit
+ *   must set at least one cap.
+ *
+ * # Safety
+ *
+ * - A non-null `engine` must be properly aligned and point to a live,
+ *   initialized engine for the duration of the call.
+ * - Every `has_*` argument must hold a valid `bool` value.
+ * - When `name.ptr` is non-null, it must point to `name.len` initialized,
+ *   readable bytes for the duration of the call.
+ * - When `has_broker` is `true`, a non-null `broker` must be properly
+ *   aligned and point to one initialized, readable barrier for the duration
+ *   of the call.
+ * - When `has_asset` is `true` and `asset_len` is greater than zero, `asset`
+ *   must be non-null, properly aligned, and point to that many initialized,
+ *   readable entries for the duration of the call.
+ * - When `has_account_asset` is `true` and `account_asset_len` is greater
+ *   than zero, `account_asset` must be non-null, properly aligned, and point
+ *   to that many initialized, readable entries for the duration of the call.
+ * - Every optional wrapper's `is_set` field in each supplied barrier must
+ *   hold a valid `bool` value.
+ * - Each non-null `asset` string-view pointer must point to `len`
+ *   initialized, readable bytes for the duration of the call.
+ * - `out_error` may be null; otherwise it must be properly aligned and point
+ *   to writable storage for an `OpenPitConfigureError` pointer.
  *
  * Success:
  * - returns `true`; the new limits apply from the next order onward.
@@ -6981,6 +7040,8 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(
  * - returns `false`; if `out_error` is non-null, writes a caller-owned
  *   `OpenPitConfigureError` (release with
  *   `openpit_destroy_configure_error`).
+ * - A supplied limit with neither cap set, a duplicate asset key, or a
+ *   duplicate `(account_id, asset)` key is rejected.
  * - a null `engine` returns `false` and, when `out_error` is non-null,
  *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
  *   be released with `openpit_destroy_configure_error`.

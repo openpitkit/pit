@@ -1615,7 +1615,11 @@ impl PyConfigurator {
     /// ``broker=None`` and axis arguments passed as ``None`` are left
     /// unchanged; an empty list replaces that axis with an empty set (subject
     /// to the at-least-one-barrier rule). Set ``clear_broker=True`` to remove
-    /// the broker barrier.
+    /// the broker barrier. Quantity caps resolve by underlying asset and
+    /// notional caps by settlement asset. An absent cap constrains nothing and
+    /// a matching barrier without that metric is skipped during lookup; a cap
+    /// explicitly set to zero rejects positive metric values and admits a value
+    /// of exactly zero.
     #[pyo3(signature = (name, *, broker = None, clear_broker = false, asset_barriers = None, account_asset_barriers = None))]
     fn order_size_limit<'py>(
         &self,
@@ -4522,18 +4526,27 @@ impl PyReadyEngineBuilder {
 )]
 #[derive(Clone)]
 struct PyOrderSizeLimit {
-    max_quantity: String,
-    max_notional: String,
+    max_quantity: Option<String>,
+    max_notional: Option<String>,
 }
 
 #[pymethods]
 impl PyOrderSizeLimit {
     #[new]
-    #[pyo3(signature = (*, max_quantity, max_notional))]
-    fn new(max_quantity: &Bound<'_, PyAny>, max_notional: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (*, max_quantity = None, max_notional = None))]
+    fn new(
+        max_quantity: Option<&Bound<'_, PyAny>>,
+        max_notional: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
         Ok(Self {
-            max_quantity: parse_quantity_input(max_quantity)?.to_string(),
-            max_notional: parse_volume_input(max_notional)?.to_string(),
+            max_quantity: max_quantity
+                .map(parse_quantity_input)
+                .transpose()?
+                .map(|value| value.to_string()),
+            max_notional: max_notional
+                .map(parse_volume_input)
+                .transpose()?
+                .map(|value| value.to_string()),
         })
     }
 }
@@ -4642,9 +4655,21 @@ fn parse_order_size_limit_entity(obj: &Bound<'_, PyAny>) -> PyResult<OrderSizeLi
     let limit = obj
         .extract::<PyRef<'_, PyOrderSizeLimit>>()
         .map_err(|_| PyTypeError::new_err("limit must be OrderSizeLimit"))?;
+    parse_order_size_limit(&limit)
+}
+
+fn parse_order_size_limit(limit: &PyOrderSizeLimit) -> PyResult<OrderSizeLimit> {
     Ok(OrderSizeLimit {
-        max_quantity: parse_quantity(&limit.max_quantity)?,
-        max_notional: parse_volume(&limit.max_notional)?,
+        max_quantity: limit
+            .max_quantity
+            .as_deref()
+            .map(parse_quantity)
+            .transpose()?,
+        max_notional: limit
+            .max_notional
+            .as_deref()
+            .map(parse_volume)
+            .transpose()?,
     })
 }
 
@@ -4661,7 +4686,7 @@ fn parse_order_size_asset_barrier(obj: &Bound<'_, PyAny>) -> PyResult<OrderSizeA
     ensure_policy_entity(obj, "OrderSizeAssetBarrier")?;
     Ok(OrderSizeAssetBarrier {
         limit: parse_order_size_limit_entity(&obj.getattr("limit")?)?,
-        settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
+        asset: parse_asset_input(&obj.getattr("asset")?)?,
     })
 }
 
@@ -4672,7 +4697,7 @@ fn parse_order_size_account_asset_barrier(
     Ok(OrderSizeAccountAssetBarrier {
         limit: parse_order_size_limit_entity(&obj.getattr("limit")?)?,
         account_id: parse_account_id_input(&obj.getattr("account_id")?)?,
-        settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
+        asset: parse_asset_input(&obj.getattr("asset")?)?,
     })
 }
 
@@ -4771,37 +4796,28 @@ fn make_order_size_limit_policy(
     let broker_barrier = broker
         .map(|l| {
             Ok::<_, pyo3::PyErr>(openpit::pretrade::policies::OrderSizeBrokerBarrier {
-                limit: OrderSizeLimit {
-                    max_quantity: parse_quantity(&l.max_quantity)?,
-                    max_notional: parse_volume(&l.max_notional)?,
-                },
+                limit: parse_order_size_limit(&l)?,
             })
         })
         .transpose()?;
 
     let asset: Vec<OrderSizeAssetBarrier> = asset_barriers
         .into_iter()
-        .map(|(l, settlement)| {
+        .map(|(l, asset)| {
             Ok(OrderSizeAssetBarrier {
-                limit: OrderSizeLimit {
-                    max_quantity: parse_quantity(&l.max_quantity)?,
-                    max_notional: parse_volume(&l.max_notional)?,
-                },
-                settlement_asset: parse_asset(&settlement)?,
+                limit: parse_order_size_limit(&l)?,
+                asset: parse_asset(&asset)?,
             })
         })
         .collect::<PyResult<Vec<_>>>()?;
 
     let account_asset: Vec<OrderSizeAccountAssetBarrier> = account_asset_barriers
         .into_iter()
-        .map(|(l, account_id, settlement)| {
+        .map(|(l, account_id, asset)| {
             Ok(OrderSizeAccountAssetBarrier {
-                limit: OrderSizeLimit {
-                    max_quantity: parse_quantity(&l.max_quantity)?,
-                    max_notional: parse_volume(&l.max_notional)?,
-                },
+                limit: parse_order_size_limit(&l)?,
                 account_id: AccountId::from_u64(account_id),
-                settlement_asset: parse_asset(&settlement)?,
+                asset: parse_asset(&asset)?,
             })
         })
         .collect::<PyResult<Vec<_>>>()?;
@@ -9723,8 +9739,8 @@ class AdjustmentCheck:
             builder.add_configurable_rate_limit(rl_policy)?;
 
             let size_limit = PyOrderSizeLimit {
-                max_quantity: "1000".to_owned(),
-                max_notional: "1000000".to_owned(),
+                max_quantity: Some("1000".to_owned()),
+                max_notional: Some("1000000".to_owned()),
             };
             let size_limit_py = Py::new(py, size_limit)?;
             let sl_policy = make_order_size_limit_policy(

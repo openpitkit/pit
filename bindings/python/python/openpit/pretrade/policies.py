@@ -33,11 +33,20 @@ if typing.TYPE_CHECKING:
 DEFAULT_POLICY_GROUP_ID = 0
 
 OrderSizeLimit.__doc__ = """
-Order-size limits (quantity and notional cap).
+Optional quantity and notional caps for one order.
 
 Args:
-    max_quantity: Maximum allowed order quantity.
-    max_notional: Maximum allowed notional volume.
+    max_quantity: Maximum quantity, resolved by underlying asset. ``None``
+        does not constrain quantity.
+    max_notional: Maximum notional, resolved by settlement asset. ``None``
+        does not constrain notional.
+
+Each metric resolves its own account-and-asset, then asset chain. A matching
+barrier that does not carry that metric is skipped within that chain. The broker
+barrier applies each cap it carries to every order in addition to both asset
+chains. A cap rejects an order whose metric value is above it; a cap of zero
+rejects positive metric values and admits a value of exactly zero. At least one
+cap must be set; the core reports an error otherwise.
 
 Use as ``limit`` inside :class:`OrderSizeBrokerBarrier`,
 :class:`OrderSizeAssetBarrier`, or :class:`OrderSizeAccountAssetBarrier`.
@@ -256,10 +265,15 @@ def build_rate_limit() -> RateLimitBuilder:
 
 @dataclasses.dataclass(frozen=True)
 class OrderSizeBrokerBarrier:
-    """Order size limit applied across the entire broker.
+    """Broker-wide quantity and notional caps applied to every order.
 
     Args:
-        limit: Quantity and notional caps.
+        limit: Optional caps. An absent cap constrains nothing, while a cap set
+            to zero rejects positive metric values and admits a value of exactly
+            zero.
+
+    Each cap applies in addition to that metric's account-and-asset then asset
+    chain.
     """
 
     limit: OrderSizeLimit
@@ -267,38 +281,45 @@ class OrderSizeBrokerBarrier:
 
 @dataclasses.dataclass(frozen=True)
 class OrderSizeAssetBarrier:
-    """Order size limit applied per settlement asset.
+    """Quantity and notional caps keyed independently by asset.
 
     Args:
-        limit: Quantity and notional caps.
-        settlement_asset: Settlement asset symbol this barrier tracks.
+        limit: Optional caps. A missing metric is skipped during its lookup
+            chain; a zero cap rejects positive metric values and admits a value
+            of exactly zero.
+        asset: Underlying key for quantity and settlement key for notional.
     """
 
     limit: OrderSizeLimit
-    settlement_asset: param.Asset
+    asset: param.Asset
 
 
 @dataclasses.dataclass(frozen=True)
 class OrderSizeAccountAssetBarrier:
-    """Order size limit applied per (account, settlement asset) pair.
+    """Quantity and notional caps keyed independently by account and asset.
 
     Args:
-        limit: Quantity and notional caps.
+        limit: Optional caps. A missing metric is skipped during its lookup
+            chain; a zero cap rejects positive metric values and admits a value
+            of exactly zero.
         account_id: Account this barrier applies to.
-        settlement_asset: Settlement asset symbol this barrier tracks.
+        asset: Underlying key for quantity and settlement key for notional.
     """
 
     limit: OrderSizeLimit
     account_id: param.AccountId
-    settlement_asset: param.Asset
+    asset: param.Asset
 
 
 class OrderSizeLimitReadyBuilder:
     """Fully-configured order-size-limit policy builder.
 
-    Obtain via :func:`build_order_size_limit` followed by
-    :meth:`~OrderSizeLimitBuilder.broker_barrier`.  All axis methods
-    return ``self`` for chaining.  Pass to
+    Obtain via :func:`build_order_size_limit` followed by any axis method. All
+    axis methods return ``self`` for chaining. Quantity resolves by underlying
+    asset and notional by settlement asset. Within its account-and-asset then
+    asset chain, each metric skips a matching barrier that omits its cap. An
+    absent cap constrains nothing, while a zero cap rejects positive metric
+    values and admits a value of exactly zero. Pass to
     ``SyncedEngineBuilder.builtin()`` or ``ReadyEngineBuilder.builtin()``.
     """
 
@@ -316,21 +337,35 @@ class OrderSizeLimitReadyBuilder:
     def broker_barrier(
         self, barrier: OrderSizeBrokerBarrier
     ) -> OrderSizeLimitReadyBuilder:
-        """Set or replace the broker-wide order-size limit."""
+        """Set or replace the additive broker-wide caps.
+
+        Each cap applies to every order in addition to both asset chains. An
+        absent cap constrains nothing; a zero cap rejects positive metric
+        values and admits a value of exactly zero.
+        """
         self._broker = barrier
         return self
 
     def asset_barriers(
         self, *barriers: OrderSizeAssetBarrier
     ) -> OrderSizeLimitReadyBuilder:
-        """Append per-settlement-asset order-size barriers."""
+        """Append barriers keyed by underlying or settlement asset.
+
+        Quantity uses the underlying key, notional uses the settlement key,
+        and each chain skips a matching barrier that omits its metric.
+        """
         self._asset.extend(barriers)
         return self
 
     def account_asset_barriers(
         self, *barriers: OrderSizeAccountAssetBarrier
     ) -> OrderSizeLimitReadyBuilder:
-        """Append per-(account, settlement-asset) order-size barriers."""
+        """Append barriers keyed independently by account and asset.
+
+        Quantity uses ``(account, underlying)`` and notional uses ``(account,
+        settlement)``. Each chain skips a matching barrier that omits its
+        metric.
+        """
         self._account_asset.extend(barriers)
         return self
 
@@ -339,10 +374,9 @@ class OrderSizeLimitReadyBuilder:
         builder._add_builtin_order_size_limit(
             policy_group_id=self._policy_group_id,
             broker=self._broker.limit if self._broker is not None else None,
-            asset_barriers=[(b.limit, b.settlement_asset) for b in self._asset],
+            asset_barriers=[(b.limit, b.asset) for b in self._asset],
             account_asset_barriers=[
-                (b.limit, b.account_id.value, b.settlement_asset)
-                for b in self._account_asset
+                (b.limit, b.account_id.value, b.asset) for b in self._account_asset
             ],
         )
 
@@ -350,11 +384,12 @@ class OrderSizeLimitReadyBuilder:
 class OrderSizeLimitBuilder:
     """Entry point for the order-size-limit policy builder.
 
-    Call :func:`build_order_size_limit` to obtain an instance.  Call
-    :meth:`broker_barrier` to obtain an :class:`OrderSizeLimitReadyBuilder`
-    that can be passed to ``builtin()``.  Additional axes
-    (:meth:`asset_barriers`, :meth:`account_asset_barriers`) stage barriers
-    before the broker barrier is set.
+    Call :func:`build_order_size_limit` to obtain an instance, then call any
+    axis method to obtain an :class:`OrderSizeLimitReadyBuilder`. Quantity caps
+    resolve by underlying asset and notional caps by settlement asset. An
+    absent cap constrains nothing. Within the account-and-asset then asset
+    chain, matching barriers without that metric are skipped. A zero cap rejects
+    positive metric values and admits a value of exactly zero.
     """
 
     #: Registration name of the order-size-limit policy. Pass to
@@ -372,19 +407,33 @@ class OrderSizeLimitBuilder:
     def broker_barrier(
         self, barrier: OrderSizeBrokerBarrier
     ) -> OrderSizeLimitReadyBuilder:
-        """Set the broker-wide order-size limit and return a ready builder."""
+        """Set additive broker-wide caps and return a ready builder.
+
+        Each cap applies to every order in addition to both asset chains. An
+        absent cap constrains nothing; a zero cap rejects positive metric
+        values and admits a value of exactly zero.
+        """
         return self._ready.broker_barrier(barrier)
 
     def asset_barriers(
         self, *barriers: OrderSizeAssetBarrier
     ) -> OrderSizeLimitReadyBuilder:
-        """Add per-settlement-asset barriers and return a ready builder."""
+        """Add barriers keyed by underlying or settlement asset.
+
+        Quantity uses the underlying key, notional uses the settlement key,
+        and each chain skips a matching barrier that omits its metric.
+        """
         return self._ready.asset_barriers(*barriers)
 
     def account_asset_barriers(
         self, *barriers: OrderSizeAccountAssetBarrier
     ) -> OrderSizeLimitReadyBuilder:
-        """Add per-(account, settlement-asset) barriers and return a ready builder."""
+        """Add barriers keyed independently by account and asset.
+
+        Quantity uses ``(account, underlying)`` and notional uses ``(account,
+        settlement)``. Each chain skips a matching barrier that omits its
+        metric.
+        """
         return self._ready.account_asset_barriers(*barriers)
 
 

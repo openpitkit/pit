@@ -321,12 +321,16 @@ int main(void) {
     rate_limit.max_orders = 100;
     rate_limit.window_nanoseconds = 1000000000;
 
-    if (make_quantity(500, 0, &order_size_limit.limit.max_quantity) != 0) {
+    if (make_quantity(
+            500, 0, &order_size_limit.limit.max_quantity.value) != 0) {
         goto cleanup;
     }
-    if (make_volume(100000, 0, &order_size_limit.limit.max_notional) != 0) {
+    order_size_limit.limit.max_quantity.is_set = true;
+    if (make_volume(
+            100000, 0, &order_size_limit.limit.max_notional.value) != 0) {
         goto cleanup;
     }
+    order_size_limit.limit.max_notional.is_set = true;
 
     /* 2. Build the engine once during platform initialization. */
     builder = openpit_create_engine_builder(OpenPitSyncPolicy_Full, &error);

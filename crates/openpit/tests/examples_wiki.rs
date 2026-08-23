@@ -367,6 +367,7 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
         WithExecutionReportOperation, WithFinancialImpact,
     };
 
+    let aapl = Asset::new("AAPL")?;
     let usd = Asset::new("USD")?;
 
     // 1. Build the engine builder.
@@ -406,21 +407,32 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
         .pre_trade(OrderValidationPolicy::new())
         .pre_trade(pnl_policy)
         .pre_trade(rate_limit_policy)
+        // Quantity is keyed by the underlying asset, notional by the
+        // settlement asset; broker caps apply on top.
         .pre_trade(OrderSizeLimitPolicy::<NoLocking>::new(
             OrderSizeLimitSettings::new(
                 Some(OrderSizeBrokerBarrier {
                     limit: OrderSizeLimit {
-                        max_quantity: Quantity::from_str("500")?,
-                        max_notional: Volume::from_str("100000")?,
+                        max_quantity: Some(Quantity::from_str("500")?),
+                        max_notional: Some(Volume::from_str("100000")?),
                     },
                 }),
-                [OrderSizeAssetBarrier {
-                    limit: OrderSizeLimit {
-                        max_quantity: Quantity::from_str("500")?,
-                        max_notional: Volume::from_str("100000")?,
+                [
+                    OrderSizeAssetBarrier {
+                        limit: OrderSizeLimit {
+                            max_quantity: Some(Quantity::from_str("200")?),
+                            max_notional: None,
+                        },
+                        asset: aapl.clone(),
                     },
-                    settlement_asset: usd.clone(),
-                }],
+                    OrderSizeAssetBarrier {
+                        limit: OrderSizeLimit {
+                            max_quantity: None,
+                            max_notional: Some(Volume::from_str("50000")?),
+                        },
+                        asset: usd.clone(),
+                    },
+                ],
                 [],
             )?,
         ))
@@ -428,7 +440,7 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
 
     // 4. Check an order.
     let order = OrderOperation {
-        instrument: Instrument::new(Asset::new("AAPL")?, usd.clone()),
+        instrument: Instrument::new(aapl.clone(), usd.clone()),
         account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
         trade_amount: TradeAmount::Quantity(Quantity::from_f64(100.0)?),
@@ -488,7 +500,7 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
             },
         },
         operation: ExecutionReportOperation {
-            instrument: Instrument::new(Asset::new("AAPL")?, usd),
+            instrument: Instrument::new(aapl, usd),
             account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
         },
@@ -1158,21 +1170,32 @@ fn example_wiki_policies_order_size_limit() -> Result<(), Box<dyn std::error::Er
 
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
+        // Quantity is keyed by the underlying asset, notional by the
+        // settlement asset; broker caps apply on top.
         .pre_trade(OrderSizeLimitPolicy::<NoLocking>::new(
             OrderSizeLimitSettings::new(
                 Some(OrderSizeBrokerBarrier {
                     limit: OrderSizeLimit {
-                        max_quantity: Quantity::from_str("100")?,
-                        max_notional: Volume::from_str("50000")?,
+                        max_quantity: Some(Quantity::from_str("500")?),
+                        max_notional: Some(Volume::from_str("100000")?),
                     },
                 }),
-                [OrderSizeAssetBarrier {
-                    limit: OrderSizeLimit {
-                        max_quantity: Quantity::from_str("100")?,
-                        max_notional: Volume::from_str("50000")?,
+                [
+                    OrderSizeAssetBarrier {
+                        limit: OrderSizeLimit {
+                            max_quantity: Some(Quantity::from_str("100")?),
+                            max_notional: None,
+                        },
+                        asset: Asset::new("AAPL")?,
                     },
-                    settlement_asset: Asset::new("USD")?,
-                }],
+                    OrderSizeAssetBarrier {
+                        limit: OrderSizeLimit {
+                            max_quantity: None,
+                            max_notional: Some(Volume::from_str("50000")?),
+                        },
+                        asset: Asset::new("USD")?,
+                    },
+                ],
                 [],
             )?,
         ))

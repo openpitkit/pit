@@ -112,6 +112,7 @@ class ListAccess;
 
 namespace openpit::pretrade::policies::detail {
 
+class OrderSizeOptionalAccess;
 class PnlOptionalAccess;
 
 }  // namespace openpit::pretrade::policies::detail

@@ -650,7 +650,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount, Volume};
+    use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount};
     use crate::pretrade::policies::{
         OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitPolicyError,
         OrderSizeLimitSettings, RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
@@ -696,9 +696,10 @@ mod tests {
     fn order_size_broker(max_quantity: &str) -> OrderSizeBrokerBarrier {
         OrderSizeBrokerBarrier {
             limit: OrderSizeLimit {
-                max_quantity: Quantity::from_str(max_quantity)
-                    .expect("quantity literal must be valid"),
-                max_notional: Volume::from_str("1000000").expect("volume literal must be valid"),
+                max_quantity: Some(
+                    Quantity::from_str(max_quantity).expect("quantity literal must be valid"),
+                ),
+                max_notional: None,
             },
         }
     }

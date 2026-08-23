@@ -26,7 +26,7 @@ use std::rc::Rc;
 use std::str;
 use std::sync::Arc;
 
-use openpit::param::{Asset, Pnl};
+use openpit::param::{Asset, Pnl, Quantity, Volume};
 use openpit::pretrade::{
     PolicyPreTradeResult, PostTradeContext, PostTradeResult, PreTradeContext, PreTradePolicy,
     Rejects,
@@ -37,7 +37,10 @@ use openpit::{AccountAdjustmentContext, Mutation, Mutations, PolicyAccountAdjust
 use crate::OpenPitStringView;
 use crate::{AccountAdjustment, ExecutionReport, Order};
 
-use crate::param::{OpenPitParamAccountId, OpenPitParamPnlOptional};
+use crate::param::{
+    OpenPitParamAccountId, OpenPitParamPnlOptional, OpenPitParamQuantityOptional,
+    OpenPitParamVolumeOptional,
+};
 
 use crate::last_error::{write_error, OpenPitOutError};
 use crate::write_error_format;
@@ -325,31 +328,79 @@ pub(super) fn parse_configure_asset(
     })
 }
 
-pub(super) fn parse_optional_pnl_or_error(
-    bound: OpenPitParamPnlOptional,
-    label: &str,
-    index: usize,
-    field: &str,
-    out_error: OpenPitOutError,
-) -> Result<Option<Pnl>, ()> {
-    if !bound.is_set {
-        return Ok(None);
-    }
-    match bound.value.to_param() {
-        Ok(v) => Ok(Some(v)),
-        Err(e) => {
-            write_error_format!(
-                out_error,
-                "{}[{}] {} is invalid: {}",
-                label,
-                index,
-                field,
-                e
-            );
-            Err(())
+macro_rules! define_parse_optional_or_error {
+    ($function:ident, $wrapper:ty, $value:ty) => {
+        pub(super) fn $function(
+            bound: $wrapper,
+            label: &str,
+            index: usize,
+            field: &str,
+            out_error: OpenPitOutError,
+        ) -> Result<Option<$value>, ()> {
+            if !bound.is_set {
+                return Ok(None);
+            }
+            match bound.value.to_param() {
+                Ok(v) => Ok(Some(v)),
+                Err(e) => {
+                    write_error_format!(
+                        out_error,
+                        "{}[{}] {} is invalid: {}",
+                        label,
+                        index,
+                        field,
+                        e
+                    );
+                    Err(())
+                }
+            }
         }
-    }
+    };
 }
+
+macro_rules! define_parse_optional_without_index_or_error {
+    ($function:ident, $wrapper:ty, $value:ty) => {
+        pub(super) fn $function(
+            bound: $wrapper,
+            label: &str,
+            field: &str,
+            out_error: OpenPitOutError,
+        ) -> Result<Option<$value>, ()> {
+            if !bound.is_set {
+                return Ok(None);
+            }
+            match bound.value.to_param() {
+                Ok(v) => Ok(Some(v)),
+                Err(e) => {
+                    write_error_format!(out_error, "{} {} is invalid: {}", label, field, e);
+                    Err(())
+                }
+            }
+        }
+    };
+}
+
+define_parse_optional_or_error!(parse_optional_pnl_or_error, OpenPitParamPnlOptional, Pnl);
+define_parse_optional_or_error!(
+    parse_optional_quantity_or_error,
+    OpenPitParamQuantityOptional,
+    Quantity
+);
+define_parse_optional_or_error!(
+    parse_optional_volume_or_error,
+    OpenPitParamVolumeOptional,
+    Volume
+);
+define_parse_optional_without_index_or_error!(
+    parse_optional_quantity_without_index_or_error,
+    OpenPitParamQuantityOptional,
+    Quantity
+);
+define_parse_optional_without_index_or_error!(
+    parse_optional_volume_without_index_or_error,
+    OpenPitParamVolumeOptional,
+    Volume
+);
 
 pub(super) unsafe fn cstr_arg(ptr: OpenPitStringView) -> Option<String> {
     if ptr.ptr.is_null() {

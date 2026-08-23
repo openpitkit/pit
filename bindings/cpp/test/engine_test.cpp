@@ -63,6 +63,16 @@ namespace policies = openpit::pretrade::policies;
   return order;
 }
 
+[[nodiscard]] openpit::model::Order SizedOrder(std::string_view quantity,
+                                               std::string_view price,
+                                               std::uint64_t accountId = 1) {
+  openpit::model::Order order = TestOrder(accountId);
+  order.operation->tradeAmount =
+      openpit::model::TradeAmount::OfQuantity(Quantity::FromString(quantity));
+  order.operation->price = Price::FromString(price);
+  return order;
+}
+
 // A rate-limit engine that admits a single order on the broker axis: the second
 // pre-trade for any account is rejected with RateLimitExceeded.
 [[nodiscard]] Engine SingleOrderEngine() {
@@ -77,13 +87,32 @@ namespace policies = openpit::pretrade::policies;
 [[nodiscard]] Engine SingleQuantityEngine() {
   EngineBuilder builder(SyncPolicy::None);
   policies::OrderSizeLimitPolicy config;
-  config.BrokerBarrier(
-      policies::OrderSizeBrokerBarrier(policies::OrderSizeLimit(
-          Quantity::FromString("1"),
-          ::openpit::param::Volume::FromString("1000000"))));
+  config.BrokerBarrier(policies::OrderSizeBrokerBarrier(
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("1"))));
   config.AssetBarrier(policies::OrderSizeAssetBarrier(
-      policies::OrderSizeLimit(Quantity::FromString("3"),
-                               ::openpit::param::Volume::FromString("1000000")),
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("3")),
+      ::openpit::param::Asset("AAPL")));
+  config.AddTo(builder);
+  return builder.Build();
+}
+
+[[nodiscard]] Engine BrokerOrderSizeEngine(policies::OrderSizeLimit limit) {
+  EngineBuilder builder(SyncPolicy::None);
+  policies::OrderSizeLimitPolicy config;
+  config.BrokerBarrier(policies::OrderSizeBrokerBarrier(std::move(limit)));
+  config.AddTo(builder);
+  return builder.Build();
+}
+
+[[nodiscard]] Engine SettlementAssetOrderSizeEngine(
+    policies::OrderSizeLimit assetLimit,
+    policies::OrderSizeLimit accountAssetLimit) {
+  EngineBuilder builder(SyncPolicy::None);
+  policies::OrderSizeLimitPolicy config;
+  config.AssetBarrier(policies::OrderSizeAssetBarrier(
+      std::move(assetLimit), ::openpit::param::Asset("USD")));
+  config.AccountAssetBarrier(policies::OrderSizeAccountAssetBarrier(
+      std::move(accountAssetLimit), AccountId::FromUint64(2),
       ::openpit::param::Asset("USD")));
   config.AddTo(builder);
   return builder.Build();
@@ -1027,6 +1056,278 @@ TEST(EngineConfigure, OrderSizeBrokerUpdateCanClearOrRemainUnchanged) {
       policies::OrderSizeLimitPolicyName,
       policies::OrderSizeBrokerBarrierUpdate::Clear());
   EXPECT_TRUE(cleared.StartPreTrade(TwoQuantityOrder()).Passed());
+}
+
+TEST(EngineConfigure, OrderSizeBrokerUpdatePreservesAbsentAndZeroCaps) {
+  Engine engine = SingleQuantityEngine();
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Set(
+          policies::OrderSizeBrokerBarrier(policies::OrderSizeLimit::Notional(
+              ::openpit::param::Volume::FromString("1000")))));
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("1", "1000")).Passed());
+  const openpit::pretrade::StartResult aboveNotional =
+      engine.StartPreTrade(SizedOrder("1", "1001"));
+  EXPECT_FALSE(aboveNotional.Passed());
+  ASSERT_EQ(aboveNotional.rejects.size(), 1u);
+  EXPECT_EQ(aboveNotional.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Set(
+          policies::OrderSizeBrokerBarrier(
+              policies::OrderSizeLimit::Quantity(Quantity::FromString("0")))));
+  const openpit::pretrade::StartResult zeroQuantity =
+      engine.StartPreTrade(SizedOrder("1", "1"));
+  EXPECT_FALSE(zeroQuantity.Passed());
+  ASSERT_EQ(zeroQuantity.rejects.size(), 1u);
+  EXPECT_EQ(zeroQuantity.rejects.front().code,
+            RejectCode::OrderQtyExceedsLimit);
+}
+
+TEST(EngineConfigure,
+     OrderSizeSettlementAssetUpdatesPreserveAbsentAndZeroCaps) {
+  Engine engine = SettlementAssetOrderSizeEngine(
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("5000")),
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("6000")));
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
+      std::vector<policies::OrderSizeAssetBarrier>{
+          policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Notional(
+                  ::openpit::param::Volume::FromString("1000")),
+              ::openpit::param::Asset("USD"))},
+      std::vector<policies::OrderSizeAccountAssetBarrier>{
+          policies::OrderSizeAccountAssetBarrier(
+              policies::OrderSizeLimit::Notional(
+                  ::openpit::param::Volume::FromString("2000")),
+              AccountId::FromUint64(2), ::openpit::param::Asset("USD"))});
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("1000", "1")).Passed());
+  const openpit::pretrade::StartResult aboveAsset =
+      engine.StartPreTrade(SizedOrder("1001", "1"));
+  EXPECT_FALSE(aboveAsset.Passed());
+  ASSERT_EQ(aboveAsset.rejects.size(), 1u);
+  EXPECT_EQ(aboveAsset.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("2000", "1", 2)).Passed());
+  const openpit::pretrade::StartResult aboveAccountAsset =
+      engine.StartPreTrade(SizedOrder("2001", "1", 2));
+  EXPECT_FALSE(aboveAccountAsset.Passed());
+  ASSERT_EQ(aboveAccountAsset.rejects.size(), 1u);
+  EXPECT_EQ(aboveAccountAsset.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+
+  // The account+asset reject above carries account scope, and a start-stage
+  // reject with account scope latches a block on that account, so account 2 is
+  // no longer admissible on this engine. The zero-cap probes therefore need a
+  // fresh engine, retuned to zero the same way.
+  Engine zeroEngine = SettlementAssetOrderSizeEngine(
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("5000")),
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("6000")));
+  zeroEngine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
+      std::vector<policies::OrderSizeAssetBarrier>{
+          policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Notional(
+                  ::openpit::param::Volume::FromString("0")),
+              ::openpit::param::Asset("USD"))},
+      std::vector<policies::OrderSizeAccountAssetBarrier>{
+          policies::OrderSizeAccountAssetBarrier(
+              policies::OrderSizeLimit::Notional(
+                  ::openpit::param::Volume::FromString("0")),
+              AccountId::FromUint64(2), ::openpit::param::Asset("USD"))});
+  const openpit::pretrade::StartResult zeroAsset =
+      zeroEngine.StartPreTrade(SizedOrder("1", "1"));
+  EXPECT_FALSE(zeroAsset.Passed());
+  ASSERT_EQ(zeroAsset.rejects.size(), 1u);
+  EXPECT_EQ(zeroAsset.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+  const openpit::pretrade::StartResult zeroAccountAsset =
+      zeroEngine.StartPreTrade(SizedOrder("1", "1", 2));
+  EXPECT_FALSE(zeroAccountAsset.Passed());
+  ASSERT_EQ(zeroAccountAsset.rejects.size(), 1u);
+  EXPECT_EQ(zeroAccountAsset.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+}
+
+// The next four probes look like tautologies - every cap is above the order -
+// and they are not. Quantity resolves by the instrument's underlying asset
+// (AAPL) and notional by its settlement asset (USD), so a quantity-only USD
+// barrier and a notional-only AAPL barrier each leave absent exactly the cap
+// that its own key would make the engine consult. If a conversion site
+// marshalled an absent cap as is_set = true, the core would receive Some(0) on
+// that live chain and reject the order. Keep the asymmetry: giving either
+// barrier both caps, keying both on one asset, or swapping which barrier
+// carries which cap destroys the discrimination silently.
+TEST(EngineConfigure,
+     OrderSizeAssetUpdatesPreserveAbsenceOnTheChainEachKeyFeeds) {
+  Engine engine = BrokerOrderSizeEngine(policies::OrderSizeLimit::Both(
+      Quantity::FromString("100"),
+      ::openpit::param::Volume::FromString("100000")));
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
+      std::vector<policies::OrderSizeAssetBarrier>{
+          policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Quantity(Quantity::FromString("10")),
+              ::openpit::param::Asset("USD")),
+          policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Notional(
+                  ::openpit::param::Volume::FromString("1000")),
+              ::openpit::param::Asset("AAPL"))},
+      std::vector<policies::OrderSizeAccountAssetBarrier>{});
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("5", "100")).Passed());
+}
+
+TEST(EngineConfigure,
+     OrderSizeAccountAssetUpdatesPreserveAbsenceOnTheChainEachKeyFeeds) {
+  Engine engine = BrokerOrderSizeEngine(policies::OrderSizeLimit::Both(
+      Quantity::FromString("100"),
+      ::openpit::param::Volume::FromString("100000")));
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
+      std::vector<policies::OrderSizeAssetBarrier>{},
+      std::vector<policies::OrderSizeAccountAssetBarrier>{
+          policies::OrderSizeAccountAssetBarrier(
+              policies::OrderSizeLimit::Quantity(Quantity::FromString("10")),
+              AccountId::FromUint64(2), ::openpit::param::Asset("USD")),
+          policies::OrderSizeAccountAssetBarrier(
+              policies::OrderSizeLimit::Notional(
+                  ::openpit::param::Volume::FromString("1000")),
+              AccountId::FromUint64(2), ::openpit::param::Asset("AAPL"))});
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("5", "100", 2)).Passed());
+}
+
+TEST(OrderSizeLimit, QuantityOnlyBrokerEnforcesBoundaryAndPreservesAbsence) {
+  const Engine engine = BrokerOrderSizeEngine(
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("10")));
+
+  const openpit::pretrade::StartResult above =
+      engine.StartPreTrade(SizedOrder("11", "1"));
+  EXPECT_FALSE(above.Passed());
+  ASSERT_EQ(above.rejects.size(), 1u);
+  EXPECT_EQ(above.rejects.front().code, RejectCode::OrderQtyExceedsLimit);
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("10", "1")).Passed());
+}
+
+TEST(OrderSizeLimit, NotionalOnlyBrokerEnforcesBoundaryAndPreservesAbsence) {
+  const Engine engine =
+      BrokerOrderSizeEngine(policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("1000")));
+
+  const openpit::pretrade::StartResult above =
+      engine.StartPreTrade(SizedOrder("1", "1001"));
+  EXPECT_FALSE(above.Passed());
+  ASSERT_EQ(above.rejects.size(), 1u);
+  EXPECT_EQ(above.rejects.front().code, RejectCode::OrderNotionalExceedsLimit);
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("1", "1000")).Passed());
+}
+
+TEST(OrderSizeLimit,
+     SettlementAssetNotionalLimitsEnforceBoundariesAndPreserveAbsence) {
+  const Engine engine = SettlementAssetOrderSizeEngine(
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("1000")),
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("2000")));
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("1000", "1")).Passed());
+  const openpit::pretrade::StartResult aboveAsset =
+      engine.StartPreTrade(SizedOrder("1001", "1"));
+  EXPECT_FALSE(aboveAsset.Passed());
+  ASSERT_EQ(aboveAsset.rejects.size(), 1u);
+  EXPECT_EQ(aboveAsset.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("2000", "1", 2)).Passed());
+  const openpit::pretrade::StartResult aboveAccountAsset =
+      engine.StartPreTrade(SizedOrder("2001", "1", 2));
+  EXPECT_FALSE(aboveAccountAsset.Passed());
+  ASSERT_EQ(aboveAccountAsset.rejects.size(), 1u);
+  EXPECT_EQ(aboveAccountAsset.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+}
+
+// Same mechanism as the EngineConfigure probes above, on the registration route
+// instead of the retune one: the absent cap of each barrier sits on the chain
+// that barrier's key feeds, so marshalling absence as is_set = true would
+// supply Some(0) there and reject. Do not "simplify" the asymmetry away.
+TEST(OrderSizeLimit,
+     AssetBarrierRegistrationPreservesAbsenceOnTheChainEachKeyFeeds) {
+  EngineBuilder builder(SyncPolicy::None);
+  policies::OrderSizeLimitPolicy config;
+  config.AssetBarrier(policies::OrderSizeAssetBarrier(
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("10")),
+      ::openpit::param::Asset("USD")));
+  config.AssetBarrier(policies::OrderSizeAssetBarrier(
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("1000")),
+      ::openpit::param::Asset("AAPL")));
+  config.AddTo(builder);
+  const Engine engine = builder.Build();
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("5", "100")).Passed());
+}
+
+TEST(OrderSizeLimit,
+     AccountAssetBarrierRegistrationPreservesAbsenceOnTheChainEachKeyFeeds) {
+  EngineBuilder builder(SyncPolicy::None);
+  policies::OrderSizeLimitPolicy config;
+  config.AccountAssetBarrier(policies::OrderSizeAccountAssetBarrier(
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("10")),
+      AccountId::FromUint64(2), ::openpit::param::Asset("USD")));
+  config.AccountAssetBarrier(policies::OrderSizeAccountAssetBarrier(
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("1000")),
+      AccountId::FromUint64(2), ::openpit::param::Asset("AAPL")));
+  config.AddTo(builder);
+  const Engine engine = builder.Build();
+
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("5", "100", 2)).Passed());
+}
+
+TEST(OrderSizeLimit, ExplicitZeroSettlementAssetLimitsRemainPresent) {
+  const Engine engine = SettlementAssetOrderSizeEngine(
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("0")),
+      policies::OrderSizeLimit::Notional(
+          ::openpit::param::Volume::FromString("0")));
+
+  const openpit::pretrade::StartResult asset =
+      engine.StartPreTrade(SizedOrder("1", "1"));
+  EXPECT_FALSE(asset.Passed());
+  ASSERT_EQ(asset.rejects.size(), 1u);
+  EXPECT_EQ(asset.rejects.front().code, RejectCode::OrderNotionalExceedsLimit);
+  const openpit::pretrade::StartResult accountAsset =
+      engine.StartPreTrade(SizedOrder("1", "1", 2));
+  EXPECT_FALSE(accountAsset.Passed());
+  ASSERT_EQ(accountAsset.rejects.size(), 1u);
+  EXPECT_EQ(accountAsset.rejects.front().code,
+            RejectCode::OrderNotionalExceedsLimit);
+}
+
+TEST(OrderSizeLimit, ExplicitZeroQuantityRejectsEveryPositiveOrder) {
+  const Engine engine = BrokerOrderSizeEngine(
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("0")));
+
+  const openpit::pretrade::StartResult result =
+      engine.StartPreTrade(SizedOrder("1", "1"));
+  EXPECT_FALSE(result.Passed());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::OrderQtyExceedsLimit);
 }
 
 TEST(EngineConfigure, SpotFundsLimitModeUpdateBuildsThroughAccessor) {

@@ -1256,10 +1256,48 @@ TEST(BuiltinPolicy, OrderSizeLimitBrokerBarrierBuilds) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   policies::OrderSizeLimitPolicy config;
   config.BrokerBarrier(
-      policies::OrderSizeBrokerBarrier(policies::OrderSizeLimit(
+      policies::OrderSizeBrokerBarrier(policies::OrderSizeLimit::Both(
           Quantity::FromString("100"), Volume::FromString("1000000"))));
   config.AddTo(builder);
   EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
+}
+
+TEST(BuiltinPolicy, OrderSizeLimitWithoutCapsSurfacesCoreError) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  policies::OrderSizeLimit empty =
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("1"));
+  empty.maxQuantity.reset();
+  policies::OrderSizeLimitPolicy config;
+  config.BrokerBarrier(policies::OrderSizeBrokerBarrier(std::move(empty)));
+
+  try {
+    config.AddTo(builder);
+    FAIL() << "an order-size limit without caps should fail";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.Message(),
+                testing::HasSubstr(
+                    "at least one of max_quantity or max_notional must be "
+                    "configured"));
+  }
+}
+
+TEST(BuiltinPolicy, DuplicateOrderSizeAssetSurfacesCoreError) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  policies::OrderSizeLimitPolicy config;
+  config.AssetBarrier(policies::OrderSizeAssetBarrier(
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("10")),
+      openpit::param::Asset("AAPL")));
+  config.AssetBarrier(policies::OrderSizeAssetBarrier(
+      policies::OrderSizeLimit::Notional(Volume::FromString("1000")),
+      openpit::param::Asset("AAPL")));
+
+  try {
+    config.AddTo(builder);
+    FAIL() << "a duplicate order-size asset should fail";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.Message(),
+                testing::HasSubstr("duplicate asset barrier for asset AAPL"));
+  }
 }
 
 TEST(BuiltinPolicy, OrderSizeLimitWithoutBarrierThrows) {

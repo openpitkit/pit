@@ -28,7 +28,6 @@ use std::time::Duration;
 use openpit::marketdata::{InstrumentId, MarketDataBuilder, Quote, QuoteTtl};
 use openpit::param::{
     AccountId, AdjustmentAmount, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side, TradeAmount,
-    Volume,
 };
 use openpit::pretrade::policies::pnl_bounds_killswitch::PnlBoundsAccountAssetBarrierUpdate;
 use openpit::pretrade::policies::{
@@ -436,11 +435,12 @@ fn configure_dispatches_by_policy_name_in_multi_policy_engine() {
             None,
             [OrderSizeAssetBarrier {
                 limit: OrderSizeLimit {
-                    max_quantity: Quantity::from_str("100")
-                        .expect("quantity literal must be valid"),
-                    max_notional: Volume::from_str("100000").expect("volume literal must be valid"),
+                    max_quantity: Some(
+                        Quantity::from_str("100").expect("quantity literal must be valid"),
+                    ),
+                    max_notional: None,
                 },
-                settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
             }],
             [],
         )
@@ -459,12 +459,12 @@ fn configure_dispatches_by_policy_name_in_multi_policy_engine() {
             |settings| {
                 settings.set_asset_barriers([OrderSizeAssetBarrier {
                     limit: OrderSizeLimit {
-                        max_quantity: Quantity::from_str("10")
-                            .expect("quantity literal must be valid"),
-                        max_notional: Volume::from_str("100000")
-                            .expect("volume literal must be valid"),
+                        max_quantity: Some(
+                            Quantity::from_str("10").expect("quantity literal must be valid"),
+                        ),
+                        max_notional: None,
                     },
-                    settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                    asset: Asset::new("AAPL").expect("asset code must be valid"),
                 }])
             },
         )
@@ -833,24 +833,20 @@ fn order_with_price(account: u64, quantity: &str, price: &str) -> OrderOperation
     }
 }
 
-fn build_order_size_engine(
-    account_id: u64,
-    max_quantity: &str,
-    max_notional: &str,
-) -> FullSyncEngine<OrderOperation> {
+fn build_order_size_engine(account_id: u64, max_quantity: &str) -> FullSyncEngine<OrderOperation> {
     let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
     let settings = OrderSizeLimitSettings::new(
         None,
         [],
         [OrderSizeAccountAssetBarrier {
             limit: OrderSizeLimit {
-                max_quantity: Quantity::from_str(max_quantity)
-                    .expect("max_quantity literal must be valid"),
-                max_notional: Volume::from_str(max_notional)
-                    .expect("max_notional literal must be valid"),
+                max_quantity: Some(
+                    Quantity::from_str(max_quantity).expect("max_quantity literal must be valid"),
+                ),
+                max_notional: None,
             },
             account_id: AccountId::from_u64(account_id),
-            settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+            asset: Asset::new("AAPL").expect("asset code must be valid"),
         }],
     )
     .expect("settings must be valid");
@@ -866,7 +862,7 @@ fn build_order_size_engine(
 // The broker axis is absent so only the account+asset axis triggers.
 #[test]
 fn configure_order_size_limit_account_asset_barrier_tightened_rejects_previously_admitted_order() {
-    let engine = build_order_size_engine(1, "20", "100000");
+    let engine = build_order_size_engine(1, "20");
     let name = OrderSizeLimitPolicy::<FullLocking>::NAME;
 
     // qty=15 is within the generous limit of 20: passes.
@@ -880,13 +876,13 @@ fn configure_order_size_limit_account_asset_barrier_tightened_rejects_previously
         .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
             settings.set_account_asset_barriers([OrderSizeAccountAssetBarrier {
                 limit: OrderSizeLimit {
-                    max_quantity: Quantity::from_str("10")
-                        .expect("max_quantity literal must be valid"),
-                    max_notional: Volume::from_str("100000")
-                        .expect("max_notional literal must be valid"),
+                    max_quantity: Some(
+                        Quantity::from_str("10").expect("max_quantity literal must be valid"),
+                    ),
+                    max_notional: None,
                 },
                 account_id: AccountId::from_u64(1),
-                settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
             }])
         })
         .expect("tightening barrier must publish");
@@ -907,7 +903,7 @@ fn configure_order_size_limit_account_asset_barrier_tightened_rejects_previously
 
 #[test]
 fn configure_order_size_limit_broker_barrier_added_rejects_all_accounts() {
-    let engine = build_order_size_engine(1, "100", "100000");
+    let engine = build_order_size_engine(1, "100");
     let name = OrderSizeLimitPolicy::<FullLocking>::NAME;
 
     engine
@@ -919,10 +915,10 @@ fn configure_order_size_limit_broker_barrier_added_rejects_all_accounts() {
         .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
             settings.set_broker(Some(OrderSizeBrokerBarrier {
                 limit: OrderSizeLimit {
-                    max_quantity: Quantity::from_str("10")
-                        .expect("max_quantity literal must be valid"),
-                    max_notional: Volume::from_str("100000")
-                        .expect("max_notional literal must be valid"),
+                    max_quantity: Some(
+                        Quantity::from_str("10").expect("max_quantity literal must be valid"),
+                    ),
+                    max_notional: None,
                 },
             }))
         })
@@ -936,8 +932,8 @@ fn configure_order_size_limit_broker_barrier_added_rejects_all_accounts() {
 }
 
 #[test]
-fn configure_order_size_limit_asset_barrier_added_rejects_matching_settlement() {
-    let engine = build_order_size_engine(1, "100", "100000");
+fn configure_order_size_limit_asset_barrier_added_rejects_matching_underlying() {
+    let engine = build_order_size_engine(1, "100");
     let name = OrderSizeLimitPolicy::<FullLocking>::NAME;
 
     engine
@@ -949,12 +945,12 @@ fn configure_order_size_limit_asset_barrier_added_rejects_matching_settlement() 
         .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
             settings.set_asset_barriers([OrderSizeAssetBarrier {
                 limit: OrderSizeLimit {
-                    max_quantity: Quantity::from_str("10")
-                        .expect("max_quantity literal must be valid"),
-                    max_notional: Volume::from_str("100000")
-                        .expect("max_notional literal must be valid"),
+                    max_quantity: Some(
+                        Quantity::from_str("10").expect("max_quantity literal must be valid"),
+                    ),
+                    max_notional: None,
                 },
-                settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
             }])
         })
         .expect("asset barrier add must publish");
@@ -962,7 +958,7 @@ fn configure_order_size_limit_asset_barrier_added_rejects_matching_settlement() 
     let rejects = engine
         .execute_pre_trade(order_with_price(2, "15", "100"))
         .err()
-        .expect("USD asset limit must reject matching settlement");
+        .expect("AAPL asset limit must reject matching underlying");
     assert_eq!(rejects[0].reason, "order quantity exceeded");
 }
 

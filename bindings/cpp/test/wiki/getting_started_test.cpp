@@ -43,8 +43,10 @@ using openpit::param::Volume;
 // snippet does, so the shortcut / two-stage / post-trade snippets have a real
 // `engine` to run against.
 [[nodiscard]] openpit::Engine BuildWikiEngine() {
-  const Quantity maxQty = Quantity::FromString("500");
-  const Volume maxNotional = Volume::FromString("100000");
+  const Quantity brokerMaxQty = Quantity::FromString("500");
+  const Volume brokerMaxNotional = Volume::FromString("100000");
+  const Quantity assetMaxQty = Quantity::FromString("200");
+  const Volume assetMaxNotional = Volume::FromString("50000");
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
 
@@ -59,12 +61,18 @@ using openpit::param::Volume;
           policies::RateLimit(/*maxOrders=*/100,
                               /*windowNanoseconds=*/1'000'000'000))));
 
-  builder.Add(policies::OrderSizeLimitPolicy{}
-                  .BrokerBarrier(policies::OrderSizeBrokerBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional)))
-                  .AssetBarrier(policies::OrderSizeAssetBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional),
-                      openpit::param::Asset("USD"))));
+  // Quantity is keyed by the underlying asset, notional by the
+  // settlement asset; broker caps apply on top.
+  builder.Add(
+      policies::OrderSizeLimitPolicy{}
+          .BrokerBarrier(policies::OrderSizeBrokerBarrier(
+              policies::OrderSizeLimit::Both(brokerMaxQty, brokerMaxNotional)))
+          .AssetBarrier(policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Quantity(assetMaxQty),
+              openpit::param::Asset("AAPL")))
+          .AssetBarrier(policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Notional(assetMaxNotional),
+              openpit::param::Asset("USD"))));
 
   return builder.Build();
 }
@@ -101,8 +109,10 @@ using openpit::param::Volume;
 // Example: Build an Engine (the full end-to-end flow).
 
 TEST(GettingStartedWiki, BuildAnEngine) {
-  const Quantity maxQty = Quantity::FromString("500");
-  const Volume maxNotional = Volume::FromString("100000");
+  const Quantity brokerMaxQty = Quantity::FromString("500");
+  const Volume brokerMaxNotional = Volume::FromString("100000");
+  const Quantity assetMaxQty = Quantity::FromString("200");
+  const Volume assetMaxNotional = Volume::FromString("50000");
 
   // 1. Build the engine (one time at the platform initialization).
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
@@ -118,12 +128,18 @@ TEST(GettingStartedWiki, BuildAnEngine) {
           policies::RateLimit(/*maxOrders=*/100,
                               /*windowNanoseconds=*/1'000'000'000))));
 
-  builder.Add(policies::OrderSizeLimitPolicy{}
-                  .BrokerBarrier(policies::OrderSizeBrokerBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional)))
-                  .AssetBarrier(policies::OrderSizeAssetBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional),
-                      openpit::param::Asset("USD"))));
+  // Quantity is keyed by the underlying asset, notional by the
+  // settlement asset; broker caps apply on top.
+  builder.Add(
+      policies::OrderSizeLimitPolicy{}
+          .BrokerBarrier(policies::OrderSizeBrokerBarrier(
+              policies::OrderSizeLimit::Both(brokerMaxQty, brokerMaxNotional)))
+          .AssetBarrier(policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Quantity(assetMaxQty),
+              openpit::param::Asset("AAPL")))
+          .AssetBarrier(policies::OrderSizeAssetBarrier(
+              policies::OrderSizeLimit::Notional(assetMaxNotional),
+              openpit::param::Asset("USD"))));
 
   const openpit::Engine engine = builder.Build();
 

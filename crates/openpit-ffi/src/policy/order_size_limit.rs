@@ -24,7 +24,7 @@ use openpit::pretrade::policies::{
 };
 
 use crate::engine::{write_configure_error, OpenPitConfigureError};
-use crate::param::{OpenPitParamQuantity, OpenPitParamVolume};
+use crate::param::{OpenPitParamQuantityOptional, OpenPitParamVolumeOptional};
 
 use super::*;
 
@@ -35,27 +35,46 @@ fn parse_configure_limit(
     label: &str,
     index: usize,
 ) -> Result<OrderSizeLimit, OpenPitConfigureError> {
-    let max_quantity = limit.max_quantity.to_param().map_err(|e| {
-        OpenPitConfigureError::validation(format!("{label}[{index}] max_quantity is invalid: {e}"))
-    })?;
-    let max_notional = limit.max_notional.to_param().map_err(|e| {
-        OpenPitConfigureError::validation(format!("{label}[{index}] max_notional is invalid: {e}"))
-    })?;
+    let max_quantity = if limit.max_quantity.is_set {
+        Some(limit.max_quantity.value.to_param().map_err(|e| {
+            OpenPitConfigureError::validation(format!(
+                "{label}[{index}] max_quantity is invalid: {e}"
+            ))
+        })?)
+    } else {
+        None
+    };
+    let max_notional = if limit.max_notional.is_set {
+        Some(limit.max_notional.value.to_param().map_err(|e| {
+            OpenPitConfigureError::validation(format!(
+                "{label}[{index}] max_notional is invalid: {e}"
+            ))
+        })?)
+    } else {
+        None
+    };
     Ok(OrderSizeLimit {
         max_quantity,
         max_notional,
     })
 }
 
-/// Shared order-size limits for
+/// Shared optional order-size limits for
 /// `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+///
+/// Each cap is present when its wrapper's `is_set` field is `true`. When
+/// `is_set` is `false`, the wrapper's `value` field is ignored. An unset cap
+/// does not constrain that metric, and lookup continues down that metric's
+/// barrier chain. A cap rejects an order whose value on that metric is above it;
+/// a cap of zero rejects positive metric values and admits a value of exactly
+/// zero. At least one cap must be present in every limit.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesOrderSizeLimit {
-    /// Maximum allowed quantity for one order.
-    pub max_quantity: OpenPitParamQuantity,
-    /// Maximum allowed notional for one order.
-    pub max_notional: OpenPitParamVolume,
+    /// Optional maximum allowed quantity for one order.
+    pub max_quantity: OpenPitParamQuantityOptional,
+    /// Optional maximum allowed notional for one order.
+    pub max_notional: OpenPitParamVolumeOptional,
 }
 
 /// Broker-wide order-size barrier for
@@ -67,19 +86,25 @@ pub struct OpenPitPretradePoliciesOrderSizeBrokerBarrier {
     pub limit: OpenPitPretradePoliciesOrderSizeLimit,
 }
 
-/// Per-settlement-asset order-size barrier for
+/// Per-asset order-size barrier for
 /// `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+///
+/// An asset key may appear at most once within one asset-barrier array.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesOrderSizeAssetBarrier {
     /// Size limits for this asset barrier.
     pub limit: OpenPitPretradePoliciesOrderSizeLimit,
-    /// Settlement asset this barrier applies to.
-    pub settlement_asset: OpenPitStringView,
+    /// Asset key: `max_quantity` matches the instrument's underlying asset,
+    /// while `max_notional` matches its settlement asset.
+    pub asset: OpenPitStringView,
 }
 
-/// Per-(account, settlement-asset) order-size barrier for
+/// Per-(account, asset) order-size barrier for
 /// `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+///
+/// An `(account_id, asset)` key may appear at most once within one
+/// account+asset-barrier array.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
@@ -87,30 +112,51 @@ pub struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
     pub limit: OpenPitPretradePoliciesOrderSizeLimit,
     /// Account this barrier applies to.
     pub account_id: OpenPitParamAccountId,
-    /// Settlement asset this barrier applies to.
-    pub settlement_asset: OpenPitStringView,
+    /// Asset key: `max_quantity` matches the instrument's underlying asset,
+    /// while `max_notional` matches its settlement asset.
+    pub asset: OpenPitStringView,
 }
 
 #[no_mangle]
 /// Adds the built-in order-size limit policy to the engine builder.
 ///
 /// Contract:
-/// - `builder` must be a valid engine builder pointer.
-/// - `policy_group_id` assigns the policy to a policy group (pass `0` for default).
+/// - A null or already-consumed `builder` is a handled error.
+/// - `policy_group_id` assigns the policy to a policy group (pass `0` for the
+///   default group).
 /// - At least one barrier axis must be configured: `broker` non-null,
 ///   `asset_len > 0`, or `account_asset_len > 0`.
-/// - When a length is greater than zero the corresponding pointer must point
-///   to that many readable entries.
-/// - Each `settlement_asset` string view inside an array entry must be valid
-///   for the duration of the call.
-/// - `max_quantity` and `max_notional` inside each limit must be valid.
+/// - A pointer may be null when its array length is zero.
+/// - Each non-null `asset` string view must contain UTF-8 and a valid asset for
+///   the call to succeed.
+/// - Each optional cap with `is_set == true` must contain a valid value. When
+///   `is_set == false`, its `value` field is ignored. Every limit must set at
+///   least one cap.
+///
+/// # Safety
+///
+/// - A non-null `builder` must be properly aligned and point to a live,
+///   initialized engine builder for the duration of the call.
+/// - A non-null `broker` must be properly aligned and point to one initialized,
+///   readable barrier for the duration of the call.
+/// - When an array length is greater than zero, its pointer must be non-null,
+///   properly aligned, and point to that many initialized, readable entries for
+///   the duration of the call.
+/// - Every optional wrapper's `is_set` field in each supplied barrier must hold
+///   a valid `bool` value.
+/// - Each non-null `asset` string-view pointer must point to `len` initialized,
+///   readable bytes for the duration of the call.
+/// - `out_error` may be null; otherwise it must be properly aligned and point
+///   to writable storage for an `OpenPitSharedString` handle.
 ///
 /// Success:
 /// - returns `true`; the builder retains the policy.
 ///
 /// Error:
 /// - returns `false` when the builder is null or already consumed, when no
-///   barrier axis is configured, or when argument parsing fails;
+///   barrier axis is configured, when any limit has no cap, when an asset or
+///   `(account_id, asset)` key is duplicated within its axis, or when argument
+///   parsing fails;
 /// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
 ///   error handle that MUST be released with `openpit_destroy_shared_string`.
 pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_policy(
@@ -147,19 +193,23 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 
     let broker_opt = if !broker.is_null() {
         let b = unsafe { &*broker };
-        let max_quantity = match b.limit.max_quantity.to_param() {
+        let max_quantity = match parse_optional_quantity_without_index_or_error(
+            b.limit.max_quantity,
+            "broker",
+            "max_quantity",
+            out_error,
+        ) {
             Ok(v) => v,
-            Err(e) => {
-                write_error_format!(out_error, "broker max_quantity is invalid: {}", e);
-                return false;
-            }
+            Err(()) => return false,
         };
-        let max_notional = match b.limit.max_notional.to_param() {
+        let max_notional = match parse_optional_volume_without_index_or_error(
+            b.limit.max_notional,
+            "broker",
+            "max_notional",
+            out_error,
+        ) {
             Ok(v) => v,
-            Err(e) => {
-                write_error_format!(out_error, "broker max_notional is invalid: {}", e);
-                return false;
-            }
+            Err(()) => return false,
         };
         Some(OrderSizeBrokerBarrier {
             limit: OrderSizeLimit {
@@ -173,72 +223,65 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 
     let mut asset_barriers = Vec::with_capacity(asset_slice.len());
     for (index, entry) in asset_slice.iter().enumerate() {
-        let settlement = match parse_asset_or_error(
-            entry.settlement_asset,
-            "asset",
-            index,
-            "settlement_asset",
-            out_error,
-        ) {
+        let asset = match parse_asset_or_error(entry.asset, "asset", index, "asset", out_error) {
             Some(v) => v,
             None => return false,
         };
-        let max_quantity = match entry.limit.max_quantity.to_param() {
+        let max_quantity = match parse_optional_quantity_or_error(
+            entry.limit.max_quantity,
+            "asset",
+            index,
+            "max_quantity",
+            out_error,
+        ) {
             Ok(v) => v,
-            Err(e) => {
-                write_error_format!(out_error, "asset[{index}] max_quantity is invalid: {}", e);
-                return false;
-            }
+            Err(()) => return false,
         };
-        let max_notional = match entry.limit.max_notional.to_param() {
+        let max_notional = match parse_optional_volume_or_error(
+            entry.limit.max_notional,
+            "asset",
+            index,
+            "max_notional",
+            out_error,
+        ) {
             Ok(v) => v,
-            Err(e) => {
-                write_error_format!(out_error, "asset[{index}] max_notional is invalid: {}", e);
-                return false;
-            }
+            Err(()) => return false,
         };
         asset_barriers.push(OrderSizeAssetBarrier {
             limit: OrderSizeLimit {
                 max_quantity,
                 max_notional,
             },
-            settlement_asset: settlement,
+            asset,
         });
     }
 
     let mut account_asset_barriers = Vec::with_capacity(account_asset_slice.len());
     for (index, entry) in account_asset_slice.iter().enumerate() {
-        let settlement = match parse_asset_or_error(
-            entry.settlement_asset,
+        let asset =
+            match parse_asset_or_error(entry.asset, "account_asset", index, "asset", out_error) {
+                Some(v) => v,
+                None => return false,
+            };
+        let max_quantity = match parse_optional_quantity_or_error(
+            entry.limit.max_quantity,
             "account_asset",
             index,
-            "settlement_asset",
+            "max_quantity",
             out_error,
         ) {
-            Some(v) => v,
-            None => return false,
-        };
-        let max_quantity = match entry.limit.max_quantity.to_param() {
             Ok(v) => v,
-            Err(e) => {
-                write_error_format!(
-                    out_error,
-                    "account_asset[{index}] max_quantity is invalid: {}",
-                    e
-                );
-                return false;
-            }
+            Err(()) => return false,
         };
-        let max_notional = match entry.limit.max_notional.to_param() {
+        let max_notional = match parse_optional_volume_or_error(
+            entry.limit.max_notional,
+            "account_asset",
+            index,
+            "max_notional",
+            out_error,
+        ) {
             Ok(v) => v,
-            Err(e) => {
-                write_error_format!(
-                    out_error,
-                    "account_asset[{index}] max_notional is invalid: {}",
-                    e
-                );
-                return false;
-            }
+            Err(()) => return false,
         };
         account_asset_barriers.push(OrderSizeAccountAssetBarrier {
             limit: OrderSizeLimit {
@@ -246,7 +289,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
                 max_notional,
             },
             account_id: AccountId::from_u64(entry.account_id),
-            settlement_asset: settlement,
+            asset,
         });
     }
 
@@ -279,9 +322,9 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 /// replace-shaped settings setters.
 ///
 /// Contract:
-/// - `engine` must be a valid non-null engine pointer.
-/// - `name` selects the policy; it is interpreted as UTF-8. A built-in
-///   policy added via `openpit_engine_builder_add_builtin_order_size_limit_policy`
+/// - A null `engine` is a handled error.
+/// - `name` selects the policy and is interpreted as UTF-8. A built-in policy
+///   added via `openpit_engine_builder_add_builtin_order_size_limit_policy`
 ///   registers under its fixed name `"OrderSizeLimitPolicy"`, so pass that
 ///   string here.
 /// - When `has_broker` is `true`, the broker barrier is set to `*broker` when
@@ -290,10 +333,37 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 ///   `asset_len` entries at `asset`.
 /// - When `has_account_asset` is `true`, the per-(account, asset) axis is
 ///   replaced by the `account_asset_len` entries at `account_asset`.
-/// - Each `settlement_asset` view and every `max_quantity`/`max_notional` must
-///   be valid for the duration of the call.
-/// - A `has_*` flag set to `false` leaves that axis untouched. The policy's
-///   "at least one barrier" rule still applies to the resulting configuration.
+/// - A `has_*` flag set to `false` leaves that axis untouched and ignores the
+///   corresponding pointer and length. The policy's "at least one barrier"
+///   rule still applies to the resulting configuration.
+/// - Each non-null `asset` view must contain UTF-8 and a valid asset for the
+///   call to succeed.
+/// - Each optional cap with `is_set == true` must contain a valid value. When
+///   `is_set == false`, its `value` field is ignored. Every supplied limit must
+///   set at least one cap.
+///
+/// # Safety
+///
+/// - A non-null `engine` must be properly aligned and point to a live,
+///   initialized engine for the duration of the call.
+/// - Every `has_*` argument must hold a valid `bool` value.
+/// - When `name.ptr` is non-null, it must point to `name.len` initialized,
+///   readable bytes for the duration of the call.
+/// - When `has_broker` is `true`, a non-null `broker` must be properly aligned
+///   and point to one initialized, readable barrier for the duration of the
+///   call.
+/// - When `has_asset` is `true` and `asset_len` is greater than zero, `asset`
+///   must be non-null, properly aligned, and point to that many initialized,
+///   readable entries for the duration of the call.
+/// - When `has_account_asset` is `true` and `account_asset_len` is greater than
+///   zero, `account_asset` must be non-null, properly aligned, and point to that
+///   many initialized, readable entries for the duration of the call.
+/// - Every optional wrapper's `is_set` field in each supplied barrier must hold
+///   a valid `bool` value.
+/// - Each non-null `asset` string-view pointer must point to `len` initialized,
+///   readable bytes for the duration of the call.
+/// - `out_error` may be null; otherwise it must be properly aligned and point
+///   to writable storage for an `OpenPitConfigureError` pointer.
 ///
 /// Success:
 /// - returns `true`; the new limits apply from the next order onward.
@@ -301,9 +371,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 /// Error:
 /// - returns `false`; if `out_error` is non-null, writes a caller-owned
 ///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
+/// - A supplied limit with neither cap set, a duplicate asset key, or a
+///   duplicate `(account_id, asset)` key is rejected.
 /// - a null `engine` returns `false` and, when `out_error` is non-null, writes
-///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
-///   with `openpit_destroy_configure_error`.
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be
+///   released with `openpit_destroy_configure_error`.
 pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,
@@ -370,12 +442,7 @@ pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
-            let settlement = match parse_configure_asset(
-                entry.settlement_asset,
-                "asset",
-                index,
-                "settlement_asset",
-            ) {
+            let asset = match parse_configure_asset(entry.asset, "asset", index, "asset") {
                 Ok(v) => v,
                 Err(e) => {
                     write_configure_error(out_error, e);
@@ -389,10 +456,7 @@ pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
                     return false;
                 }
             };
-            out.push(OrderSizeAssetBarrier {
-                limit,
-                settlement_asset: settlement,
-            });
+            out.push(OrderSizeAssetBarrier { limit, asset });
         }
         out
     } else {
@@ -421,12 +485,7 @@ pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
-            let settlement = match parse_configure_asset(
-                entry.settlement_asset,
-                "account_asset",
-                index,
-                "settlement_asset",
-            ) {
+            let asset = match parse_configure_asset(entry.asset, "account_asset", index, "asset") {
                 Ok(v) => v,
                 Err(e) => {
                     write_configure_error(out_error, e);
@@ -443,7 +502,7 @@ pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
             out.push(OrderSizeAccountAssetBarrier {
                 limit,
                 account_id: AccountId::from_u64(entry.account_id),
-                settlement_asset: settlement,
+                asset,
             });
         }
         out
@@ -480,7 +539,10 @@ mod tests {
     use super::*;
 
     use crate::order::OpenPitOrder;
-    use crate::param::{OpenPitParamDecimal, OpenPitParamQuantity, OpenPitParamVolume};
+    use crate::param::{
+        OpenPitParamDecimal, OpenPitParamQuantity, OpenPitParamQuantityOptional,
+        OpenPitParamVolume, OpenPitParamVolumeOptional,
+    };
 
     fn cstr_to_string(handle: *mut crate::string::OpenPitSharedString) -> String {
         if handle.is_null() {
@@ -511,6 +573,20 @@ mod tests {
             mantissa_hi: (mantissa >> 64) as i64,
             scale,
         })
+    }
+
+    fn quantity_cap(mantissa: i128, scale: i32) -> OpenPitParamQuantityOptional {
+        OpenPitParamQuantityOptional {
+            value: quantity_param(mantissa, scale),
+            is_set: true,
+        }
+    }
+
+    fn volume_cap(mantissa: i128, scale: i32) -> OpenPitParamVolumeOptional {
+        OpenPitParamVolumeOptional {
+            value: volume_param(mantissa, scale),
+            is_set: true,
+        }
     }
 
     fn build_engine_with_builtin_start_policy(
@@ -570,8 +646,26 @@ mod tests {
         }
     }
 
-    fn run_start_pre_trade_passes(engine: *mut crate::engine::OpenPitEngine) {
-        let order = valid_pit_order();
+    fn pit_order_with_quantity(mantissa: i128) -> OpenPitOrder {
+        let mut order = valid_pit_order();
+        order.operation.value.trade_amount.value = quantity_param(mantissa, 0).0;
+        order
+    }
+
+    fn pit_order_with_price(mantissa: i128) -> OpenPitOrder {
+        let mut order = valid_pit_order();
+        order.operation.value.price.value.0 = OpenPitParamDecimal {
+            mantissa_lo: mantissa as i64,
+            mantissa_hi: (mantissa >> 64) as i64,
+            scale: 0,
+        };
+        order
+    }
+
+    fn run_start_pre_trade(
+        engine: *mut crate::engine::OpenPitEngine,
+        order: OpenPitOrder,
+    ) -> crate::engine::OpenPitPretradeStatus {
         let mut request = std::ptr::null_mut();
         let mut out_rejects = std::ptr::null_mut();
         let status = crate::engine::openpit_engine_start_pre_trade(
@@ -581,25 +675,148 @@ mod tests {
             &mut out_rejects,
             std::ptr::null_mut(),
         );
-        assert_eq!(
-            status,
-            crate::engine::OpenPitPretradeStatus::Passed,
-            "start_pre_trade should pass"
-        );
         crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+        crate::reject::openpit_destroy_pretrade_reject_list(out_rejects);
+        status
     }
 
     #[test]
-    fn add_builtin_order_size_limit_policy_happy_path() {
-        let usd = OpenPitStringView::from_utf8("USD");
+    fn add_builtin_order_size_limit_policy_accepts_quantity_only() {
+        let broker = OpenPitPretradePoliciesOrderSizeBrokerBarrier {
+            limit: OpenPitPretradePoliciesOrderSizeLimit {
+                max_quantity: quantity_cap(100, 0),
+                max_notional: OpenPitParamVolumeOptional::default(),
+            },
+        };
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                builder,
+                0,
+                &broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        assert_eq!(
+            run_start_pre_trade(engine, pit_order_with_quantity(101)),
+            crate::engine::OpenPitPretradeStatus::Rejected
+        );
+        assert_eq!(
+            run_start_pre_trade(engine, pit_order_with_quantity(100)),
+            crate::engine::OpenPitPretradeStatus::Passed
+        );
+        assert_eq!(
+            run_start_pre_trade(engine, valid_pit_order()),
+            crate::engine::OpenPitPretradeStatus::Passed,
+            "an unset max_notional must not act like an explicit zero cap"
+        );
+        crate::engine::openpit_destroy_engine(engine);
+
+        let zero_broker = OpenPitPretradePoliciesOrderSizeBrokerBarrier {
+            limit: OpenPitPretradePoliciesOrderSizeLimit {
+                max_quantity: quantity_cap(0, 0),
+                max_notional: OpenPitParamVolumeOptional::default(),
+            },
+        };
+        let zero_engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                builder,
+                0,
+                &zero_broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        assert_eq!(
+            run_start_pre_trade(zero_engine, valid_pit_order()),
+            crate::engine::OpenPitPretradeStatus::Rejected,
+            "an explicit zero max_quantity must reject a positive quantity"
+        );
+        crate::engine::openpit_destroy_engine(zero_engine);
+    }
+
+    #[test]
+    fn add_builtin_order_size_limit_policy_accepts_notional_only() {
+        let broker = OpenPitPretradePoliciesOrderSizeBrokerBarrier {
+            limit: OpenPitPretradePoliciesOrderSizeLimit {
+                max_quantity: OpenPitParamQuantityOptional::default(),
+                max_notional: volume_cap(100, 0),
+            },
+        };
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                builder,
+                0,
+                &broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        assert_eq!(
+            run_start_pre_trade(engine, pit_order_with_price(101)),
+            crate::engine::OpenPitPretradeStatus::Rejected
+        );
+        assert_eq!(
+            run_start_pre_trade(engine, pit_order_with_price(100)),
+            crate::engine::OpenPitPretradeStatus::Passed
+        );
+        assert_eq!(
+            run_start_pre_trade(engine, pit_order_with_price(1)),
+            crate::engine::OpenPitPretradeStatus::Passed,
+            "an unset max_quantity must not act like an explicit zero cap"
+        );
+        crate::engine::openpit_destroy_engine(engine);
+
+        let zero_broker = OpenPitPretradePoliciesOrderSizeBrokerBarrier {
+            limit: OpenPitPretradePoliciesOrderSizeLimit {
+                max_quantity: OpenPitParamQuantityOptional::default(),
+                max_notional: volume_cap(0, 0),
+            },
+        };
+        let zero_engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                builder,
+                0,
+                &zero_broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        assert_eq!(
+            run_start_pre_trade(zero_engine, valid_pit_order()),
+            crate::engine::OpenPitPretradeStatus::Rejected,
+            "an explicit zero max_notional must reject a positive notional"
+        );
+        crate::engine::openpit_destroy_engine(zero_engine);
+    }
+
+    #[test]
+    fn add_builtin_order_size_limit_policy_rejects_limit_without_caps() {
         let asset = [OpenPitPretradePoliciesOrderSizeAssetBarrier {
             limit: OpenPitPretradePoliciesOrderSizeLimit {
-                max_quantity: quantity_param(100, 0),
-                max_notional: volume_param(10000, 0),
+                max_quantity: OpenPitParamQuantityOptional::default(),
+                max_notional: OpenPitParamVolumeOptional::default(),
             },
-            settlement_asset: usd,
+            asset: OpenPitStringView::from_utf8("USD"),
         }];
-        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+        let builder = crate::engine::openpit_create_engine_builder(
+            crate::engine::OpenPitSyncPolicy::Full as u8,
+            std::ptr::null_mut(),
+        );
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
             openpit_engine_builder_add_builtin_order_size_limit_policy(
                 builder,
                 0,
@@ -608,11 +825,54 @@ mod tests {
                 asset.len(),
                 std::ptr::null(),
                 0,
-                std::ptr::null_mut(),
+                &mut out_error,
             )
-        });
-        run_start_pre_trade_passes(engine);
-        crate::engine::openpit_destroy_engine(engine);
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        let error = cstr_to_string(out_error);
+        assert!(
+            error.contains("at least one of max_quantity or max_notional"),
+            "unexpected error: {error}"
+        );
+        crate::engine::openpit_destroy_engine_builder(builder);
+    }
+
+    #[test]
+    fn add_builtin_order_size_limit_policy_rejects_duplicate_asset_key() {
+        let barrier = OpenPitPretradePoliciesOrderSizeAssetBarrier {
+            limit: OpenPitPretradePoliciesOrderSizeLimit {
+                max_quantity: quantity_cap(100, 0),
+                max_notional: OpenPitParamVolumeOptional::default(),
+            },
+            asset: OpenPitStringView::from_utf8("USD"),
+        };
+        let asset = [barrier, barrier];
+        let builder = crate::engine::openpit_create_engine_builder(
+            crate::engine::OpenPitSyncPolicy::Full as u8,
+            std::ptr::null_mut(),
+        );
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                builder,
+                0,
+                std::ptr::null(),
+                asset.as_ptr(),
+                asset.len(),
+                std::ptr::null(),
+                0,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        let error = cstr_to_string(out_error);
+        assert!(
+            error.contains("duplicate asset barrier for asset USD"),
+            "unexpected error: {error}"
+        );
+        crate::engine::openpit_destroy_engine_builder(builder);
     }
 
     #[test]
@@ -635,11 +895,15 @@ mod tests {
             )
         };
         assert!(!ok);
-        let message = cstr_to_string(out_error);
+        assert!(!out_error.is_null());
+        let error = cstr_to_string(out_error);
         assert!(
-            message.contains("order_size_limit_policy creation failed")
-                && message.contains("must be configured"),
-            "expected SDK no-barrier error wrapped by FFI, got: {message}"
+            error.contains("order_size_limit_policy creation failed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("must be configured"),
+            "unexpected error: {error}"
         );
         crate::engine::openpit_destroy_engine_builder(builder);
     }
@@ -648,10 +912,10 @@ mod tests {
     fn configure_order_size_limit_rejects_null_and_invalid_utf8_names() {
         let asset = [OpenPitPretradePoliciesOrderSizeAssetBarrier {
             limit: OpenPitPretradePoliciesOrderSizeLimit {
-                max_quantity: quantity_param(100, 0),
-                max_notional: volume_param(10000, 0),
+                max_quantity: quantity_cap(100, 0),
+                max_notional: volume_cap(10000, 0),
             },
-            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            asset: OpenPitStringView::from_utf8("USD"),
         }];
         let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
             openpit_engine_builder_add_builtin_order_size_limit_policy(

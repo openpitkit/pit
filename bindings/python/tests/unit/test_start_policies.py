@@ -130,11 +130,18 @@ def _huge_broker_barrier() -> openpit.pretrade.policies.OrderSizeBrokerBarrier:
             None,
         ),
         (
-            "USD",
+            "AAPL",
             openpit.param.Quantity("11"),
             None,
             openpit.param.Price("90"),
             openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT,
+        ),
+        (
+            "AAPL",
+            openpit.param.Quantity("10"),
+            None,
+            openpit.param.Price("100"),
+            None,
         ),
         (
             "USD",
@@ -174,6 +181,10 @@ def test_order_size_limit_paths(
     expected_code: str | None,
 ) -> None:
     policies = openpit.pretrade.policies
+    if limit_asset == "AAPL":
+        asset_limit = policies.OrderSizeLimit(max_quantity=openpit.param.Quantity("10"))
+    else:
+        asset_limit = policies.OrderSizeLimit(max_notional=openpit.param.Volume("1000"))
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -182,11 +193,8 @@ def test_order_size_limit_paths(
             .broker_barrier(_huge_broker_barrier())
             .asset_barriers(
                 policies.OrderSizeAssetBarrier(
-                    limit=policies.OrderSizeLimit(
-                        max_quantity=openpit.param.Quantity("10"),
-                        max_notional=openpit.param.Volume("1000"),
-                    ),
-                    settlement_asset=limit_asset,
+                    limit=asset_limit,
+                    asset=limit_asset,
                 )
             )
         )
@@ -225,6 +233,112 @@ def test_order_size_limit_paths(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("limit", "expected_code"),
+    [
+        (
+            openpit.pretrade.policies.OrderSizeLimit(
+                max_quantity=openpit.param.Quantity("0")
+            ),
+            openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT,
+        ),
+        (
+            openpit.pretrade.policies.OrderSizeLimit(
+                max_notional=openpit.param.Volume("0")
+            ),
+            openpit.pretrade.RejectCode.ORDER_NOTIONAL_EXCEEDS_LIMIT,
+        ),
+    ],
+)
+def test_order_size_limit_explicit_zero_caps_reject(
+    limit: openpit.pretrade.policies.OrderSizeLimit,
+    expected_code: str,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_order_size_limit().broker_barrier(
+                policies.OrderSizeBrokerBarrier(limit=limit)
+            )
+        )
+        .build()
+    )
+
+    result = engine.start_pre_trade(order=conftest.make_order())
+    assert not result.ok
+    assert len(result.rejects) == 1
+    assert result.rejects[0].code == expected_code
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "limit",
+    [
+        openpit.pretrade.policies.OrderSizeLimit(
+            max_quantity=openpit.param.Quantity("10")
+        ),
+        openpit.pretrade.policies.OrderSizeLimit(
+            max_notional=openpit.param.Volume("1000")
+        ),
+    ],
+)
+def test_order_size_limit_absence_is_not_zero(
+    limit: openpit.pretrade.policies.OrderSizeLimit,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_order_size_limit().broker_barrier(
+                policies.OrderSizeBrokerBarrier(limit=limit)
+            )
+        )
+        .build()
+    )
+
+    result = engine.start_pre_trade(
+        order=conftest.make_order(
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("100"),
+        )
+    )
+    assert result.ok
+    result.request.execute().reservation.rollback()
+
+
+@pytest.mark.unit
+def test_order_size_limit_rejects_capless_limit() -> None:
+    policies = openpit.pretrade.policies
+    limit = policies.OrderSizeLimit()
+    ready = policies.build_order_size_limit().broker_barrier(
+        policies.OrderSizeBrokerBarrier(limit=limit)
+    )
+    with pytest.raises(
+        ValueError,
+        match=("^at least one of max_quantity or max_notional must be configured$"),
+    ):
+        (openpit.Engine.builder().no_sync().builtin(ready).build())
+
+
+@pytest.mark.unit
+def test_order_size_limit_rejects_duplicate_asset_key() -> None:
+    policies = openpit.pretrade.policies
+    limit = policies.OrderSizeLimit(max_quantity=openpit.param.Quantity("10"))
+    ready = policies.build_order_size_limit().asset_barriers(
+        policies.OrderSizeAssetBarrier(limit=limit, asset="AAPL"),
+        policies.OrderSizeAssetBarrier(limit=limit, asset="AAPL"),
+    )
+    with pytest.raises(
+        ValueError,
+        match="^duplicate asset barrier for asset AAPL$",
+    ):
+        (openpit.Engine.builder().no_sync().builtin(ready).build())
+
+
+@pytest.mark.unit
 def test_order_size_limit_policy_asset_barrier_requires_asset_string() -> None:
     policies = openpit.pretrade.policies
     with pytest.raises((TypeError, ValueError)):
@@ -237,7 +351,7 @@ def test_order_size_limit_policy_asset_barrier_requires_asset_string() -> None:
                         max_quantity=openpit.param.Quantity(10),
                         max_notional=openpit.param.Volume(1000),
                     ),
-                    settlement_asset=123,  # type: ignore[arg-type]
+                    asset=123,  # type: ignore[arg-type]
                 )
             )
         ).build()
@@ -377,7 +491,7 @@ def test_order_size_limit_account_asset_overrides_asset_baseline() -> None:
                         max_quantity=openpit.param.Quantity("5"),
                         max_notional=openpit.param.Volume("10000"),
                     ),
-                    settlement_asset=openpit.param.Asset("USD"),
+                    asset=openpit.param.Asset("AAPL"),
                 )
             )
             .account_asset_barriers(
@@ -387,7 +501,7 @@ def test_order_size_limit_account_asset_overrides_asset_baseline() -> None:
                         max_notional=openpit.param.Volume("10000"),
                     ),
                     account_id=openpit.param.AccountId.from_int(99224416),
-                    settlement_asset=openpit.param.Asset("USD"),
+                    asset=openpit.param.Asset("AAPL"),
                 )
             )
         )
@@ -407,7 +521,7 @@ def test_order_size_limit_account_asset_overrides_asset_baseline() -> None:
 
 
 @pytest.mark.unit
-def test_order_size_limit_unknown_settlement_passes() -> None:
+def test_order_size_limit_unknown_asset_passes() -> None:
     policies = openpit.pretrade.policies
     engine = (
         openpit.Engine.builder()
@@ -421,7 +535,7 @@ def test_order_size_limit_unknown_settlement_passes() -> None:
                         max_quantity=openpit.param.Quantity("1"),
                         max_notional=openpit.param.Volume("100"),
                     ),
-                    settlement_asset=openpit.param.Asset("EUR"),
+                    asset=openpit.param.Asset("EUR"),
                 )
             )
         )

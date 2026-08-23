@@ -44,6 +44,7 @@ import {
   buildRateLimit,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
+  OrderSizeAccountAssetBarrier,
   OrderSizeAssetBarrier,
   OrderSizeBrokerBarrier,
   OrderSizeLimit,
@@ -63,13 +64,18 @@ import {
 } from "@openpit/engine/pretrade/policies";
 
 const ACCOUNT = 99_224_416n;
+const ORDER_SIZE_OVERRIDE_ACCOUNT = 99_224_417n;
 
-function makeOrder(quantity: string = "1", price: string = "100"): OrderInit {
+function makeOrder(
+  quantity: string = "1",
+  price: string = "100",
+  accountId: bigint = ACCOUNT,
+): OrderInit {
   return {
     operation: {
       underlyingAsset: "AAPL",
       settlementAsset: "USD",
-      accountId: ACCOUNT,
+      accountId,
       side: "BUY",
       tradeAmount: TradeAmount.quantity(quantity),
       price,
@@ -317,7 +323,7 @@ describe("runtime configurator", () => {
           .assetBarriers([
             new OrderSizeAssetBarrier(
               new OrderSizeLimit("10", "1000000"),
-              "USD",
+              "AAPL",
             ),
           ]),
       )
@@ -332,6 +338,183 @@ describe("runtime configurator", () => {
     });
 
     expect(engine.startPreTrade(makeOrder("2")).ok).toBe(true);
+  });
+
+  it("preserves absent and zero order-size caps at runtime", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildOrderSizeLimit().brokerBarrier(
+          new OrderSizeBrokerBarrier(new OrderSizeLimit("10", undefined)),
+        ),
+      )
+      .build();
+
+    engine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
+      broker: new OrderSizeBrokerBarrier(new OrderSizeLimit(undefined, "1000")),
+    });
+    expect(engine.startPreTrade(makeOrder("1", "1000")).ok).toBe(true);
+    const aboveNotional = engine.startPreTrade(makeOrder("1", "1001"));
+    expect(aboveNotional.ok).toBe(false);
+    expect(aboveNotional.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+
+    engine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
+      broker: new OrderSizeBrokerBarrier(new OrderSizeLimit("0", undefined)),
+    });
+    const zeroQuantity = engine.startPreTrade(makeOrder("1", "1"));
+    expect(zeroQuantity.ok).toBe(false);
+    expect(zeroQuantity.rejects[0]?.code).toBe("OrderQtyExceedsLimit");
+  });
+
+  it("preserves absent and zero settlement-asset caps at runtime", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildOrderSizeLimit()
+          .assetBarriers([
+            new OrderSizeAssetBarrier(
+              new OrderSizeLimit(undefined, "5000"),
+              "USD",
+            ),
+          ])
+          .accountAssetBarriers([
+            new OrderSizeAccountAssetBarrier(
+              new OrderSizeLimit(undefined, "6000"),
+              ORDER_SIZE_OVERRIDE_ACCOUNT,
+              "USD",
+            ),
+          ]),
+      )
+      .build();
+
+    engine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
+      assetBarriers: [
+        new OrderSizeAssetBarrier(new OrderSizeLimit(undefined, "1000"), "USD"),
+      ],
+      accountAssetBarriers: [
+        new OrderSizeAccountAssetBarrier(
+          new OrderSizeLimit(undefined, "2000"),
+          ORDER_SIZE_OVERRIDE_ACCOUNT,
+          "USD",
+        ),
+      ],
+    });
+
+    expect(engine.startPreTrade(makeOrder("1000", "1")).ok).toBe(true);
+    const aboveAsset = engine.startPreTrade(makeOrder("1001", "1"));
+    expect(aboveAsset.ok).toBe(false);
+    expect(aboveAsset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+    expect(
+      engine.startPreTrade(makeOrder("2000", "1", ORDER_SIZE_OVERRIDE_ACCOUNT))
+        .ok,
+    ).toBe(true);
+    const aboveAccountAsset = engine.startPreTrade(
+      makeOrder("2001", "1", ORDER_SIZE_OVERRIDE_ACCOUNT),
+    );
+    expect(aboveAccountAsset.ok).toBe(false);
+    expect(aboveAccountAsset.rejects[0]?.code).toBe(
+      "OrderNotionalExceedsLimit",
+    );
+
+    // The account+asset reject above carries account scope, and a start-stage
+    // reject with account scope latches a block on that account, so the
+    // override account is no longer admissible on this engine. The zero-cap
+    // probes therefore need a fresh engine, retuned to zero the same way.
+    const zeroEngine = Engine.builder()
+      .builtin(
+        buildOrderSizeLimit()
+          .assetBarriers([
+            new OrderSizeAssetBarrier(
+              new OrderSizeLimit(undefined, "5000"),
+              "USD",
+            ),
+          ])
+          .accountAssetBarriers([
+            new OrderSizeAccountAssetBarrier(
+              new OrderSizeLimit(undefined, "6000"),
+              ORDER_SIZE_OVERRIDE_ACCOUNT,
+              "USD",
+            ),
+          ]),
+      )
+      .build();
+    zeroEngine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
+      assetBarriers: [
+        new OrderSizeAssetBarrier(new OrderSizeLimit(undefined, "0"), "USD"),
+      ],
+      accountAssetBarriers: [
+        new OrderSizeAccountAssetBarrier(
+          new OrderSizeLimit(undefined, "0"),
+          ORDER_SIZE_OVERRIDE_ACCOUNT,
+          "USD",
+        ),
+      ],
+    });
+    const zeroAsset = zeroEngine.startPreTrade(makeOrder("1", "1"));
+    expect(zeroAsset.ok).toBe(false);
+    expect(zeroAsset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+    const zeroAccountAsset = zeroEngine.startPreTrade(
+      makeOrder("1", "1", ORDER_SIZE_OVERRIDE_ACCOUNT),
+    );
+    expect(zeroAccountAsset.ok).toBe(false);
+    expect(zeroAccountAsset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+  });
+
+  // These two look like tautologies - the order is under every visible cap - and
+  // they are not. Quantity resolves by the instrument's underlying asset (AAPL)
+  // and notional by its settlement asset (USD), so the quantity-only USD barrier
+  // and the notional-only AAPL barrier each leave absent exactly the cap its own
+  // key would make the engine consult. An absent cap turned into a zero cap
+  // would land on that live chain and reject. Keep the asymmetry: one barrier
+  // carrying both caps, or both keyed on one asset, silently removes the check.
+  it("preserves absent caps on the chains fed by configured asset keys", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildOrderSizeLimit().brokerBarrier(
+          new OrderSizeBrokerBarrier(new OrderSizeLimit("100", "100000")),
+        ),
+      )
+      .build();
+
+    engine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
+      assetBarriers: [
+        new OrderSizeAssetBarrier(new OrderSizeLimit("10", undefined), "USD"),
+        new OrderSizeAssetBarrier(
+          new OrderSizeLimit(undefined, "1000"),
+          "AAPL",
+        ),
+      ],
+    });
+
+    expect(engine.startPreTrade(makeOrder("5", "100")).ok).toBe(true);
+  });
+
+  it("preserves absent caps on the chains fed by configured account-asset keys", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildOrderSizeLimit().brokerBarrier(
+          new OrderSizeBrokerBarrier(new OrderSizeLimit("100", "100000")),
+        ),
+      )
+      .build();
+
+    engine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
+      accountAssetBarriers: [
+        new OrderSizeAccountAssetBarrier(
+          new OrderSizeLimit("10", undefined),
+          ORDER_SIZE_OVERRIDE_ACCOUNT,
+          "USD",
+        ),
+        new OrderSizeAccountAssetBarrier(
+          new OrderSizeLimit(undefined, "1000"),
+          ORDER_SIZE_OVERRIDE_ACCOUNT,
+          "AAPL",
+        ),
+      ],
+    });
+
+    expect(
+      engine.startPreTrade(makeOrder("5", "100", ORDER_SIZE_OVERRIDE_ACCOUNT))
+        .ok,
+    ).toBe(true);
   });
 
   it("force-sets accumulated generic pnl", () => {

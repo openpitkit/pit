@@ -754,6 +754,10 @@ func TestExampleWikiPolicyRollbackSafety(t *testing.T) {
 
 // Source: https://wiki.openpit.dev/Getting-Started/ - Build an Engine
 func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset(AAPL) error = %v", err)
+	}
 	usd, err := param.NewAsset("USD")
 	if err != nil {
 		t.Fatalf("NewAsset(USD) error = %v", err)
@@ -763,11 +767,19 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPnlFromString(-1000) error = %v", err)
 	}
-	maxQty, err := param.NewQuantityFromString("500")
+	brokerMaxQty, err := param.NewQuantityFromString("500")
 	if err != nil {
 		t.Fatalf("NewQuantityFromString() error = %v", err)
 	}
-	maxNotional, err := param.NewVolumeFromString("100000")
+	brokerMaxNotional, err := param.NewVolumeFromString("100000")
+	if err != nil {
+		t.Fatalf("NewVolumeFromString() error = %v", err)
+	}
+	assetMaxQty, err := param.NewQuantityFromString("200")
+	if err != nil {
+		t.Fatalf("NewQuantityFromString() error = %v", err)
+	}
+	assetMaxNotional, err := param.NewVolumeFromString("50000")
 	if err != nil {
 		t.Fatalf("NewVolumeFromString() error = %v", err)
 	}
@@ -791,21 +803,30 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 			),
 		).
 		Builtin(
+			// Quantity is keyed by the underlying asset, notional by the
+			// settlement asset; broker caps apply on top.
 			policies.BuildOrderSizeLimit().
 				AssetBarriers(
 					policies.OrderSizeAssetBarrier{
-						SettlementAsset: usd,
+						Asset: aapl,
 						Limit: policies.OrderSizeLimit{
-							MaxQuantity: maxQty,
-							MaxNotional: maxNotional,
+							MaxQuantity: optional.Some(assetMaxQty),
+							MaxNotional: optional.None[param.Volume](),
+						},
+					},
+					policies.OrderSizeAssetBarrier{
+						Asset: usd,
+						Limit: policies.OrderSizeLimit{
+							MaxQuantity: optional.None[param.Quantity](),
+							MaxNotional: optional.Some(assetMaxNotional),
 						},
 					},
 				).
 				BrokerBarrier(
 					policies.OrderSizeBrokerBarrier{
 						Limit: policies.OrderSizeLimit{
-							MaxQuantity: maxQty,
-							MaxNotional: maxNotional,
+							MaxQuantity: optional.Some(brokerMaxQty),
+							MaxNotional: optional.Some(brokerMaxNotional),
 						},
 					},
 				),
@@ -818,10 +839,6 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
-	aapl, err := param.NewAsset("AAPL")
-	if err != nil {
-		t.Fatalf("NewAsset(AAPL) error = %v", err)
-	}
 	op.SetInstrument(param.NewInstrument(aapl, usd))
 	op.SetAccountID(param.NewAccountIDFromUint64(99224416))
 	op.SetSide(param.SideBuy)
@@ -1110,37 +1127,58 @@ func TestExampleWikiPoliciesRateLimit(t *testing.T) {
 
 // Source: https://wiki.openpit.dev/Policies/ - OrderSizeLimitPolicy
 func TestExampleWikiPoliciesOrderSizeLimit(t *testing.T) {
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset() error = %v", err)
+	}
 	usd, err := param.NewAsset("USD")
 	if err != nil {
 		t.Fatalf("NewAsset() error = %v", err)
 	}
-	maxQty, err := param.NewQuantityFromString("100")
+	assetMaxQty, err := param.NewQuantityFromString("100")
 	if err != nil {
 		t.Fatalf("NewQuantityFromString() error = %v", err)
 	}
-	maxNotional, err := param.NewVolumeFromString("50000")
+	assetMaxNotional, err := param.NewVolumeFromString("50000")
+	if err != nil {
+		t.Fatalf("NewVolumeFromString() error = %v", err)
+	}
+	brokerMaxQty, err := param.NewQuantityFromString("500")
+	if err != nil {
+		t.Fatalf("NewQuantityFromString() error = %v", err)
+	}
+	brokerMaxNotional, err := param.NewVolumeFromString("100000")
 	if err != nil {
 		t.Fatalf("NewVolumeFromString() error = %v", err)
 	}
 
+	// Quantity is keyed by the underlying asset, notional by the
+	// settlement asset; broker caps apply on top.
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
 			policies.BuildOrderSizeLimit().
 				AssetBarriers(
 					policies.OrderSizeAssetBarrier{
-						SettlementAsset: usd,
+						Asset: aapl,
 						Limit: policies.OrderSizeLimit{
-							MaxQuantity: maxQty,
-							MaxNotional: maxNotional,
+							MaxQuantity: optional.Some(assetMaxQty),
+							MaxNotional: optional.None[param.Volume](),
+						},
+					},
+					policies.OrderSizeAssetBarrier{
+						Asset: usd,
+						Limit: policies.OrderSizeLimit{
+							MaxQuantity: optional.None[param.Quantity](),
+							MaxNotional: optional.Some(assetMaxNotional),
 						},
 					},
 				).
 				BrokerBarrier(
 					policies.OrderSizeBrokerBarrier{
 						Limit: policies.OrderSizeLimit{
-							MaxQuantity: maxQty,
-							MaxNotional: maxNotional,
+							MaxQuantity: optional.Some(brokerMaxQty),
+							MaxNotional: optional.Some(brokerMaxNotional),
 						},
 					},
 				),

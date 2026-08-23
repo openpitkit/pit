@@ -40,8 +40,8 @@ fn example_readme_hello_world() -> Result<(), Box<dyn std::error::Error>> {
             OrderSizeLimitSettings::new(
                 Some(OrderSizeBrokerBarrier {
                     limit: OrderSizeLimit {
-                        max_quantity: Quantity::from_str("500")?,
-                        max_notional: Volume::from_str("100000")?,
+                        max_quantity: Some(Quantity::from_str("500")?),
+                        max_notional: Some(Volume::from_str("100000")?),
                     },
                 }),
                 [],

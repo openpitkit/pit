@@ -312,7 +312,12 @@ func (c Configurator) SetAccountPnl(
 // [policies.OrderSizeLimitReadyBuilder]. An axis passed as nil is left
 // unchanged; an empty non-nil slice replaces the axis with an empty set
 // (subject to the policy's at-least-one-barrier rule). A nil broker leaves
-// the broker barrier unchanged.
+// the broker barrier unchanged. Quantity caps resolve by underlying asset and
+// notional caps by settlement asset. An absent cap constrains nothing. Within
+// the account+asset then asset chain for a metric, a matching barrier without
+// that cap is skipped. Broker caps apply to every order in addition to those
+// chains. An explicitly set zero cap rejects positive metric values and admits
+// a value of exactly zero.
 //
 // Returns a *Error on a domain error.
 func (c Configurator) OrderSizeLimit(
@@ -346,8 +351,8 @@ func (c Configurator) OrderSizeLimitUpdate(
 	if hasBroker && brokerValue != nil {
 		b := native.NewPretradePoliciesOrderSizeBrokerBarrier(
 			native.NewPretradePoliciesOrderSizeLimit(
-				brokerValue.Limit.MaxQuantity.Handle(),
-				brokerValue.Limit.MaxNotional.Handle(),
+				quantityOptionalToNative(brokerValue.Limit.MaxQuantity),
+				volumeOptionalToNative(brokerValue.Limit.MaxNotional),
 			),
 		)
 		nativeBroker = ptr.New(b)
@@ -359,10 +364,10 @@ func (c Configurator) OrderSizeLimitUpdate(
 		for _, a := range assets {
 			nativeAssets = append(nativeAssets, native.NewPretradePoliciesOrderSizeAssetBarrier(
 				native.NewPretradePoliciesOrderSizeLimit(
-					a.Limit.MaxQuantity.Handle(),
-					a.Limit.MaxNotional.Handle(),
+					quantityOptionalToNative(a.Limit.MaxQuantity),
+					volumeOptionalToNative(a.Limit.MaxNotional),
 				),
-				a.SettlementAsset.Handle(),
+				a.Asset.Handle(),
 			))
 		}
 	}
@@ -375,11 +380,11 @@ func (c Configurator) OrderSizeLimitUpdate(
 				nativeAccountAssets,
 				native.NewPretradePoliciesOrderSizeAccountAssetBarrier(
 					native.NewPretradePoliciesOrderSizeLimit(
-						a.Limit.MaxQuantity.Handle(),
-						a.Limit.MaxNotional.Handle(),
+						quantityOptionalToNative(a.Limit.MaxQuantity),
+						volumeOptionalToNative(a.Limit.MaxNotional),
 					),
 					a.AccountID.Handle(),
-					a.SettlementAsset.Handle(),
+					a.Asset.Handle(),
 				),
 			)
 		}
@@ -731,6 +736,24 @@ type PolicyConfigurationResult struct {
 
 //------------------------------------------------------------------------------
 // Helpers
+
+func quantityOptionalToNative(
+	value optional.Option[param.Quantity],
+) native.ParamQuantityOptional {
+	if v, has := value.Get(); has {
+		return native.NewParamQuantityOptional(v.Handle())
+	}
+	return native.ParamQuantityOptional{}
+}
+
+func volumeOptionalToNative(
+	value optional.Option[param.Volume],
+) native.ParamVolumeOptional {
+	if v, has := value.Get(); has {
+		return native.NewParamVolumeOptional(v.Handle())
+	}
+	return native.ParamVolumeOptional{}
+}
 
 func pnlOptionalToNative(value optional.Option[param.Pnl]) native.ParamPnlOptional {
 	if v, has := value.Get(); has {

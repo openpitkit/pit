@@ -20,9 +20,11 @@
 //! `buildOrderSizeLimit()` returns a configuring builder. Calling any barrier
 //! setter (`brokerBarrier`, `assetBarriers`, `accountAssetBarriers`) produces a
 //! ready-builder token that can be passed to `builder.builtin(token)`.
-//! `withPolicyGroupId` preserves the current stage. `OrderSizeLimit` is the
-//! shared `(maxQuantity, maxNotional)` value used by every barrier. Decimals
-//! cross as `Quantity` / `Volume` value objects or `DecimalInput`.
+//! `withPolicyGroupId` preserves the current stage. Each `OrderSizeLimit` cap
+//! is optional: asset-keyed quantity resolves by underlying asset and notional
+//! by settlement asset. A metric skips a matching barrier without its cap. An
+//! absent cap constrains nothing, while zero rejects positive metric values and
+//! admits a value of exactly zero.
 
 use openpit::param::{Asset, Quantity, Volume};
 use openpit::pretrade::policies::{
@@ -34,8 +36,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::domain::{
     collect_cloned_wrappers, extract_cloned_wrapper, is_plain_object, parse_asset, read_field,
-    resolve_account_id, resolve_quantity, resolve_volume, AccountIdLike, IntegerNumber,
-    QuantityLike, VolumeLike,
+    resolve_account_id, resolve_optional_quantity, resolve_optional_volume, AccountIdLike,
+    IntegerNumber, OptionalQuantityLike, OptionalVolumeLike,
 };
 use crate::error::{engine_build_configuration_error, make_error, ErrorKind};
 use crate::param::ids::JsAccountId;
@@ -43,11 +45,16 @@ use crate::param::ids::JsAccountId;
 #[wasm_bindgen(typescript_custom_section)]
 const ORDER_SIZE_INIT_TS: &'static str = r#"
 /**
- * Plain-object form of {@link OrderSizeLimit}. Both fields are required.
+ * Plain-object form of {@link OrderSizeLimit}.
+ *
+ * `maxQuantity` is keyed by underlying asset and `maxNotional` by settlement
+ * asset. Either cap may be absent and then constrains nothing. A resolution
+ * chain skips a matching barrier that omits its metric. Zero is a present cap
+ * and rejects positive metric values while admitting a value of exactly zero.
  */
 export interface OrderSizeLimitInit {
-  maxQuantity: Quantity | string | number | bigint;
-  maxNotional: Volume | string | number | bigint;
+  maxQuantity?: Quantity | string | number | bigint | null;
+  maxNotional?: Volume | string | number | bigint | null;
 }
 "#;
 
@@ -58,45 +65,55 @@ extern "C" {
     pub type OrderSizeLimitLike;
 }
 
-/// Order-size limit: a maximum quantity and a maximum notional volume.
+/// Independent quantity and notional caps for one order.
+///
+/// On asset-keyed barriers, quantity resolves by the instrument's underlying
+/// asset and notional by its settlement asset. A cap may be absent and then
+/// constrains nothing; its chain skips a matching barrier without that cap. A
+/// cap set to zero rejects positive metric values and admits a value of exactly
+/// zero.
 #[wasm_bindgen(js_name = OrderSizeLimit)]
 #[derive(Clone, Copy)]
 pub struct JsOrderSizeLimit {
-    max_quantity: Quantity,
-    max_notional: Volume,
+    max_quantity: Option<Quantity>,
+    max_notional: Option<Volume>,
 }
 
 #[wasm_bindgen(js_class = OrderSizeLimit)]
 impl JsOrderSizeLimit {
     /// Constructs an order-size limit.
     ///
-    /// Each argument accepts a value object (`Quantity` / `Volume`) or a
-    /// `DecimalInput`.
+    /// Each cap accepts its value object, a `DecimalInput`, or
+    /// `null`/`undefined`. The core rejects a limit with neither cap when the
+    /// containing policy is built.
     ///
     /// # Errors
     ///
     /// Throws `ParamError` on an invalid value.
     #[wasm_bindgen(constructor)]
     pub fn new(
-        max_quantity: QuantityLike,
-        max_notional: VolumeLike,
+        max_quantity: OptionalQuantityLike,
+        max_notional: OptionalVolumeLike,
     ) -> Result<JsOrderSizeLimit, JsValue> {
         Ok(Self {
-            max_quantity: resolve_quantity(max_quantity.into())?,
-            max_notional: resolve_volume(max_notional.into())?,
+            max_quantity: resolve_optional_quantity(max_quantity.into())?,
+            max_notional: resolve_optional_volume(max_notional.into())?,
         })
     }
 
-    /// The maximum order quantity.
+    /// The maximum order quantity, or `undefined` when quantity is
+    /// unconstrained.
     #[wasm_bindgen(getter, js_name = maxQuantity)]
-    pub fn max_quantity(&self) -> crate::param::value_types::JsQuantity {
-        crate::param::value_types::JsQuantity::from_inner(self.max_quantity)
+    pub fn max_quantity(&self) -> Option<crate::param::value_types::JsQuantity> {
+        self.max_quantity
+            .map(crate::param::value_types::JsQuantity::from_inner)
     }
 
-    /// The maximum order notional volume.
+    /// The maximum notional, or `undefined` when notional is unconstrained.
     #[wasm_bindgen(getter, js_name = maxNotional)]
-    pub fn max_notional(&self) -> crate::param::value_types::JsVolume {
-        crate::param::value_types::JsVolume::from_inner(self.max_notional)
+    pub fn max_notional(&self) -> Option<crate::param::value_types::JsVolume> {
+        self.max_notional
+            .map(crate::param::value_types::JsVolume::from_inner)
     }
 
     /// Returns a fresh copy of this order-size limit.
@@ -117,21 +134,21 @@ impl JsOrderSizeLimit {
 
     /// Resolves an `OrderSizeLimit | OrderSizeLimitInit` argument.
     ///
-    /// A wrapper instance is copied; a plain object literal
-    /// `{ maxQuantity, maxNotional }` is assembled.
+    /// A wrapper instance is copied; a plain object may omit either field.
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid or missing field, or when the value is
-    /// neither an `OrderSizeLimit` nor a plain object.
+    /// Throws `ParamError` on an invalid present field, or when the value is
+    /// neither an `OrderSizeLimit` nor a plain object. The core validates that
+    /// at least one cap is present when the policy is built.
     fn coerce(value: JsValue) -> Result<JsOrderSizeLimit, JsValue> {
         if let Some(wrapped) = extract_cloned_wrapper::<JsOrderSizeLimit>(&value)? {
             return Ok(wrapped);
         }
         if is_plain_object(&value) {
             return Ok(Self {
-                max_quantity: resolve_quantity(read_field(&value, "maxQuantity")?)?,
-                max_notional: resolve_volume(read_field(&value, "maxNotional")?)?,
+                max_quantity: resolve_optional_quantity(read_field(&value, "maxQuantity")?)?,
+                max_notional: resolve_optional_volume(read_field(&value, "maxNotional")?)?,
             });
         }
         Err(make_error(
@@ -143,6 +160,9 @@ impl JsOrderSizeLimit {
 }
 
 /// Broker-wide order-size barrier.
+///
+/// Each present cap applies to every order. An absent cap constrains nothing;
+/// a zero cap rejects positive metric values and admits a value of exactly zero.
 #[wasm_bindgen(js_name = OrderSizeBrokerBarrier)]
 #[derive(Clone, Copy)]
 pub struct JsOrderSizeBrokerBarrier {
@@ -180,29 +200,32 @@ impl JsOrderSizeBrokerBarrier {
     }
 }
 
-/// Per-settlement-asset order-size barrier.
+/// Per-asset order-size barrier.
+///
+/// Its asset keys quantity by underlying asset and notional by settlement
+/// asset. Each metric skips the barrier and continues its chain when its cap is
+/// absent. Zero remains a present cap: it rejects positive metric values and
+/// admits a value of exactly zero.
 #[wasm_bindgen(js_name = OrderSizeAssetBarrier)]
 #[derive(Clone)]
 pub struct JsOrderSizeAssetBarrier {
     limit: JsOrderSizeLimit,
-    settlement_asset: Asset,
+    asset: Asset,
 }
 
 #[wasm_bindgen(js_class = OrderSizeAssetBarrier)]
 impl JsOrderSizeAssetBarrier {
-    /// Constructs an asset barrier from its limit and settlement asset.
+    /// Constructs a barrier whose asset keys quantity by underlying and
+    /// notional by settlement.
     ///
     /// # Errors
     ///
-    /// Throws `AssetError` when `settlementAsset` is empty.
+    /// Throws `AssetError` when `asset` is empty.
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        limit: OrderSizeLimitLike,
-        settlement_asset: &str,
-    ) -> Result<JsOrderSizeAssetBarrier, JsValue> {
+    pub fn new(limit: OrderSizeLimitLike, asset: &str) -> Result<JsOrderSizeAssetBarrier, JsValue> {
         Ok(Self {
             limit: JsOrderSizeLimit::coerce(limit.into())?,
-            settlement_asset: parse_asset(settlement_asset)?,
+            asset: parse_asset(asset)?,
         })
     }
 
@@ -216,18 +239,23 @@ impl JsOrderSizeAssetBarrier {
     pub(crate) fn to_core(&self) -> OrderSizeAssetBarrier {
         OrderSizeAssetBarrier {
             limit: self.limit.to_core(),
-            settlement_asset: self.settlement_asset.clone(),
+            asset: self.asset.clone(),
         }
     }
 }
 
-/// Per-(account, settlement-asset) order-size barrier.
+/// Per-(account, asset) order-size barrier.
+///
+/// For this account, its asset keys quantity by underlying asset and notional
+/// by settlement asset. A metric whose cap is absent continues to the matching
+/// asset barrier. Zero remains a present cap: it rejects positive metric values
+/// and admits a value of exactly zero.
 #[wasm_bindgen(js_name = OrderSizeAccountAssetBarrier)]
 #[derive(Clone)]
 pub struct JsOrderSizeAccountAssetBarrier {
     limit: JsOrderSizeLimit,
     account_id: JsAccountId,
-    settlement_asset: Asset,
+    asset: Asset,
 }
 
 #[wasm_bindgen(js_class = OrderSizeAccountAssetBarrier)]
@@ -236,17 +264,17 @@ impl JsOrderSizeAccountAssetBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `AssetError` when `settlementAsset` is empty.
+    /// Throws `AssetError` when `asset` is empty.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: OrderSizeLimitLike,
         account_id: AccountIdLike,
-        settlement_asset: &str,
+        asset: &str,
     ) -> Result<JsOrderSizeAccountAssetBarrier, JsValue> {
         Ok(Self {
             limit: JsOrderSizeLimit::coerce(limit.into())?,
             account_id: JsAccountId::from_inner(resolve_account_id(account_id.into())?),
-            settlement_asset: parse_asset(settlement_asset)?,
+            asset: parse_asset(asset)?,
         })
     }
 
@@ -261,7 +289,7 @@ impl JsOrderSizeAccountAssetBarrier {
         OrderSizeAccountAssetBarrier {
             limit: self.limit.to_core(),
             account_id: self.account_id.inner(),
-            settlement_asset: self.settlement_asset.clone(),
+            asset: self.asset.clone(),
         }
     }
 }

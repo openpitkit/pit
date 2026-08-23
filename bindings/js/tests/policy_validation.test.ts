@@ -25,11 +25,17 @@ import {
 } from "@openpit/engine";
 import { QuoteTtl } from "@openpit/engine/marketdata";
 import { TradeAmount } from "@openpit/engine/param";
+import type { OrderInit } from "@openpit/engine/model";
 import type { Policy } from "@openpit/engine/pretrade";
 import {
+  buildOrderSizeLimit,
   buildRateLimit,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
+  OrderSizeAccountAssetBarrier,
+  OrderSizeAssetBarrier,
+  OrderSizeBrokerBarrier,
+  OrderSizeLimit,
   RateLimit,
   RateLimitBrokerBarrier,
   SpotFundsOverride,
@@ -44,6 +50,26 @@ function buildBrokerRateLimit(windowMs: number): Engine {
       ),
     )
     .build();
+}
+
+const ORDER_SIZE_ACCOUNT = 99_224_416n;
+const ORDER_SIZE_OVERRIDE_ACCOUNT = 99_224_417n;
+
+function sizedOrder(
+  quantity: string,
+  price: string,
+  accountId: bigint = ORDER_SIZE_ACCOUNT,
+): OrderInit {
+  return {
+    operation: {
+      underlyingAsset: "AAPL",
+      settlementAsset: "USD",
+      accountId,
+      side: "BUY",
+      tradeAmount: TradeAmount.quantity(quantity),
+      price,
+    },
+  };
 }
 
 describe("rate-limit boundary conversion", () => {
@@ -144,6 +170,204 @@ describe("rate-limit boundary conversion", () => {
     expect(caught).toBeInstanceOf(EngineBuildError);
     expect((caught as Error).message).toMatch(
       /rate limit window must be positive and fit in u64 nanoseconds/,
+    );
+  });
+});
+
+describe("order-size limits", () => {
+  function brokerEngine(limit: OrderSizeLimit): Engine {
+    return Engine.builder()
+      .builtin(
+        buildOrderSizeLimit().brokerBarrier(new OrderSizeBrokerBarrier(limit)),
+      )
+      .build();
+  }
+
+  function settlementAssetEngine(
+    assetLimit: OrderSizeLimit,
+    accountAssetLimit: OrderSizeLimit,
+  ): Engine {
+    return Engine.builder()
+      .builtin(
+        buildOrderSizeLimit()
+          .assetBarriers([new OrderSizeAssetBarrier(assetLimit, "USD")])
+          .accountAssetBarriers([
+            new OrderSizeAccountAssetBarrier(
+              accountAssetLimit,
+              ORDER_SIZE_OVERRIDE_ACCOUNT,
+              "USD",
+            ),
+          ]),
+      )
+      .build();
+  }
+
+  it("enforces a quantity-only boundary without inventing a notional cap", () => {
+    const limit = new OrderSizeLimit("10", undefined);
+    expect(limit.maxQuantity!.toString()).toBe("10");
+    expect(limit.maxNotional).toBeUndefined();
+    const engine = brokerEngine(limit);
+
+    const above = engine.executePreTrade(sizedOrder("11", "1"));
+    expect(above.ok).toBe(false);
+    expect(above.rejects[0]?.code).toBe("OrderQtyExceedsLimit");
+
+    const boundary = engine.executePreTrade(sizedOrder("10", "1"));
+    expect(boundary.ok).toBe(true);
+    boundary.reservation!.rollback();
+  });
+
+  it("enforces a notional-only boundary without inventing a quantity cap", () => {
+    const limit = new OrderSizeLimit(undefined, "1000");
+    expect(limit.maxQuantity).toBeUndefined();
+    expect(limit.maxNotional!.toString()).toBe("1000");
+    const engine = brokerEngine(limit);
+
+    const above = engine.executePreTrade(sizedOrder("1", "1001"));
+    expect(above.ok).toBe(false);
+    expect(above.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+
+    const boundary = engine.executePreTrade(sizedOrder("1", "1000"));
+    expect(boundary.ok).toBe(true);
+    boundary.reservation!.rollback();
+  });
+
+  it("enforces notional-only settlement-asset boundaries without quantity caps", () => {
+    const engine = settlementAssetEngine(
+      new OrderSizeLimit(undefined, "1000"),
+      new OrderSizeLimit(undefined, "2000"),
+    );
+
+    const assetBoundary = engine.executePreTrade(sizedOrder("1000", "1"));
+    expect(assetBoundary.ok).toBe(true);
+    assetBoundary.reservation!.rollback();
+    const aboveAsset = engine.executePreTrade(sizedOrder("1001", "1"));
+    expect(aboveAsset.ok).toBe(false);
+    expect(aboveAsset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+
+    const accountBoundary = engine.executePreTrade(
+      sizedOrder("2000", "1", ORDER_SIZE_OVERRIDE_ACCOUNT),
+    );
+    expect(accountBoundary.ok).toBe(true);
+    accountBoundary.reservation!.rollback();
+    const aboveAccount = engine.executePreTrade(
+      sizedOrder("2001", "1", ORDER_SIZE_OVERRIDE_ACCOUNT),
+    );
+    expect(aboveAccount.ok).toBe(false);
+    expect(aboveAccount.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+  });
+
+  // These two look like tautologies - the order is under every visible cap - and
+  // they are not. Quantity resolves by the instrument's underlying asset (AAPL)
+  // and notional by its settlement asset (USD), so the quantity-only USD barrier
+  // and the notional-only AAPL barrier each leave absent exactly the cap its own
+  // key would make the engine consult. An absent cap turned into a zero cap
+  // would land on that live chain and reject. Keep the asymmetry: one barrier
+  // carrying both caps, or both keyed on one asset, silently removes the check.
+  it("preserves absent caps on the chains fed by asset keys", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildOrderSizeLimit().assetBarriers([
+          new OrderSizeAssetBarrier(new OrderSizeLimit("10", undefined), "USD"),
+          new OrderSizeAssetBarrier(
+            new OrderSizeLimit(undefined, "1000"),
+            "AAPL",
+          ),
+        ]),
+      )
+      .build();
+
+    const result = engine.executePreTrade(sizedOrder("5", "100"));
+    expect(result.ok).toBe(true);
+    result.reservation!.rollback();
+  });
+
+  it("preserves absent caps on the chains fed by account-asset keys", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildOrderSizeLimit().accountAssetBarriers([
+          new OrderSizeAccountAssetBarrier(
+            new OrderSizeLimit("10", undefined),
+            ORDER_SIZE_OVERRIDE_ACCOUNT,
+            "USD",
+          ),
+          new OrderSizeAccountAssetBarrier(
+            new OrderSizeLimit(undefined, "1000"),
+            ORDER_SIZE_OVERRIDE_ACCOUNT,
+            "AAPL",
+          ),
+        ]),
+      )
+      .build();
+
+    const result = engine.executePreTrade(
+      sizedOrder("5", "100", ORDER_SIZE_OVERRIDE_ACCOUNT),
+    );
+    expect(result.ok).toBe(true);
+    result.reservation!.rollback();
+  });
+
+  it("treats explicit zero settlement-asset caps as present", () => {
+    const engine = settlementAssetEngine(
+      new OrderSizeLimit(undefined, "0"),
+      new OrderSizeLimit(undefined, "0"),
+    );
+
+    const asset = engine.executePreTrade(sizedOrder("1", "1"));
+    expect(asset.ok).toBe(false);
+    expect(asset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+    const accountAsset = engine.executePreTrade(
+      sizedOrder("1", "1", ORDER_SIZE_OVERRIDE_ACCOUNT),
+    );
+    expect(accountAsset.ok).toBe(false);
+    expect(accountAsset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
+  });
+
+  it("treats an explicit zero cap as present", () => {
+    const engine = brokerEngine(new OrderSizeLimit("0", undefined));
+
+    const result = engine.executePreTrade(sizedOrder("1", "1"));
+    expect(result.ok).toBe(false);
+    expect(result.rejects[0]?.code).toBe("OrderQtyExceedsLimit");
+  });
+
+  it("surfaces the core error when neither cap is configured", () => {
+    let caught: unknown;
+    try {
+      Engine.builder().builtin(
+        buildOrderSizeLimit().brokerBarrier(
+          new OrderSizeBrokerBarrier(new OrderSizeLimit(undefined, undefined)),
+        ),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(EngineBuildError);
+    expect((caught as Error).message).toBe(
+      "at least one of max_quantity or max_notional must be configured",
+    );
+  });
+
+  it("surfaces the core error for a duplicate asset key", () => {
+    let caught: unknown;
+    try {
+      Engine.builder().builtin(
+        buildOrderSizeLimit().assetBarriers([
+          new OrderSizeAssetBarrier(
+            new OrderSizeLimit("10", undefined),
+            "AAPL",
+          ),
+          new OrderSizeAssetBarrier({ maxNotional: "1000" }, "AAPL"),
+        ]),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(EngineBuildError);
+    expect((caught as Error).message).toBe(
+      "duplicate asset barrier for asset AAPL",
     );
   });
 });

@@ -2146,13 +2146,22 @@ class PostTradeContext:
     def account_group(self) -> AccountGroupId | None: ...
 
 class OrderSizeLimit:
-    """Order size limits."""
+    """Optional quantity and notional caps for one order.
+
+    Quantity resolves by underlying asset and notional by settlement asset.
+    An absent cap constrains nothing, and within a metric's account-and-asset
+    then asset chain a matching barrier without that metric is skipped. The
+    broker barrier is additive: each cap it carries applies to every order in
+    addition to both asset chains. A cap rejects an order whose metric value is
+    above it; a cap of zero rejects positive metric values and admits a value of
+    exactly zero. At least one cap must be set.
+    """
 
     def __init__(
         self,
         *,
-        max_quantity: param.Quantity,
-        max_notional: param.Volume,
+        max_quantity: param.Quantity | None = None,
+        max_notional: param.Volume | None = None,
     ) -> None:
         """Create order size limits."""
         _ = (max_quantity, max_notional)
@@ -2474,6 +2483,13 @@ class Configurator:
 
         Policy settings use the named order-size entities from
         ``openpit.pretrade.policies``.
+
+        Quantity caps resolve by underlying asset and notional caps by
+        settlement asset. An absent cap constrains nothing, within a metric's
+        account-and-asset then asset chain a matching barrier without that
+        metric is skipped, broker caps apply to every order in addition to
+        both asset chains, and a zero cap rejects positive metric values while
+        admitting a value of exactly zero.
 
         ``broker=None`` and axis arguments passed as ``None`` are left
         unchanged; ``clear_broker=True`` removes the broker barrier. An empty

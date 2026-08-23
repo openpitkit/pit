@@ -57,15 +57,36 @@ rate_limit_policy = (
         ),
     )
 )
+broker_max_qty = openpit.param.Quantity("500")
+broker_max_notional = openpit.param.Volume("100000")
+asset_max_qty = openpit.param.Quantity("200")
+asset_max_notional = openpit.param.Volume("50000")
+# Quantity is keyed by the underlying asset, notional by the
+# settlement asset; broker caps apply on top.
 size_policy = (
     openpit.pretrade.policies.build_order_size_limit()
+    .broker_barrier(
+        openpit.pretrade.policies.OrderSizeBrokerBarrier(
+            limit=openpit.pretrade.policies.OrderSizeLimit(
+                max_quantity=broker_max_qty,
+                max_notional=broker_max_notional,
+            ),
+        ),
+    )
     .asset_barriers(
         openpit.pretrade.policies.OrderSizeAssetBarrier(
             limit=openpit.pretrade.policies.OrderSizeLimit(
-                max_quantity=openpit.param.Quantity("500"),
-                max_notional=openpit.param.Volume("100000"),
+                max_quantity=asset_max_qty,
+                max_notional=None,
             ),
-            settlement_asset="USD",
+            asset="AAPL",
+        ),
+        openpit.pretrade.policies.OrderSizeAssetBarrier(
+            limit=openpit.pretrade.policies.OrderSizeLimit(
+                max_quantity=None,
+                max_notional=asset_max_notional,
+            ),
+            asset="USD",
         ),
     )
 )

@@ -68,6 +68,32 @@ inline constexpr std::string_view SpotFundsPolicyName = "SpotFundsPolicy";
 
 namespace detail {
 
+class OrderSizeOptionalAccess final {
+ private:
+  [[nodiscard]] static ::openpit::param::detail::RawQuantityOptional Native(
+      const std::optional<::openpit::param::Quantity>& value) noexcept {
+    ::openpit::param::detail::RawQuantityOptional raw{};
+    if (value) {
+      raw.value = ::openpit::detail::Native(*value);
+      raw.is_set = true;
+    }
+    return raw;
+  }
+
+  [[nodiscard]] static ::openpit::param::detail::RawVolumeOptional Native(
+      const std::optional<::openpit::param::Volume>& value) noexcept {
+    ::openpit::param::detail::RawVolumeOptional raw{};
+    if (value) {
+      raw.value = ::openpit::detail::Native(*value);
+      raw.is_set = true;
+    }
+    return raw;
+  }
+
+  friend class ::openpit::Configurator;
+  friend class ::openpit::pretrade::policies::OrderSizeLimitPolicy;
+};
+
 class PnlOptionalAccess final {
  private:
   [[nodiscard]] static ::openpit::param::detail::RawPnlOptional Native(
@@ -101,27 +127,42 @@ class PnlOptionalAccess final {
 //------------------------------------------------------------------------------
 // OrderSizeLimit
 
-// Maximum quantity and notional for a single order.
+// Independent order-size caps. On asset-keyed barriers, `maxQuantity` resolves
+// by the instrument's underlying asset and `maxNotional` by its settlement
+// asset. An absent cap constrains nothing, and its resolution chain skips a
+// matching barrier that does not carry it. A cap rejects an order whose metric
+// value is above it; a zero cap rejects positive metric values and admits a
+// value of exactly zero. The core is the sole validator of the "at least one
+// cap" rule; a limit mutated into a capless state after construction is
+// rejected at registration.
 struct OrderSizeLimit {
-  ::openpit::param::Quantity maxQuantity;
-  ::openpit::param::Volume maxNotional;
+  std::optional<::openpit::param::Quantity> maxQuantity;
+  std::optional<::openpit::param::Volume> maxNotional;
 
-  OrderSizeLimit(::openpit::param::Quantity quantity,
-                 ::openpit::param::Volume notional)
-      : maxQuantity(quantity), maxNotional(notional) {}
+  [[nodiscard]] static OrderSizeLimit Quantity(
+      ::openpit::param::Quantity quantity) {
+    return OrderSizeLimit(quantity, std::nullopt);
+  }
+
+  [[nodiscard]] static OrderSizeLimit Notional(
+      ::openpit::param::Volume notional) {
+    return OrderSizeLimit(std::nullopt, notional);
+  }
+
+  [[nodiscard]] static OrderSizeLimit Both(::openpit::param::Quantity quantity,
+                                           ::openpit::param::Volume notional) {
+    return OrderSizeLimit(quantity, notional);
+  }
 
  private:
-  friend class ::openpit::detail::NativeAccess;
-
-  [[nodiscard]] OpenPitPretradePoliciesOrderSizeLimit Native() const noexcept {
-    OpenPitPretradePoliciesOrderSizeLimit raw{};
-    raw.max_quantity = ::openpit::detail::Native(maxQuantity);
-    raw.max_notional = ::openpit::detail::Native(maxNotional);
-    return raw;
-  }
+  OrderSizeLimit(std::optional<::openpit::param::Quantity> quantity,
+                 std::optional<::openpit::param::Volume> notional)
+      : maxQuantity(quantity), maxNotional(notional) {}
 };
 
-// Broker-wide order-size barrier.
+// Broker-wide order-size barrier. Each present cap applies to every order; an
+// absent cap constrains nothing. A zero cap rejects positive metric values and
+// admits a value of exactly zero.
 struct OrderSizeBrokerBarrier {
   OrderSizeLimit limit;
 
@@ -161,28 +202,34 @@ class OrderSizeBrokerBarrierUpdate {
   std::optional<OrderSizeBrokerBarrier> m_barrier;
 };
 
-// Per-settlement-asset order-size barrier.
+// Per-asset order-size barrier. `asset` keys quantity by underlying asset and
+// notional by settlement asset. Each metric skips this barrier and continues
+// its own chain when the matching limit does not carry that cap. An absent cap
+// constrains nothing. A zero cap rejects positive metric values and admits a
+// value of exactly zero.
 struct OrderSizeAssetBarrier {
   OrderSizeLimit limit;
-  ::openpit::param::Asset settlementAsset;
+  ::openpit::param::Asset asset;
 
   OrderSizeAssetBarrier(OrderSizeLimit barrierLimit,
                         ::openpit::param::Asset asset)
-      : limit(barrierLimit), settlementAsset(std::move(asset)) {}
+      : limit(barrierLimit), asset(std::move(asset)) {}
 };
 
-// Per-(account, settlement-asset) order-size barrier.
+// Per-(account, asset) order-size barrier. `asset` keys quantity by underlying
+// asset and notional by settlement asset for this account. Each metric skips a
+// matching barrier without that cap and continues to the asset-level barrier.
+// An absent cap constrains nothing; a zero cap rejects positive metric values
+// and admits a value of exactly zero.
 struct OrderSizeAccountAssetBarrier {
   OrderSizeLimit limit;
   ::openpit::param::AccountId accountId;
-  ::openpit::param::Asset settlementAsset;
+  ::openpit::param::Asset asset;
 
   OrderSizeAccountAssetBarrier(OrderSizeLimit barrierLimit,
                                ::openpit::param::AccountId account,
                                ::openpit::param::Asset asset)
-      : limit(barrierLimit),
-        accountId(account),
-        settlementAsset(std::move(asset)) {}
+      : limit(barrierLimit), accountId(account), asset(std::move(asset)) {}
 };
 
 // Built-in order-size-limit policy. At least one barrier axis must be
@@ -215,7 +262,10 @@ class OrderSizeLimitPolicy {
     OpenPitPretradePoliciesOrderSizeBrokerBarrier brokerRaw{};
     const OpenPitPretradePoliciesOrderSizeBrokerBarrier* brokerPtr = nullptr;
     if (m_broker) {
-      brokerRaw.limit = ::openpit::detail::Native(m_broker->limit);
+      brokerRaw.limit.max_quantity =
+          detail::OrderSizeOptionalAccess::Native(m_broker->limit.maxQuantity);
+      brokerRaw.limit.max_notional =
+          detail::OrderSizeOptionalAccess::Native(m_broker->limit.maxNotional);
       brokerPtr = &brokerRaw;
     }
 
@@ -223,8 +273,11 @@ class OrderSizeLimitPolicy {
     assetRaw.reserve(m_assetBarriers.size());
     for (const OrderSizeAssetBarrier& barrier : m_assetBarriers) {
       OpenPitPretradePoliciesOrderSizeAssetBarrier raw{};
-      raw.limit = ::openpit::detail::Native(barrier.limit);
-      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
+      raw.limit.max_quantity =
+          detail::OrderSizeOptionalAccess::Native(barrier.limit.maxQuantity);
+      raw.limit.max_notional =
+          detail::OrderSizeOptionalAccess::Native(barrier.limit.maxNotional);
+      raw.asset = ::openpit::detail::Native(barrier.asset);
       assetRaw.push_back(raw);
     }
 
@@ -233,9 +286,12 @@ class OrderSizeLimitPolicy {
     accountAssetRaw.reserve(m_accountAssetBarriers.size());
     for (const OrderSizeAccountAssetBarrier& barrier : m_accountAssetBarriers) {
       OpenPitPretradePoliciesOrderSizeAccountAssetBarrier raw{};
-      raw.limit = ::openpit::detail::Native(barrier.limit);
+      raw.limit.max_quantity =
+          detail::OrderSizeOptionalAccess::Native(barrier.limit.maxQuantity);
+      raw.limit.max_notional =
+          detail::OrderSizeOptionalAccess::Native(barrier.limit.maxNotional);
       raw.account_id = ::openpit::detail::Native(barrier.accountId);
-      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
+      raw.asset = ::openpit::detail::Native(barrier.asset);
       accountAssetRaw.push_back(raw);
     }
 

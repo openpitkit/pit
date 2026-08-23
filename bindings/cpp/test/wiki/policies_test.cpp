@@ -65,20 +65,31 @@ TEST(Policies, RateLimitBrokerBarrier) {
   EXPECT_TRUE(static_cast<bool>(engine));
 }
 
-// OrderSizeLimitPolicy: per-asset barrier plus an additive broker hard cap.
+// OrderSizeLimitPolicy: quantity follows the underlying asset and notional
+// follows the settlement asset, with an additive broker hard cap.
 TEST(Policies, OrderSizeLimitAssetAndBroker) {
-  const openpit::param::Quantity maxQty =
+  const openpit::param::Quantity assetMaxQty =
       openpit::param::Quantity::FromString("100");
-  const openpit::param::Volume maxNotional =
+  const openpit::param::Volume assetMaxNotional =
       openpit::param::Volume::FromString("50000");
+  const openpit::param::Quantity brokerMaxQty =
+      openpit::param::Quantity::FromString("500");
+  const openpit::param::Volume brokerMaxNotional =
+      openpit::param::Volume::FromString("100000");
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  // Quantity is keyed by the underlying asset, notional by the
+  // settlement asset; broker caps apply on top.
   builder.Add(policies::OrderSizeLimitPolicy{}
                   .AssetBarrier(policies::OrderSizeAssetBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional),
+                      policies::OrderSizeLimit::Quantity(assetMaxQty),
+                      openpit::param::Asset("AAPL")))
+                  .AssetBarrier(policies::OrderSizeAssetBarrier(
+                      policies::OrderSizeLimit::Notional(assetMaxNotional),
                       openpit::param::Asset("USD")))
                   .BrokerBarrier(policies::OrderSizeBrokerBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional))));
+                      policies::OrderSizeLimit::Both(brokerMaxQty,
+                                                     brokerMaxNotional))));
   const openpit::Engine engine = builder.Build();
 
   EXPECT_TRUE(static_cast<bool>(engine));

@@ -194,7 +194,8 @@ fn integration_table_order_size_limit_paths() {
             expected_reject: Some((
                 RejectCode::OrderExceedsLimit,
                 "order size exceeded",
-                "requested quantity 11, max allowed: 10; requested notional 1100, max allowed: 1000",
+                "requested quantity 11 for asset AAPL, max allowed: 10; \
+                 requested notional 1100 for asset USD, max allowed: 1000",
             )),
         },
         Case {
@@ -209,13 +210,24 @@ fn integration_table_order_size_limit_paths() {
     for case in cases {
         let size_limit = if case.configure_limit {
             OrderSizeLimitPolicy::<NoLocking>::new(
-                OrderSizeLimitSettings::new(None, [order_size_limit_usd("10", "1000")], [])
-                    .expect("valid config"),
+                OrderSizeLimitSettings::new(
+                    None,
+                    [
+                        order_size_limit("AAPL", Some("10"), None),
+                        order_size_limit("USD", None, Some("1000")),
+                    ],
+                    [],
+                )
+                .expect("valid config"),
             )
         } else {
             OrderSizeLimitPolicy::<NoLocking>::new(
-                OrderSizeLimitSettings::new(None, [order_size_limit_eur("10", "1000")], [])
-                    .expect("valid config"),
+                OrderSizeLimitSettings::new(
+                    None,
+                    [order_size_limit("EUR", Some("10"), Some("1000"))],
+                    [],
+                )
+                .expect("valid config"),
             )
         };
 
@@ -249,7 +261,7 @@ fn integration_table_order_size_limit_paths() {
     }
 
     let size_limit = OrderSizeLimitPolicy::<NoLocking>::new(
-        OrderSizeLimitSettings::new(None, [order_size_limit_usd("100", "1000")], [])
+        OrderSizeLimitSettings::new(None, [order_size_limit("USD", None, Some("1000"))], [])
             .expect("valid config"),
     );
     let overflow_engine = Engine::builder::<TestOrder, TestReport, ()>()
@@ -1056,25 +1068,18 @@ fn pnl_bounds_barrier(
     }
 }
 
-fn order_size_limit_usd(max_quantity: &str, max_notional: &str) -> OrderSizeAssetBarrier {
+fn order_size_limit(
+    asset: &str,
+    max_quantity: Option<&str>,
+    max_notional: Option<&str>,
+) -> OrderSizeAssetBarrier {
     OrderSizeAssetBarrier {
         limit: OrderSizeLimit {
-            max_quantity: Quantity::from_str(max_quantity)
-                .expect("max quantity literal must be valid"),
-            max_notional: volume(max_notional),
+            max_quantity: max_quantity.map(|value| {
+                Quantity::from_str(value).expect("max quantity literal must be valid")
+            }),
+            max_notional: max_notional.map(volume),
         },
-        settlement_asset: Asset::new("USD").expect("asset code must be valid"),
-    }
-}
-
-fn order_size_limit_eur(max_quantity: &str, max_notional: &str) -> OrderSizeAssetBarrier {
-    OrderSizeAssetBarrier {
-        limit: OrderSizeLimit {
-            max_quantity: Quantity::from_str(max_quantity)
-                .expect("max quantity literal must be valid"),
-            max_notional: Volume::from_str(max_notional)
-                .expect("max notional literal must be valid"),
-        },
-        settlement_asset: Asset::new("EUR").expect("asset code must be valid"),
+        asset: Asset::new(asset).expect("asset code must be valid"),
     }
 }

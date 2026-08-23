@@ -365,13 +365,22 @@ describe("Getting-Started.md wiki examples", () => {
       ),
     );
 
+    // Quantity is keyed by the underlying asset, notional by the
+    // settlement asset; broker caps apply on top.
     ready.builtin(
       buildOrderSizeLimit()
         .brokerBarrier(
           new OrderSizeBrokerBarrier(new OrderSizeLimit("500", "100000")),
         )
         .assetBarriers([
-          new OrderSizeAssetBarrier(new OrderSizeLimit("500", "100000"), "USD"),
+          new OrderSizeAssetBarrier(
+            new OrderSizeLimit("200", undefined),
+            "AAPL",
+          ),
+          new OrderSizeAssetBarrier(
+            new OrderSizeLimit(undefined, "50000"),
+            "USD",
+          ),
         ]),
     );
 
@@ -933,18 +942,24 @@ describe("Policies.md wiki examples", () => {
   it("builds an OrderSizeLimit engine", () => {
     // Source: https://wiki.openpit.dev/Policies/ - OrderSizeLimitPolicy
     // Quantities and notionals cross as decimal strings.
+    // Quantity is keyed by the underlying asset, notional by the
+    // settlement asset; broker caps apply on top.
     const engine = Engine.builder()
 
       .builtin(
         buildOrderSizeLimit()
           .assetBarriers([
             new OrderSizeAssetBarrier(
-              new OrderSizeLimit("100", "50000"),
+              new OrderSizeLimit("100", undefined),
+              "AAPL",
+            ),
+            new OrderSizeAssetBarrier(
+              new OrderSizeLimit(undefined, "50000"),
               "USD",
             ),
           ])
           .brokerBarrier(
-            new OrderSizeBrokerBarrier(new OrderSizeLimit("100", "50000")),
+            new OrderSizeBrokerBarrier(new OrderSizeLimit("500", "100000")),
           ),
       )
       .build();

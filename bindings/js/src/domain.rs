@@ -146,6 +146,7 @@ define_optional_value_resolver!(
     Quantity,
     "Quantity"
 );
+define_optional_value_resolver!(resolve_optional_volume, resolve_volume, Volume, "Volume");
 define_optional_value_resolver!(
     resolve_optional_position_size,
     resolve_position_size,
@@ -676,6 +677,10 @@ extern "C" {
     /// An optional `Quantity` wrapper or `DecimalInput`.
     #[wasm_bindgen(typescript_type = "Quantity | string | number | bigint | null | undefined")]
     pub type OptionalQuantityLike;
+
+    /// An optional `Volume` wrapper or `DecimalInput`.
+    #[wasm_bindgen(typescript_type = "Volume | string | number | bigint | null | undefined")]
+    pub type OptionalVolumeLike;
 
     /// A `Pnl` wrapper or a `DecimalInput` (`string | number | bigint`).
     #[wasm_bindgen(typescript_type = "Pnl | string | number | bigint")]

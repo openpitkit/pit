@@ -24,49 +24,64 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pkg/ptr"
 )
 
-// OrderSizeLimit defines maximum quantity and notional for a single order.
+// OrderSizeLimit defines optional quantity and notional caps for one order.
+//
+// Quantity resolves by underlying asset, while notional resolves by settlement
+// asset. An absent cap does not constrain its metric. Within the account+asset
+// then asset chain for a metric, a matching barrier without that metric is
+// skipped. The broker barrier applies each cap it carries to every order in
+// addition to those chains. A cap rejects an order whose metric value is above
+// it; a zero cap rejects positive metric values and admits a value of exactly
+// zero. The core requires at least one cap in every limit.
 type OrderSizeLimit struct {
-	// MaxQuantity is the maximum allowed order quantity.
-	MaxQuantity param.Quantity
-	// MaxNotional is the maximum allowed order notional.
-	MaxNotional param.Volume
+	// MaxQuantity is the optional maximum quantity, keyed by underlying asset.
+	MaxQuantity optional.Option[param.Quantity]
+	// MaxNotional is the optional maximum notional, keyed by settlement asset.
+	MaxNotional optional.Option[param.Volume]
 }
 
-// OrderSizeBrokerBarrier applies an order size limit across the entire
-// broker.
+// OrderSizeBrokerBarrier applies broker-wide caps to every order, in addition
+// to the account+asset and asset chains. Each cap applies independently.
 type OrderSizeBrokerBarrier struct {
 	Limit OrderSizeLimit
 }
 
-// OrderSizeAssetBarrier applies an order size limit per settlement asset.
+// OrderSizeAssetBarrier applies its quantity cap when Asset is the underlying
+// asset and its notional cap when Asset is the settlement asset. A missing cap
+// is skipped while resolving that metric.
 type OrderSizeAssetBarrier struct {
-	Limit           OrderSizeLimit
-	SettlementAsset param.Asset
+	Limit OrderSizeLimit
+	Asset param.Asset
 }
 
-// OrderSizeAccountAssetBarrier applies an order size limit per
-// (account, settlement asset) pair.
+// OrderSizeAccountAssetBarrier applies its quantity cap per (account,
+// underlying asset) and its notional cap per (account, settlement asset). A
+// missing cap is skipped while resolving that metric.
 type OrderSizeAccountAssetBarrier struct {
-	Limit           OrderSizeLimit
-	AccountID       param.AccountID
-	SettlementAsset param.Asset
+	Limit     OrderSizeLimit
+	AccountID param.AccountID
+	Asset     param.Asset
 }
 
 //------------------------------------------------------------------------------
 // OrderSizeLimitBuilder
 
 // OrderSizeLimitBuilder is the entry point for the order-size-limit policy.
-// Call BrokerBarrier to obtain an OrderSizeLimitReadyBuilder on which
-// additional axes and Build are available.
+// Each cap is optional, and the core validates that every configured limit
+// carries at least one cap. Call an axis method to obtain an
+// OrderSizeLimitReadyBuilder on which additional axes and Build are available.
 type OrderSizeLimitBuilder struct {
 	builder *OrderSizeLimitReadyBuilder
 }
 
-// OrderSizeLimitReadyBuilder holds a fully-configured order-size-limit
-// policy.
+// OrderSizeLimitReadyBuilder holds an order-size-limit policy ready to build.
+// Quantity barriers are keyed by underlying asset and notional barriers by
+// settlement asset. Within its account+asset then asset chain, each metric
+// skips matching barriers that omit that cap.
 type OrderSizeLimitReadyBuilder struct {
 	broker               *native.PretradePoliciesOrderSizeBrokerBarrier
 	assetBarriers        []native.PretradePoliciesOrderSizeAssetBarrier
@@ -99,8 +114,10 @@ func (b *OrderSizeLimitReadyBuilder) PolicyGroupID(
 	return b
 }
 
-// BrokerBarrier sets the broker-wide size limit and returns a ready
-// builder.
+// BrokerBarrier sets additive broker-wide caps and returns a ready builder.
+// Each cap applies to every order in addition to the account+asset and asset
+// chains. An absent cap constrains nothing; an explicitly set zero cap rejects
+// positive metric values and admits a value of exactly zero.
 func (b *OrderSizeLimitBuilder) BrokerBarrier(
 	barrier OrderSizeBrokerBarrier,
 ) *OrderSizeLimitReadyBuilder {
@@ -108,23 +125,27 @@ func (b *OrderSizeLimitBuilder) BrokerBarrier(
 	return b.builder
 }
 
-// BrokerBarrier sets or replaces the broker-wide size limit.
+// BrokerBarrier sets or replaces the additive broker-wide caps. Each cap
+// applies to every order in addition to the account+asset and asset chains. An
+// absent cap constrains nothing; an explicitly set zero cap rejects positive
+// metric values and admits a value of exactly zero.
 func (b *OrderSizeLimitReadyBuilder) BrokerBarrier(
 	barrier OrderSizeBrokerBarrier,
 ) *OrderSizeLimitReadyBuilder {
 	b.broker = ptr.New(
 		native.NewPretradePoliciesOrderSizeBrokerBarrier(
 			native.NewPretradePoliciesOrderSizeLimit(
-				barrier.Limit.MaxQuantity.Handle(),
-				barrier.Limit.MaxNotional.Handle(),
+				newParamQuantityOptionalFromOptional(barrier.Limit.MaxQuantity),
+				newParamVolumeOptionalFromOptional(barrier.Limit.MaxNotional),
 			),
 		),
 	)
 	return b
 }
 
-// AssetBarriers adds per-settlement-asset barriers and returns a ready
-// builder.
+// AssetBarriers adds barriers keyed by underlying for quantity and settlement
+// for notional, then returns a ready builder. Resolution skips a barrier that
+// omits the metric being resolved.
 func (b *OrderSizeLimitBuilder) AssetBarriers(
 	barriers ...OrderSizeAssetBarrier,
 ) *OrderSizeLimitReadyBuilder {
@@ -132,7 +153,9 @@ func (b *OrderSizeLimitBuilder) AssetBarriers(
 	return b.builder
 }
 
-// AssetBarriers appends per-settlement-asset order-size barriers.
+// AssetBarriers appends barriers keyed by underlying for quantity and
+// settlement for notional. Resolution skips a barrier that omits the metric
+// being resolved.
 func (b *OrderSizeLimitReadyBuilder) AssetBarriers(
 	barriers ...OrderSizeAssetBarrier,
 ) *OrderSizeLimitReadyBuilder {
@@ -141,18 +164,19 @@ func (b *OrderSizeLimitReadyBuilder) AssetBarriers(
 			b.assetBarriers,
 			native.NewPretradePoliciesOrderSizeAssetBarrier(
 				native.NewPretradePoliciesOrderSizeLimit(
-					barrier.Limit.MaxQuantity.Handle(),
-					barrier.Limit.MaxNotional.Handle(),
+					newParamQuantityOptionalFromOptional(barrier.Limit.MaxQuantity),
+					newParamVolumeOptionalFromOptional(barrier.Limit.MaxNotional),
 				),
-				barrier.SettlementAsset.Handle(),
+				barrier.Asset.Handle(),
 			),
 		)
 	}
 	return b
 }
 
-// AccountAssetBarriers adds per-(account, settlement-asset) barriers and
-// returns a ready builder.
+// AccountAssetBarriers adds barriers keyed by (account, underlying) for
+// quantity and (account, settlement) for notional, then returns a ready
+// builder. Resolution skips a barrier that omits the metric being resolved.
 func (b *OrderSizeLimitBuilder) AccountAssetBarriers(
 	barriers ...OrderSizeAccountAssetBarrier,
 ) *OrderSizeLimitReadyBuilder {
@@ -160,8 +184,9 @@ func (b *OrderSizeLimitBuilder) AccountAssetBarriers(
 	return b.builder
 }
 
-// AccountAssetBarriers appends per-(account, settlement-asset) order-size
-// barriers.
+// AccountAssetBarriers appends barriers keyed by (account, underlying) for
+// quantity and (account, settlement) for notional. Resolution skips a barrier
+// that omits the metric being resolved.
 func (b *OrderSizeLimitReadyBuilder) AccountAssetBarriers(
 	barriers ...OrderSizeAccountAssetBarrier,
 ) *OrderSizeLimitReadyBuilder {
@@ -170,19 +195,20 @@ func (b *OrderSizeLimitReadyBuilder) AccountAssetBarriers(
 			b.accountAssetBarriers,
 			native.NewPretradePoliciesOrderSizeAccountAssetBarrier(
 				native.NewPretradePoliciesOrderSizeLimit(
-					barrier.Limit.MaxQuantity.Handle(),
-					barrier.Limit.MaxNotional.Handle(),
+					newParamQuantityOptionalFromOptional(barrier.Limit.MaxQuantity),
+					newParamVolumeOptionalFromOptional(barrier.Limit.MaxNotional),
 				),
 				barrier.AccountID.Handle(),
-				barrier.SettlementAsset.Handle(),
+				barrier.Asset.Handle(),
 			),
 		)
 	}
 	return b
 }
 
-// Build marshals the configuration and registers the built-in
-// order-PolicyGroupIDmit policy on the given engine builder.
+// Build marshals the configuration and registers the built-in order-size-limit
+// policy on the given engine builder. The core rejects capless limits and
+// duplicate keys.
 func (b *OrderSizeLimitReadyBuilder) Build(builder native.EngineBuilder) error {
 	err := native.EngineBuilderAddBuiltinOrderSizeLimit(
 		builder,
@@ -193,4 +219,22 @@ func (b *OrderSizeLimitReadyBuilder) Build(builder native.EngineBuilder) error {
 	)
 	runtime.KeepAlive(b)
 	return err
+}
+
+func newParamQuantityOptionalFromOptional(
+	value optional.Option[param.Quantity],
+) native.ParamQuantityOptional {
+	if v, has := value.Get(); has {
+		return native.NewParamQuantityOptional(v.Handle())
+	}
+	return native.ParamQuantityOptional{}
+}
+
+func newParamVolumeOptionalFromOptional(
+	value optional.Option[param.Volume],
+) native.ParamVolumeOptional {
+	if v, has := value.Get(); has {
+		return native.NewParamVolumeOptional(v.Handle())
+	}
+	return native.ParamVolumeOptional{}
 }

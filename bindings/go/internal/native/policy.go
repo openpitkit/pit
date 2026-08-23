@@ -80,9 +80,23 @@ func NewPretradePoliciesRateLimitAccountAssetBarrier(
 //------------------------------------------------------------------------------
 // BuiltinOrderSizeLimitPolicy
 
+func NewParamQuantityOptional(value ParamQuantity) ParamQuantityOptional {
+	var out ParamQuantityOptional
+	out.value = value
+	out.is_set = true
+	return out
+}
+
+func NewParamVolumeOptional(value ParamVolume) ParamVolumeOptional {
+	var out ParamVolumeOptional
+	out.value = value
+	out.is_set = true
+	return out
+}
+
 func NewPretradePoliciesOrderSizeLimit(
-	maxQuantity ParamQuantity,
-	maxNotional ParamVolume,
+	maxQuantity ParamQuantityOptional,
+	maxNotional ParamVolumeOptional,
 ) PretradePoliciesOrderSizeLimit {
 	return PretradePoliciesOrderSizeLimit{
 		max_quantity: maxQuantity,
@@ -98,23 +112,23 @@ func NewPretradePoliciesOrderSizeBrokerBarrier(
 
 func NewPretradePoliciesOrderSizeAssetBarrier(
 	limit PretradePoliciesOrderSizeLimit,
-	settlementAsset string,
+	asset string,
 ) PretradePoliciesOrderSizeAssetBarrier {
 	return PretradePoliciesOrderSizeAssetBarrier{
-		limit:            limit,
-		settlement_asset: importString(settlementAsset),
+		limit: limit,
+		asset: importString(asset),
 	}
 }
 
 func NewPretradePoliciesOrderSizeAccountAssetBarrier(
 	limit PretradePoliciesOrderSizeLimit,
 	accountID ParamAccountID,
-	settlementAsset string,
+	asset string,
 ) PretradePoliciesOrderSizeAccountAssetBarrier {
 	return PretradePoliciesOrderSizeAccountAssetBarrier{
-		limit:            limit,
-		account_id:       accountID,
-		settlement_asset: importString(settlementAsset),
+		limit:      limit,
+		account_id: accountID,
+		asset:      importString(asset),
 	}
 }
 

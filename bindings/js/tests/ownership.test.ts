@@ -81,7 +81,7 @@ describe("wasm wrapper ownership", () => {
   });
 
   it("does not consume exported barriers passed through iterables", () => {
-    const orderSize = new OrderSizeLimit("10", "1000");
+    const orderSize = new OrderSizeLimit("10", undefined);
     const orderSizeAsset = new OrderSizeAssetBarrier(orderSize, "USD");
     const orderSizeAccount = new OrderSizeAccountAssetBarrier(
       orderSize,

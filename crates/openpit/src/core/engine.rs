@@ -4199,8 +4199,8 @@ mod tests {
         let settings = OrderSizeLimitSettings::new(
             Some(OrderSizeBrokerBarrier {
                 limit: OrderSizeLimit {
-                    max_quantity: Quantity::from_str("100").expect("quantity must be valid"),
-                    max_notional: Volume::from_str("10000").expect("volume must be valid"),
+                    max_quantity: Some(Quantity::from_str("100").expect("quantity must be valid")),
+                    max_notional: Some(Volume::from_str("10000").expect("volume must be valid")),
                 },
             }),
             [],

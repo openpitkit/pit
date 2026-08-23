@@ -94,17 +94,15 @@ def test_start_pre_trade_order_size_limit_without_operation_rejects() -> None:
                 policies.OrderSizeBrokerBarrier(
                     limit=policies.OrderSizeLimit(
                         max_quantity=openpit.param.Quantity("1000000"),
-                        max_notional=openpit.param.Volume("1000000000"),
                     )
                 )
             )
             .asset_barriers(
                 policies.OrderSizeAssetBarrier(
                     limit=policies.OrderSizeLimit(
-                        max_quantity=openpit.param.Quantity("100"),
                         max_notional=openpit.param.Volume("50000"),
                     ),
-                    settlement_asset=openpit.param.Asset("USD"),
+                    asset=openpit.param.Asset("USD"),
                 )
             )
         )

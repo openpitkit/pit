@@ -146,8 +146,8 @@ blocked individually in place.
 - `build_rate_limit()`: rejects requests after a configured limit is reached.
 - `build_pnl_bounds_killswitch()`: blocks accounts when accumulated P&L is
   outside configured bounds.
-- `build_order_size_limit()`: enforces per-settlement-asset quantity and
-  notional limits.
+- `build_order_size_limit()`: enforces optional quantity limits by underlying
+  asset and notional limits by settlement asset, with additive broker caps.
 - `build_spot_funds()`: enforces available-funds checks by default and tracks
   reservations and settlement state.
 - `build_spot_funds_pnl_bounds_killswitch()`: enables account P&L bounds with

@@ -178,14 +178,14 @@ def test_order_size_configuration_uses_named_entities() -> None:
         asset_barriers=[
             policies.OrderSizeAssetBarrier(
                 limit=_order_size_limit("10"),
-                settlement_asset=openpit.param.Asset("USD"),
+                asset=openpit.param.Asset("AAPL"),
             )
         ],
         account_asset_barriers=[
             policies.OrderSizeAccountAssetBarrier(
                 limit=_order_size_limit("10"),
                 account_id=account_id,
-                settlement_asset=openpit.param.Asset("USD"),
+                asset=openpit.param.Asset("AAPL"),
             )
         ],
     )
@@ -197,6 +197,118 @@ def test_order_size_configuration_uses_named_entities() -> None:
     )
     assert not result.ok
     assert result.rejects[0].code == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+
+
+@pytest.mark.unit
+def test_order_size_configuration_preserves_optional_notional_cap() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_order_size_limit().broker_barrier(
+                policies.OrderSizeBrokerBarrier(
+                    limit=policies.OrderSizeLimit(
+                        max_quantity=openpit.param.Quantity("100")
+                    )
+                )
+            )
+        )
+        .build()
+    )
+
+    engine.configure().order_size_limit(
+        policies.OrderSizeLimitBuilder.NAME,
+        broker=policies.OrderSizeBrokerBarrier(
+            limit=policies.OrderSizeLimit(max_notional=openpit.param.Volume("1000"))
+        ),
+    )
+
+    boundary = engine.start_pre_trade(
+        order=conftest.make_order(
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("100"),
+        )
+    )
+    assert boundary.ok
+    boundary.request.execute().reservation.rollback()
+
+    above = engine.start_pre_trade(
+        order=conftest.make_order(
+            trade_amount=openpit.param.TradeAmount.quantity("11"),
+            price=openpit.param.Price("100"),
+        )
+    )
+    assert not above.ok
+    assert len(above.rejects) == 1
+    assert (
+        above.rejects[0].code
+        == openpit.pretrade.RejectCode.ORDER_NOTIONAL_EXCEEDS_LIMIT
+    )
+
+    engine.configure().order_size_limit(
+        policies.OrderSizeLimitBuilder.NAME,
+        broker=policies.OrderSizeBrokerBarrier(
+            limit=policies.OrderSizeLimit(max_notional=openpit.param.Volume("0"))
+        ),
+    )
+    zero = engine.start_pre_trade(order=conftest.make_order())
+    assert not zero.ok
+    assert len(zero.rejects) == 1
+    assert (
+        zero.rejects[0].code == openpit.pretrade.RejectCode.ORDER_NOTIONAL_EXCEEDS_LIMIT
+    )
+
+
+@pytest.mark.unit
+def test_order_size_configuration_reports_core_validation_errors() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_order_size_limit().broker_barrier(
+                policies.OrderSizeBrokerBarrier(
+                    limit=policies.OrderSizeLimit(
+                        max_quantity=openpit.param.Quantity("100")
+                    )
+                )
+            )
+        )
+        .build()
+    )
+
+    capless = policies.OrderSizeLimit()
+    with pytest.raises(
+        openpit.PolicyConfigureError,
+        match=(
+            "^policy OrderSizeLimitPolicy rejected the update: at least one "
+            "of max_quantity or max_notional must be configured$"
+        ),
+    ) as caught:
+        engine.configure().order_size_limit(
+            policies.OrderSizeLimitBuilder.NAME,
+            broker=policies.OrderSizeBrokerBarrier(limit=capless),
+        )
+    assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
+
+    aapl = openpit.param.Asset("AAPL")
+    limit = policies.OrderSizeLimit(max_quantity=openpit.param.Quantity("10"))
+    with pytest.raises(
+        openpit.PolicyConfigureError,
+        match=(
+            "^policy OrderSizeLimitPolicy rejected the update: duplicate "
+            "asset barrier for asset AAPL$"
+        ),
+    ) as caught:
+        engine.configure().order_size_limit(
+            policies.OrderSizeLimitBuilder.NAME,
+            asset_barriers=[
+                policies.OrderSizeAssetBarrier(limit=limit, asset=aapl),
+                policies.OrderSizeAssetBarrier(limit=limit, asset=aapl),
+            ],
+        )
+    assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
 
 
 @pytest.mark.unit
@@ -246,7 +358,7 @@ def test_order_size_configuration_can_clear_broker_barrier() -> None:
             .asset_barriers(
                 policies.OrderSizeAssetBarrier(
                     limit=_order_size_limit("10"),
-                    settlement_asset=openpit.param.Asset("USD"),
+                    asset=openpit.param.Asset("AAPL"),
                 )
             )
         )

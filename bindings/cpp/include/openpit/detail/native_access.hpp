@@ -178,7 +178,6 @@ class NativeAccess final {
     friend struct ::openpit::pretrade::policies::OrderSizeAccountAssetBarrier;
     friend struct ::openpit::pretrade::policies::OrderSizeAssetBarrier;
     friend struct ::openpit::pretrade::policies::OrderSizeBrokerBarrier;
-    friend struct ::openpit::pretrade::policies::OrderSizeLimit;
     friend struct ::openpit::pretrade::policies::PnlBoundsAccountBarrier;
     friend struct ::openpit::pretrade::policies::PnlBoundsAccountBarrierUpdate;
     friend struct ::openpit::pretrade::policies::PnlBoundsBrokerBarrier;
@@ -193,6 +192,7 @@ class NativeAccess final {
     friend struct ::openpit::pretrade::policies::
         SpotFundsPnlBoundsAccountGroupBarrier;
     friend struct ::openpit::pretrade::policies::SpotFundsPnlBoundsBarrier;
+    friend class ::openpit::pretrade::policies::detail::OrderSizeOptionalAccess;
     friend class ::openpit::pretrade::policies::detail::PnlOptionalAccess;
 
     friend class ::openpit::accounts::AccountControl;

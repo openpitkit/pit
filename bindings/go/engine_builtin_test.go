@@ -407,27 +407,25 @@ func hugeOrderSizeLimit(t *testing.T) policies.OrderSizeBrokerBarrier {
 	t.Helper()
 	return policies.OrderSizeBrokerBarrier{
 		Limit: policies.OrderSizeLimit{
-			MaxQuantity: orderSizeTestQty(t, "1000000"),
-			MaxNotional: orderSizeTestVol(t, "1000000000"),
+			MaxQuantity: optional.Some(orderSizeTestQty(t, "1000000")),
+			MaxNotional: optional.Some(orderSizeTestVol(t, "1000000000")),
 		},
 	}
 }
 
 func TestConfigureOrderSizeLimitUpdateClearsBrokerBarrier(t *testing.T) {
-	usd := builtinTestAsset(t, "USD")
+	aapl := builtinTestAsset(t, "AAPL")
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildOrderSizeLimit().
 			BrokerBarrier(policies.OrderSizeBrokerBarrier{
 				Limit: policies.OrderSizeLimit{
-					MaxQuantity: orderSizeTestQty(t, "1"),
-					MaxNotional: orderSizeTestVol(t, "1000000"),
+					MaxQuantity: optional.Some(orderSizeTestQty(t, "1")),
 				},
 			}).
 			AssetBarriers(policies.OrderSizeAssetBarrier{
-				SettlementAsset: usd,
+				Asset: aapl,
 				Limit: policies.OrderSizeLimit{
-					MaxQuantity: orderSizeTestQty(t, "10"),
-					MaxNotional: orderSizeTestVol(t, "1000000"),
+					MaxQuantity: optional.Some(orderSizeTestQty(t, "10")),
 				},
 			}),
 		).Build()
@@ -464,8 +462,131 @@ func TestConfigureOrderSizeLimitUpdateClearsBrokerBarrier(t *testing.T) {
 	request.Close()
 }
 
+func TestConfigureOrderSizeLimitPreservesOptionalNotionalCap(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().
+			BrokerBarrier(policies.OrderSizeBrokerBarrier{
+				Limit: policies.OrderSizeLimit{
+					MaxQuantity: optional.Some(orderSizeTestQty(t, "100")),
+				},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	err = engine.Configure().OrderSizeLimit(
+		policies.OrderSizeLimitPolicyName,
+		&policies.OrderSizeBrokerBarrier{
+			Limit: policies.OrderSizeLimit{
+				MaxNotional: optional.Some(orderSizeTestVol(t, "1000")),
+			},
+		},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Configure().OrderSizeLimit() error = %v", err)
+	}
+
+	request, rejects, err := engine.StartPreTrade(
+		orderSizeTestOrder(t, 1001, "USD", "10"),
+	)
+	if err != nil {
+		t.Fatalf("boundary StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("boundary rejects = %v, want none", rejects)
+	}
+	request.Close()
+
+	_, rejects, err = engine.StartPreTrade(
+		orderSizeTestOrder(t, 1001, "USD", "11"),
+	)
+	if err != nil {
+		t.Fatalf("above-cap StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeOrderNotionalExceedsLimit {
+		t.Fatalf("above-cap rejects = %v, want notional reject", rejects)
+	}
+
+	err = engine.Configure().OrderSizeLimit(
+		policies.OrderSizeLimitPolicyName,
+		&policies.OrderSizeBrokerBarrier{
+			Limit: policies.OrderSizeLimit{
+				MaxNotional: optional.Some(orderSizeTestVol(t, "0")),
+			},
+		},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("zero-cap Configure().OrderSizeLimit() error = %v", err)
+	}
+
+	_, rejects, err = engine.StartPreTrade(
+		orderSizeTestOrder(t, 1001, "USD", "1"),
+	)
+	if err != nil {
+		t.Fatalf("zero-cap StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeOrderNotionalExceedsLimit {
+		t.Fatalf("zero-cap rejects = %v, want notional reject", rejects)
+	}
+}
+
+func TestConfigureOrderSizeLimitReportsCoreValidationErrors(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().
+			BrokerBarrier(policies.OrderSizeBrokerBarrier{
+				Limit: policies.OrderSizeLimit{
+					MaxQuantity: optional.Some(orderSizeTestQty(t, "100")),
+				},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	err = engine.Configure().OrderSizeLimit(
+		policies.OrderSizeLimitPolicyName,
+		&policies.OrderSizeBrokerBarrier{},
+		nil,
+		nil,
+	)
+	var configErr *configure.Error
+	wantMessage := "policy OrderSizeLimitPolicy rejected the update: " +
+		"at least one of max_quantity or max_notional must be configured"
+	if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation ||
+		configErr.Message != wantMessage {
+		t.Fatalf("capless Configure().OrderSizeLimit() error = %v", err)
+	}
+
+	aapl := builtinTestAsset(t, "AAPL")
+	limit := policies.OrderSizeLimit{
+		MaxQuantity: optional.Some(orderSizeTestQty(t, "10")),
+	}
+	err = engine.Configure().OrderSizeLimit(
+		policies.OrderSizeLimitPolicyName,
+		nil,
+		[]policies.OrderSizeAssetBarrier{
+			{Limit: limit, Asset: aapl},
+			{Limit: limit, Asset: aapl},
+		},
+		nil,
+	)
+	wantMessage = "policy OrderSizeLimitPolicy rejected the update: " +
+		"duplicate asset barrier for asset AAPL"
+	if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation ||
+		configErr.Message != wantMessage {
+		t.Fatalf("duplicate Configure().OrderSizeLimit() error = %v", err)
+	}
+}
+
 func TestBuiltinOrderSizeLimitAccountAssetOverridesAssetBaseline(t *testing.T) {
-	usd := builtinTestAsset(t, "USD")
+	aapl := builtinTestAsset(t, "AAPL")
 	acct := param.NewAccountIDFromUint64(1001)
 
 	// Asset baseline: max qty 10. Account+asset override: max qty 5.
@@ -473,18 +594,16 @@ func TestBuiltinOrderSizeLimitAccountAssetOverridesAssetBaseline(t *testing.T) {
 		Builtin(policies.BuildOrderSizeLimit().
 			BrokerBarrier(hugeOrderSizeLimit(t)).
 			AssetBarriers(policies.OrderSizeAssetBarrier{
-				SettlementAsset: usd,
+				Asset: aapl,
 				Limit: policies.OrderSizeLimit{
-					MaxQuantity: orderSizeTestQty(t, "10"),
-					MaxNotional: orderSizeTestVol(t, "10000"),
+					MaxQuantity: optional.Some(orderSizeTestQty(t, "10")),
 				},
 			}).
 			AccountAssetBarriers(policies.OrderSizeAccountAssetBarrier{
-				AccountID:       acct,
-				SettlementAsset: usd,
+				AccountID: acct,
+				Asset:     aapl,
 				Limit: policies.OrderSizeLimit{
-					MaxQuantity: orderSizeTestQty(t, "5"),
-					MaxNotional: orderSizeTestVol(t, "10000"),
+					MaxQuantity: optional.Some(orderSizeTestQty(t, "5")),
 				},
 			}),
 		).Build()
@@ -527,18 +646,17 @@ func TestBuiltinOrderSizeLimitAccountAssetOverridesAssetBaseline(t *testing.T) {
 	request2.Close()
 }
 
-func TestBuiltinOrderSizeLimitUnknownSettlementPasses(t *testing.T) {
+func TestBuiltinOrderSizeLimitSettlementAssetControlsNotional(t *testing.T) {
 	usd := builtinTestAsset(t, "USD")
 
-	// Only USD asset barrier configured; EUR is unknown and must pass.
+	// A USD barrier does not constrain quantity, but it does constrain notional.
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildOrderSizeLimit().
 			BrokerBarrier(hugeOrderSizeLimit(t)).
 			AssetBarriers(policies.OrderSizeAssetBarrier{
-				SettlementAsset: usd,
+				Asset: usd,
 				Limit: policies.OrderSizeLimit{
-					MaxQuantity: orderSizeTestQty(t, "1"),
-					MaxNotional: orderSizeTestVol(t, "1000"),
+					MaxNotional: optional.Some(orderSizeTestVol(t, "100")),
 				},
 			}),
 		).Build()
@@ -547,7 +665,7 @@ func TestBuiltinOrderSizeLimitUnknownSettlementPasses(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	// EUR settlement: no asset barrier, must pass.
+	// EUR settlement: the USD barrier matches neither metric and must pass.
 	request, rejects, err := engine.StartPreTrade(
 		orderSizeTestOrder(t, 1, "EUR", "100"),
 	)
@@ -559,7 +677,7 @@ func TestBuiltinOrderSizeLimitUnknownSettlementPasses(t *testing.T) {
 	}
 	request.Close()
 
-	// USD settlement, qty 2 > maxQty 1: must be rejected on qty.
+	// USD settlement: qty 2 is allowed, but notional 200 exceeds 100.
 	_, rejects, err = engine.StartPreTrade(
 		orderSizeTestOrder(t, 1, "USD", "2"),
 	)
@@ -569,49 +687,210 @@ func TestBuiltinOrderSizeLimitUnknownSettlementPasses(t *testing.T) {
 	if len(rejects) != 1 {
 		t.Fatalf("USD order reject len = %d, want 1", len(rejects))
 	}
-	if rejects[0].Code != reject.CodeOrderQtyExceedsLimit {
+	if rejects[0].Code != reject.CodeOrderNotionalExceedsLimit {
 		t.Fatalf(
 			"reject code = %v, want %v",
-			rejects[0].Code, reject.CodeOrderQtyExceedsLimit,
+			rejects[0].Code, reject.CodeOrderNotionalExceedsLimit,
 		)
 	}
 }
 
-func TestBuiltinOrderSizeLimitAssetOnlyBuildsAndRejects(t *testing.T) {
+func TestBuiltinOrderSizeLimitCombinedRejectCode(t *testing.T) {
+	aapl := builtinTestAsset(t, "AAPL")
 	usd := builtinTestAsset(t, "USD")
-	maxQty := orderSizeTestQty(t, "10")
-	maxNotional := orderSizeTestVol(t, "1000")
-
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildOrderSizeLimit().
-			AssetBarriers(policies.OrderSizeAssetBarrier{
-				Limit: policies.OrderSizeLimit{
-					MaxQuantity: maxQty,
-					MaxNotional: maxNotional,
+			AssetBarriers(
+				policies.OrderSizeAssetBarrier{
+					Asset: aapl,
+					Limit: policies.OrderSizeLimit{
+						MaxQuantity: optional.Some(orderSizeTestQty(t, "10")),
+					},
 				},
-				SettlementAsset: usd,
-			}),
+				policies.OrderSizeAssetBarrier{
+					Asset: usd,
+					Limit: policies.OrderSizeLimit{
+						MaxNotional: optional.Some(orderSizeTestVol(t, "1000")),
+					},
+				},
+			),
 		).Build()
 	if err != nil {
-		t.Fatalf("Build() error = %v (asset-only must work)", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 	defer engine.Stop()
 
-	// Order with qty 15 > maxQty 10: expected reject.
 	_, rejects, err := engine.StartPreTrade(
 		orderSizeTestOrder(t, 1, "USD", "15"),
 	)
 	if err != nil {
 		t.Fatalf("StartPreTrade() error = %v", err)
 	}
-	if len(rejects) == 0 {
-		t.Fatal("expected reject for oversized order")
+	if len(rejects) != 1 {
+		t.Fatalf("reject len = %d, want 1", len(rejects))
 	}
 	if rejects[0].Code != reject.CodeOrderExceedsLimit {
 		t.Fatalf(
 			"reject code = %v, want %v",
 			rejects[0].Code, reject.CodeOrderExceedsLimit,
 		)
+	}
+}
+
+func TestBuiltinOrderSizeLimitQuantityOnlyBoundaries(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().
+			BrokerBarrier(policies.OrderSizeBrokerBarrier{
+				Limit: policies.OrderSizeLimit{
+					MaxQuantity: optional.Some(orderSizeTestQty(t, "10")),
+				},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	_, rejects, err := engine.StartPreTrade(
+		orderSizeTestOrder(t, 1, "USD", "11"),
+	)
+	if err != nil {
+		t.Fatalf("above-cap StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeOrderQtyExceedsLimit {
+		t.Fatalf("above-cap rejects = %v, want quantity reject", rejects)
+	}
+
+	request, rejects, err := engine.StartPreTrade(
+		orderSizeTestOrder(t, 1, "USD", "10"),
+	)
+	if err != nil {
+		t.Fatalf("boundary StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("boundary rejects = %v, want none", rejects)
+	}
+	request.Close()
+}
+
+func TestBuiltinOrderSizeLimitNotionalOnlyBoundaries(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().
+			BrokerBarrier(policies.OrderSizeBrokerBarrier{
+				Limit: policies.OrderSizeLimit{
+					MaxNotional: optional.Some(orderSizeTestVol(t, "1000")),
+				},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	_, rejects, err := engine.StartPreTrade(
+		orderSizeTestOrder(t, 1, "USD", "11"),
+	)
+	if err != nil {
+		t.Fatalf("above-cap StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeOrderNotionalExceedsLimit {
+		t.Fatalf("above-cap rejects = %v, want notional reject", rejects)
+	}
+
+	request, rejects, err := engine.StartPreTrade(
+		orderSizeTestOrder(t, 1, "USD", "10"),
+	)
+	if err != nil {
+		t.Fatalf("boundary StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("boundary rejects = %v, want none", rejects)
+	}
+	request.Close()
+}
+
+func TestBuiltinOrderSizeLimitExplicitZeroCapsReject(t *testing.T) {
+	tests := []struct {
+		name     string
+		asset    string
+		limit    policies.OrderSizeLimit
+		wantCode reject.Code
+	}{
+		{
+			name:  "quantity",
+			asset: "AAPL",
+			limit: policies.OrderSizeLimit{
+				MaxQuantity: optional.Some(orderSizeTestQty(t, "0")),
+			},
+			wantCode: reject.CodeOrderQtyExceedsLimit,
+		},
+		{
+			name:  "notional",
+			asset: "USD",
+			limit: policies.OrderSizeLimit{
+				MaxNotional: optional.Some(orderSizeTestVol(t, "0")),
+			},
+			wantCode: reject.CodeOrderNotionalExceedsLimit,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := NewEngineBuilder().NoSync().
+				Builtin(policies.BuildOrderSizeLimit().
+					AssetBarriers(policies.OrderSizeAssetBarrier{
+						Limit: test.limit,
+						Asset: builtinTestAsset(t, test.asset),
+					}),
+				).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			defer engine.Stop()
+
+			_, rejects, err := engine.StartPreTrade(
+				orderSizeTestOrder(t, 1, "USD", "1"),
+			)
+			if err != nil {
+				t.Fatalf("StartPreTrade() error = %v", err)
+			}
+			if len(rejects) != 1 || rejects[0].Code != test.wantCode {
+				t.Fatalf("rejects = %v, want code %v", rejects, test.wantCode)
+			}
+		})
+	}
+}
+
+func TestBuiltinOrderSizeLimitRejectsCaplessLimit(t *testing.T) {
+	_, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().
+			BrokerBarrier(policies.OrderSizeBrokerBarrier{}),
+		).Build()
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"at least one of max_quantity or max_notional must be configured",
+	) {
+		t.Fatalf("Build() error = %v, want capless-limit error", err)
+	}
+}
+
+func TestBuiltinOrderSizeLimitRejectsDuplicateAssetKey(t *testing.T) {
+	aapl := builtinTestAsset(t, "AAPL")
+	limit := policies.OrderSizeLimit{
+		MaxQuantity: optional.Some(orderSizeTestQty(t, "10")),
+	}
+	_, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().
+			AssetBarriers(
+				policies.OrderSizeAssetBarrier{Limit: limit, Asset: aapl},
+				policies.OrderSizeAssetBarrier{Limit: limit, Asset: aapl},
+			),
+		).Build()
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"duplicate asset barrier for asset AAPL",
+	) {
+		t.Fatalf("Build() error = %v, want duplicate-asset error", err)
 	}
 }
 
