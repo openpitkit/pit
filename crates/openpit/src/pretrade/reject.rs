@@ -32,17 +32,30 @@ use std::fmt::{Display, Formatter};
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RejectScope {
-    /// Reject only the current order.
+    /// Reject only the current request.
     Order,
     /// Account-level reject signal.
     ///
-    /// Every pre-trade stage that returns this scope automatically records the
-    /// affected account in the engine's blocked-accounts registry. The block is
-    /// irreversible until the engine is rebuilt; no retry, replay, or time
-    /// passing clears it.
+    /// Only the pre-trade stages derive an account block from this scope.
+    /// [`crate::Engine::start_pre_trade`] and
+    /// [`crate::Engine::execute_pre_trade`] record the start-stage block.
+    /// [`crate::pretrade::PreTradeRequest::execute`] records the main-stage
+    /// block.
     ///
-    /// A policy that intends to reject only the current order without latching
-    /// a block on the account must return [`RejectScope::Order`] instead.
+    /// The public dry-run entry points
+    /// [`crate::Engine::start_pre_trade_dry_run`] and
+    /// [`crate::Engine::execute_pre_trade_dry_run`] report the block a real
+    /// call would record, but do not record it.
+    ///
+    /// [`crate::Engine::apply_account_adjustment`] and
+    /// [`crate::Engine::apply_execution_report`] never read this scope.
+    /// Blocking on those paths is independent of this value.
+    ///
+    /// A block derived here stays latched until `Accounts::unblock` clears that
+    /// account. Retry, replay, and time passing do not clear it.
+    ///
+    /// A policy that intends to reject only the current request without
+    /// latching a block on the account must return [`RejectScope::Order`].
     Account,
 }
 

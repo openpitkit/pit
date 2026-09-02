@@ -675,13 +675,13 @@ where
             };
             let broker = s.broker.as_ref().map(|slot| {
                 let count = slot.counter.push(now_nanos, window_nanos(&slot.limit));
-                over_limit(count, &slot.limit, RejectScope::Order, "broker barrier")
+                over_limit(count, &slot.limit, "broker barrier")
             });
 
             let asset = settlement_opt.as_ref().and_then(|settlement| {
                 s.asset_limits.get(settlement).map(|slot| {
                     let count = slot.counter.push(now_nanos, window_nanos(&slot.limit));
-                    over_limit(count, &slot.limit, RejectScope::Order, "asset barrier")
+                    over_limit(count, &slot.limit, "asset barrier")
                 })
             });
 
@@ -696,7 +696,7 @@ where
                             entry.len() as u64
                         },
                     );
-                    over_limit(count, limit, RejectScope::Account, "account barrier")
+                    over_limit(count, limit, "account barrier")
                 })
             });
 
@@ -713,7 +713,7 @@ where
                                 entry.len() as u64
                             },
                         );
-                        over_limit(count, limit, RejectScope::Account, "account+asset barrier")
+                        over_limit(count, limit, "account+asset barrier")
                     })
                 })
             });
@@ -781,13 +781,13 @@ where
 
             let broker = s.broker.as_ref().map(|slot| {
                 let count = slot.counter.peek(now_nanos, window_nanos(&slot.limit));
-                over_limit(count, &slot.limit, RejectScope::Order, "broker barrier")
+                over_limit(count, &slot.limit, "broker barrier")
             });
 
             let asset = settlement_opt.as_ref().and_then(|settlement| {
                 s.asset_limits.get(settlement).map(|slot| {
                     let count = slot.counter.peek(now_nanos, window_nanos(&slot.limit));
-                    over_limit(count, &slot.limit, RejectScope::Order, "asset barrier")
+                    over_limit(count, &slot.limit, "asset barrier")
                 })
             });
 
@@ -799,7 +799,7 @@ where
                             would_be_window_count(entry, now, limit.window)
                         })
                         .unwrap_or(1);
-                    over_limit(count, limit, RejectScope::Account, "account barrier")
+                    over_limit(count, limit, "account barrier")
                 })
             });
 
@@ -813,7 +813,7 @@ where
                                 would_be_window_count(entry, now, limit.window)
                             })
                             .unwrap_or(1);
-                        over_limit(count, limit, RejectScope::Account, "account+asset barrier")
+                        over_limit(count, limit, "account+asset barrier")
                     })
                 })
             });
@@ -838,20 +838,14 @@ fn window_nanos(limit: &RateLimit) -> u64 {
 
 // Builds a reject if `count` breaches `limit`, else `None`. Keeps the
 // limit read and the threshold comparison inside the single settings read.
-fn over_limit(
-    count: u64,
-    limit: &RateLimit,
-    scope: RejectScope,
-    reason: &'static str,
-) -> Option<Rejects> {
+fn over_limit(count: u64, limit: &RateLimit, reason: &'static str) -> Option<Rejects> {
     (count > limit.max_orders as u64)
-        .then(|| rate_limit_reject(scope, reason, count, limit.max_orders as u64, limit.window))
+        .then(|| rate_limit_reject(reason, count, limit.max_orders as u64, limit.window))
 }
 
 // `barrier` names the breached axis (e.g. "broker barrier"); the reject
 // reason is "rate limit exceeded: <barrier>".
 fn rate_limit_reject(
-    scope: RejectScope,
     barrier: &'static str,
     count: u64,
     max_orders: u64,
@@ -859,7 +853,7 @@ fn rate_limit_reject(
 ) -> Rejects {
     Reject::new(
         RATE_LIMIT_POLICY_NAME,
-        scope,
+        RejectScope::Order,
         RejectCode::RateLimitExceeded,
         format!("rate limit exceeded: {barrier}"),
         format!(
@@ -1386,7 +1380,7 @@ mod tests {
         let reject = check_at(&policy, &o, base + Duration::from_secs(2))
             .expect_err("third order for account must be rejected");
         let reject = &reject[0];
-        assert_eq!(reject.scope, RejectScope::Account);
+        assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RateLimitExceeded);
         assert_eq!(reject.reason, "rate limit exceeded: account barrier");
         assert_eq!(
@@ -1467,7 +1461,7 @@ mod tests {
         let reject = check_at(&policy, &order(account(1)), base + Duration::from_secs(1))
             .expect_err("second order for account+USD must be rejected");
         let reject = &reject[0];
-        assert_eq!(reject.scope, RejectScope::Account);
+        assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RateLimitExceeded);
         assert_eq!(reject.reason, "rate limit exceeded: account+asset barrier");
     }
@@ -1512,7 +1506,7 @@ mod tests {
         // Broker: 2/3, account(1): 2/1 → account barrier triggers.
         let reject = check_at(&policy, &order(account(1)), base + Duration::from_secs(1))
             .expect_err("account barrier must trigger");
-        assert_eq!(reject[0].scope, RejectScope::Account);
+        assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].reason, "rate limit exceeded: account barrier");
     }
 

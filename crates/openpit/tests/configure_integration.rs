@@ -15,12 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Engine-side runtime reconfiguration: builds a FullSync engine with various
-// built-in policies, then drives each through `Engine::configure()`.
-// Covers rate-limit retune, P&L-bounds kill-switch (including pre-barrier
-// accumulation guarantee), order-size-limit retune, spot-funds retune, the
-// three `ConfigureError` paths, and the per-mode `Send`/`Sync` contract of
-// `Configurator`.
+// Engine-side runtime reconfiguration and related policy behavior: builds a
+// FullSync engine with various built-in policies and drives their public APIs.
+// Covers rate-limit retune, reject scope and account-block behavior (including
+// dry-run), drop-copy/live-pre-trade blocking parity, P&L-bounds kill-switch
+// (including pre-barrier accumulation), order-size-limit retune, spot-funds
+// retune, the three `ConfigureError` paths, and the per-mode `Send`/`Sync`
+// contract of `Configurator`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,12 +35,13 @@ use openpit::pretrade::policies::{
     OrderSizeAccountAssetBarrier, OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit,
     OrderSizeLimitPolicy, OrderSizeLimitPolicyError, OrderSizeLimitSettings,
     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
-    PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings, RateLimit, RateLimitAssetBarrier,
+    PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings, RateLimit,
+    RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
     SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPolicy, SpotFundsPricingSource,
     SpotFundsSettings,
 };
-use openpit::pretrade::{PreTradePolicy, DEFAULT_POLICY_GROUP_ID};
+use openpit::pretrade::{PreTradePolicy, RejectCode, RejectScope, DEFAULT_POLICY_GROUP_ID};
 use openpit::storage::{FullLocking, IndexLocking, NoLocking};
 use openpit::{
     AccountKeyConstraint, AccountSync, AccountSyncEngine, Configurator, ConfigureError, Engine,
@@ -95,14 +97,17 @@ fn broker_settings(max_orders: usize) -> RateLimitSettings {
     .expect("broker barrier is a valid configuration")
 }
 
-fn build_engine(max_orders: usize) -> FullSyncEngine<OrderOperation> {
+fn build_rate_limit_engine(settings: RateLimitSettings) -> FullSyncEngine<OrderOperation> {
     let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
-    let policy =
-        RateLimitPolicy::<FullLocking>::new(broker_settings(max_orders), builder.storage_builder());
+    let policy = RateLimitPolicy::<FullLocking>::new(settings, builder.storage_builder());
     builder
         .pre_trade(policy)
         .build()
         .expect("engine must build")
+}
+
+fn build_engine(max_orders: usize) -> FullSyncEngine<OrderOperation> {
+    build_rate_limit_engine(broker_settings(max_orders))
 }
 
 fn build_local_engine(max_orders: usize) -> LocalEngine<OrderOperation> {
@@ -191,6 +196,138 @@ fn configure_rate_limit_retune_does_not_reset_surviving_broker_counter() {
         .expect("third order in the surviving window must be rejected");
     assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
     assert!(rejects[0].details.contains("submitted 3 orders"));
+}
+
+#[test]
+fn configure_rate_limit_account_barrier_reject_does_not_block_account() {
+    let account_id = AccountId::from_u64(7);
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(
+            None,
+            [],
+            [RateLimitAccountBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+                account_id,
+            }],
+            [],
+        )
+        .expect("account barrier must be valid"),
+    );
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+
+    engine
+        .execute_pre_trade(order(7))
+        .expect("first order must fit the account barrier");
+    let rejects = engine
+        .execute_pre_trade(order(7))
+        .err()
+        .expect("second order must breach the account barrier");
+    assert_eq!(rejects[0].scope, RejectScope::Order);
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    assert_eq!(rejects[0].reason, "rate limit exceeded: account barrier");
+
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_account_barriers([RateLimitAccountBarrier {
+                limit: RateLimit {
+                    max_orders: 3,
+                    window: Duration::from_secs(60),
+                },
+                account_id,
+            }])
+        })
+        .expect("widening the account barrier must publish");
+    engine
+        .execute_pre_trade(order(7))
+        .expect("the same account must pass after its barrier is widened");
+}
+
+#[test]
+fn rate_limit_account_barrier_dry_run_reject_does_not_block_account() {
+    let account_id = AccountId::from_u64(7);
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(
+            None,
+            [],
+            [RateLimitAccountBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+                account_id,
+            }],
+            [],
+        )
+        .expect("account barrier must be valid"),
+    );
+
+    engine
+        .execute_pre_trade(order(7))
+        .expect("first order must exhaust the account barrier");
+
+    let report = engine.start_pre_trade_dry_run(order(7));
+    let rejects = report.rejects().expect("dry-run must report rejects");
+    assert_eq!(rejects[0].scope, RejectScope::Order);
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    assert!(report.account_block().is_none());
+}
+
+#[test]
+fn configure_rate_limit_account_asset_barrier_reject_does_not_block_account() {
+    let account_id = AccountId::from_u64(8);
+    let usd = Asset::new("USD").expect("asset code must be valid");
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(
+            None,
+            [],
+            [],
+            [RateLimitAccountAssetBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+                account_id,
+                settlement_asset: usd.clone(),
+            }],
+        )
+        .expect("account+asset barrier must be valid"),
+    );
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+
+    engine
+        .execute_pre_trade(order(8))
+        .expect("first order must fit the account+asset barrier");
+    let rejects = engine
+        .execute_pre_trade(order(8))
+        .err()
+        .expect("second order must breach the account+asset barrier");
+    assert_eq!(rejects[0].scope, RejectScope::Order);
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    assert_eq!(
+        rejects[0].reason,
+        "rate limit exceeded: account+asset barrier"
+    );
+
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_account_asset_barriers([RateLimitAccountAssetBarrier {
+                limit: RateLimit {
+                    max_orders: 3,
+                    window: Duration::from_secs(60),
+                },
+                account_id,
+                settlement_asset: usd,
+            }])
+        })
+        .expect("widening the account+asset barrier must publish");
+    engine
+        .execute_pre_trade(order(8))
+        .expect("the same account must pass after its barrier is widened");
 }
 
 #[test]
@@ -527,14 +664,196 @@ fn pnl_report(account: u64, settlement: &str, pnl: &str, fee: &str) -> PnlReport
 fn build_pnl_engine(
     account_barriers: impl IntoIterator<Item = PnlBoundsAccountAssetBarrier>,
 ) -> FullSyncEngine<OrderOperation, PnlReport> {
+    build_pnl_engine_with_barriers([], account_barriers)
+}
+
+fn build_pnl_engine_with_barriers(
+    broker_barriers: impl IntoIterator<Item = PnlBoundsBrokerBarrier>,
+    account_barriers: impl IntoIterator<Item = PnlBoundsAccountAssetBarrier>,
+) -> FullSyncEngine<OrderOperation, PnlReport> {
     let builder = Engine::builder::<OrderOperation, PnlReport, ()>().full_sync();
-    let settings =
-        PnlBoundsKillSwitchSettings::new([], account_barriers).expect("settings must be valid");
+    let settings = PnlBoundsKillSwitchSettings::new(broker_barriers, account_barriers)
+        .expect("settings must be valid");
     let policy = PnlBoundsKillSwitchPolicy::<FullLocking>::new(settings, builder.storage_builder());
     builder
         .pre_trade(policy)
         .build()
         .expect("engine must build")
+}
+
+#[test]
+fn pnl_bounds_broker_breach_latches_account_block() {
+    let usd = Asset::new("USD").expect("asset code must be valid");
+    let engine = build_pnl_engine_with_barriers(
+        [PnlBoundsBrokerBarrier {
+            settlement_asset: usd.clone(),
+            lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
+            upper_bound: None,
+        }],
+        [],
+    );
+    let name = PnlBoundsKillSwitchPolicy::<FullLocking>::NAME;
+
+    engine
+        .configure()
+        .set_account_pnl(
+            name,
+            AccountId::from_u64(1),
+            usd.clone(),
+            Pnl::from_str("-150").expect("pnl literal must be valid"),
+        )
+        .expect("force-set past the broker bound must publish");
+    let rejects = engine
+        .execute_pre_trade(order(1))
+        .err()
+        .expect("broker kill-switch breach must reject the live request");
+    assert_eq!(rejects[0].scope, RejectScope::Account);
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+    assert_eq!(
+        rejects[0].reason,
+        "pnl kill switch triggered: broker barrier"
+    );
+
+    let blocked = engine
+        .execute_pre_trade(order(1))
+        .err()
+        .expect("the next request must see the latched account block");
+    assert_eq!(blocked[0].code, RejectCode::AccountBlocked);
+
+    engine
+        .configure()
+        .set_account_pnl(
+            name,
+            AccountId::from_u64(1),
+            usd,
+            Pnl::from_str("-10").expect("pnl literal must be valid"),
+        )
+        .expect("force-set inside the broker bound must publish");
+    let still_blocked = engine
+        .execute_pre_trade(order(1))
+        .err()
+        .expect("returning inside the bound must not clear the account block");
+    assert_eq!(still_blocked[0].code, RejectCode::AccountBlocked);
+}
+
+#[test]
+fn pnl_bounds_account_asset_breach_latches_account_block() {
+    let usd = Asset::new("USD").expect("asset code must be valid");
+    let engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
+        barrier: PnlBoundsBrokerBarrier {
+            settlement_asset: usd.clone(),
+            lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
+            upper_bound: None,
+        },
+        account_id: AccountId::from_u64(1),
+        initial_pnl: Pnl::ZERO,
+    }]);
+    let name = PnlBoundsKillSwitchPolicy::<FullLocking>::NAME;
+
+    engine
+        .configure()
+        .set_account_pnl(
+            name,
+            AccountId::from_u64(1),
+            usd.clone(),
+            Pnl::from_str("-150").expect("pnl literal must be valid"),
+        )
+        .expect("force-set past the account+asset bound must publish");
+    let rejects = engine
+        .execute_pre_trade(order(1))
+        .err()
+        .expect("account+asset kill-switch breach must reject the live request");
+    assert_eq!(rejects[0].scope, RejectScope::Account);
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+    assert_eq!(
+        rejects[0].reason,
+        "pnl kill switch triggered: account + asset barrier"
+    );
+
+    let blocked = engine
+        .execute_pre_trade(order(1))
+        .err()
+        .expect("the next request must see the latched account block");
+    assert_eq!(blocked[0].code, RejectCode::AccountBlocked);
+
+    engine
+        .configure()
+        .set_account_pnl(
+            name,
+            AccountId::from_u64(1),
+            usd,
+            Pnl::from_str("-10").expect("pnl literal must be valid"),
+        )
+        .expect("force-set inside the account+asset bound must publish");
+    let still_blocked = engine
+        .execute_pre_trade(order(1))
+        .err()
+        .expect("returning inside the bound must not clear the account block");
+    assert_eq!(still_blocked[0].code, RejectCode::AccountBlocked);
+}
+
+#[test]
+fn drop_copy_blocking_matches_live_pre_trade() {
+    let account_id = AccountId::from_u64(9);
+    let rate_engine = build_rate_limit_engine(
+        RateLimitSettings::new(
+            None,
+            [],
+            [RateLimitAccountBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+                account_id,
+            }],
+            [],
+        )
+        .expect("account barrier must be valid"),
+    );
+    rate_engine
+        .execute_pre_trade(order(9))
+        .expect("first live request must fit the rate limit");
+    let rate_drop_copy = rate_engine
+        .apply_drop_copy(order(9))
+        .expect("ordinary rate-limit rejects must not abort drop-copy");
+    assert!(rate_drop_copy.account_block().is_none());
+    assert!(!rate_drop_copy.is_account_blocked());
+    let rate_rejects = rate_engine
+        .execute_pre_trade(order(9))
+        .err()
+        .expect("the exhausted live request must be rate limited");
+    assert_eq!(rate_rejects[0].scope, RejectScope::Order);
+    assert_eq!(rate_rejects[0].code, RejectCode::RateLimitExceeded);
+
+    let usd = Asset::new("USD").expect("asset code must be valid");
+    let pnl_engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
+        barrier: PnlBoundsBrokerBarrier {
+            settlement_asset: usd.clone(),
+            lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
+            upper_bound: None,
+        },
+        account_id,
+        initial_pnl: Pnl::ZERO,
+    }]);
+    pnl_engine
+        .configure()
+        .set_account_pnl(
+            PnlBoundsKillSwitchPolicy::<FullLocking>::NAME,
+            account_id,
+            usd,
+            Pnl::from_str("-150").expect("pnl literal must be valid"),
+        )
+        .expect("force-set past the account+asset bound must publish");
+    let pnl_drop_copy = pnl_engine
+        .apply_drop_copy(order(9))
+        .expect("P&L admission rejects must not abort drop-copy");
+    assert!(pnl_drop_copy.account_block().is_some());
+    assert!(pnl_drop_copy.is_account_blocked());
+    let blocked = pnl_engine
+        .execute_pre_trade(order(9))
+        .err()
+        .expect("the live request must see the drop-copy account block");
+    assert_eq!(blocked[0].code, RejectCode::AccountBlocked);
 }
 
 // Adds a broker barrier via configure and asserts an order that was passing
@@ -894,6 +1213,10 @@ fn configure_order_size_limit_account_asset_barrier_tightened_rejects_previously
         .expect("order beyond the tightened limit must be rejected");
     assert_eq!(rejects[0].reason, "order quantity exceeded");
     assert!(rejects[0].details.contains("max allowed: 10"));
+
+    engine
+        .execute_pre_trade(order_with_price(1, "5", "100"))
+        .expect("a smaller order for the same account must still pass");
 
     // Account 2 has no account+asset barrier and no broker barrier: passes.
     engine

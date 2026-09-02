@@ -1123,17 +1123,9 @@ TEST(EngineConfigure,
   ASSERT_EQ(aboveAccountAsset.rejects.size(), 1u);
   EXPECT_EQ(aboveAccountAsset.rejects.front().code,
             RejectCode::OrderNotionalExceedsLimit);
+  EXPECT_TRUE(engine.StartPreTrade(SizedOrder("2000", "1", 2)).Passed());
 
-  // The account+asset reject above carries account scope, and a start-stage
-  // reject with account scope latches a block on that account, so account 2 is
-  // no longer admissible on this engine. The zero-cap probes therefore need a
-  // fresh engine, retuned to zero the same way.
-  Engine zeroEngine = SettlementAssetOrderSizeEngine(
-      policies::OrderSizeLimit::Notional(
-          ::openpit::param::Volume::FromString("5000")),
-      policies::OrderSizeLimit::Notional(
-          ::openpit::param::Volume::FromString("6000")));
-  zeroEngine.Configure().OrderSizeLimit(
+  engine.Configure().OrderSizeLimit(
       policies::OrderSizeLimitPolicyName,
       policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
       std::vector<policies::OrderSizeAssetBarrier>{
@@ -1147,13 +1139,13 @@ TEST(EngineConfigure,
                   ::openpit::param::Volume::FromString("0")),
               AccountId::FromUint64(2), ::openpit::param::Asset("USD"))});
   const openpit::pretrade::StartResult zeroAsset =
-      zeroEngine.StartPreTrade(SizedOrder("1", "1"));
+      engine.StartPreTrade(SizedOrder("1", "1"));
   EXPECT_FALSE(zeroAsset.Passed());
   ASSERT_EQ(zeroAsset.rejects.size(), 1u);
   EXPECT_EQ(zeroAsset.rejects.front().code,
             RejectCode::OrderNotionalExceedsLimit);
   const openpit::pretrade::StartResult zeroAccountAsset =
-      zeroEngine.StartPreTrade(SizedOrder("1", "1", 2));
+      engine.StartPreTrade(SizedOrder("1", "1", 2));
   EXPECT_FALSE(zeroAccountAsset.Passed());
   ASSERT_EQ(zeroAccountAsset.rejects.size(), 1u);
   EXPECT_EQ(zeroAccountAsset.rejects.front().code,

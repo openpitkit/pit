@@ -92,11 +92,11 @@ impl<Order> PreTradeRequest<Order> {
     /// set.
     ///
     /// A main-stage reject with [`crate::pretrade::RejectScope::Account`]
-    /// latches a block for the order's account, so later requests for it are
-    /// rejected up front. The block is recorded only for a readable account: an
-    /// unreadable one records nothing, since a rejected request created no
-    /// exposure that would justify the irreversible global block. The order is
-    /// rejected either way.
+    /// latches a block for the order's account. The block persists until it is
+    /// lifted, so later requests for the account are rejected up front. The
+    /// block is recorded only for a readable account: an unreadable one records
+    /// nothing, since a rejected request created no exposure that would justify
+    /// the global block. The order is rejected either way.
     ///
     /// # Errors
     ///

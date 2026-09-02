@@ -15,6 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -25,7 +26,7 @@ use openpit::pretrade::policies::{
 };
 use openpit::pretrade::{PreTradeContext, PreTradePolicy, Rejects};
 use openpit::storage::FullLocking;
-use openpit::{Engine, FullSync, Instrument, OrderOperation};
+use openpit::{Engine, FullSync, Instrument, OrderOperation, PolicyGroupId};
 
 type TestPolicy = RateLimitPolicy<FullLocking>;
 
@@ -34,6 +35,12 @@ const PER_THREAD: usize = 1_000;
 
 struct StartBarrierPolicy {
     barrier: Arc<TimedBarrier>,
+}
+
+struct DecisionCountingRateLimitPolicy {
+    inner: TestPolicy,
+    accepted: Arc<AtomicUsize>,
+    rejected: Arc<AtomicUsize>,
 }
 
 struct TimedBarrier {
@@ -86,6 +93,50 @@ impl PreTradePolicy<OrderOperation, (), (), FullSync> for StartBarrierPolicy {
     ) -> Result<(), Rejects> {
         self.barrier.wait();
         Ok(())
+    }
+}
+
+impl PreTradePolicy<OrderOperation, (), (), FullSync> for DecisionCountingRateLimitPolicy {
+    fn name(&self) -> &str {
+        <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::name(&self.inner)
+    }
+
+    fn policy_group_id(&self) -> PolicyGroupId {
+        <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::policy_group_id(
+            &self.inner,
+        )
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        ctx: &PreTradeContext<FullLocking>,
+        order: &OrderOperation,
+    ) -> Result<(), Rejects> {
+        let result =
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start(
+                &self.inner,
+                ctx,
+                order,
+            );
+        if result.is_ok() {
+            self.accepted.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+        }
+        result
+    }
+
+    // Counters cover the start path only.
+    fn check_pre_trade_start_dry_run(
+        &self,
+        ctx: &PreTradeContext<FullLocking>,
+        order: &OrderOperation,
+    ) -> Result<(), Rejects> {
+        <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start_dry_run(
+            &self.inner,
+            ctx,
+            order,
+        )
     }
 }
 
@@ -167,22 +218,28 @@ fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
 fn concurrent_drop_copy_account_limit_decisions_are_exact() {
     let account_id = AccountId::from_u64(7);
     let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
-    let rate_limit = RateLimitPolicy::<FullLocking>::new(
-        RateLimitSettings::new(
-            None,
-            [],
-            [RateLimitAccountBarrier {
-                account_id,
-                limit: RateLimit {
-                    max_orders: 1,
-                    window: Duration::from_secs(60),
-                },
-            }],
-            [],
-        )
-        .expect("rate limit settings must be valid"),
-        builder.storage_builder(),
-    );
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let rate_limit = DecisionCountingRateLimitPolicy {
+        inner: RateLimitPolicy::<FullLocking>::new(
+            RateLimitSettings::new(
+                None,
+                [],
+                [RateLimitAccountBarrier {
+                    account_id,
+                    limit: RateLimit {
+                        max_orders: 1,
+                        window: Duration::from_secs(60),
+                    },
+                }],
+                [],
+            )
+            .expect("rate limit settings must be valid"),
+            builder.storage_builder(),
+        ),
+        accepted: Arc::clone(&accepted),
+        rejected: Arc::clone(&rejected),
+    };
     let engine = Arc::new(
         builder
             .pre_trade(StartBarrierPolicy {
@@ -213,5 +270,14 @@ fn concurrent_drop_copy_account_limit_decisions_are_exact() {
             .count()
     });
 
-    assert_eq!(blocked_results, TOTAL_THREADS - 1);
+    assert_eq!(accepted.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        rejected.load(Ordering::Relaxed),
+        TOTAL_THREADS - 1,
+        "all account-limit decisions must be counted exactly"
+    );
+    assert_eq!(
+        blocked_results, 0,
+        "order-scoped rejects must not request account blocks"
+    );
 }

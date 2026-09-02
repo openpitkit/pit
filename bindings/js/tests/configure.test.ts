@@ -413,30 +413,12 @@ describe("runtime configurator", () => {
     expect(aboveAccountAsset.rejects[0]?.code).toBe(
       "OrderNotionalExceedsLimit",
     );
+    expect(
+      engine.startPreTrade(makeOrder("2000", "1", ORDER_SIZE_OVERRIDE_ACCOUNT))
+        .ok,
+    ).toBe(true);
 
-    // The account+asset reject above carries account scope, and a start-stage
-    // reject with account scope latches a block on that account, so the
-    // override account is no longer admissible on this engine. The zero-cap
-    // probes therefore need a fresh engine, retuned to zero the same way.
-    const zeroEngine = Engine.builder()
-      .builtin(
-        buildOrderSizeLimit()
-          .assetBarriers([
-            new OrderSizeAssetBarrier(
-              new OrderSizeLimit(undefined, "5000"),
-              "USD",
-            ),
-          ])
-          .accountAssetBarriers([
-            new OrderSizeAccountAssetBarrier(
-              new OrderSizeLimit(undefined, "6000"),
-              ORDER_SIZE_OVERRIDE_ACCOUNT,
-              "USD",
-            ),
-          ]),
-      )
-      .build();
-    zeroEngine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
+    engine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
       assetBarriers: [
         new OrderSizeAssetBarrier(new OrderSizeLimit(undefined, "0"), "USD"),
       ],
@@ -448,10 +430,10 @@ describe("runtime configurator", () => {
         ),
       ],
     });
-    const zeroAsset = zeroEngine.startPreTrade(makeOrder("1", "1"));
+    const zeroAsset = engine.startPreTrade(makeOrder("1", "1"));
     expect(zeroAsset.ok).toBe(false);
     expect(zeroAsset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
-    const zeroAccountAsset = zeroEngine.startPreTrade(
+    const zeroAccountAsset = engine.startPreTrade(
       makeOrder("1", "1", ORDER_SIZE_OVERRIDE_ACCOUNT),
     );
     expect(zeroAccountAsset.ok).toBe(false);

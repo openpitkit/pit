@@ -249,10 +249,11 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// engine cannot clear it against the blocked set.
     ///
     /// A start-stage reject with [`RejectScope::Account`] latches a block for
-    /// the order's account, so later requests for it are rejected up front. The
-    /// block is recorded only for a readable account: an unreadable one records
-    /// nothing, since a rejected request created no exposure that would justify
-    /// the irreversible global block. The order is rejected either way.
+    /// the order's account. The block persists until it is lifted, so later
+    /// requests for the account are rejected up front. The block is recorded
+    /// only for a readable account: an unreadable one records nothing, since a
+    /// rejected request created no exposure that would justify the global
+    /// block. The order is rejected either way.
     ///
     /// # Errors
     ///
@@ -610,6 +611,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// Processing is **not atomic**: if one policy sets an account block, the
     /// state changes already applied by earlier policies are not rolled back.
     ///
+    /// Reject scope is not consulted on this path; this method does not derive
+    /// an account block from a reject.
+    ///
     /// A non-empty [`PostTradeResult::account_blocks`] means at least one policy entered a
     /// blocked state after the report was applied. This does **not** imply that
     /// [`PostTradeResult::account_adjustments`] were undone — they reflect storage
@@ -664,14 +668,24 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// Policies are evaluated in registration order for each adjustment, and
     /// adjustments are traversed in slice order.
     ///
-    /// On success returns [`crate::AccountAdjustmentBatchResult`]. Its `outcomes` field is a
-    /// flat list of [`crate::AccountAdjustmentOutcome`] in policy registration order. Each entry
-    /// carries the [`crate::PolicyGroupId`] of the policy that produced it. A single asset may
-    /// appear more than once. Policies that report nothing contribute no entries.
+    /// Reject scope is not consulted on this path. `AccountControl::block`
+    /// writes through immediately, including from a policy's commit or rollback
+    /// closure. A rejected batch discards
+    /// `PolicyAccountAdjustmentResult::account_blocks`, but its rollback can
+    /// still block through that control or a failed mutation finalizer.
     ///
-    /// The engine commits accepted mutations, records every policy-reported account block for
-    /// `account_id`, and then returns the same blocks in `account_blocks`. The first reported
-    /// block remains the stored cause if more than one block is reported for the account.
+    /// On success returns [`crate::AccountAdjustmentBatchResult`]. Its
+    /// `outcomes` field is a flat list of
+    /// [`crate::AccountAdjustmentOutcome`] in policy registration order. Each
+    /// entry carries the [`crate::PolicyGroupId`] of the policy that produced
+    /// it. A single asset may appear more than once. Policies that report
+    /// nothing contribute no entries.
+    ///
+    /// The engine records each block from accepted
+    /// `PolicyAccountAdjustmentResult::account_blocks` for `account_id` only
+    /// after every batch mutation commits, then returns the same blocks in
+    /// `account_blocks`. The first reported block remains the stored cause if
+    /// more than one block is reported for the account.
     ///
     /// A commit or rollback callback that fails is never ignored: it arms the
     /// engine kill switch described by the finalizer contract on
@@ -2168,9 +2182,10 @@ mod tests {
         assert!(post_trade.account_blocks.is_empty());
     }
 
-    // An account-scope reject blocks only a known account. With an unreadable
-    // account ID nothing is recorded: a rejected request created no exposure
-    // that would justify the irreversible global block.
+    // An account-scope reject blocks only a known account. A recorded block is
+    // latched until it is lifted. With an unreadable account ID, nothing is
+    // recorded: a rejected request created no exposure that would justify the
+    // global block.
     #[test]
     fn accountless_start_stage_account_reject_records_no_block() {
         let engine = Engine::builder::<NoAccountOrder, TestReport, TestAdjustment>()
@@ -6040,8 +6055,8 @@ mod tests {
         assert_eq!(block.code, RejectCode::AccountBlocked);
         assert_eq!(block.policy, "toggle");
 
-        // The dry-run must NOT have latched the block: with the flag cleared a
-        // real start now passes, unlike the permanent-block normal path.
+        // The dry-run must NOT latch the block: with the flag cleared, a real
+        // start passes. A normal call would latch the block until it is lifted.
         blocked.set(false);
         assert!(engine.start_pre_trade(order_with_settlement("USD")).is_ok());
     }

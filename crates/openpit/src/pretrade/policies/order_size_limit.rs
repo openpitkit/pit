@@ -313,8 +313,9 @@ impl OrderSizeLimitSettings {
 /// 3. **Broker axis (additive).** A broker barrier applies each cap it carries
 ///    in addition to the two asset chains. An absent cap constrains nothing.
 /// 4. Asset-chain rejects are returned before broker rejects. When both asset
-///    metrics fail, the combined reject names the asset supplying each cap; an
-///    account-level component keeps the combined reject account-scoped.
+///    metrics fail, the combined reject names the asset supplying each cap.
+///    Every broker, asset, and account+asset barrier produces an order-scoped
+///    reject and never blocks the account.
 /// 5. A metric without an applicable cap is not resolved or compared.
 ///
 /// Drop-copy operations replay historical orders and bypass these admission
@@ -485,20 +486,12 @@ where
                 )
             });
 
-        let quantity_broker_limit =
-            broker_limit
-                .and_then(|limit| limit.max_quantity)
-                .map(|maximum| SelectedMetricLimit {
-                    maximum,
-                    scope: RejectScope::Order,
-                });
-        let notional_broker_limit =
-            broker_limit
-                .and_then(|limit| limit.max_notional)
-                .map(|maximum| SelectedMetricLimit {
-                    maximum,
-                    scope: RejectScope::Order,
-                });
+        let quantity_broker_limit = broker_limit
+            .and_then(|limit| limit.max_quantity)
+            .map(|maximum| SelectedMetricLimit { maximum });
+        let notional_broker_limit = broker_limit
+            .and_then(|limit| limit.max_notional)
+            .map(|maximum| SelectedMetricLimit { maximum });
 
         let quantity_needed = quantity_axis_limit.is_some() || quantity_broker_limit.is_some();
         let notional_needed = notional_axis_limit.is_some() || notional_broker_limit.is_some();
@@ -564,7 +557,6 @@ where
 
 struct SelectedMetricLimit<MetricValue> {
     maximum: MetricValue,
-    scope: RejectScope,
 }
 
 impl<MetricValue> SelectedMetricLimit<MetricValue> {
@@ -572,7 +564,6 @@ impl<MetricValue> SelectedMetricLimit<MetricValue> {
         ResolvedMetricLimit {
             requested,
             maximum: self.maximum,
-            scope: self.scope,
         }
     }
 }
@@ -580,7 +571,6 @@ impl<MetricValue> SelectedMetricLimit<MetricValue> {
 struct ResolvedMetricLimit<MetricValue> {
     requested: MetricValue,
     maximum: MetricValue,
-    scope: RejectScope,
 }
 
 fn select_asset_limit<MetricValue: Copy>(
@@ -594,19 +584,14 @@ fn select_asset_limit<MetricValue: Copy>(
         .get(&(account_id, asset.clone()))
     {
         if let Some(maximum) = metric(limit) {
-            return Some(SelectedMetricLimit {
-                maximum,
-                scope: RejectScope::Account,
-            });
+            return Some(SelectedMetricLimit { maximum });
         }
     }
 
-    settings.asset_limits.get(asset).and_then(|limit| {
-        metric(limit).map(|maximum| SelectedMetricLimit {
-            maximum,
-            scope: RejectScope::Order,
-        })
-    })
+    settings
+        .asset_limits
+        .get(asset)
+        .and_then(|limit| metric(limit).map(|maximum| SelectedMetricLimit { maximum }))
 }
 
 type ResolvedMetricPair<MetricValue> = (
@@ -643,7 +628,7 @@ fn check_limit_optional(
         (None, None) => None,
         (Some(quantity), None) => Some(Reject::new(
             policy,
-            quantity.scope,
+            RejectScope::Order,
             RejectCode::OrderQtyExceedsLimit,
             "order quantity exceeded",
             format!(
@@ -653,7 +638,7 @@ fn check_limit_optional(
         )),
         (None, Some(notional)) => Some(Reject::new(
             policy,
-            notional.scope,
+            RejectScope::Order,
             RejectCode::OrderNotionalExceedsLimit,
             "order notional exceeded",
             format!(
@@ -662,13 +647,6 @@ fn check_limit_optional(
             ),
         )),
         (Some(quantity), Some(notional)) => {
-            let scope = if quantity.scope == RejectScope::Account
-                || notional.scope == RejectScope::Account
-            {
-                RejectScope::Account
-            } else {
-                RejectScope::Order
-            };
             let details = match assets {
                 Some((quantity_asset, notional_asset)) => format!(
                     "requested quantity {} for asset {quantity_asset}, \
@@ -684,7 +662,7 @@ fn check_limit_optional(
             };
             Some(Reject::new(
                 policy,
-                scope,
+                RejectScope::Order,
                 RejectCode::OrderExceedsLimit,
                 "order size exceeded",
                 details,
@@ -1290,7 +1268,7 @@ mod tests {
 
         let reject = check(&p, &order("USD", "6", "10"))
             .expect_err("account+asset barrier (max 5) must override asset barrier (max 10)");
-        assert_eq!(reject[0].scope, RejectScope::Account);
+        assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].code, RejectCode::OrderQtyExceedsLimit);
     }
 
@@ -1386,7 +1364,7 @@ mod tests {
 
         let reject = check(&p, &order_for_account("USD", "6", "100", account_id))
             .expect_err("both account-specific limits must reject");
-        assert_eq!(reject[0].scope, RejectScope::Account);
+        assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].code, RejectCode::OrderExceedsLimit);
         assert_eq!(
             reject[0].details,
@@ -1402,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_reject_keeps_account_scope_from_either_metric() {
+    fn combined_reject_stays_order_scoped_across_metrics() {
         let account_id = AccountId::from_u64(99224416);
         let p = policy(
             None,
@@ -1416,12 +1394,12 @@ mod tests {
 
         let reject = check(&p, &order_for_account("USD", "6", "100", account_id))
             .expect_err("both asset-chain metrics must reject");
-        assert_eq!(reject[0].scope, RejectScope::Account);
+        assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].code, RejectCode::OrderExceedsLimit);
     }
 
     #[test]
-    fn same_asset_barrier_supplies_both_caps_and_scope() {
+    fn same_asset_barrier_supplies_both_caps() {
         let account_id = AccountId::from_u64(99224416);
         let p = policy(
             None,
@@ -1435,7 +1413,7 @@ mod tests {
 
         let order = order_for_instrument("AAPL", "AAPL", "6", "100", account_id);
         let reject = check(&p, &order).expect_err("both caps from one entry must reject");
-        assert_eq!(reject[0].scope, RejectScope::Account);
+        assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].code, RejectCode::OrderExceedsLimit);
         assert_eq!(
             reject[0].details,
