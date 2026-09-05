@@ -155,7 +155,7 @@ func TestMergeWindowRangeLossless(t *testing.T) {
 
 	snaps, allRunOC, allRunSet := w.Snapshot()
 
-	// MergeWindowRange with start=0 merges every window — identical set to
+	// MergeWindowRange with start=0 merges every window - identical set to
 	// the all-run merged histogram.
 	ssOC, ssSet := measurement.MergeWindowRange(snaps, 0)
 
@@ -289,13 +289,13 @@ func TestSinkRaceClean(t *testing.T) {
 // We use equal-size warmup and steady-state windows so the warmup clearly
 // dominates enough to shift the all-run p50. With 50 warmup samples at ~10ms
 // and 50 steady-state samples at ~100µs, the all-run p50 (median of 100) is
-// where the 50th sample falls — right at the boundary between the two groups.
+// where the 50th sample falls - right at the boundary between the two groups.
 // Because HdrHistogram sorts by value (not insertion order), samples from the
 // two groups interleave: all 50 low-latency samples fall below p50, so the
 // 50th-percentile value depends on relative magnitudes. With 10ms >> 100µs
 // and equal counts, all-run p50 ≈ 10ms (the lower half of samples are all
 // 100µs, the upper half are all 10ms; median is either the last 100µs or
-// first 10ms sample — implementation-defined boundary). Either way, all-run
+// first 10ms sample - implementation-defined boundary). Either way, all-run
 // p50 is > steady-state p50 (≈100µs).
 func TestSteadyStateConsistency(t *testing.T) {
 	// Window size 50 ops: 1 warmup window (50 high-latency ops) +
@@ -328,7 +328,7 @@ func TestSteadyStateConsistency(t *testing.T) {
 
 	// All-run p50 spans both groups; for equal-size groups of 10ms vs 100µs,
 	// the median is on the 100µs side (values are sorted; 50th of 101 is the
-	// 50th lowest value, all of which are 100µs — but just barely). However,
+	// 50th lowest value, all of which are 100µs - but just barely). However,
 	// the key assertion is that steady-state p50 is lower than the all-run p50
 	// WHEN the all-run is contaminated by warmup. Use p90 for a robust check:
 	// steady-state p90 must be << all-run p90 (which includes the 10ms spike).
@@ -360,7 +360,7 @@ func TestSteadyStateConsistency(t *testing.T) {
 // numerator and the denominator.
 //
 // Scenario: 100 order checks, 5 of which are rejected (5% target hit exactly),
-// plus 95 settlements recorded — some of which are also marked as rejected.
+// plus 95 settlements recorded - some of which are also marked as rejected.
 // The achieved rate must be exactly 0.05 regardless of the settlement count.
 func TestAchievedRejectRateOrderCheckOnly(t *testing.T) {
 	const (
@@ -413,7 +413,7 @@ func TestAchievedRejectRateZeroOrderChecks(t *testing.T) {
 	w := measurement.NewWindows(measurement.WindowUnitOps, 10000, 0)
 	s := measurement.NewSink(w)
 
-	// Record only settlements — no order checks.
+	// Record only settlements - no order checks.
 	for i := 0; i < 10; i++ {
 		s.RecordSubmit()
 		s.RecordSettlement(time.Millisecond, i%2 == 0)

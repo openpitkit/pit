@@ -1,7 +1,7 @@
 # spot_table (C++)
 
-Runs a scenario table through two OpenPit engines — a sequential one and a
-parallel async one — and prints how fast each was. Use it to get a feel for the
+Runs a scenario table through two OpenPit engines - a sequential one and a
+parallel async one - and prints how fast each was. Use it to get a feel for the
 engine's speed without writing any code.
 
 ## Build & run
@@ -16,8 +16,10 @@ just run-examples-cpp-table-debug
 Other tables, and a soak run:
 
 ```sh
-just run-examples-cpp-table-debug examples/tables/spot/coverage.md # pick a table
-just test-examples-cpp-debug                                      # build + smoke test
+# Pick a table.
+just run-examples-cpp-table-debug examples/tables/spot/coverage.md
+# Build and smoke test.
+just test-examples-cpp-debug
 ```
 
 No `just`? Build and run by hand:
@@ -35,14 +37,14 @@ given time (soak / sustained-load).
 
 ## Reading the report
 
-You get one block per engine — **sync** (sequential) and **async** (parallel):
+You get one block per engine - **sync** (sequential) and **async** (parallel):
 
-- **operations** — orders/fills/etc. applied (price ticks excluded)
-- **accounts** — distinct accounts touched
-- **total time** — wall-clock to run the whole scenario
-- **order check** — pre-trade decision latency, as n / min / avg / max
-- **reports** — fill-application latency, as n / min / avg / max
-- **result** — `ALL PASS`, or the first row that disagreed (line, account, action)
+- **operations** - orders/fills/etc. applied (price ticks excluded)
+- **accounts** - distinct accounts touched
+- **total time** - wall-clock to run the whole scenario
+- **order check** - pre-trade decision latency, as n / min / avg / max
+- **reports** - fill-application latency, as n / min / avg / max
+- **result** - `ALL PASS`, or the first row that disagreed (line, account, action)
 
 The two engines' numbers are **not** comparable: async times the full
 submit-to-result round trip (dispatch + queue wait), sync times the direct call.

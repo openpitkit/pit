@@ -8,13 +8,13 @@ exactly what an SDK user sees when they add the dependency.
 
 ## Layout
 
-- `run.sh` — orchestrator: builds one image per scenario and runs its checks.
-- `run-windows.ps1` — Windows-container orchestrator for the Windows binary
+- `run.sh` - orchestrator: builds one image per scenario and runs its checks.
+- `run-windows.ps1` - Windows-container orchestrator for the Windows binary
   surfaces.
-- `env/docker/<target>/Dockerfile` — per-target build environment.
-- `scripts/<target>.sh` and `scripts/windows-binary.ps1` — in-container
+- `env/docker/<target>/Dockerfile` - per-target build environment.
+- `scripts/<target>.sh` and `scripts/windows-binary.ps1` - in-container
   runners (fetch the release, build, test).
-- `clients/<lang>` — the minimal smoke consumer for each language.
+- `clients/<lang>` - the minimal smoke consumer for each language.
 
 ## How to run
 

@@ -133,7 +133,7 @@ impl AccountGroupId {
     /// 32-bit.
     ///
     /// Note: this method is intentionally *not* an implementation of
-    /// [`std::str::FromStr`] — the caller must consciously choose `from_str`
+    /// [`std::str::FromStr`] - the caller must consciously choose `from_str`
     /// and read its collision warning. Implicit `From<&str>` / `From<String>`
     /// conversions are not provided for the same reason.
     ///

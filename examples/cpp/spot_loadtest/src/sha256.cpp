@@ -58,7 +58,8 @@ std::string Sha256Hex(std::string_view data) {
     msg.push_back('\0');
   }
   for (int i = 7; i >= 0; --i) {
-    msg.push_back(static_cast<char>((bitLen >> (i * 8)) & 0xff));
+    msg.push_back(
+        static_cast<char>((bitLen >> (static_cast<unsigned>(i) * 8U)) & 0xffU));
   }
 
   for (std::size_t chunk = 0; chunk < msg.size(); chunk += 64) {
@@ -66,16 +67,16 @@ std::string Sha256Hex(std::string_view data) {
     for (std::size_t i = 0; i < 16; ++i) {
       const auto *p =
           reinterpret_cast<const unsigned char *>(msg.data() + chunk + i * 4);
-      w[i] = (static_cast<std::uint32_t>(p[0]) << 24) |
-             (static_cast<std::uint32_t>(p[1]) << 16) |
-             (static_cast<std::uint32_t>(p[2]) << 8) |
+      w[i] = (static_cast<std::uint32_t>(p[0]) << 24U) |
+             (static_cast<std::uint32_t>(p[1]) << 16U) |
+             (static_cast<std::uint32_t>(p[2]) << 8U) |
              static_cast<std::uint32_t>(p[3]);
     }
     for (std::size_t i = 16; i < 64; ++i) {
       const std::uint32_t s0 =
-          Rotr(w[i - 15], 7) ^ Rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+          Rotr(w[i - 15], 7) ^ Rotr(w[i - 15], 18) ^ (w[i - 15] >> 3U);
       const std::uint32_t s1 =
-          Rotr(w[i - 2], 17) ^ Rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+          Rotr(w[i - 2], 17) ^ Rotr(w[i - 2], 19) ^ (w[i - 2] >> 10U);
       w[i] = w[i - 16] + s0 + w[i - 7] + s1;
     }
 
@@ -112,7 +113,7 @@ std::string Sha256Hex(std::string_view data) {
   out.reserve(64);
   for (const std::uint32_t word : h) {
     for (int i = 7; i >= 0; --i) {
-      out.push_back(kHex[(word >> (i * 4)) & 0xf]);
+      out.push_back(kHex[(word >> (static_cast<unsigned>(i) * 4U)) & 0xfU]);
     }
   }
   return out;

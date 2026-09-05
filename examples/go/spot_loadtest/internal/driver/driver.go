@@ -81,7 +81,7 @@ const (
 // collector pushes to an unbounded overflow (finalizers also drain it) so the
 // submit schedule is never throttled by the off-path finalize backlog, and the
 // overflow use is counted as a HARNESS handoff stall DIAGNOSTIC (see
-// handOffFinalize) — it does not contaminate the headline or invalidate the run.
+// handOffFinalize) - it does not contaminate the headline or invalidate the run.
 const finalizeBuffer = 8192
 
 // overflow is an unbounded FIFO used as the spill path behind a bounded fast
@@ -416,7 +416,7 @@ func Run(ctx context.Context, stream *generator.Stream, cfg Config) (Stats, meas
 	// A harness handoff stall (collector -> finalizer fast-path overflow) is NOT
 	// an invalidity trigger: the handoff is non-blocking, so a finalize-overflow
 	// spill never throttles the open-loop submit schedule and never contaminates
-	// the headline (CommitAndClose is fully off the measured path — the latency
+	// the headline (CommitAndClose is fully off the measured path - the latency
 	// was already recorded at resolve). HandoffStalls is reported as a diagnostic
 	// only (see Snapshot / reporter), never folded into validity.
 	//
@@ -447,7 +447,7 @@ type run struct {
 	// collectors also drain), so the open-loop submit schedule keeps pacing to
 	// VirtualT0 regardless of how far behind the collectors are. A full work
 	// channel is most often caused by collectors legitimately blocked in fut.Await
-	// because the ENGINE is slow — that is REAL latency folded into the headline,
+	// because the ENGINE is slow - that is REAL latency folded into the headline,
 	// NOT a harness stall, so spilling here is deliberately NOT witnessed.
 	work         chan inflight
 	workOverflow overflow[inflight]
@@ -459,7 +459,7 @@ type run struct {
 	// HARNESS handoff stall DIAGNOSTIC (RecordHandoffStall): the finalize backlog is
 	// purely harness-internal (CommitAndClose throughput) and off the measured path,
 	// so a full finalize fast path never throttles the submit schedule and does NOT
-	// invalidate the run — it is reported as a diagnostic only.
+	// invalidate the run - it is reported as a diagnostic only.
 	finalize         chan *asyncengine.AsyncReservation
 	finalizeOverflow overflow[*asyncengine.AsyncReservation]
 }
@@ -625,7 +625,7 @@ func (r *run) submitFunding(ev *generator.Event, intendedT0 time.Time) bool {
 // collector -> finalizer handoff instead (see handOffFinalize).
 //
 // DIAGNOSTIC: when we spill, we track the running peak spill depth via
-// recordWorkOverflowDepth. A large peak means collectors lagged submission —
+// recordWorkOverflowDepth. A large peak means collectors lagged submission -
 // usually because they were legitimately blocked in fut.Await (real engine
 // latency, correctly in the headline), but under host CPU starvation it can
 // include collector-dispatch delay that inflates the tail. This is NOT a stall

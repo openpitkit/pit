@@ -16,8 +16,8 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Example spot_table runs a tabular spot-policy scenario against the engine in
-// two isolated runs — a sequential NoSync engine and a parallel AccountSync
-// engine wrapped in asyncengine — and prints a per-engine summary report with
+// two isolated runs - a sequential NoSync engine and a parallel AccountSync
+// engine wrapped in asyncengine - and prints a per-engine summary report with
 // operation counts, total wall-clock time, and order/report latency statistics.
 // With -min-duration d it repeats the scenario until at least d of wall-clock
 // time has elapsed (a repeat run), printing a periodic progress block with each

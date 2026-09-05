@@ -65,7 +65,7 @@ func assertNoGoroutineLeak(t *testing.T, baseline int) {
 // TestAsyncEngineShardedGoroutineCleanup verifies that all worker goroutines
 // started by a Sharded engine exit after StopGraceful.
 func TestAsyncEngineShardedGoroutineCleanup(t *testing.T) {
-	// NOTE: Not parallel — the goroutine baseline must be stable. Running this
+	// NOTE: Not parallel - the goroutine baseline must be stable. Running this
 	// sequentially in isolation is what makes the check meaningful.
 
 	baseline := runtime.NumGoroutine()
@@ -95,7 +95,7 @@ func TestAsyncEngineShardedGoroutineCleanup(t *testing.T) {
 // TestAsyncEngineDynamicGoroutineCleanup verifies that all worker goroutines
 // and the cleanup goroutine started by a Dynamic engine exit after StopGraceful.
 func TestAsyncEngineDynamicGoroutineCleanup(t *testing.T) {
-	// NOTE: Not parallel — same reasoning as TestAsyncEngineShardedGoroutineCleanup.
+	// NOTE: Not parallel - same reasoning as TestAsyncEngineShardedGoroutineCleanup.
 
 	baseline := runtime.NumGoroutine()
 	driver := newFakeDriver()

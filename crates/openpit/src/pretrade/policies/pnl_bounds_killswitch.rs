@@ -1156,7 +1156,7 @@ mod tests {
         use rust_decimal::Decimal;
         let policy = policy_usd(Some(pnl("-100")), None);
 
-        // First MAX: stores MAX, within [-100, ∞) — no block.
+        // First MAX: stores MAX, within [-100, ∞) - no block.
         let first =
             apply_report_blocks(&policy, &report("USD", account(1), Pnl::new(Decimal::MAX)));
         assert!(first.is_empty());

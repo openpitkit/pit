@@ -6,7 +6,7 @@ directory is one self-contained scenario.
 
 ## Files
 
-- `coverage.md` — one scenario that uses every feature: all five actions
+- `coverage.md` - one scenario that uses every feature: all five actions
   (`SEED`, `GROUP`, `TICK`, `ORDER`, `FILL`), global / account- / group-addressed
   market data, quantity- and volume-denominated orders, market and limit orders,
   a buy and a sell of each kind, and the two deliberate rejects (over-budget buy,
@@ -20,7 +20,7 @@ one [GFM](https://github.github.com/gfm/) pipe-table.
 ### Front-matter
 
 The front-matter is a small `key: value` block delimited by `---` lines. It is
-**not** full YAML — there are no nested fields, lists, quoting, or anchors. It
+**not** full YAML - there are no nested fields, lists, quoting, or anchors. It
 supports exactly two keys, `name` and `slippage_bps`, and any line starting with
 `#` is treated as a comment.
 
@@ -61,12 +61,12 @@ other column below is read when present.
 
 ### Actions
 
-- `SEED`  — credits `amount` of `asset` to `account` as an absolute starting
+- `SEED`  - credits `amount` of `asset` to `account` as an absolute starting
   balance. `expect = OK` (or `REJECT` to assert a refusal).
-- `GROUP` — registers `account` into account-group `group`. All `GROUP` rows are
+- `GROUP` - registers `account` into account-group `group`. All `GROUP` rows are
   aggregated and registered **before** any `ORDER`, `FILL`, or addressed `TICK`,
   so later rows can rely on the membership. `expect = OK`.
-- `TICK`  — publishes a live mark price of `instrument` to the market-data
+- `TICK`  - publishes a live mark price of `instrument` to the market-data
   service at the row's position. Addressing:
   - empty `account` **and** empty `group` → a global snapshot every account
     reads by default;
@@ -74,7 +74,7 @@ other column below is read when present.
     the quote for those targets only, so it sizes only their market orders.
 
   `expect = OK`.
-- `ORDER` — places a buy/sell order. Set **exactly one** of `qty` or `volume`:
+- `ORDER` - places a buy/sell order. Set **exactly one** of `qty` or `volume`:
   `qty` reserves against a base quantity, `volume` reserves the settlement
   notional directly. Empty `price` means a market order, sized from the live
   quote the ordering account reads; a non-empty `price` is a limit order (which
@@ -85,7 +85,7 @@ other column below is read when present.
   `AccountAdjustmentBoundsExceeded`, `OrderValueCalculationFailed`,
   `InvalidFieldFormat`, `InvalidFieldValue`, `InsufficientPosition`,
   `InsufficientMargin`, `MissingRequiredField`.
-- `FILL`  — applies a final execution report. `qty` is the filled quantity
+- `FILL`  - applies a final execution report. `qty` is the filled quantity
   (fills are always quantity-based; `volume` is not used), and `price` is the
   lock / reservation price (the limit price for limit orders, the mark price for
   market orders). When `price` is omitted the most recent quote pushed for the
@@ -94,7 +94,7 @@ other column below is read when present.
 ### TICK determinism
 
 `TICK` rows are replayed live, in row order, against each engine's own
-market-data service — there is no load-time pre-aggregation.
+market-data service - there is no load-time pre-aggregation.
 
 - **Addressed** ticks (with an `account` and/or `group`) are safe anywhere. In
   the parallel engine an addressed tick is replayed only after the outstanding

@@ -393,7 +393,7 @@ the only way to name it.
 AccountId.__doc__ = """
 Type-safe account identifier.
 
-Use :meth:`from_int` when the broker or venue assigns numeric account IDs —
+Use :meth:`from_int` when the broker or venue assigns numeric account IDs -
 zero cost, zero collision risk.
 
 Use :meth:`from_string` when only a string identifier is available. The string

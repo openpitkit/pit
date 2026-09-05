@@ -550,6 +550,11 @@ where
                 )
             })
         });
+        // Every remaining pair of Options means the same thing here: no account
+        // P&L outcome and no new halt block for this report. Enumerating them
+        // buys no variant protection either, because the scrutinee is a pair of
+        // Options rather than the reason enum itself.
+        // fallback(approved): the remaining pairs all mean "nothing to report"
         let (account_pnl, new_halt_block) = match (account_pnl_halt_reason, fee_pnl_delta) {
             (None, Some(delta)) if account_pnl_halt_reason_before.is_none() => {
                 let (result, block) = self.apply_account_pnl_delta(
@@ -1103,6 +1108,11 @@ where
         } else {
             None
         };
+        // Every remaining pair of Options means the same thing here: no account
+        // P&L outcome and no new halt block for this report. Enumerating them
+        // buys no variant protection either, because the scrutinee is a pair of
+        // Options rather than the reason enum itself.
+        // fallback(approved): the remaining pairs all mean "nothing to report"
         let (account_pnl, new_halt_block) = match (account_pnl_halt_reason, account_pnl_delta) {
             (Some(halt_reason), _)
                 if account_pnl_engaged && account_pnl_halt_reason_before.is_none() =>

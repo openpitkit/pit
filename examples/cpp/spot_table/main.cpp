@@ -37,6 +37,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #if defined(_WIN32)
@@ -93,7 +94,7 @@ ResolveTablePath(const std::string &argv0, const std::string &p) {
 //------------------------------------------------------------------------------
 // Report formatting and output.
 
-[[nodiscard]] std::string EngineTitle(Mode m) {
+[[nodiscard]] std::string_view EngineTitle(Mode m) {
   switch (m) {
   case Mode::Sync:
     return "sequential engine (sync)";

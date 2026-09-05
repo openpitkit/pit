@@ -357,7 +357,7 @@ pub trait ServiceTtlGate: Send {
 
 // SAFETY-of-ordering: `mark_present` stores with `Release` and
 // `is_possibly_present` loads with `Acquire`, so a reader observing `true` is
-// guaranteed to see every write that happened-before the setter — including the
+// guaranteed to see every write that happened-before the setter - including the
 // map insert the service performs just before calling `mark_present`.
 impl ServiceTtlGate for AtomicBool {
     #[inline]

@@ -1,0 +1,120 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Isolation between parallel implementations, and reference hygiene.
+#
+# The binding rules below are the enforceable half of the parity contract: each
+# binding documents itself in its own idiom and never points a reader at a
+# sibling. A reference to the shared core contract is fine and is not matched -
+# only the phrase "<other language> binding/SDK" is.
+
+rules:
+  - id: no-internal-document-reference
+    message: >-
+      Published source and documentation must not reference internal design
+      material. Such a link discloses both the existence and the structure of
+      documents that are not published. State the contract in place instead.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: 'doc/(design|code_style|agents)\b|design/[a-z_]+/'
+    paths:
+      exclude:
+        # The rule quotes the paths it forbids.
+        - /checks/semgrep/**
+
+  - id: no-tracker-ids-in-code
+    message: >-
+      Issue identifiers do not belong in the repository. They rot when the
+      tracker changes and mean nothing to a reader without access to it.
+      Describe the pending work in words.
+    severity: ERROR
+    languages: [generic]
+    # Only this project's tracker prefixes: a generic [A-Z]+-<digits> pattern
+    # would match UTF-8, SHA-256, ISO-8601 and every similar spelling.
+    pattern-regex: '\b(OPENPIT|PIT|SDK|OF|CLD|CLW|JMW)-\d+\b|TODO\([^)]*-\d+\)'
+    paths:
+      exclude:
+        # The rule quotes the prefixes it forbids.
+        - /checks/semgrep/**
+
+  - id: binding-isolation-go
+    message: >-
+      Documentation of one language binding must not present a sibling binding
+      as its reference. Each binding documents itself in its own idiom;
+      references to the shared core contract are fine.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?i)\b(python|js|javascript|typescript|c\+\+|cpp|rust)[ \t]+(binding|sdk)\b
+    paths:
+      include:
+        - /bindings/go/**
+        - /examples/go/**
+
+  - id: binding-isolation-python
+    message: >-
+      Documentation of one language binding must not present a sibling binding
+      as its reference.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?i)\b(go|golang|js|javascript|typescript|c\+\+|cpp|rust)[ \t]+(binding|sdk)\b
+    paths:
+      include:
+        - /bindings/python/**
+        - /examples/python/**
+
+  - id: binding-isolation-cpp
+    message: >-
+      Documentation of one language binding must not present a sibling binding
+      as its reference.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?i)\b(go|golang|python|js|javascript|typescript|rust)[ \t]+(binding|sdk)\b
+    paths:
+      include:
+        - /bindings/cpp/**
+        - /examples/cpp/**
+
+  - id: binding-isolation-js
+    message: >-
+      Documentation of one language binding must not present a sibling binding
+      as its reference.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?i)\b(go|golang|python|c\+\+|cpp|rust)[ \t]+(binding|sdk)\b
+    paths:
+      include:
+        - /bindings/js/**
+        - /examples/js/**
+      exclude:
+        # Machine-written dependency metadata.
+        - /bindings/js/package.json
+
+  - id: binding-isolation-c
+    message: >-
+      Documentation of one language binding must not present a sibling binding
+      as its reference.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?i)\b(go|golang|python|js|javascript|typescript|c\+\+|cpp|rust)[ \t]+(binding|sdk)\b
+    paths:
+      include:
+        - /bindings/c/**

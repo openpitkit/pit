@@ -25,11 +25,11 @@
 //!
 //! # Concepts
 //!
-//! * [`StorageBuilder<Factory>`] — the builder, parameterised by a
+//! * [`StorageBuilder<Factory>`] - the builder, parameterised by a
 //!   [`LockingPolicyFactory`]. It is owned by the engine builder and
 //!   exposed through `storage_builder()`; each storage gets its own
 //!   freshly created [`LockingPolicy`].
-//! * [`Storage<Key, Value, LockingPolicy>`] — the actual key-value
+//! * [`Storage<Key, Value, LockingPolicy>`] - the actual key-value
 //!   store. Exposes scoped access methods that run a caller closure
 //!   while the appropriate locks are held; references handed to the
 //!   closure are confined to the closure's call. Cannot be cloned.
@@ -42,16 +42,16 @@
 //! Concrete policy types are private to this crate; callers name only
 //! the factory types below.
 //!
-//! * [`NoLocking`] — no synchronization. The resulting storage is
+//! * [`NoLocking`] - no synchronization. The resulting storage is
 //!   `!Send` and `!Sync`. The closure-based access methods make safe
 //!   misuse via overlapping references impossible at the type level;
 //!   accidental closure re-entry on the same storage is detected by a
 //!   debug-only check.
-//! * [`IndexLocking`] — one reader-writer lock guards key insertions
+//! * [`IndexLocking`] - one reader-writer lock guards key insertions
 //!   and removals; per-key value access is unsynchronized. The closure
 //!   based access methods, plus the debug-only re-entry check, keep
 //!   single-thread misuse impossible to express in safe code.
-//! * [`FullLocking`] — one reader-writer lock guards key insertions
+//! * [`FullLocking`] - one reader-writer lock guards key insertions
 //!   and removals, a second reader-writer lock guards every value
 //!   access. A writer to one value blocks readers of every other
 //!   value; the trade-off is a small fixed amount of state per storage

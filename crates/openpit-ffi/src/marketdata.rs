@@ -346,7 +346,7 @@ pub enum OpenPitMarketDataAccountGroupResolution {
 /// Writes the group id to `out_account_group_id` and returns `Found` when the
 /// account belongs to a group, `NoGroup` when it has none, and `Failed` when
 /// the group could not be determined. Invoked lazily by
-/// `openpit_marketdata_service_get` — only when the resolution mode would
+/// `openpit_marketdata_service_get` - only when the resolution mode would
 /// consult the group or default-group bucket and the per-account bucket has no
 /// quote.
 ///
@@ -690,7 +690,7 @@ pub extern "C" fn openpit_marketdata_service_register_with_id_and_ttl(
 }
 
 //--------------------------------------------------------------------------------------------------
-// TTL update / clear — account-level
+// TTL update / clear - account-level
 
 /// Pins the service-level TTL for `account_id`.
 ///
@@ -729,7 +729,7 @@ pub extern "C" fn openpit_marketdata_service_clear_account_ttl(
 }
 
 //--------------------------------------------------------------------------------------------------
-// TTL update / clear — group-level
+// TTL update / clear - group-level
 
 /// Pins the service-level TTL for `account_group_id`.
 ///
@@ -770,7 +770,7 @@ pub extern "C" fn openpit_marketdata_service_clear_account_group_ttl(
 }
 
 //--------------------------------------------------------------------------------------------------
-// TTL update / clear — instrument-level
+// TTL update / clear - instrument-level
 
 /// Updates the instrument-level TTL for an already-registered instrument.
 ///
@@ -822,7 +822,7 @@ pub extern "C" fn openpit_marketdata_service_clear_instrument_ttl(
 }
 
 //--------------------------------------------------------------------------------------------------
-// TTL update / clear — instrument × account
+// TTL update / clear - instrument × account
 
 /// Pins the instrument × account TTL cell for `(instrument_id, account_id)`.
 ///
@@ -879,7 +879,7 @@ pub extern "C" fn openpit_marketdata_service_clear_instrument_account_ttl(
 }
 
 //--------------------------------------------------------------------------------------------------
-// TTL update / clear — instrument × group
+// TTL update / clear - instrument × group
 
 /// Pins the instrument × group TTL cell for `(instrument_id, account_group_id)`.
 ///
@@ -963,7 +963,7 @@ pub extern "C" fn openpit_marketdata_service_clear(
 }
 
 //--------------------------------------------------------------------------------------------------
-// Push by id — default bucket
+// Push by id - default bucket
 
 /// Publishes a quote for `instrument_id`, replacing the entire stored snapshot.
 ///
@@ -1008,7 +1008,7 @@ pub extern "C" fn openpit_marketdata_service_push(
 }
 
 //--------------------------------------------------------------------------------------------------
-// Push by id — targeted fan-out
+// Push by id - targeted fan-out
 
 /// Publishes a quote for `instrument_id` into the per-account bucket of every
 /// account in `account_ids` and the per-group bucket of every group in
@@ -1165,7 +1165,7 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
 /// resolution.
 ///
 /// `resolve_account_group` is a **required** callback that supplies the reading
-/// account's group **lazily** — it is invoked only when the resolution mode
+/// account's group **lazily** - it is invoked only when the resolution mode
 /// would consult a group or default-group bucket and the per-account bucket has
 /// no quote. The callback receives the caller-supplied `user_data` context
 /// pointer and, when the account belongs to a group, writes the group id to
@@ -1657,7 +1657,7 @@ mod tests {
     fn create_md_service_invalid_mode_returns_null_with_error() {
         let mut err = null_error();
         let service = openpit_create_marketdata_service(
-            2, // Account byte — invalid for MD
+            2, // Account byte - invalid for MD
             openpit_create_marketdata_quote_ttl_infinite(),
             &mut err,
         );
@@ -1811,7 +1811,7 @@ mod tests {
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
         openpit_marketdata_service_push(service, id, quote_with_mark("100"), 0, 0, &mut err);
 
-        // Pin a zero-duration TTL for account=1 — the quote will appear stale
+        // Pin a zero-duration TTL for account=1 - the quote will appear stale
         // immediately on the next read for that account.
         let zero_ttl = openpit_create_marketdata_quote_ttl_within(0, 0);
         let status =
@@ -1898,7 +1898,7 @@ mod tests {
         let status = openpit_marketdata_service_get(
             service,
             id,
-            77, // account_id — no per-account quote
+            77, // account_id - no per-account quote
             Some(fixed_group_resolver),
             std::ptr::null_mut(),
             OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP,
@@ -1924,7 +1924,7 @@ mod tests {
         let status = openpit_marketdata_service_get(
             service,
             id,
-            7, // account_id — no per-account quote
+            7, // account_id - no per-account quote
             Some(failing_group_resolver),
             std::ptr::null_mut(),
             OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,

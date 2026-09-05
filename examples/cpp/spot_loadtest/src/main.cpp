@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
   if (!invalidReason.empty()) {
     sl::reporter::WriteInvalid(std::cout, e, cfg, configPath, result.snapshot,
                                result.stats.submitterThreads, stream->stats);
-    std::cerr << "\nerror: run invalid — " << invalidReason
+    std::cerr << "\nerror: run invalid - " << invalidReason
               << "; latency numbers suppressed\n";
     return 1;
   }

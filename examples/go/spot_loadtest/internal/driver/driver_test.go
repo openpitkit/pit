@@ -182,7 +182,7 @@ func TestDriverOraclePipeline(t *testing.T) {
 
 	// Checksum must be non-zero.
 	if stats.Checksum == 0 {
-		t.Error("checksum is zero — anti-DCE proof failed")
+		t.Error("checksum is zero - anti-DCE proof failed")
 	}
 
 	// Handoff stalls are a DIAGNOSTIC, not a validity trigger. The collector ->

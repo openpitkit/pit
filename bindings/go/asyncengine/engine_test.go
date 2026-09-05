@@ -301,7 +301,7 @@ func TestAsyncEngineDynamicSerializesPerAccount(t *testing.T) {
 			)
 		}
 	}
-	// T7: mirror the sharded variant — assert total dispatch count.
+	// T7: mirror the sharded variant - assert total dispatch count.
 	if got := atomic.LoadInt64(&driver.startCount); got != accounts*perAccount {
 		t.Errorf("startCount = %d, want %d", got, accounts*perAccount)
 	}
@@ -1111,7 +1111,7 @@ func TestAsyncEngineWrapperObjectsRouteToPinnedAccount(t *testing.T) {
 			t.Fatalf("%s: submit account = %v, want %v", label, got, acc)
 		}
 		// The recording strategy never calls run or abort, so the future must
-		// remain unresolved — assert that explicitly.
+		// remain unresolved - assert that explicitly.
 		if f.Done() {
 			t.Errorf(
 				"%s: future resolved, want unresolved (strategy drops tasks)",

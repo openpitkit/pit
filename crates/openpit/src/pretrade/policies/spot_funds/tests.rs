@@ -1151,7 +1151,7 @@ fn settings_cell_clone_shares_state_with_running_policy() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// perform_pre_trade_check — §8.1
+// perform_pre_trade_check - §8.1
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Buy Quantity + limit price ─────────────────────────────────────────────
@@ -1673,7 +1673,7 @@ fn missing_holdings_treated_as_zero_rejects_insufficient_funds() {
 fn insufficient_funds_on_missing_settlement_does_not_create_holdings_entry() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    // EUR settlement not seeded — treated as zero → InsufficientFunds.
+    // EUR settlement not seeded - treated as zero → InsufficientFunds.
 
     let order = make_order(
         acc,
@@ -1800,7 +1800,7 @@ fn concurrent_second_check_rejects_when_first_already_reserved() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// apply_execution_report — §8.2
+// apply_execution_report - §8.2
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Buy partial fill ──────────────────────────────────────────────────────
@@ -2517,7 +2517,7 @@ fn buy_fill_creates_underlying_entry_in_holdings() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// apply_account_adjustment — §8.3
+// apply_account_adjustment - §8.3
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Absolute set positive ─────────────────────────────────────────────────
@@ -4238,7 +4238,7 @@ fn account_adjustment_delta_overflow_rejects_with_arithmetic_overflow_code() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Post-trade asymmetry fix — §8.3
+// Post-trade asymmetry fix - §8.3
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Execution report for a Buy where the charge-side (USD) slot is absent:

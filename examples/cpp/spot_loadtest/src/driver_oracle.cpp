@@ -66,7 +66,7 @@ DescribeRejects(const std::vector<::openpit::reject::Reject> &rejects) {
   std::string out;
   for (std::size_t i = 0; i < rejects.size(); ++i) {
     if (i > 0) {
-      out += ",";
+      out += ',';
     }
     out += rejects[i].reason;
   }

@@ -36,7 +36,7 @@ namespace {
 [[nodiscard]] int CountLeadingZeros64(std::uint64_t v) {
   int n = 0;
   for (int bit = 63; bit >= 0; --bit) {
-    if ((v >> bit) & 1ULL) {
+    if ((v >> static_cast<unsigned>(bit)) & 1ULL) {
       break;
     }
     ++n;
@@ -62,19 +62,22 @@ Histogram::Histogram(std::int64_t lowest, std::int64_t highest, int sigFig)
   m_subBucketCount = static_cast<std::int32_t>(
       std::pow(2.0, m_subBucketHalfCountMagnitude + 1));
   m_subBucketHalfCount = m_subBucketCount / 2;
-  m_subBucketMask = (m_subBucketCount - 1) << m_unitMagnitude;
+  m_subBucketMask =
+      static_cast<std::int32_t>(static_cast<std::uint32_t>(m_subBucketCount - 1)
+                                << static_cast<unsigned>(m_unitMagnitude));
 
   // bucketsNeededToCoverValue (reference algorithm): how many buckets of
   // doubling range are required to reach `highest`.
-  std::int64_t smallestUntrackableValue =
-      static_cast<std::int64_t>(m_subBucketCount) << m_unitMagnitude;
+  std::uint64_t smallestUntrackableValue =
+      static_cast<std::uint64_t>(m_subBucketCount)
+      << static_cast<unsigned>(m_unitMagnitude);
   std::int32_t bucketsNeeded = 1;
-  while (smallestUntrackableValue <= highest) {
+  while (smallestUntrackableValue <= static_cast<std::uint64_t>(highest)) {
     if (smallestUntrackableValue > (INT64_MAX / 2)) {
       ++bucketsNeeded;
       break;
     }
-    smallestUntrackableValue <<= 1;
+    smallestUntrackableValue <<= 1U;
     ++bucketsNeeded;
   }
   m_bucketCount = bucketsNeeded;
@@ -86,30 +89,40 @@ Histogram::Histogram(std::int64_t lowest, std::int64_t highest, int sigFig)
 int Histogram::CountsIndexFor(std::int64_t value) const {
   const std::int32_t bucketIndex = std::max<std::int32_t>(
       0, 64 -
-             CountLeadingZeros64(
-                 static_cast<std::uint64_t>(value | m_subBucketMask)) -
+             CountLeadingZeros64(static_cast<std::uint64_t>(value) |
+                                 static_cast<std::uint64_t>(m_subBucketMask)) -
              (m_unitMagnitude + m_subBucketHalfCountMagnitude + 1));
-  const std::int32_t subBucketIndex =
-      static_cast<std::int32_t>(value >> (bucketIndex + m_unitMagnitude));
+  const std::int32_t subBucketIndex = static_cast<std::int32_t>(
+      static_cast<std::uint64_t>(value) >>
+      static_cast<unsigned>(bucketIndex + m_unitMagnitude));
 
   // countsIndex (reference): bucketBaseIndex + (subBucketIndex -
   // subBucketHalf).
-  const std::int32_t bucketBaseIndex = (bucketIndex + 1)
-                                       << m_subBucketHalfCountMagnitude;
+  const std::int32_t bucketBaseIndex = static_cast<std::int32_t>(
+      static_cast<std::uint32_t>(bucketIndex + 1)
+      << static_cast<unsigned>(m_subBucketHalfCountMagnitude));
   const std::int32_t offsetInBucket = subBucketIndex - m_subBucketHalfCount;
   return bucketBaseIndex + offsetInBucket;
 }
 
 std::int64_t Histogram::ValueFromIndex(int index) const {
-  std::int32_t bucketIndex = (index >> m_subBucketHalfCountMagnitude) - 1;
+  std::int32_t bucketIndex =
+      static_cast<std::int32_t>(
+          static_cast<unsigned>(index) >>
+          static_cast<unsigned>(m_subBucketHalfCountMagnitude)) -
+      1;
   std::int32_t subBucketIndex =
-      (index & (m_subBucketHalfCount - 1)) + m_subBucketHalfCount;
+      static_cast<std::int32_t>(
+          static_cast<unsigned>(index) &
+          static_cast<unsigned>(m_subBucketHalfCount - 1)) +
+      m_subBucketHalfCount;
   if (bucketIndex < 0) {
     subBucketIndex -= m_subBucketHalfCount;
     bucketIndex = 0;
   }
-  return static_cast<std::int64_t>(subBucketIndex)
-         << (bucketIndex + m_unitMagnitude);
+  return static_cast<std::int64_t>(
+      static_cast<std::uint64_t>(subBucketIndex)
+      << static_cast<unsigned>(bucketIndex + m_unitMagnitude));
 }
 
 bool Histogram::RecordClamped(std::int64_t value) {
@@ -148,26 +161,30 @@ void Histogram::Merge(const Histogram &other) {
 std::int64_t Histogram::SizeOfEquivalentValueRange(std::int64_t value) const {
   const std::int32_t bucketIndex = std::max<std::int32_t>(
       0, 64 -
-             CountLeadingZeros64(
-                 static_cast<std::uint64_t>(value | m_subBucketMask)) -
+             CountLeadingZeros64(static_cast<std::uint64_t>(value) |
+                                 static_cast<std::uint64_t>(m_subBucketMask)) -
              (m_unitMagnitude + m_subBucketHalfCountMagnitude + 1));
-  const std::int32_t subBucketIndex =
-      static_cast<std::int32_t>(value >> (bucketIndex + m_unitMagnitude));
+  const std::int32_t subBucketIndex = static_cast<std::int32_t>(
+      static_cast<std::uint64_t>(value) >>
+      static_cast<unsigned>(bucketIndex + m_unitMagnitude));
   const std::int32_t adjustedBucket =
       (subBucketIndex >= m_subBucketCount) ? bucketIndex + 1 : bucketIndex;
-  return static_cast<std::int64_t>(1) << (m_unitMagnitude + adjustedBucket);
+  return static_cast<std::int64_t>(std::uint64_t{1} << static_cast<unsigned>(
+                                       m_unitMagnitude + adjustedBucket));
 }
 
 std::int64_t Histogram::LowestEquivalentValue(std::int64_t value) const {
   const std::int32_t bucketIndex = std::max<std::int32_t>(
       0, 64 -
-             CountLeadingZeros64(
-                 static_cast<std::uint64_t>(value | m_subBucketMask)) -
+             CountLeadingZeros64(static_cast<std::uint64_t>(value) |
+                                 static_cast<std::uint64_t>(m_subBucketMask)) -
              (m_unitMagnitude + m_subBucketHalfCountMagnitude + 1));
-  const std::int32_t subBucketIndex =
-      static_cast<std::int32_t>(value >> (bucketIndex + m_unitMagnitude));
-  return static_cast<std::int64_t>(subBucketIndex)
-         << (bucketIndex + m_unitMagnitude);
+  const std::int32_t subBucketIndex = static_cast<std::int32_t>(
+      static_cast<std::uint64_t>(value) >>
+      static_cast<unsigned>(bucketIndex + m_unitMagnitude));
+  return static_cast<std::int64_t>(
+      static_cast<std::uint64_t>(subBucketIndex)
+      << static_cast<unsigned>(bucketIndex + m_unitMagnitude));
 }
 
 std::int64_t Histogram::HighestEquivalentValue(std::int64_t value) const {
@@ -175,8 +192,7 @@ std::int64_t Histogram::HighestEquivalentValue(std::int64_t value) const {
 }
 
 std::int64_t Histogram::MedianEquivalentValue(std::int64_t value) const {
-  return LowestEquivalentValue(value) +
-         (SizeOfEquivalentValueRange(value) >> 1);
+  return LowestEquivalentValue(value) + (SizeOfEquivalentValueRange(value) / 2);
 }
 
 std::int64_t Histogram::ValueAtQuantile(double quantile) const {

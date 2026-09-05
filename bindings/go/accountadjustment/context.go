@@ -40,7 +40,7 @@ func NewContextFromHandle(handle native.AccountAdjustmentContext) Context {
 //
 // An account-adjustment context always carries account control, so this call
 // always returns a usable handle. The returned handle is valid to use only
-// within the account-adjustment processing of this request — through its commit
+// within the account-adjustment processing of this request - through its commit
 // or rollback (so it may be captured into a mutation commit/rollback callback
 // for deferred blocking); using it afterwards is unspecified. Its memory is
 // reclaimed by the garbage collector; callers do not manage its lifetime.

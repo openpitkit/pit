@@ -314,9 +314,9 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) AccountBarriers(
 //
 // `slippageBps` is the worst-case slippage applied to a market-order
 // reservation, expressed in basis points (1 bps = 0.01%):
-//   - `0` — no slippage; the reservation uses the base price as-is.
-//   - `1500` — 15% (the typical conservative default).
-//   - `10000` — 100% (reserve up to double the base price).
+//   - `0` - no slippage; the reservation uses the base price as-is.
+//   - `1500` - 15% (the typical conservative default).
+//   - `10000` - 100% (reserve up to double the base price).
 //
 // Without calling this method, market orders are rejected with
 // UnsupportedOrderType (limit-only mode).

@@ -6,12 +6,12 @@ full story; this page is the index and the one-command entry points.
 
 ## Layout
 
-- `go/` — Go examples (`rate_pnl_killswitch`, `spot_funds`, `spot_table`).
-- `python/` — the same examples for the Python binding.
-- `js/` — the same Node examples for the JS binding, plus the
+- `go/` - Go examples (`rate_pnl_killswitch`, `spot_funds`, `spot_table`).
+- `python/` - the same examples for the Python binding.
+- `js/` - the same Node examples for the JS binding, plus the
   `browser_terminal` demo.
-- `cpp/` — the same examples for the C++ binding.
-- `tables/` — scenario tables consumed by the `spot_table` examples
+- `cpp/` - the same examples for the C++ binding.
+- `tables/` - scenario tables consumed by the `spot_table` examples
   (see [`tables/spot/README.md`](tables/spot/README.md)).
 
 ## How to run

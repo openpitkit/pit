@@ -18,7 +18,7 @@
 //! Pull-based market-data service for supplying live quotes to pre-trade
 //! policies and periodic portfolio revaluators.
 //!
-//! Quotes are stored per instrument in three conceptual buckets — per-account,
+//! Quotes are stored per instrument in three conceptual buckets - per-account,
 //! per-account-group, and the default ("everyone-else") bucket, which is the
 //! bucket of [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
 //!

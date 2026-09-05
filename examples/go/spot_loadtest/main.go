@@ -47,7 +47,7 @@ func main() {
 
 	configPath := flag.String("config", "", "path to the INI config file (required)")
 	allowDebugCore := flag.Bool("allow-debug-core", false,
-		"allow a debug-built core; latency numbers will be meaningless — for development only")
+		"allow a debug-built core; latency numbers will be meaningless - for development only")
 	showProgress := flag.Bool("progress", true,
 		"show live progress on stderr while the run proceeds (default on)")
 	flag.Parse()
@@ -123,7 +123,7 @@ func main() {
 	// An INVALID run must NEVER print a headline number. A run is invalid when it
 	// hit dispatch backpressure (ErrQueueLimit) or produced a zero anti-DCE
 	// checksum on a non-empty run (decisions not provably consumed). A HARNESS
-	// handoff stall is NOT an invalidity trigger — the handoff is non-blocking and
+	// handoff stall is NOT an invalidity trigger - the handoff is non-blocking and
 	// off the measured path, so it never contaminates the headline; it is reported
 	// as a diagnostic only. For an invalid run, print the invalid-run report
 	// (banner + non-latency diagnostics, NO headline/percentiles) to stdout and
@@ -135,7 +135,7 @@ func main() {
 		errors.Is(err, driver.ErrZeroChecksumInvalidRun) {
 		reporter.WriteInvalid(os.Stdout, e, cfg, *configPath, snap, stream.Stats)
 		fmt.Fprintf(os.Stderr,
-			"\nerror: run invalid — %v; latency numbers suppressed\n", err)
+			"\nerror: run invalid - %v; latency numbers suppressed\n", err)
 		os.Exit(1)
 	}
 	if err != nil {

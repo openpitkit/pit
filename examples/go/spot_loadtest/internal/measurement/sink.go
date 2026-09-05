@@ -71,10 +71,10 @@ type Sink struct {
 	// maxWorkOverflow is the peak depth of the submitter -> collector overflow
 	// spill (workOverflow). It is a HARNESS DIAGNOSTIC only; it is never an
 	// INVALID trigger and is never folded into the anti-DCE checksum. A large
-	// value means collectors lagged submission — usually because they were
+	// value means collectors lagged submission - usually because they were
 	// legitimately blocked in fut.Await (real engine latency, correctly in the
 	// headline), but under host CPU starvation it can include collector-dispatch
-	// delay that inflates — never flatters — the tail.
+	// delay that inflates - never flatters - the tail.
 	maxWorkOverflow int
 
 	// inFlight / maxInFlight track the open-loop depth as the Phase-3 witness.
@@ -228,10 +228,10 @@ func (s *Sink) RecordHandoffStall() {
 
 // RecordWorkOverflowDepth updates the running peak submitter -> collector spill
 // depth (maxWorkOverflow). It is a HARNESS DIAGNOSTIC only: a large peak means
-// collectors lagged submission — usually because they were legitimately blocked
+// collectors lagged submission - usually because they were legitimately blocked
 // in fut.Await (real engine latency, correctly in the headline), but under host
-// CPU starvation it can include collector-dispatch delay that inflates — never
-// flatters — the tail. It is NOT an INVALID trigger and is NOT folded into the
+// CPU starvation it can include collector-dispatch delay that inflates - never
+// flatters - the tail. It is NOT an INVALID trigger and is NOT folded into the
 // anti-DCE checksum.
 func (s *Sink) RecordWorkOverflowDepth(depth int) {
 	s.mu.Lock()
@@ -261,7 +261,7 @@ type SinkStats struct {
 	// run. It excludes engine-await latency, which stays in the headline.
 	HandoffStalls uint64
 	// MaxWorkOverflow is the peak depth of the submitter -> collector spill
-	// (workOverflow). DIAGNOSTIC only — not an INVALID trigger.
+	// (workOverflow). DIAGNOSTIC only - not an INVALID trigger.
 	MaxWorkOverflow int
 	Checksum        uint64
 	MaxInFlight     int64

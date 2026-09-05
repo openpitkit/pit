@@ -27,7 +27,7 @@
 // The shadow fund model.
 //
 // An INDEPENDENT reimplementation of the spot-funds arithmetic that never
-// imports the engine — which is what makes the per-op oracle non-circular. It
+// imports the engine - which is what makes the per-op oracle non-circular. It
 // reproduces policy-contract section 2 exactly, including the engine's
 // prune-when-zero behaviour: a slot whose available and held both reach zero is
 // removed, so a missing slot and an all-zero slot are indistinguishable.

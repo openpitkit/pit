@@ -210,7 +210,7 @@ impl PreTradeLock {
     /// non-default group in `other`, prices are bulk-copied into the matching
     /// existing section or into a new section if none exists yet.
     ///
-    /// The hot path — a single-entry lock merging into an existing one — costs
+    /// The hot path - a single-entry lock merging into an existing one - costs
     /// exactly one `extend_from_slice` call with no iteration or allocation.
     pub fn merge(&mut self, other: &Self) {
         self.default_prices.extend_from_slice(&other.default_prices);

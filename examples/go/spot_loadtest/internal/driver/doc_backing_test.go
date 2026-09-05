@@ -24,8 +24,8 @@ package driver
 //
 // This test loads configs/baseline.ini through the real config parser (guarding
 // that the committed reference config stays in sync with the tightened validator),
-// then runs a reduced end-to-end — 30 000 order-checks instead of the 2 000 000
-// in the baseline — through the REAL openpit asyncengine, and finally renders the
+// then runs a reduced end-to-end - 30 000 order-checks instead of the 2 000 000
+// in the baseline - through the REAL openpit asyncengine, and finally renders the
 // report, asserting every named block is present and the run is oracle-clean with
 // zero backpressure.
 //
@@ -52,7 +52,7 @@ import (
 // README "Build and run" recipe (examples/go/spot_loadtest/README.md).
 //
 // It guards two invariants:
-//  1. configs/baseline.ini parses and passes strict validation without error —
+//  1. configs/baseline.ini parses and passes strict validation without error -
 //     the committed reference config must always stay in sync with the parser.
 //  2. A reduced run (30 000 ops, same seed + cohort structure as the baseline)
 //     through the REAL openpit asyncengine produces an oracle-clean report that
@@ -148,7 +148,7 @@ func TestDocBackingBaselineRecipe(t *testing.T) {
 
 	// Anti-DCE proof: the checksum must be non-zero.
 	if snap.Checksum == 0 {
-		t.Error("anti-DCE checksum is zero — not all decisions were consumed")
+		t.Error("anti-DCE checksum is zero - not all decisions were consumed")
 	}
 
 	// Open-loop witness: the submitter never blocks on a decision, so submissions

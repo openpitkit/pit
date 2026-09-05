@@ -51,8 +51,8 @@ use super::storage::Storage;
 /// [`SyncedEngineBuilder::storage_builder`](crate::SyncedEngineBuilder::storage_builder)
 /// by shared reference to every policy that needs to create storages.
 ///
-/// Storing a `StorageBuilder` inside a policy — even by value through
-/// unsafe code — is a misuse: the builder is only meaningful during
+/// Storing a `StorageBuilder` inside a policy - even by value through
+/// unsafe code - is a misuse: the builder is only meaningful during
 /// initialization, after which the storages it produced are already live
 /// and the builder itself carries no additional information.
 ///

@@ -167,14 +167,14 @@ func (r *run) collectFunding(item inflight) {
 // also drain.
 //
 // Spilling here is counted as a HARNESS handoff stall DIAGNOSTIC. Unlike the work
-// handoff (whose fast path fills mainly because the ENGINE is slow — real
+// handoff (whose fast path fills mainly because the ENGINE is slow - real
 // latency), the finalize backlog is purely harness-internal: it forms only when
 // the finalizer pool cannot keep up with CommitAndClose throughput, never because
 // of engine order-check latency. Because the handoff is non-blocking and
 // CommitAndClose is fully off the measured path (the latency was already recorded
 // at resolve), a full finalize fast path does NOT throttle the submit schedule
-// and does NOT invalidate the run — it is reported as a diagnostic only. The
-// reservation is still finalized (from the overflow) — the stall is counted,
+// and does NOT invalidate the run - it is reported as a diagnostic only. The
+// reservation is still finalized (from the overflow) - the stall is counted,
 // never a dropped reservation.
 //
 // On context cancellation it closes the reservation directly so the native

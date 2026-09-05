@@ -45,7 +45,7 @@ struct Toolchain {
 };
 
 // Summarizes the pit monorepo revision. The working-tree status is TRI-STATE:
-// clean | dirty | unknown — an unauditable build is never reported as
+// clean | dirty | unknown - an unauditable build is never reported as
 // "clean".
 struct PitRepo {
   std::string commit = "unknown";
@@ -68,7 +68,7 @@ struct CoreBuildProfile {
   std::string raw; // the unparsed key=value; string for the report.
 
   // True when the core was built without optimizations or with debug
-  // assertions — conditions that make latency numbers meaningless.
+  // assertions - conditions that make latency numbers meaningless.
   [[nodiscard]] bool IsDebug() const;
 };
 

@@ -205,15 +205,11 @@ enum OpenpitAttrItem {
 impl Parse for OpenpitAttrItem {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let path = input.parse::<Path>()?;
-        if path.is_ident("inner") {
+        if let Some(ident) = path.get_ident().filter(|ident| *ident == "inner") {
             if !input.is_empty() && !input.peek(Token![,]) {
                 return Err(input.error("`inner` must not have arguments"));
             }
-            let ident = path
-                .get_ident()
-                .expect("inner path must have one segment")
-                .clone();
-            return Ok(OpenpitAttrItem::Inner(ident));
+            return Ok(OpenpitAttrItem::Inner(ident.clone()));
         }
 
         if !input.peek(syn::token::Paren) {

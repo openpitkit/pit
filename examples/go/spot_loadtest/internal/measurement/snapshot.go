@@ -119,11 +119,11 @@ type Snapshot struct {
 	HandoffStalls uint64
 
 	// MaxWorkOverflow is the peak depth of the submitter -> collector spill
-	// (workOverflow). DIAGNOSTIC only — NOT an INVALID signal, and NOT folded into
+	// (workOverflow). DIAGNOSTIC only - NOT an INVALID signal, and NOT folded into
 	// the anti-DCE checksum. A large value means collectors lagged submission:
 	// usually because they were legitimately blocked in fut.Await (real engine
 	// latency, correctly in the headline), but under host CPU starvation it can
-	// include collector-dispatch delay that inflates — never flatters — the tail.
+	// include collector-dispatch delay that inflates - never flatters - the tail.
 	// Cross-check throughput and engine-compute when this depth is large.
 	MaxWorkOverflow int
 

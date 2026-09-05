@@ -154,8 +154,8 @@ mod reentry {
 /// # Purpose
 ///
 /// Trading policies built on top of `openpit` often maintain internal
-/// state — for example, reserved margin, open positions, and rate-limit
-/// counters — that must be thread-safe when shared across engine threads.
+/// state - for example, reserved margin, open positions, and rate-limit
+/// counters - that must be thread-safe when shared across engine threads.
 /// Without a common abstraction each policy would have to implement its
 /// own synchronization discipline: choose the right lock primitive,
 /// acquire locks in a consistent order, ensure that the acquisition order
@@ -181,15 +181,15 @@ mod reentry {
 /// impossible for safe code to keep conflicting references to the same
 /// value alive at the same time.
 ///
-/// * [`Storage::with`] — invokes the closure with `&Value` if the key
+/// * [`Storage::with`] - invokes the closure with `&Value` if the key
 ///   exists; returns the closure's result wrapped in `Some`, or `None`
 ///   if the key is absent.
-/// * [`Storage::with_mut`] — invokes the closure with `&mut Value`,
+/// * [`Storage::with_mut`] - invokes the closure with `&mut Value`,
 ///   creating the entry on demand. The closure is also told whether the
 ///   entry was just inserted.
-/// * [`Storage::remove`] — drops an entry; returns `true` if the key was
+/// * [`Storage::remove`] - drops an entry; returns `true` if the key was
 ///   present.
-/// * [`Storage::len`], [`Storage::is_empty`] — observers of the index.
+/// * [`Storage::len`], [`Storage::is_empty`] - observers of the index.
 ///
 /// All accessors take `&self` and acquire the locks defined by
 /// `LockingPolicy`. Acquisition order is **always index before values**,
@@ -406,8 +406,8 @@ where
     /// miss without inserting any default.
     ///
     /// Use this when the operation is only meaningful for entries that
-    /// already exist — for example, consuming from a hold that may not
-    /// exist — so that absent keys never create phantom entries.
+    /// already exist - for example, consuming from a hold that may not
+    /// exist - so that absent keys never create phantom entries.
     ///
     /// `mutator` must not call [`Storage::with`] or
     /// [`Storage::with_mut`] back into the same storage; see the
@@ -568,14 +568,14 @@ where
     ///
     /// * **Fast path** (existing entry): acquires index shared + values
     ///   exclusive. `mutator` receives `&mut Value`; any mutations it makes
-    ///   are visible whether it returns `Ok` or `Err` — storage does **not**
+    ///   are visible whether it returns `Ok` or `Err` - storage does **not**
     ///   snapshot or restore the value. If `mutator` needs to leave the entry
     ///   untouched on failure it must avoid writing before it knows the
     ///   operation will succeed.
     /// * **Slow path** (new entry): acquires index exclusive, inserts
     ///   `default()`, acquires values exclusive, and invokes `mutator`.
     ///   If `mutator` returns `Err`, the just-inserted entry is removed
-    ///   under the same exclusive index lock — no phantom entry remains.
+    ///   under the same exclusive index lock - no phantom entry remains.
     ///   If `mutator` returns `Ok`, the entry is kept.
     ///
     /// `Key: Clone` is required for the same reason as in `with_mut`.

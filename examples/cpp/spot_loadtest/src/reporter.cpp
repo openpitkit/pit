@@ -230,7 +230,7 @@ InvalidReasons(const measurement::Snapshot &snap) {
 
 [[nodiscard]] std::string SteadyStateLabel(const measurement::Snapshot &snap) {
   if (snap.warmupWindows == 0) {
-    return "all windows (single window — no warmup exclusion possible)";
+    return "all windows (single window - no warmup exclusion possible)";
   }
   char buf[128];
   std::snprintf(buf, sizeof(buf),
@@ -274,7 +274,7 @@ void WriteHeadline(std::ostream &out, const measurement::Snapshot &snap) {
   Pf(out, "    p99.9 : %s", FmtDur(oc.p999).c_str());
   Pf(out, "    max   : %s", FmtDur(oc.max).c_str());
   P(out, "");
-  P(out, "  All-run merged (includes warmup window — full picture):");
+  P(out, "  All-run merged (includes warmup window - full picture):");
   Pf(out, "    p50   : %s", FmtDur(snap.orderCheck.p50).c_str());
   Pf(out, "    p99   : %s", FmtDur(snap.orderCheck.p99).c_str());
   Pf(out, "    p99.9 : %s", FmtDur(snap.orderCheck.p999).c_str());
@@ -389,12 +389,12 @@ void WriteConcurrency(std::ostream &out, const measurement::Snapshot &snap,
 
   if (snap.backpressure == 0) {
     P(out,
-      "  Backpressure (QueueLimit submits): 0 (healthy — dispatch held the "
+      "  Backpressure (QueueLimit submits): 0 (healthy - dispatch held the "
       "load)");
   } else {
     Pf(out,
        "  Backpressure (QueueLimit submits): %llu (dispatch capacity was "
-       "exceeded; the run is degraded — raise max_queues or lower "
+       "exceeded; the run is degraded - raise max_queues or lower "
        "active_accounts)",
        static_cast<unsigned long long>(snap.backpressure));
   }
@@ -403,9 +403,9 @@ void WriteConcurrency(std::ostream &out, const measurement::Snapshot &snap,
     P(out, "  Handoff stalls: 0 (finalizer pool kept up with the collector)");
   } else {
     Pf(out,
-       "  Handoff stalls: %llu (DIAGNOSTIC — finalizer pool transiently lagged "
+       "  Handoff stalls: %llu (DIAGNOSTIC - finalizer pool transiently lagged "
        "the collector and spilled to the off-path overflow; does NOT throttle "
-       "the submit schedule or invalidate the run — raise the finalizer pool "
+       "the submit schedule or invalidate the run - raise the finalizer pool "
        "size if persistent)",
        static_cast<unsigned long long>(snap.handoffStalls));
   }
@@ -416,10 +416,10 @@ void WriteConcurrency(std::ostream &out, const measurement::Snapshot &snap,
       "submission)");
   } else {
     Pf(out,
-       "  Submit->collector overflow (max depth): %d (DIAGNOSTIC — collectors "
+       "  Submit->collector overflow (max depth): %d (DIAGNOSTIC - collectors "
        "lagged submission at peak; usually engine slowness correctly in the "
        "headline, but under host CPU starvation can fold collector-dispatch "
-       "delay into the tail — cross-check throughput and engine-compute)",
+       "delay into the tail - cross-check throughput and engine-compute)",
        snap.maxWorkOverflow);
   }
   P(out, "");
@@ -538,7 +538,7 @@ void WriteTrajectory(std::ostream &out, const measurement::Snapshot &snap) {
     std::snprintf(label, sizeof(label), "%4zu", i + 1);
     std::string labelStr = label;
     if (i == 0 && snap.windows.size() > 1) {
-      labelStr += "w";
+      labelStr += 'w';
     }
     Pf(out, "  %-5s| %-6lld| %-11s| %-11s| %-11s| %s", labelStr.c_str(),
        static_cast<long long>(win.orderCheck.count),
@@ -564,7 +564,7 @@ void WriteTrajectory(std::ostream &out, const measurement::Snapshot &snap) {
     std::snprintf(label, sizeof(label), "%4zu", i + 1);
     std::string labelStr = label;
     if (i == 0 && snap.windows.size() > 1) {
-      labelStr += "w";
+      labelStr += 'w';
     }
     Pf(out, "  %-5s| %-6lld| %-11s| %-11s| %s", labelStr.c_str(),
        static_cast<long long>(win.settlement.count),
@@ -705,7 +705,7 @@ void WriteDiagnostics(std::ostream &out, const measurement::Snapshot &snap,
         snap.orderCheck.p50 - (im.queueWait.p50 + im.engineCompute.p50);
     const nanoseconds residualP99 =
         snap.orderCheck.p99 - (im.queueWait.p99 + im.engineCompute.p99);
-    P(out, "  Aggregate FFI+handoff residual (APPROXIMATE — aggregate "
+    P(out, "  Aggregate FFI+handoff residual (APPROXIMATE - aggregate "
            "arithmetic,");
     P(out, "  NOT per-op subtraction; interpret with care):");
     P(out, "    residual p50 = order_check.p50 - (queue_wait.p50 + "

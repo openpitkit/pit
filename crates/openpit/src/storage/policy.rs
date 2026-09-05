@@ -29,10 +29,10 @@
 //!
 //! A policy controls two independent lock domains:
 //!
-//! * **Index** — the set of keys present in the storage. Acquired
+//! * **Index** - the set of keys present in the storage. Acquired
 //!   exclusively when keys are added or removed; acquired shared when an
 //!   existing key is looked up.
-//! * **Values** — the bag of all values stored under those keys. Acquired
+//! * **Values** - the bag of all values stored under those keys. Acquired
 //!   exclusively when any value is mutated; acquired shared when any value
 //!   is read. The key of the entry being accessed is passed as an argument
 //!   so that future implementations can apply per-key granularity; the

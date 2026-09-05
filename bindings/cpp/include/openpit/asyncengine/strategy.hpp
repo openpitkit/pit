@@ -1103,16 +1103,16 @@ class ShardedStrategy final : public Strategy, private Base {
   [[nodiscard]] static std::uint64_t MulHigh64(std::uint64_t a,
                                                std::uint64_t b) {
     const std::uint64_t aLo = a & 0xFFFFFFFFULL;
-    const std::uint64_t aHi = a >> 32;
+    const std::uint64_t aHi = a >> 32U;
     const std::uint64_t bLo = b & 0xFFFFFFFFULL;
-    const std::uint64_t bHi = b >> 32;
+    const std::uint64_t bHi = b >> 32U;
     const std::uint64_t loLo = aLo * bLo;
     const std::uint64_t hiLo = aHi * bLo;
     const std::uint64_t loHi = aLo * bHi;
     const std::uint64_t hiHi = aHi * bHi;
     const std::uint64_t cross =
-        (loLo >> 32) + (hiLo & 0xFFFFFFFFULL) + (loHi & 0xFFFFFFFFULL);
-    return hiHi + (hiLo >> 32) + (loHi >> 32) + (cross >> 32);
+        (loLo >> 32U) + (hiLo & 0xFFFFFFFFULL) + (loHi & 0xFFFFFFFFULL);
+    return hiHi + (hiLo >> 32U) + (loHi >> 32U) + (cross >> 32U);
   }
 
   void StopInDestructor() {

@@ -239,7 +239,7 @@ def threshold_for_lines(
             return 97.0
         # When the region metric already has synthetic point spans
         # (effective_region > raw_region), the same file likely contains
-        # synthetic uncoverable lines — e.g. wildcard arms required by
+        # synthetic uncoverable lines - e.g. wildcard arms required by
         # `#[non_exhaustive]` enums from external crates.  Apply the same
         # relaxed threshold so those structurally-unreachable lines do not
         # fail the build.

@@ -27,6 +27,7 @@ node_dir := env_var_or_default("PIT_NODE_DIR", repo_dir / "target" / "node")
 node_bin_dir := if os_family() == "windows" { node_dir } else { node_dir / "bin" }
 path_separator := if os_family() == "windows" { ";" } else { ":" }
 python_path := env_var_or_default("PYTHON_PATH", default_python_path)
+semgrep_path := if os_family() == "windows" { venv_bin / "semgrep.exe" } else { venv_bin / "semgrep" }
 bootstrap_python := env_var_or_default("PIT_BOOTSTRAP_PYTHON", if os_family() == "windows" { "python" } else { "python3" })
 windows_target := env_var_or_default("PIT_WINDOWS_TARGET", "x86_64-pc-windows-msvc")
 just_helper := "scripts/just_helpers.py"
@@ -300,7 +301,7 @@ run-examples-release: run-examples-go-release run-examples-python-release run-ex
 
 # Lint all.
 [parallel]
-lint-all: lint-rust lint-python lint-go lint-cpp lint-js
+lint-all: lint-rust lint-python lint-go lint-cpp lint-js check-semgrep
 
 # Lint Rust.
 [unix]
@@ -340,6 +341,12 @@ lint-go: _ensure-python-env
     {{ python_path }} {{ just_helper }} go-examples debug go vet -all ./...
     {{ python_path }} {{ just_helper }} go-examples debug golangci-lint run --timeout=5m ./...
 
+# Run the invariant rule set (checks/semgrep) over the whole repository.
+check-semgrep: _ensure-python-env
+    {{ semgrep_path }} scan --config checks/semgrep --error --quiet --metrics=off --disable-version-check .
+    {{ semgrep_path }} --test --config checks/semgrep/financial-types-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/financial-types-rust.rs
+    {{ semgrep_path }} --test --config checks/semgrep/fallbacks-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/fallbacks-rust.rs
+
 # Lint JS (type-check, eslint, prettier --check).
 lint-js: build-js
     cd bindings/js && npm run typecheck
@@ -375,7 +382,7 @@ test-rust-debug:
     _run_nextest run --workspace --exclude openpit-python --locked --status-level fail --final-status-level fail
     _run_nextest run -p openpit --all-features --locked --status-level fail --final-status-level fail
     # nextest does not run doctests; cover them via cargo test.
-    cargo test --workspace --doc --locked
+    cargo test --workspace --exclude openpit-ffi --exclude openpit-python --doc --locked
     cargo test -p openpit --all-features --doc --locked
 [windows]
 test-rust-debug: _ensure-python-env
@@ -398,7 +405,7 @@ test-rust-release:
     _run_nextest run --release --workspace --exclude openpit-python --locked --status-level fail --final-status-level fail
     _run_nextest run --release -p openpit --all-features --locked --status-level fail --final-status-level fail
     # nextest does not run doctests; cover them via cargo test.
-    cargo test --release --workspace --doc --locked
+    cargo test --release --workspace --exclude openpit-ffi --exclude openpit-python --doc --locked
     cargo test --release -p openpit --all-features --doc --locked
 [windows]
 test-rust-release: _ensure-python-env

@@ -1,0 +1,113 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Domain types for financial values (Rust).
+#
+# Source: the project style contract - monetary values, prices and quantities
+# use the domain value types (Price, Pnl, Volume, Quantity and the rest); a raw
+# Decimal is rare and deliberate, and a floating-point type is never used for a
+# financial value. The point is not that a float is inaccurate: a raw numeric
+# type is the usual way the domain model gets bypassed. If no domain type
+# expresses a value, that is a defect in the model - fix the model rather than
+# working around it at the call site.
+#
+# crates/openpit/src/param holds the domain types themselves and the boundary
+# constructors that convert an external representation into one, so it is out of
+# scope for the signature rules.
+
+rules:
+  - id: financial-value-must-use-domain-type
+    message: >-
+      Financial values use a domain type (Price, Pnl, Volume, Quantity, ...),
+      never a floating-point type. If no domain type expresses this value, that
+      is a defect in the domain model - file it and fix the model rather than
+      bypassing it here.
+    severity: ERROR
+    languages: [rust]
+    pattern-either:
+      - pattern: |
+          struct $S { ..., $F: f64, ... }
+      - pattern: |
+          fn $FN(..., $A: f64, ...) -> $R { ... }
+      - pattern: |
+          fn $FN(...) -> f64 { ... }
+    paths:
+      include:
+        - /crates/openpit/src/core/**
+        - /crates/openpit/src/pretrade/**
+        - /crates/openpit/src/storage/**
+        - /crates/openpit/src/marketdata/**
+        - /crates/openpit-interop/src/**
+        - /crates/openpit-ffi/src/**
+      exclude:
+        - "**/benches/**"
+
+  - id: raw-decimal-in-public-api
+    message: >-
+      A public signature exposes a raw Decimal instead of a domain type. This is
+      the common way the domain model gets bypassed. Constructors and parsers of
+      the domain types are the intended exception and live under param.
+    severity: ERROR
+    languages: [rust]
+    # Known limitation: the scanner's Rust patterns drop the visibility
+    # modifier, and the match range starts at `fn`, so `pub` cannot be required
+    # either in the pattern or by a regex filter over the match. The rule
+    # therefore also reports a private signature. That is the lesser evil:
+    # rewriting it as a plain regex to get `pub` right loses generic clauses and
+    # parameter lists containing parentheses, which is what the rule exists to
+    # catch.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              pub fn $FN(..., $A: Decimal, ...) -> $R { ... }
+          - pattern: |
+              pub fn $FN(...) -> Decimal { ... }
+      # The source helper is private; the scanner falsely reports it because
+      # it drops visibility modifiers before matching the signature. This
+      # exemption survives if the helper becomes `pub` or `pub(super)`, so
+      # making it public must be deliberate: the rule will not report it.
+      - pattern-not: |
+          fn trade_price_with_factor(price: Price, factor: Decimal) -> Result<Price, PnlHaltReason> { ... }
+    paths:
+      include:
+        - /crates/openpit/src/**
+        - /crates/openpit-interop/src/**
+      exclude:
+        - /crates/openpit/src/param/**
+
+  - id: numeric-cast-in-policy-calculation
+    message: >-
+      A numeric cast inside policy calculation code is the second way around a
+      domain type, after a raw Decimal. Convert through the domain type instead.
+      Casts of lengths and indices are legitimate - exclude the individual file
+      if that is all it does.
+    severity: ERROR
+    languages: [rust]
+    pattern-either:
+      - pattern: $X as f64
+      - pattern: $X as i64
+      - pattern: $X as u64
+      - pattern: $X as u32
+    paths:
+      include:
+        - /crates/openpit/src/pretrade/policies/**
+        - /crates/openpit/src/storage/policies/**
+      exclude:
+        # Baseline: the window arithmetic here casts Duration and counters to
+        # u64 without a checked conversion. Remove this line with the fix, not
+        # before.
+        - /crates/openpit/src/pretrade/policies/rate_limit.rs

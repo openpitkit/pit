@@ -1484,7 +1484,7 @@ fn configure_spot_funds_settings_retune_takes_effect() {
         .expect("pricing-source retune must publish");
 
     // After the retune the limit order (unaffected by pricing source) still
-    // passes — the holdings were not touched by the settings update.
+    // passes - the holdings were not touched by the settings update.
     engine
         .execute_pre_trade(order_with_price(account_id, "5", "100"))
         .expect("limit order must pass after pricing-source retune")

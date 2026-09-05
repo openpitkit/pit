@@ -18,7 +18,7 @@
 /// Represents the side of a trade or order.
 ///
 /// This enum is `Copy` and intended to behave like a small value type.
-/// It does not encode numeric meaning implicitly — use methods like
+/// It does not encode numeric meaning implicitly - use methods like
 /// [`Side::sign`] if a signed representation is needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {

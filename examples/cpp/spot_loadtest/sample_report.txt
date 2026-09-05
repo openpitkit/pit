@@ -88,9 +88,9 @@ Run config:
     queue_capacity (per-queue buf): default (1024)
     slow_submit_threshold         : default (1m)
 
-  Backpressure (QueueLimit submits): 0 (healthy — dispatch held the load)
+  Backpressure (QueueLimit submits): 0 (healthy - dispatch held the load)
   Handoff stalls: 0 (finalizer pool kept up with the collector)
-  Submit->collector overflow (max depth): 145 (DIAGNOSTIC — collectors lagged submission at peak; usually engine slowness correctly in the headline, but under host CPU starvation can fold collector-dispatch delay into the tail — cross-check throughput and engine-compute)
+  Submit->collector overflow (max depth): 145 (DIAGNOSTIC - collectors lagged submission at peak; usually engine slowness correctly in the headline, but under host CPU starvation can fold collector-dispatch delay into the tail - cross-check throughput and engine-compute)
 
   Achieved reject rate    : 0.0500 (5.00%)
   Target reject rate      : 0.0500 (5.00%)

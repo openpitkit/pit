@@ -1,5 +1,5 @@
 ========================================================================
-ILLUSTRATIVE SAMPLE — numbers are from a past snapshot; regenerate to
+ILLUSTRATIVE SAMPLE - numbers are from a past snapshot; regenerate to
 get current figures:
 
   cd pit && cargo build --release
@@ -25,7 +25,7 @@ get current figures:
     p99.9 : 98.3µs
     max   : 1.842ms
 
-  All-run merged (includes warmup window — full picture):
+  All-run merged (includes warmup window - full picture):
     p50   : 24.1µs
     p99   : 65.0µs
     p99.9 : 102.4µs
@@ -93,8 +93,8 @@ Run config:
     queue_capacity (per-queue buf): default (1024)
     slow_submit_threshold         : default (1m)
 
-  Backpressure (ErrQueueLimit submits): 0 (healthy — dispatch held the load)
-  Handoff stalls: 0 (healthy — submit schedule never throttled by harness)
+  Backpressure (ErrQueueLimit submits): 0 (healthy - dispatch held the load)
+  Handoff stalls: 0 (healthy - submit schedule never throttled by harness)
   Submit->collector overflow (max depth): 0 (collectors kept up with submission)
 
   Achieved reject rate    : 0.0500 (5.00%)
@@ -231,7 +231,7 @@ Run config:
     p99.9    : 48.0µs
     max      : 612.0µs
 
-  Aggregate FFI+handoff residual (APPROXIMATE — aggregate arithmetic,
+  Aggregate FFI+handoff residual (APPROXIMATE - aggregate arithmetic,
   NOT per-op subtraction; interpret with care):
     residual p50 = order_check.p50 - (queue_wait.p50 + engine_compute.p50)
                = 24.1µs - (2.0µs + 2.0µs) = 20.1µs

@@ -28,10 +28,10 @@
 //!
 //! # Type categories
 //!
-//! - **Unsigned types** ([`Quantity`], [`Volume`], [`Notional`]) — cannot be negative.
-//! - **Signed types** ([`Price`], [`Pnl`], [`CashFlow`], [`PositionSize`], [`Fee`]) — can be negative.
-//! - **Fixed-point types** ([`Leverage`]) — scaled integer domain values.
-//! - **Identifiers** ([`Asset`], [`AccountId`], [`Side`], [`PositionSide`]) — non-numeric types.
+//! - **Unsigned types** ([`Quantity`], [`Volume`], [`Notional`]) - cannot be negative.
+//! - **Signed types** ([`Price`], [`Pnl`], [`CashFlow`], [`PositionSize`], [`Fee`]) - can be negative.
+//! - **Fixed-point types** ([`Leverage`]) - scaled integer domain values.
+//! - **Identifiers** ([`Asset`], [`AccountId`], [`Side`], [`PositionSide`]) - non-numeric types.
 //!
 //! # Rounding
 //!
@@ -72,17 +72,17 @@
 //!
 //! Numeric types provide checked operations:
 //!
-//! - `checked_add(other)` — addition
-//! - `checked_sub(other)` — subtraction
-//! - `checked_mul_i64(scalar)` — multiplication by `i64`
-//! - `checked_mul_u64(scalar)` — multiplication by `u64`
-//! - `checked_mul_f64(scalar)` — multiplication by `f64`
-//! - `checked_div_i64(divisor)` — division by `i64`
-//! - `checked_div_u64(divisor)` — division by `u64`
-//! - `checked_div_f64(divisor)` — division by `f64`
-//! - `checked_rem_i64(divisor)` — remainder by `i64`
-//! - `checked_rem_u64(divisor)` — remainder by `u64`
-//! - `checked_rem_f64(divisor)` — remainder by `f64`
+//! - `checked_add(other)` - addition
+//! - `checked_sub(other)` - subtraction
+//! - `checked_mul_i64(scalar)` - multiplication by `i64`
+//! - `checked_mul_u64(scalar)` - multiplication by `u64`
+//! - `checked_mul_f64(scalar)` - multiplication by `f64`
+//! - `checked_div_i64(divisor)` - division by `i64`
+//! - `checked_div_u64(divisor)` - division by `u64`
+//! - `checked_div_f64(divisor)` - division by `f64`
+//! - `checked_rem_i64(divisor)` - remainder by `i64`
+//! - `checked_rem_u64(divisor)` - remainder by `u64`
+//! - `checked_rem_f64(divisor)` - remainder by `f64`
 //!
 //! # Examples
 //!

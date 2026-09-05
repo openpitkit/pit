@@ -32,7 +32,7 @@ import (
 )
 
 // rejectDriver is a fake driver that always returns non-empty rejects (no
-// request/reservation, no error) — the "policy reject" path.
+// request/reservation, no error) - the "policy reject" path.
 type rejectDriver struct {
 	startRejects    []reject.Reject
 	executeRejects  []reject.Reject

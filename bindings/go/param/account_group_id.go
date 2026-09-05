@@ -55,7 +55,7 @@ func NewAccountGroupIDFromUint32(source uint32) (AccountGroupID, error) {
 
 // NewAccountGroupIDFromString constructs an account-group identifier by hashing
 // the string with FNV-1a. Any non-empty string is accepted and produces a
-// stable, deterministic ID. Use [NewAccountGroupIDFromUint32] for numeric IDs —
+// stable, deterministic ID. Use [NewAccountGroupIDFromUint32] for numeric IDs -
 // the two constructors are not interchangeable.
 func NewAccountGroupIDFromString(source string) (AccountGroupID, error) {
 	value, err := native.CreateParamAccountGroupIDFromString(source)

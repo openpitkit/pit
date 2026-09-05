@@ -301,7 +301,7 @@ class Service {
   // Reading
 
   // Reads the latest quote for `instrumentId` with account-aware resolution.
-  // `accountInfo` supplies the reading account's group lazily — the core
+  // `accountInfo` supplies the reading account's group lazily - the core
   // invokes its `AccountGroup()` only when the fallback chain reaches the
   // per-group bucket. `resolution` selects the fallback chain.
   //

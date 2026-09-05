@@ -1,0 +1,146 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Unagreed fallbacks, catch-all arms, and reachable panics (Rust).
+#
+# A fallback is not forbidden; an *unagreed* fallback is - one introduced
+# without a decision behind it. In risk code a wrong number that looks valid is
+# worse than no number at all, so the default is to fail explicitly. Agreement
+# is recorded on the line directly above the construct:
+#
+#   // fallback(approved): <what is substituted and why this was agreed>
+#
+# The marker records an agreement. It never silences a false positive: a rule
+# that fires on correct code is narrowed instead.
+#
+# The first two rules are written against the raw text rather than the syntax
+# tree, for two reasons: the scanner's Rust mode drops comments, so an
+# agreement marker would be invisible to it, and it cannot parse a match
+# expression as a pattern at all. The consequence is that the marker must sit
+# on the line immediately above - a two-line marker leaves the rule firing.
+#
+# panic-on-reachable-path is the exception: it needs the syntax tree to keep
+# inline `mod tests` blocks out of scope, and therefore takes no marker. An
+# approved exception there is recorded by naming the file in paths.exclude
+# below, with the reason - a decision that shows up in the diff.
+
+rules:
+  - id: unapproved-fallback
+    message: >-
+      A fallback without an agreement marker. Substituting a value for something
+      missing is a decision: it hides the absence and continues on a guess.
+      Either fail explicitly, or record the agreement on the line directly above
+      as "fallback(approved): <what and why>".
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?m)^(?![^\n]*fallback\(approved\))[^\n]*\n\K[^\n]*\.unwrap_or(_default|_else)?\(
+    paths:
+      include:
+        - /crates/*/src/**
+      exclude:
+        - "**/tests.rs"
+        - "**/tests/**"
+        - "**/benches/**"
+        # Baseline: 36 pre-existing substitutions, none of them yet either
+        # approved with a marker or turned into an explicit refusal. A file
+        # leaves this list when the work reaches it, not before.
+        - /crates/openpit-ffi/src/engine.rs
+        - /crates/openpit-ffi/src/execution_report.rs
+        - /crates/openpit-ffi/src/marketdata.rs
+        - /crates/openpit-ffi/src/order.rs
+        - /crates/openpit-ffi/src/param.rs
+        - /crates/openpit-ffi/src/policy/mod.rs
+        - /crates/openpit-ffi/src/policy/spot_funds.rs
+        - /crates/openpit/src/core/configure.rs
+        - /crates/openpit/src/pretrade/context.rs
+        - /crates/openpit/src/pretrade/policies/pnl_bounds_killswitch.rs
+        - /crates/openpit/src/pretrade/policies/rate_limit.rs
+        - /crates/openpit/src/pretrade/policies/spot_funds/adjustment.rs
+        - /crates/openpit/src/pretrade/policies/spot_funds/execution.rs
+        - /crates/openpit/src/pretrade/policies/spot_funds/mod.rs
+        - /crates/openpit/src/pretrade/policies/spot_funds/pre_trade.rs
+        - /crates/openpit/src/pretrade/policies/spot_funds/rollback.rs
+        # Baseline: the wall-clock substitution in the rate-limit clock is a
+        # real fallback and is fixed together with the public time-injection
+        # contract, not on its own.
+        - /crates/openpit/src/pretrade/start_pre_trade_time.rs
+
+  - id: unapproved-catch-all
+    message: >-
+      A catch-all arm in a match over a domain enum, without an agreement
+      marker. When a variant is added, this arm silently absorbs it instead of
+      failing the build - and that build failure is what protects binding
+      parity. List the variants explicitly, or record the agreement on the line
+      directly above the match as "fallback(approved): <why the rest are
+      equivalent here>".
+    severity: ERROR
+    languages: [generic]
+    # Heuristic: the scrutinee is named after a domain enum, and a catch-all arm
+    # follows at the outer match's indentation. A nested match catch-all is not
+    # attributed to the outer match. Rule regression examples:
+    # - an outer `raw => Err(...)` plus a nested `_ => ...` is allowed;
+    # - a same-level `_ => ...` remains rejected.
+    pattern-regex: >-
+      (?m)^(?![^\n]*fallback\(approved\))[^\n]*\n\K(?P<indent>[ ]*+)[^\n]*\bmatch\s+[^{\n]*(reject|reason|outcome|status|state|kind|fill_type|position_effect|operation|mode|impact)[^{\n]*\{(?:(?!(?P=indent)\})[^\n]*\n){1,40}?(?P=indent) {4}_\s*=>
+    paths:
+      include:
+        - /crates/*/src/**
+      exclude:
+        - "**/tests.rs"
+        - "**/tests/**"
+        # The rule configuration quotes the construct it forbids.
+        - /checks/semgrep/**
+
+  - id: panic-on-reachable-path
+    message: >-
+      Production SDK code does not panic on a reachable path: a panic crosses a
+      language boundary as an abort, not as an error the caller can handle.
+      Return an explicit error and translate it at the boundary.
+    severity: ERROR
+    languages: [rust]
+    patterns:
+      - pattern-either:
+          - pattern: $X.unwrap()
+          - pattern: $X.expect($MSG)
+          - pattern: panic!(...)
+          - pattern: unreachable!(...)
+          - pattern: todo!(...)
+      # Inline test modules are not a production path. Each one is named
+      # explicitly: a metavariable here would be unconstrainable - a
+      # metavariable-regex is not applied to a negated pattern, so
+      # `mod $M { ... }` silently excludes every module and empties the rule.
+      # A new inline test module needs a new line here.
+      - pattern-not-inside: |
+          mod tests { ... }
+      - pattern-not-inside: |
+          mod lease_tests { ... }
+    paths:
+      include:
+        - /crates/*/src/**
+      exclude:
+        - "**/tests.rs"
+        - "**/tests/**"
+        - "**/benches/**"
+        # Baseline: the documented double-finalization panic is the published
+        # contract of both finalizers. Removing it needs a decision on that
+        # contract first.
+        - /crates/openpit/src/pretrade/reservation.rs
+        - /crates/openpit/src/pretrade/drop_copy_operation.rs
+        # Baseline: the null-pointer abort at this C ABI boundary needs its own
+        # dedicated fix.
+        - /crates/openpit-ffi/src/marketdata.rs

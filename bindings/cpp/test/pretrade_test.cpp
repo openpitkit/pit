@@ -1856,7 +1856,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
           {accountGroup, RejectCode::PnlKillSwitchTriggered},
           {accountGlobal, RejectCode::PnlKillSwitchTriggered},
           {accountAfterClear, RejectCode::PnlKillSwitchTriggered},
-      };
+  };
   const std::vector<std::string_view> expectedReasons{
       "pnl kill switch triggered",
       "pnl kill switch triggered",

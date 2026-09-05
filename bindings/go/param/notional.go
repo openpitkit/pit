@@ -109,7 +109,7 @@ func NewNotionalFromUint64(v uint64) (Notional, error) {
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
-// DO NOT use for monetary data received from external systems — prefer
+// DO NOT use for monetary data received from external systems - prefer
 // NewNotionalFromString or NewNotionalFromDecimal. This constructor is provided
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
@@ -209,7 +209,7 @@ func (v Notional) Handle() native.ParamNotional {
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
-// DO NOT use for monetary data received from external systems — prefer
+// DO NOT use for monetary data received from external systems - prefer
 // NewNotionalFromString or NewNotionalFromDecimal. This constructor is provided
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.

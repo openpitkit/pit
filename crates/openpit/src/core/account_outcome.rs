@@ -31,7 +31,7 @@ pub struct OutcomeAmount {
     /// Field value at the moment the policy returned, **before** deferred commit.
     ///
     /// This snapshot is taken under the policy's internal lock, but it may be
-    /// superseded by the time the caller reads it — a concurrent operation on
+    /// superseded by the time the caller reads it - a concurrent operation on
     /// another thread can change the slot between the policy write and the
     /// caller's read. Use `delta` as the source of truth for position bookkeeping;
     /// treat `absolute` as a convenience hint only.

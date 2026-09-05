@@ -30,7 +30,7 @@ constexpr std::uint64_t kPcgMultiplier = 6364136223846793005ULL;
 Rng Rng::NewContent(std::uint64_t seed) {
   // Golden-ratio constant decorrelates seed 0; the increment must be odd.
   constexpr std::uint64_t kMix = 0x9E3779B97F4A7C15ULL;
-  Rng g(seed, ((seed ^ kMix) << 1) | 1U);
+  Rng g(seed, ((seed ^ kMix) << 1U) | 1U);
   // Advance once so distinct seeds diverge immediately.
   (void)g.Next64();
   return g;
@@ -39,7 +39,7 @@ Rng Rng::NewContent(std::uint64_t seed) {
 Rng Rng::NewSchedule(std::uint64_t seed) {
   // Distinct odd constant decorrelates from the content RNG.
   constexpr std::uint64_t kMix = 0xD1B54A32D192ED03ULL;
-  Rng g(seed ^ kMix, (seed << 1) | 1U);
+  Rng g(seed ^ kMix, (seed << 1U) | 1U);
   (void)g.Next64();
   return g;
 }

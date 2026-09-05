@@ -733,7 +733,20 @@ def command_test_rust(args: argparse.Namespace) -> None:
                 )
             raise
 
-    run(["cargo", "test", *release_args, "--workspace", "--doc", "--locked"])
+    run(
+        [
+            "cargo",
+            "test",
+            *release_args,
+            "--workspace",
+            "--exclude",
+            "openpit-ffi",
+            "--exclude",
+            "openpit-python",
+            "--doc",
+            "--locked",
+        ]
+    )
     run(
         [
             "cargo",

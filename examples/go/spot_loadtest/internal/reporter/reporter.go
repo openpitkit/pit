@@ -20,18 +20,18 @@
 // design doc (section 7/9).
 //
 // Block order:
-//   - Headline   — steady-state OPEN-LOOP order-check p50/p99 (prominent, honest)
-//   - Environment — host, runtime, pit commit, core build profile, run config
-//   - Workload   — counts, reject rate, op mix, cohort summary
-//   - Trajectory — per-window percentile evolution for order-check and settlement
-//   - Distribution — final merged percentiles + harness self-overhead
-//   - Diagnostics — service-time diagnostic + inner metrics (queue wait, compute)
-//   - Disclaimer — what is/is not measured + one-line reproduction recipe
+//   - Headline   - steady-state OPEN-LOOP order-check p50/p99 (prominent, honest)
+//   - Environment - host, runtime, pit commit, core build profile, run config
+//   - Workload   - counts, reject rate, op mix, cohort summary
+//   - Trajectory - per-window percentile evolution for order-check and settlement
+//   - Distribution - final merged percentiles + harness self-overhead
+//   - Diagnostics - service-time diagnostic + inner metrics (queue wait, compute)
+//   - Disclaimer - what is/is not measured + one-line reproduction recipe
 //
-// A run is INVALID — not a valid latency measurement — when it hit dispatch
+// A run is INVALID - not a valid latency measurement - when it hit dispatch
 // backpressure (ErrQueueLimit) or produced a zero anti-DCE checksum on a
 // non-empty run (decisions not provably consumed). A HARNESS handoff stall is
-// NOT an invalidity trigger — the handoff is non-blocking and off the measured
+// NOT an invalidity trigger - the handoff is non-blocking and off the measured
 // path, so it is a diagnostic only. For an invalid run the caller uses
 // WriteInvalid, which prints a prominent invalid-run banner naming the ACTUAL
 // reason(s) plus the non-latency disclosure (environment, workload counts,
@@ -99,12 +99,12 @@ func Write(
 // latency measurement, for ANY of the invalid reasons: dispatch backpressure
 // (asyncengine.ErrQueueLimit) or a zero anti-DCE checksum on a non-empty run
 // (decisions not provably consumed). A HARNESS handoff stall is NOT an invalid
-// reason — it is a diagnostic only and never suppresses the headline. It OMITS
+// reason - it is a diagnostic only and never suppresses the headline. It OMITS
 // the Headline block
 // and ALL latency-distribution percentile blocks (Trajectory, Distribution, the
 // service-time/inner-metrics latency decomposition). It keeps the non-latency
-// diagnostics — environment, workload counts, dispatch sizing, backpressure, and
-// handoff stalls — and prints a prominent invalid-run banner at the top and
+// diagnostics - environment, workload counts, dispatch sizing, backpressure, and
+// handoff stalls - and prints a prominent invalid-run banner at the top and
 // bottom that names the ACTUAL reason(s) so the suppression cannot be missed.
 //
 // It must be the ONLY writer to w during the call.
@@ -134,7 +134,7 @@ func zeroChecksumInvalid(snap measurement.Snapshot) bool {
 // invalidReasons returns the human-readable invalid reason(s) present in the
 // snapshot, in precedence order (backpressure, zero checksum). At least one is
 // present whenever WriteInvalid is called. A handoff stall is NOT an invalid
-// reason — it is a diagnostic only (off the measured path, non-blocking handoff).
+// reason - it is a diagnostic only (off the measured path, non-blocking handoff).
 func invalidReasons(snap measurement.Snapshot) []string {
 	var reasons []string
 	if snap.Backpressure > 0 {
@@ -152,7 +152,7 @@ func invalidReasons(snap measurement.Snapshot) []string {
 // latency numbers follow.
 func writeInvalidBanner(w io.Writer, snap measurement.Snapshot) {
 	reasons := invalidReasons(snap)
-	pf(w, "*** RUN INVALID: %s; latency numbers suppressed — this is not a valid "+
+	pf(w, "*** RUN INVALID: %s; latency numbers suppressed - this is not a valid "+
 		"measurement. ***", strings.Join(reasons, "; "))
 	p(w, "")
 
@@ -198,7 +198,7 @@ func writeInvalidFooter(w io.Writer, snap measurement.Snapshot, configFlag strin
 // are considered steady-state, given the warmup window count from the Snapshot.
 func steadyStateLabel(snap measurement.Snapshot) string {
 	if snap.WarmupWindows == 0 {
-		return "all windows (single window — no warmup exclusion possible)"
+		return "all windows (single window - no warmup exclusion possible)"
 	}
 	return fmt.Sprintf(
 		"windows 2-%d (window 1 excluded as warmup: JIT + cache + engine ramp-up)",
@@ -237,7 +237,7 @@ func writeHeadline(w io.Writer, snap measurement.Snapshot) {
 	pf(w, "    p99.9 : %s", fmtDur(ocSteady.P999))
 	pf(w, "    max   : %s", fmtDur(ocSteady.Max))
 	p(w, "")
-	p(w, "  All-run merged (includes warmup window — full picture):")
+	p(w, "  All-run merged (includes warmup window - full picture):")
 	pf(w, "    p50   : %s", fmtDur(snap.OrderCheck.P50))
 	pf(w, "    p99   : %s", fmtDur(snap.OrderCheck.P99))
 	pf(w, "    p99.9 : %s", fmtDur(snap.OrderCheck.P999))
@@ -415,38 +415,38 @@ func writeConcurrency(w io.Writer, snap measurement.Snapshot, cfg *config.Config
 	// Backpressure is an explicit measured outcome: a submit the engine refused
 	// because the live-queue cap was reached. A healthy baseline reports zero.
 	if snap.Backpressure == 0 {
-		p(w, "  Backpressure (ErrQueueLimit submits): 0 (healthy — dispatch held the load)")
+		p(w, "  Backpressure (ErrQueueLimit submits): 0 (healthy - dispatch held the load)")
 	} else {
 		pf(w, "  Backpressure (ErrQueueLimit submits): %d (dispatch capacity was exceeded; "+
-			"the run is degraded — raise max_queues or lower active_accounts)", snap.Backpressure)
+			"the run is degraded - raise max_queues or lower active_accounts)", snap.Backpressure)
 	}
 
 	// Handoff stalls are a HARNESS-side DIAGNOSTIC: the collector -> finalizer fast
 	// path filled and the collector spilled to the unbounded overflow. The handoff
 	// is non-blocking and CommitAndClose is fully off the measured path (the latency
 	// was already recorded at resolve), so a stall NEVER throttles the submit
-	// schedule and does NOT invalidate the run — it only signals the finalizer pool
+	// schedule and does NOT invalidate the run - it only signals the finalizer pool
 	// transiently lagged. A healthy baseline typically reports zero.
 	if snap.HandoffStalls == 0 {
 		p(w, "  Handoff stalls: 0 (finalizer pool kept up with the collector)")
 	} else {
-		pf(w, "  Handoff stalls: %d (DIAGNOSTIC — finalizer pool transiently lagged the "+
+		pf(w, "  Handoff stalls: %d (DIAGNOSTIC - finalizer pool transiently lagged the "+
 			"collector and spilled to the off-path overflow; does NOT throttle the submit "+
-			"schedule or invalidate the run — raise the finalizer pool size if persistent)",
+			"schedule or invalidate the run - raise the finalizer pool size if persistent)",
 			snap.HandoffStalls)
 	}
 
 	// Submit->collector overflow depth is a DIAGNOSTIC only. A large peak means
-	// collectors lagged submission — usually collectors legitimately blocked in
+	// collectors lagged submission - usually collectors legitimately blocked in
 	// fut.Await (real engine latency, correctly in the headline), but under host
-	// CPU starvation it can include collector-dispatch delay that inflates — never
-	// flatters — the tail. It is NOT a stall and does NOT invalidate the run.
+	// CPU starvation it can include collector-dispatch delay that inflates - never
+	// flatters - the tail. It is NOT a stall and does NOT invalidate the run.
 	if snap.MaxWorkOverflow == 0 {
 		p(w, "  Submit->collector overflow (max depth): 0 (collectors kept up with submission)")
 	} else {
-		pf(w, "  Submit->collector overflow (max depth): %d (DIAGNOSTIC — collectors lagged "+
+		pf(w, "  Submit->collector overflow (max depth): %d (DIAGNOSTIC - collectors lagged "+
 			"submission at peak; usually engine slowness correctly in the headline, but under "+
-			"host CPU starvation can fold collector-dispatch delay into the tail — "+
+			"host CPU starvation can fold collector-dispatch delay into the tail - "+
 			"cross-check throughput and engine-compute)",
 			snap.MaxWorkOverflow)
 	}
@@ -634,7 +634,7 @@ func writeDiagnostics(w io.Writer, snap measurement.Snapshot, cfg *config.Config
 	if im.QueueWait.Count > 0 && im.EngineCompute.Count > 0 {
 		residualP50 := snap.OrderCheck.P50 - (im.QueueWait.P50 + im.EngineCompute.P50)
 		residualP99 := snap.OrderCheck.P99 - (im.QueueWait.P99 + im.EngineCompute.P99)
-		p(w, "  Aggregate FFI+handoff residual (APPROXIMATE — aggregate arithmetic,")
+		p(w, "  Aggregate FFI+handoff residual (APPROXIMATE - aggregate arithmetic,")
 		p(w, "  NOT per-op subtraction; interpret with care):")
 		pf(w, "    residual p50 = order_check.p50 - (queue_wait.p50 + engine_compute.p50)")
 		pf(w, "               = %s - (%s + %s) = %s",

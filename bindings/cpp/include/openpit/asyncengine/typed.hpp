@@ -46,8 +46,8 @@
 //
 // `async_engine.hpp` provides the generic `AsyncEngine<Driver>` plus its
 // `Call`/`Call2`/`Submit` driver seam. This header layers the named operations
-// on top — `StartPreTrade`, `ExecutePreTrade`, `ApplyExecutionReport`,
-// `ApplyAccountAdjustment`, and account administration — mapping the
+// on top - `StartPreTrade`, `ExecutePreTrade`, `ApplyExecutionReport`,
+// `ApplyAccountAdjustment`, and account administration - mapping the
 // synchronous engine surface one-to-one. The generic seam is left untouched;
 // this is purely additive.
 //

@@ -35,7 +35,7 @@ use crate::storage::{ArcSwapConfigCell, ConfigCell};
 /// * A thread mutating any value blocks every other value access (read or
 ///   write) until it completes.
 ///
-/// Note that the values lock is a single coarse reader-writer lock shared
+/// The values lock is a single coarse reader-writer lock shared
 /// by all keys, not a per-key lock. A writer to one value blocks readers
 /// of every other value. The trade-off keeps the policy independent of
 /// the key type and avoids the per-entry allocation overhead of per-key

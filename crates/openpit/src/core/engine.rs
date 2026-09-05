@@ -616,7 +616,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     ///
     /// A non-empty [`PostTradeResult::account_blocks`] means at least one policy entered a
     /// blocked state after the report was applied. This does **not** imply that
-    /// [`PostTradeResult::account_adjustments`] were undone — they reflect storage
+    /// [`PostTradeResult::account_adjustments`] were undone - they reflect storage
     /// that has already been mutated and must be propagated by the caller.
     ///
     /// [`PostTradeResult::account_adjustments`] contains zero or more account position
@@ -1126,7 +1126,7 @@ mod tests {
     type AdjustmentHook = Box<dyn Fn(&mut Mutations)>;
 
     /// Minimal order stub for tests that don't require order fields.
-    /// Returns `Err` for `account_id()` — only global-block check applies.
+    /// Returns `Err` for `account_id()` - only global-block check applies.
     #[derive(Clone)]
     struct NoAccountOrder;
 

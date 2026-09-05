@@ -242,7 +242,7 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
                 for _ in 0..PER_THREAD_REPORTS {
                     apply_report(&policy, &build_report(account(1), pnl_delta));
                     // Intermediate checks may succeed (before breach) or fail (after breach);
-                    // the result is intentionally not asserted here — the post-join assertion
+                    // the result is intentionally not asserted here - the post-join assertion
                     // below verifies the permanent latched state.
                     let _ = check_start(&policy, &build_order(account(1)));
                 }

@@ -744,7 +744,7 @@ impl PyQuote {
 /// `group()` is called lazily by the core service only when the per-account
 /// bucket misses and the resolution/TTL-cascade needs the group.  Because the
 /// call reads back into Python, the GIL must be held for the entire duration of
-/// `MarketDataService::get` / `get_optional` — callers must NOT use
+/// `MarketDataService::get` / `get_optional` - callers must NOT use
 /// `py.detach` around those calls.
 ///
 /// The core trait answers with `Option<AccountGroupId>` and has no failure
@@ -773,6 +773,7 @@ impl openpit::marketdata::AccountInfo for PyAccountInfo<'_> {
         match attr.extract::<PyRef<'_, PyAccountGroupId>>() {
             Ok(g) => Some(g.inner),
             Err(err) => {
+                // identifier(approved): naming the accepted type is the point
                 set_python_callback_error(PyTypeError::new_err(format!(
                     "account_info.account_group must be AccountGroupId or None, got: {err}"
                 )));
@@ -2557,6 +2558,7 @@ impl PyAccountPnlOutcome {
         let halt_reason = self
             .halt_reason
             .map_or("None", |reason| reason.python_name());
+        // identifier(approved): repr is the identifier rendering surface
         format!(
             "AccountPnlOutcome(policy_group_id={}, account_id={}, pnl={}, halt_reason={})",
             self.policy_group_id.value(),
@@ -5925,6 +5927,7 @@ impl PyAccountId {
     }
 
     fn __repr__(&self) -> String {
+        // identifier(approved): repr is the identifier rendering surface
         format!("AccountId(value={:?})", self.value())
     }
 
@@ -6012,6 +6015,7 @@ impl PyAccountGroupId {
     }
 
     fn __repr__(&self) -> String {
+        // identifier(approved): repr is the identifier rendering surface
         format!("AccountGroupId(value={:?})", self.value())
     }
 
@@ -6871,7 +6875,7 @@ impl PyTrade {
 
 #[pymethods]
 impl PyAdjustmentAmount {
-    /// Copy / subclass constructor — accepts another AdjustmentAmount instance.
+    /// Copy / subclass constructor - accepts another AdjustmentAmount instance.
     #[new]
     fn new(other: PyRef<'_, PyAdjustmentAmount>) -> Self {
         Self { inner: other.inner }
@@ -6932,7 +6936,7 @@ impl PyAdjustmentAmount {
 
 #[pymethods]
 impl PyTradeAmount {
-    /// Copy / subclass constructor — accepts another TradeAmount instance.
+    /// Copy / subclass constructor - accepts another TradeAmount instance.
     #[new]
     fn new(other: PyRef<'_, PyTradeAmount>) -> Self {
         Self { inner: other.inner }
@@ -8062,6 +8066,7 @@ impl PyExecutionReportOperation {
     }
 
     fn __repr__(&self, py: Python<'_>) -> String {
+        // identifier(approved): repr is the identifier rendering surface
         format!(
             "ExecutionReportOperation(underlying_asset={:?}, settlement_asset={:?}, account_id={:?}, side={:?})",
             self.underlying_asset(),
@@ -8621,6 +8626,7 @@ impl PyAccountBlockOutcome {
 
     fn __repr__(&self) -> String {
         let block = convert_account_block(&self.inner.block).__repr__();
+        // identifier(approved): repr is the identifier rendering surface
         format!(
             "AccountBlockOutcome(account_id={}, block={})",
             self.inner.account_id.as_u64(),

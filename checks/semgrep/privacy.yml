@@ -1,0 +1,70 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Account identifiers leaking into rendered text.
+#
+# The structural fields that carry an identifier are fine; the rendered string
+# is not. A rejection reason, a block reason, or an error message travels much
+# further than the record it came from - into logs, screenshots, and support
+# tickets - so it describes what happened, never to whom.
+#
+# The policy group identifier is deliberately not matched: it names a rule, not
+# a party, and appears in messages on purpose.
+#
+# Type names are matched as well as variable spellings, so the identifier types
+# rendering themselves - a Debug, a Display, a __repr__ - land here too. That is
+# deliberate: those are the few places where rendering an identifier is the
+# point, and they are marked in place rather than defined away, which keeps
+# every other literal mention of an identifier type inside the gate. The marker
+# goes on the line directly above:
+#
+#   // identifier(approved): <why rendering the identifier is correct here>
+#
+# One line, directly above - the rule reads raw text and looks at exactly one
+# preceding line. The marker records an agreement; it never silences a false
+# positive.
+
+rules:
+  - id: identifier-in-rendered-message
+    message: >-
+      An account or account-group identifier is interpolated into a rendered
+      message. Keep identifiers in structural fields; the rendered reason must
+      describe what happened, not to whom.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?m)^(?![^\n]*identifier\(approved\))[^\n]*\n\K[^\n]*(format!|write!|writeln!|panic!|fmt\.Sprintf|fmt\.Errorf|errors\.New|f")[^)]*\b(account_id|accountId|accountID|AccountId|account_group_id|accountGroupId|accountGroupID|AccountGroupId)\b
+    paths:
+      exclude:
+        # The rule quotes the identifier names it forbids.
+        - checks/semgrep
+        # Tests stay in scope: a message asserted in a test is the message a
+        # user sees. Exclude an individual file only, and only with a reason.
+        #
+        # Published examples and their test mirrors are the exception, and not
+        # by exemption - they are outside what this rule is about. The subject
+        # is text the SDK produces: a reject reason, block details, an error
+        # message handed to a caller. An example prints a value the reader's
+        # own program owns and passed in itself, so no identifier crosses a
+        # boundary. Keeping them in scope only teaches examples to hide the
+        # field a reader came to see.
+        - /crates/openpit/tests/examples_*.rs
+        - /bindings/go/examples_wiki_test.go
+        - /bindings/js/tests/examples_*.test.ts
+        - /bindings/cpp/test/wiki/**
+        - /bindings/python/tests/integration/test_examples_*.py
+        - /examples/**

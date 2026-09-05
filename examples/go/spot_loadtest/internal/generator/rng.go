@@ -36,7 +36,7 @@ type rng struct {
 // of 0 still produces a well-distributed stream.
 func newRNG(seed uint64) *rng {
 	const mix = 0x9E3779B97F4A7C15                        // golden-ratio constant, decorrelates seed 0
-	return &rng{r: rand.New(rand.NewPCG(seed, seed^mix))} //nolint:gosec // G404: math/rand PCG is intentional — deterministic reproducibility is a hard requirement
+	return &rng{r: rand.New(rand.NewPCG(seed, seed^mix))} //nolint:gosec // G404: math/rand PCG is intentional - deterministic reproducibility is a hard requirement
 }
 
 // newScheduleRNG seeds a SEPARATE deterministic PCG generator for the virtual
@@ -48,7 +48,7 @@ func newRNG(seed uint64) *rng {
 // byte-identical serialised stream including the virtual times.
 func newScheduleRNG(seed uint64) *rng {
 	const mix = 0xD1B54A32D192ED03                        // distinct odd constant, decorrelates from newRNG
-	return &rng{r: rand.New(rand.NewPCG(seed^mix, seed))} //nolint:gosec // G404: math/rand PCG is intentional — deterministic reproducibility is a hard requirement
+	return &rng{r: rand.New(rand.NewPCG(seed^mix, seed))} //nolint:gosec // G404: math/rand PCG is intentional - deterministic reproducibility is a hard requirement
 }
 
 // expFloat returns an exponentially distributed value with the given rate

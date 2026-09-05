@@ -53,8 +53,8 @@ use super::error::{AdjustmentOverflowError, HoldError};
 /// the reservation requires `amount <= available + min(held, 0)`. A
 /// negative `held` (manager-initiated adjustment) reduces the spendable
 /// capacity below `available`. All other mutating operations apply
-/// arithmetic directly without non-negative guards — negative `amount`
-/// inverts the direction — and only fail on decimal-range overflow.
+/// arithmetic directly without non-negative guards - negative `amount`
+/// inverts the direction - and only fail on decimal-range overflow.
 ///
 /// Operations return a new `Holdings` (immutable update). This makes
 /// rollback straightforward for the caller: capture the old value, write

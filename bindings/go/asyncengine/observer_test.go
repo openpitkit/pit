@@ -203,7 +203,7 @@ func TestAsyncEngineObserverQueueCreatedDynamic(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	// Submit to 3 distinct accounts — expect 3 creation events.
+	// Submit to 3 distinct accounts - expect 3 creation events.
 	for i := uint64(1); i <= 3; i++ {
 		f := async.StartPreTrade(
 			context.Background(), buildTestOrder(t, i),
@@ -212,7 +212,7 @@ func TestAsyncEngineObserverQueueCreatedDynamic(t *testing.T) {
 			t.Fatalf("acc=%d Await error = %v", i, err)
 		}
 	}
-	// Submit again to the same accounts — no new creation.
+	// Submit again to the same accounts - no new creation.
 	for i := uint64(1); i <= 3; i++ {
 		f := async.StartPreTrade(
 			context.Background(), buildTestOrder(t, i),

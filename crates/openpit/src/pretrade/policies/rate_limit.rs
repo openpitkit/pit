@@ -1361,7 +1361,7 @@ mod tests {
         let policy = asset_policy("EUR", 1, Duration::from_secs(10));
         let base = Instant::now();
 
-        // Order uses USD, policy has EUR barrier — should pass regardless of count
+        // Order uses USD, policy has EUR barrier - should pass regardless of count
         assert!(check_at(&policy, &order(account(1)), base).is_ok());
         assert!(check_at(&policy, &order(account(1)), base + Duration::from_secs(1)).is_ok());
     }
@@ -1395,7 +1395,7 @@ mod tests {
         let base = Instant::now();
 
         assert!(check_at(&policy, &order(account(1)), base).is_ok());
-        // account(2) has no barrier — always passes.
+        // account(2) has no barrier - always passes.
         assert!(check_at(&policy, &order(account(2)), base + Duration::from_secs(1)).is_ok());
         assert!(check_at(&policy, &order(account(2)), base + Duration::from_secs(2)).is_ok());
         // account(1) exhausted its window.
@@ -1471,7 +1471,7 @@ mod tests {
         let policy = account_asset_policy(account(1), "USD", 1, Duration::from_secs(10));
         let base = Instant::now();
 
-        // account(2) has no account+asset barrier for USD — passes
+        // account(2) has no account+asset barrier for USD - passes
         assert!(check_at(&policy, &order(account(2)), base).is_ok());
         assert!(check_at(&policy, &order(account(2)), base + Duration::from_secs(1)).is_ok());
     }
@@ -1535,7 +1535,7 @@ mod tests {
         let base = Instant::now();
 
         assert!(check_at(&policy, &order(account(1)), base).is_ok());
-        // Both broker and account breach — broker is reported (checked first).
+        // Both broker and account breach - broker is reported (checked first).
         let reject = check_at(&policy, &order(account(1)), base + Duration::from_secs(1))
             .expect_err("must reject");
         assert_eq!(reject[0].scope, RejectScope::Order);

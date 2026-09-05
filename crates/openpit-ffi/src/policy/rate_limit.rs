@@ -288,7 +288,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 /// Retunes the built-in rate-limit policy registered under `name`.
 ///
 /// This is a partial update (PATCH): each axis is touched only when its
-/// `has_*` flag is `true`. A touched axis is replaced wholesale — barriers
+/// `has_*` flag is `true`. A touched axis is replaced wholesale - barriers
 /// can be added and removed at runtime. A barrier key that survives the
 /// replacement keeps its live counter (no reset). An empty axis (`len` 0
 /// with `has_*` true) clears it, subject to the policy's at-least-one-

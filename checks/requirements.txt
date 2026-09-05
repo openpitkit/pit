@@ -1,0 +1,8 @@
+# Dependencies of the invariant gate (`just check-semgrep`), kept next to the
+# rules they run. The repository-root requirements.txt includes this file, so
+# there is still one command to provision the environment.
+#
+# Marked off Windows because the distribution ships no native Windows build;
+# the gate itself then fails loudly there rather than reporting a pass it never
+# ran.
+semgrep; sys_platform != "win32"

@@ -279,7 +279,7 @@ impl DeferredAccountOperations {
 ///
 /// # Thread-safety
 ///
-/// The handle's auto-traits derive from `StorageFactory::Shared<...>` — the
+/// The handle's auto-traits derive from `StorageFactory::Shared<...>` - the
 /// sync-mode-aware wrapper chosen by [`LockingPolicyFactory::Shared`](crate::storage::LockingPolicyFactory::Shared):
 ///
 /// - Under [`FullSync`](crate::core::FullSync) this is `Arc<...>`:

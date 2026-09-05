@@ -306,6 +306,7 @@ if (typeof engine.startPreTrade !== "function") throw new Error("browser CJS ini
       sourcefile: `browser-consumer.${format === "esm" ? "mjs" : "cjs"}`,
     },
   });
+  expect(result.warnings).toEqual([]);
   const output = result.outputFiles[0]?.text;
   if (output === undefined) {
     throw new Error("esbuild produced no browser consumer output");

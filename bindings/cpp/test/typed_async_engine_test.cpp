@@ -720,12 +720,6 @@ struct MockEngineAdapter {
     return openpit::PostTradeResult{};
   }
 
-  template <typename Adjustment>
-  [[nodiscard]] openpit::AdjustmentResult ApplyAccountAdjustment(
-      AccountId, const std::vector<Adjustment>&) {
-    return openpit::AdjustmentResult{};
-  }
-
   [[nodiscard]] MockAccounts Accounts() {
     return MockAccounts(&blocks, &globalUnblocks);
   }
@@ -847,7 +841,7 @@ class TypedAsyncMalformedResultTest
 
 struct MakeTypedAsyncEngineCallable {
   template <typename EngineT>
-  auto operator()(EngineT&& engine) const
+  [[maybe_unused]] auto operator()(EngineT&& engine) const
       -> decltype(ae::MakeTypedAsyncEngine(std::forward<EngineT>(engine), 1));
 };
 

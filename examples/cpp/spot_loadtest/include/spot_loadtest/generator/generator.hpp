@@ -25,8 +25,8 @@
 // Builds a seeded, deterministic, pre-materialised stream of abstract load-test
 // events for the spot-limit harness.
 //
-// It is an INDEPENDENT reimplementation of the spot-funds arithmetic — it
-// never imports the engine — which is what makes the per-op oracle
+// It is an INDEPENDENT reimplementation of the spot-funds arithmetic - it
+// never imports the engine - which is what makes the per-op oracle
 // non-circular. The generator maintains a shadow ledger and a position
 // lifecycle, and for every order it PREDICTS the engine's accept/reject
 // decision and resulting balances.

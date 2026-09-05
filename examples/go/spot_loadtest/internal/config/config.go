@@ -532,7 +532,7 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 		return fmt.Errorf("section [async_engine] is required")
 	}
 
-	// strategy — required; must be "dynamic" or "sharded"
+	// strategy - required; must be "dynamic" or "sharded"
 	stratKey, err := sec.GetKey("strategy")
 	if err != nil {
 		return fmt.Errorf("key strategy is required")
@@ -547,7 +547,7 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 			AsyncEngineStrategyDynamic, AsyncEngineStrategySharded, stratKey.String())
 	}
 
-	// max_queues — required key; Dynamic only: active-set constraint; ignored for sharded
+	// max_queues - required key; Dynamic only: active-set constraint; ignored for sharded
 	mqKey, err := sec.GetKey("max_queues")
 	if err != nil {
 		return fmt.Errorf("key max_queues is required")
@@ -565,7 +565,7 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 	}
 	e.MaxQueues = mq
 
-	// idle_cleanup — required key; Dynamic only: queue retire delay; ignored for sharded
+	// idle_cleanup - required key; Dynamic only: queue retire delay; ignored for sharded
 	icKey, err := sec.GetKey("idle_cleanup")
 	if err != nil {
 		return fmt.Errorf("key idle_cleanup is required")
@@ -579,7 +579,7 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 	}
 	e.IdleCleanup = idleDur
 
-	// sharded_workers — required key; must be > 0 when strategy = sharded
+	// sharded_workers - required key; must be > 0 when strategy = sharded
 	swKey, err := sec.GetKey("sharded_workers")
 	if err != nil {
 		return fmt.Errorf("key sharded_workers is required")
@@ -595,7 +595,7 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 	}
 	e.ShardedWorkers = swRaw
 
-	// queue_capacity — required key; both strategies; 0 = engine default
+	// queue_capacity - required key; both strategies; 0 = engine default
 	qcKey, err := sec.GetKey("queue_capacity")
 	if err != nil {
 		return fmt.Errorf("key queue_capacity is required")
@@ -609,7 +609,7 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 	}
 	e.QueueCapacity = qc
 
-	// slow_submit_threshold — required key; both strategies; 0 = engine default
+	// slow_submit_threshold - required key; both strategies; 0 = engine default
 	sstKey, err := sec.GetKey("slow_submit_threshold")
 	if err != nil {
 		return fmt.Errorf("key slow_submit_threshold is required")

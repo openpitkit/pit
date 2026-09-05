@@ -4506,7 +4506,7 @@ mod tests {
         let engine = build_passthrough_engine();
 
         // A half-set instrument (one asset provided, the other absent) is
-        // rejected at import time — "both or neither" is the rule.
+        // rejected at import time - "both or neither" is the rule.
         let invalid = crate::account_adjustment::OpenPitAccountAdjustment {
             operation: crate::account_adjustment::OpenPitAccountAdjustmentOperation {
                 kind: crate::account_adjustment::OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION,

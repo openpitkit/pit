@@ -51,7 +51,7 @@ type StorageFactory = openpit_interop::StorageLockingPolicyFactory;
 /// - Every handle returned to the caller is owned by the caller and MUST be
 ///   released with `openpit_destroy_account_control` exactly once.
 /// - A handle is valid to use ONLY within the pre-trade processing of the
-///   request it belongs to — from the callback that produced it through the
+///   request it belongs to - from the callback that produced it through the
 ///   commit or rollback of that request's reservation. Recording a block
 ///   through it after that pre-trade transaction has completed is undefined
 ///   behaviour.
@@ -168,7 +168,7 @@ pub extern "C" fn openpit_destroy_account_control(control: *mut OpenPitAccountCo
 /// - the returned handle MUST be released with
 ///   `openpit_destroy_account_control` exactly once. It may be retained for
 ///   deferred blocking, but it is valid to use only within the pre-trade
-///   transaction of this request — through the commit or rollback of its
+///   transaction of this request - through the commit or rollback of its
 ///   reservation; recording a block through it afterwards is undefined.
 ///
 /// # Safety
@@ -275,7 +275,7 @@ pub unsafe extern "C" fn openpit_pretrade_context_record_drop_copy_start_mutatio
 /// - the returned handle MUST be released with
 ///   `openpit_destroy_account_control` exactly once. It may be retained for
 ///   deferred blocking, but it is valid to use only within the account
-///   adjustment processing of this request — through the commit or rollback of
+///   adjustment processing of this request - through the commit or rollback of
 ///   that request; recording a block through it afterwards is undefined.
 ///
 /// # Safety

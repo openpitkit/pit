@@ -128,6 +128,8 @@ run("wasm-bindgen", [
   outDir,
   "--target",
   "web",
+  // Loaders pass bytes explicitly; the default URL requires ESM import.meta.
+  "--omit-default-module-path",
   "--typescript",
   "--out-name",
   "openpit_js",

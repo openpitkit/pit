@@ -1,0 +1,72 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Text style and hygiene across the whole repository.
+#
+# These rules carry no paths.include on purpose: a generic rule without one
+# scans every text file the scanner can read - Rust, Go, Python, C, C++,
+# JS/TS, Markdown, YAML, JSON, the justfiles - which is what "the whole
+# repository" means here. An include list would silently shrink coverage to
+# whichever extensions someone happened to list.
+#
+# Scope exclusions live in the repository-root .semgrepignore, not here.
+
+rules:
+  - id: ascii-punctuation-only
+    message: >-
+      Use ASCII punctuation: replace an em dash or en dash with a hyphen.
+      Non-ASCII dashes render inconsistently across terminals, diffs, and the
+      documentation pipeline.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '[\x{2013}\x{2014}]'
+
+  - id: no-invisible-characters
+    message: >-
+      Invisible or zero-width characters are not allowed. They are unreadable
+      in review, survive copy-paste, and are a known vector for hidden text and
+      homoglyph confusion.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '[\x{200B}-\x{200F}\x{2060}-\x{2064}\x{2066}-\x{206F}]'
+
+  - id: no-emoji-in-source
+    message: >-
+      Emoji do not belong in source or documentation: they are not searchable,
+      render unpredictably, and carry no meaning a word cannot.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '[\x{1F300}-\x{1FAFF}\x{2700}-\x{27BF}]'
+
+  # Source: the project style contract - comments exist for non-trivial logic
+  # or interface, not for narration.
+  - id: no-conversational-comments
+    message: >-
+      Comments state why, not narrate. Drop conversational and hedging openers
+      ("Note that", "It is important to", "Let's", "In summary") and apologetic
+      or first-person phrasing - they add length without adding information.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: >-
+      (?i)(//|#|\*)[ \t]+(note that|it'?s important to|it is important to|it is
+      worth noting|this ensures that|let'?s |in summary|overall,|as we can
+      see|i cannot|i'?m sorry|i apologize)
+
+# The style contract also fixes the vocabulary of log messages (qty, px, sz,
+# pos, acc, ord). That rule has no subject here: the SDK emits no logs - it
+# returns outcomes to its caller - so it is not part of this gate. It belongs
+# to a gate over a project that logs.

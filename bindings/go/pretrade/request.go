@@ -54,7 +54,7 @@ func (r *Request) IsClosed() bool {
 // Close releases the request.
 //
 // The request is owned by the caller from the moment the engine returns
-// it. Close must be called once when the caller is done with it — after
+// it. Close must be called once when the caller is done with it - after
 // Execute (regardless of its outcome) or when the request is abandoned
 // without ever calling Execute.
 //

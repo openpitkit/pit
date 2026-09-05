@@ -59,9 +59,9 @@ _set_doc(
 
     Variants (in order of breadth):
 
-    - ``ACCOUNT_ONLY`` — only the per-account bucket.
-    - ``ACCOUNT_THEN_GROUP`` — per-account, then the account's group bucket.
-    - ``ACCOUNT_THEN_GROUP_THEN_DEFAULT`` — per-account, then group, then the
+    - ``ACCOUNT_ONLY`` - only the per-account bucket.
+    - ``ACCOUNT_THEN_GROUP`` - per-account, then the account's group bucket.
+    - ``ACCOUNT_THEN_GROUP_THEN_DEFAULT`` - per-account, then group, then the
       default ("everyone-else") bucket.
     """,
 )
@@ -74,7 +74,7 @@ _set_doc(
     ``quote``. ``get_optional(...)`` keeps the older optional shape.
     ``account_info`` is any object that
     exposes an ``account_group`` property returning an ``AccountGroupId`` or
-    ``None`` — engine contexts (e.g. ``PreTradeContext``, ``PostTradeContext``)
+    ``None`` - engine contexts (e.g. ``PreTradeContext``, ``PostTradeContext``)
     satisfy this automatically. The group is resolved lazily: the service only
     reads ``account_group`` when the per-account bucket misses and the
     resolution mode needs the group.

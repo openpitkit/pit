@@ -1,3 +1,6 @@
+# Component dependency sets, kept next to what they serve.
+-r checks/requirements.txt
+
 black
 # Pinned: it renders every published documentation page, so an unpinned
 # release could change the published HTML without a change in this repository.

@@ -1917,7 +1917,7 @@ func TestAsyncEngineStopGracefulDeadlineExceededThenHard(t *testing.T) {
 	first := async.StartPreTrade(context.Background(), buildTestOrder(t, 1))
 	<-started
 
-	// StopGraceful with a short deadline — should return DeadlineExceeded
+	// StopGraceful with a short deadline - should return DeadlineExceeded
 	// while the worker is still blocked.
 	gracefulCtx, gracefulCancel := context.WithTimeout(
 		context.Background(), 20*time.Millisecond,
@@ -2035,7 +2035,7 @@ func TestAsyncEngineWithStopUnderlyingFiresOnce(t *testing.T) {
 	if err := async.StopGraceful(ctx); err != nil {
 		t.Fatalf("StopGraceful() error = %v", err)
 	}
-	// Second stop — callback must NOT fire again.
+	// Second stop - callback must NOT fire again.
 	if err := async.StopGraceful(ctx); err != nil {
 		t.Fatalf("second StopGraceful() error = %v", err)
 	}

@@ -103,7 +103,7 @@ func (s *resultSink) recordHandoffStall() {
 }
 
 // recordWorkOverflowDepth updates the running peak submitter -> collector spill
-// depth. DIAGNOSTIC only — not a stall and not an INVALID trigger.
+// depth. DIAGNOSTIC only - not a stall and not an INVALID trigger.
 func (s *resultSink) recordWorkOverflowDepth(depth int) {
 	s.m.RecordWorkOverflowDepth(depth)
 }
@@ -137,7 +137,7 @@ type Stats struct {
 	// never counts engine-await latency, which stays in the headline.
 	HandoffStalls uint64
 	// MaxWorkOverflow is the peak depth of the submitter -> collector spill
-	// (workOverflow). DIAGNOSTIC only — not a stall, not an INVALID trigger.
+	// (workOverflow). DIAGNOSTIC only - not a stall, not an INVALID trigger.
 	MaxWorkOverflow int
 	// Checksum proves every decision was consumed (anti-DCE).
 	Checksum uint64

@@ -1,0 +1,84 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Swallowed errors (Go).
+#
+# A discarded error is a fallback: execution continues on an assumption that was
+# never checked. The binding wraps a C ABI, where a dropped error is the
+# difference between a rejected order and one that was never checked at all.
+# Scope is the whole Go tree - narrowing it by package only moves the problem
+# somewhere less watched.
+
+rules:
+  - id: discarded-error
+    message: >-
+      The error is discarded. Continuing past a failure that was never inspected
+      is a fallback: it hides the cause and fails later, somewhere else. Handle
+      it, wrap it, or return it.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern: _ = $CALL(...)
+      # Failure handoff reports the error through the callback that resolves
+      # the future.
+      - pattern-not: _ = $X.submitWithFailureHandoff($C, $K, $T, func(...) {...})
+    paths:
+      exclude:
+        - "**/*_test.go"
+        # Baseline: pre-existing discarded errors in the runtime loader, the
+        # cgo diagnostics hook and the Go examples. Each one needs its own
+        # decision - four of them changed behaviour when closed in bulk. A file
+        # leaves this list when the work reaches it.
+        - /bindings/go/internal/diag/diag.go
+        - /bindings/go/internal/loader/loader.go
+        - /bindings/go/internal/loader/loader_magic.go
+        - /examples/go/spot_loadtest/internal/config/config.go
+        - /examples/go/spot_loadtest/internal/measurement/histogram.go
+        - /examples/go/spot_table/platform.go
+        - /examples/go/spot_table/runner.go
+        - /examples/go/spot_table/table.go
+
+  - id: error-dropped-on-return
+    message: >-
+      The error is checked and then dropped: the caller cannot distinguish
+      failure from an empty result. Return the error, wrapped with context.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - pattern: |
+          if err != nil {
+            return nil
+          }
+      - pattern: |
+          if err != nil {
+            return
+          }
+    paths:
+      exclude:
+        - "**/*_test.go"
+        # Baseline: pre-existing discarded errors in the runtime loader, the
+        # cgo diagnostics hook and the Go examples. Each one needs its own
+        # decision - four of them changed behaviour when closed in bulk. A file
+        # leaves this list when the work reaches it.
+        - /bindings/go/internal/diag/diag.go
+        - /bindings/go/internal/loader/loader.go
+        - /bindings/go/internal/loader/loader_magic.go
+        - /examples/go/spot_loadtest/internal/config/config.go
+        - /examples/go/spot_loadtest/internal/measurement/histogram.go
+        - /examples/go/spot_table/platform.go
+        - /examples/go/spot_table/runner.go
+        - /examples/go/spot_table/table.go

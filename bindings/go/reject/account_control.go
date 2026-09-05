@@ -27,7 +27,7 @@ import (
 // against the account bound to a callback context.
 //
 // It is valid to use only within the pre-trade processing of the request it
-// belongs to — from the callback that produced it through the commit or
+// belongs to - from the callback that produced it through the commit or
 // rollback of that request's reservation (so it may be captured into a mutation
 // commit/rollback callback for deferred blocking). Recording a block through it
 // after that pre-trade transaction has completed is unspecified and must not be

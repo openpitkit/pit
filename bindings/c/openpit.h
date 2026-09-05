@@ -3107,7 +3107,7 @@ typedef void (*OpenPitMutationFreeFn)(
  * Writes the group id to `out_account_group_id` and returns `Found` when the
  * account belongs to a group, `NoGroup` when it has none, and `Failed` when
  * the group could not be determined. Invoked lazily by
- * `openpit_marketdata_service_get` — only when the resolution mode would
+ * `openpit_marketdata_service_get` - only when the resolution mode would
  * consult the group or default-group bucket and the per-account bucket has no
  * quote.
  *
@@ -7242,7 +7242,7 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
  * Retunes the built-in rate-limit policy registered under `name`.
  *
  * This is a partial update (PATCH): each axis is touched only when its `has_*`
- * flag is `true`. A touched axis is replaced wholesale — barriers can be added
+ * flag is `true`. A touched axis is replaced wholesale - barriers can be added
  * and removed at runtime. A barrier key that survives the replacement keeps
  * its live counter (no reset). An empty axis (`len` 0 with `has_*` true)
  * clears it, subject to the policy's at-least-one- barrier rule. Setting
@@ -7729,7 +7729,7 @@ void openpit_destroy_account_control(
  * - the returned handle MUST be released with
  *   `openpit_destroy_account_control` exactly once. It may be retained for
  *   deferred blocking, but it is valid to use only within the pre-trade
- *   transaction of this request — through the commit or rollback of its
+ *   transaction of this request - through the commit or rollback of its
  *   reservation; recording a block through it afterwards is undefined.
  *
  * # Safety
@@ -7797,7 +7797,7 @@ bool openpit_pretrade_context_record_drop_copy_start_mutation(
  * - the returned handle MUST be released with
  *   `openpit_destroy_account_control` exactly once. It may be retained for
  *   deferred blocking, but it is valid to use only within the account
- *   adjustment processing of this request — through the commit or rollback
+ *   adjustment processing of this request - through the commit or rollback
  *   of that request; recording a block through it afterwards is undefined.
  *
  * # Safety
@@ -8675,7 +8675,7 @@ bool openpit_marketdata_service_push_by_instrument(
  * resolution.
  *
  * `resolve_account_group` is a **required** callback that supplies the reading
- * account's group **lazily** — it is invoked only when the resolution mode
+ * account's group **lazily** - it is invoked only when the resolution mode
  * would consult a group or default-group bucket and the per-account bucket has
  * no quote. The callback receives the caller-supplied `user_data` context
  * pointer and, when the account belongs to a group, writes the group id to

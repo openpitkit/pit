@@ -2112,7 +2112,7 @@ class AccountControl:
     """Per-account handle to the engine's account-block facility.
 
     Valid to use only within the pre-trade processing of the request it belongs
-    to — from the callback that produced it through the commit or rollback of
+    to - from the callback that produced it through the commit or rollback of
     that request's reservation (so it may be retained for a deferred mutation
     commit/rollback callback). Recording a block through it after that pre-trade
     transaction has completed is unspecified and must not be relied upon.

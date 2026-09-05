@@ -37,7 +37,7 @@ import (
 // field (OpenPitStringView) stores a raw pointer to the string bytes.  When such a
 // struct is held in Go memory and passed to C via a Go pointer, the CGo checker
 // enforces "Go memory must not contain Go pointers".  By keeping the bytes on
-// the C heap, OpenPitStringView.ptr is always a C pointer — invisible to the
+// the C heap, OpenPitStringView.ptr is always a C pointer - invisible to the
 // checker.  See internal/native/asset_buf.go for the allocation details.
 //
 // # Lifetime contract for model structs
@@ -59,7 +59,7 @@ import (
 // # Finalizer guarantees
 //
 // runtime.SetFinalizer does NOT guarantee the finalizer runs before program
-// exit — only that it runs before the GC reclaims the object.  In a
+// exit - only that it runs before the GC reclaims the object.  In a
 // high-frequency trading process the GC runs frequently under memory pressure,
 // so C buffers are reclaimed promptly.  A small leak on abnormal exit is
 // acceptable because the OS reclaims the process address space.
@@ -135,6 +135,6 @@ func (a Asset) Hash() uint64 {
 
 // Handle returns a Go string backed by the Asset's C buffer, for use by
 // importString in internal/native.  Because the backing bytes are C-heap,
-// importString stores a C pointer in OpenPitStringView.ptr — not a Go pointer —
+// importString stores a C pointer in OpenPitStringView.ptr - not a Go pointer -
 // so no CGo pointer-check violation occurs.
 func (a Asset) Handle() string { return a.Unsafe() }

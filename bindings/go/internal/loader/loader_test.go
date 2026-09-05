@@ -167,7 +167,7 @@ func TestResolveCacheDir_OverrideWhitespace(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// resolvePath — override via env var
+// resolvePath - override via env var
 // ---------------------------------------------------------------------------
 
 func TestResolvePath_Override_FileExists(t *testing.T) {
@@ -225,7 +225,7 @@ func TestResolvePath_Override_Whitespace_Ignored(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// resolvePath — cache hit
+// resolvePath - cache hit
 // ---------------------------------------------------------------------------
 
 func TestResolvePath_CacheHit(t *testing.T) {
@@ -415,7 +415,7 @@ func TestResolvePath_CacheMissWritesAndSecondCallUsesCache(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// load — panic contract
+// load - panic contract
 // ---------------------------------------------------------------------------
 
 func TestLoad_PanicsForCorruptCachedRuntime(t *testing.T) {

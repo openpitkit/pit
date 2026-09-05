@@ -600,7 +600,7 @@ void RunState::HandOffWork(InFlight item) {
     return;
   }
   // Fast buffer full (almost always: collectors legitimately blocked in Await
-  // because the engine is slow — real latency, NOT a harness stall). Spill to
+  // because the engine is slow - real latency, NOT a harness stall). Spill to
   // the unbounded overflow and record the peak depth as a diagnostic only.
   const int depth = m_workOverflow.Push(std::move(item));
   m_sink->RecordWorkOverflowDepth(depth);

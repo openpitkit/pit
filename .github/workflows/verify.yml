@@ -354,3 +354,36 @@ jobs:
 
       - name: Check JS
         run: just --justfile "$JUSTFILE" check-js-dry-debug
+
+  invariants:
+    name: Invariant checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.CI_PYTHON }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Create virtual environment
+        run: |
+          python -m venv .venv
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> "$GITHUB_ENV"
+          echo "PYTHON_PATH=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      # The language jobs run per-language check targets, none of which reach
+      # lint-all; the whole-repository rule set therefore needs its own job.
+      - name: Check invariants
+        run: just --justfile "$JUSTFILE" check-semgrep

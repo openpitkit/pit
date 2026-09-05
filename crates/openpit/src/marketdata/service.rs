@@ -99,7 +99,7 @@ impl InstrumentRegistry {
 /// [`register`](Self::register) (or the `_with_ttl` / `_with_id` /
 /// `_with_id_and_ttl` variants) to add an instrument. All registration calls
 /// are **strict**: they return an error if the instrument name or id is already
-/// taken — they never silently return an existing entry.
+/// taken - they never silently return an existing entry.
 ///
 /// Every publication supplies the quote's source age: the time elapsed between
 /// observing the prices and calling the service. [`Duration::ZERO`] means the
@@ -558,7 +558,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     /// - [`PushForError::UnknownInstrument`] if `instrument_id` is not
     ///   registered.
     /// - [`PushForError::NoTarget`] if both `account_ids` and
-    ///   `account_group_ids` are empty — this is a caller bug; use
+    ///   `account_group_ids` are empty - this is a caller bug; use
     ///   [`push`](Self::push) for the no-target case.
     pub fn push_for(
         &self,
@@ -656,7 +656,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     /// then the account's group, then the default group), stopping at the first
     /// non-empty bucket. The selected quote's freshness is then checked against
     /// the TTL cascade for `(instrument_id, account_id, account_info.group())`
-    /// — independent of which bucket the quote came from.
+    /// - independent of which bucket the quote came from.
     ///
     /// # Errors
     ///

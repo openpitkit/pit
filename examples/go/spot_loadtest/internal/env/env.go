@@ -59,7 +59,7 @@ type GoRuntime struct {
 // PitRepo summarizes the pit monorepo revision.
 //
 // The working-tree status is TRI-STATE: clean | dirty | unknown. Dirty alone
-// cannot express "unknown" — a build whose status could not be checked (git
+// cannot express "unknown" - a build whose status could not be checked (git
 // unavailable, not a repository, command error) must never be reported as
 // "clean". DirtyKnown gates Dirty: when DirtyKnown is false the status is
 // "unknown" regardless of Dirty; only when DirtyKnown is true does Dirty
@@ -103,7 +103,7 @@ type CoreBuildProfile struct {
 }
 
 // IsDebug returns true when the core was built without optimizations or with
-// debug assertions enabled — conditions that make latency numbers meaningless.
+// debug assertions enabled - conditions that make latency numbers meaningless.
 func (p CoreBuildProfile) IsDebug() bool {
 	return p.DebugAssertions || p.OptLevel == "0" || p.Profile == "debug"
 }
@@ -117,7 +117,7 @@ type Env struct {
 }
 
 // Capture collects all environment fields. It never returns a hard error for
-// individual fields; only the core profile parse is fatal-free — errors are
+// individual fields; only the core profile parse is fatal-free - errors are
 // surfaced as "unknown" field values.
 func Capture(repoRoot string) Env {
 	e := Env{}

@@ -1,0 +1,59 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Scan scope for the invariant gate (`just check-semgrep`, rules in
+# checks/semgrep/). This file lives at the repository root because the scanner
+# reads it only from the working directory - it cannot be moved next to the
+# rules it belongs to.
+#
+# Presence of this file replaces the scanner's bundled default ignore list, so
+# everything that must stay out of scope is named here and nowhere else. The
+# bundled default excludes test files; this project does not, because a message
+# asserted in a test is the message a user sees.
+
+# Build output and caches. Regenerated, never reviewed.
+/target/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.just-mcp-work/
+
+# Third-party trees.
+node_modules/
+vendor/
+.venv/
+
+# Generated API references, produced by the documentation pipeline.
+/docs/c-api/
+/docs/cpp-api/
+/docs/js-api/
+
+# Generated C artifacts: the header and its Go copy are written by
+# scripts/generate_api_c.py from the Rust sources, which are in scope.
+/bindings/c/openpit.h
+/bindings/go/internal/native/openpit.h
+
+# Lock files and dependency manifests: machine-written, byte-for-byte.
+Cargo.lock
+go.work.sum
+/bindings/go/go.sum
+/bindings/js/package-lock.json
+
+# Editor and agent state, untracked.
+.git/
+.serena/

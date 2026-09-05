@@ -302,12 +302,8 @@ fn override_target(
     }
     if tag == OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT_GROUP {
         let payload = unsafe { entry.target.payload.instrument_account_group };
-        let account_group_id = AccountGroupId::from_u32(payload.account_group_id).map_err(|e| {
-            format!(
-                "spot funds override account group id {} is invalid: {e}",
-                payload.account_group_id
-            )
-        })?;
+        let account_group_id = AccountGroupId::from_u32(payload.account_group_id)
+            .map_err(|e| format!("spot funds override account group id is invalid: {e}"))?;
         return Ok(SpotFundsOverrideTarget::InstrumentAccountGroup(
             InstrumentId::new(payload.instrument_id),
             account_group_id,
@@ -569,8 +565,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
             Err(e) => {
                 write_error_format!(
                     out_error,
-                    "account_group[{index}] account_group_id {} is invalid: {e}",
-                    entry.account_group_id
+                    "account_group[{index}] account group id is invalid: {e}",
                 );
                 return false;
             }
@@ -903,8 +898,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
                     write_configure_error(
                         out_error,
                         OpenPitConfigureError::validation(format!(
-                            "account_group[{index}] account_group_id {} is invalid: {e}",
-                            entry.account_group_id
+                            "account_group[{index}] account group id is invalid: {e}"
                         )),
                     );
                     return std::ptr::null_mut();
@@ -1186,7 +1180,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_group_limit
             write_configure_error(
                 out_error,
                 OpenPitConfigureError::validation(format!(
-                    "spot funds account group id {account_group_id} is invalid: {error}"
+                    "spot funds account group id is invalid: {error}"
                 )),
             );
             return false;
@@ -1614,7 +1608,7 @@ mod tests {
         assert!(!result);
         assert!(!err.is_null());
         let msg = cstr_to_string(err);
-        assert!(msg.contains("account group id 0 is invalid"));
+        assert!(msg.contains("spot funds override account group id is invalid"));
         openpit_destroy_marketdata_service(service);
     }
 

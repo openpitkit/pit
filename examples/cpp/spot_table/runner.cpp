@@ -485,7 +485,7 @@ Report RunSync(Deadline deadline, const Frontmatter &fm,
   if (std::optional<Failure> fail =
           RegisterGroupsSync(set.engine, groups, report);
       fail.has_value()) {
-    report.firstFail = fail;
+    report.firstFail = std::move(fail);
     return report;
   }
 
@@ -501,7 +501,7 @@ Report RunSync(Deadline deadline, const Frontmatter &fm,
     if (row.action == "TICK") {
       if (std::optional<Failure> fail = RunSyncTick(feed, row);
           fail.has_value()) {
-        report.firstFail = fail;
+        report.firstFail = std::move(fail);
         break;
       }
       continue;
@@ -519,7 +519,7 @@ Report RunSync(Deadline deadline, const Frontmatter &fm,
     if (row.action == "SEED") {
       if (std::optional<Failure> fail = RunSyncSeed(set.engine, acc, row);
           fail.has_value()) {
-        report.firstFail = fail;
+        report.firstFail = std::move(fail);
         break;
       }
     } else if (row.action == "ORDER") {
@@ -896,7 +896,7 @@ Report RunAsync(Deadline deadline, const Frontmatter &fm,
   if (std::optional<Failure> fail =
           RegisterGroupsAsync(deadline, asyncEngine, groups, report);
       fail.has_value()) {
-    report.firstFail = fail;
+    report.firstFail = std::move(fail);
     (void)asyncEngine.StopGraceful(kAsyncStopTimeout);
     return report;
   }
