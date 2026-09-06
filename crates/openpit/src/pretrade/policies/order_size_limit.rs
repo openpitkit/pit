@@ -321,6 +321,9 @@ impl OrderSizeLimitSettings {
 /// Drop-copy operations replay historical orders and bypass these admission
 /// limits. The policy does not request their instrument, account, trade amount,
 /// or price.
+/// For live orders, it requests the account identifier only when at least one
+/// account+asset barrier is configured, then the trade amount only when an
+/// applicable quantity or notional cap was selected.
 ///
 /// Constructor rules:
 /// - at least one barrier across all three axes must be configured;
@@ -463,79 +466,85 @@ where
         let instrument = order
             .instrument()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
-        let account_id = order
-            .account_id()
-            .map_err(|e| Rejects::from(missing_required_field_reject(self, "account ID", &e)))?;
-        let trade_amount = order
-            .trade_amount()
-            .map_err(|e| Rejects::from(missing_required_field_reject(self, "trade amount", &e)))?;
-
         let underlying = instrument.underlying_asset();
         let settlement = instrument.settlement_asset();
 
-        let (quantity_axis_limit, notional_axis_limit, broker_limit) =
-            self.settings.with(|settings| {
-                (
-                    select_asset_limit(settings, account_id, underlying, |limit| {
-                        limit.max_quantity
-                    }),
-                    select_asset_limit(settings, account_id, settlement, |limit| {
-                        limit.max_notional
-                    }),
-                    settings.broker.as_ref().map(|barrier| barrier.limit),
-                )
-            });
+        // Accessors may publish new settings; cap selection and enforcement
+        // must still use the same version for this order.
+        self.settings.with_snapshot(|settings| {
+            let needs_account = !settings.account_asset_limits.is_empty();
+            let account_id = if needs_account {
+                Some(order.account_id().map_err(|e| {
+                    Rejects::from(missing_required_field_reject(self, "account ID", &e))
+                })?)
+            } else {
+                None
+            };
 
-        let quantity_broker_limit = broker_limit
-            .and_then(|limit| limit.max_quantity)
-            .map(|maximum| SelectedMetricLimit { maximum });
-        let notional_broker_limit = broker_limit
-            .and_then(|limit| limit.max_notional)
-            .map(|maximum| SelectedMetricLimit { maximum });
+            let quantity_axis_limit =
+                select_asset_limit(settings, account_id, underlying, |limit| limit.max_quantity);
+            let notional_axis_limit =
+                select_asset_limit(settings, account_id, settlement, |limit| limit.max_notional);
+            let broker_limit = settings.broker.as_ref().map(|barrier| barrier.limit);
 
-        let quantity_needed = quantity_axis_limit.is_some() || quantity_broker_limit.is_some();
-        let notional_needed = notional_axis_limit.is_some() || notional_broker_limit.is_some();
-        if !quantity_needed && !notional_needed {
-            return Ok(());
-        }
+            let quantity_broker_limit = broker_limit
+                .and_then(|limit| limit.max_quantity)
+                .map(|maximum| SelectedMetricLimit { maximum });
+            let notional_broker_limit = broker_limit
+                .and_then(|limit| limit.max_notional)
+                .map(|maximum| SelectedMetricLimit { maximum });
 
-        let quantity_needs_price =
-            matches!(trade_amount, TradeAmount::Volume(_)) && quantity_needed;
-        let notional_needs_price =
-            matches!(trade_amount, TradeAmount::Quantity(_)) && notional_needed;
-        let price = if quantity_needs_price || notional_needs_price {
-            order.price().map_err(|error| {
-                Rejects::from(missing_required_field_reject(self, "price", &error))
-            })?
-        } else {
-            None
-        };
+            let quantity_needed = quantity_axis_limit.is_some() || quantity_broker_limit.is_some();
+            let notional_needed = notional_axis_limit.is_some() || notional_broker_limit.is_some();
+            if !quantity_needed && !notional_needed {
+                return Ok(());
+            }
 
-        let (quantity_axis, quantity_broker) =
-            resolve_metric_limits(quantity_axis_limit, quantity_broker_limit, || {
-                resolve_quantity(Self::NAME, trade_amount, price)
-            })
-            .map_err(Rejects::from)?;
-        let (notional_axis, notional_broker) =
-            resolve_metric_limits(notional_axis_limit, notional_broker_limit, || {
-                resolve_notional(Self::NAME, trade_amount, price)
-            })
-            .map_err(Rejects::from)?;
+            // Read the trade amount only after resolving the caps, so an
+            // unconstrained order is never rejected for inaccessible trade amount.
+            // Keep this read below the early return.
+            let trade_amount = order.trade_amount().map_err(|e| {
+                Rejects::from(missing_required_field_reject(self, "trade amount", &e))
+            })?;
 
-        let axis_reject = check_limit_optional(
-            Self::NAME,
-            quantity_axis,
-            notional_axis,
-            Some((underlying, settlement)),
-        );
-        let broker_reject =
-            check_limit_optional(Self::NAME, quantity_broker, notional_broker, None);
+            let quantity_needs_price =
+                matches!(trade_amount, TradeAmount::Volume(_)) && quantity_needed;
+            let notional_needs_price =
+                matches!(trade_amount, TradeAmount::Quantity(_)) && notional_needed;
+            let price = if quantity_needs_price || notional_needs_price {
+                order.price().map_err(|error| {
+                    Rejects::from(missing_required_field_reject(self, "price", &error))
+                })?
+            } else {
+                None
+            };
 
-        if let Some(reject) = axis_reject.or(broker_reject) {
-            return Err(Rejects::from(reject));
-        }
+            let (quantity_axis, quantity_broker) =
+                resolve_metric_limits(quantity_axis_limit, quantity_broker_limit, || {
+                    resolve_quantity(Self::NAME, trade_amount, price)
+                })
+                .map_err(Rejects::from)?;
+            let (notional_axis, notional_broker) =
+                resolve_metric_limits(notional_axis_limit, notional_broker_limit, || {
+                    resolve_notional(Self::NAME, trade_amount, price)
+                })
+                .map_err(Rejects::from)?;
 
-        Ok(())
+            let axis_reject = check_limit_optional(
+                Self::NAME,
+                quantity_axis,
+                notional_axis,
+                Some((underlying, settlement)),
+            );
+            let broker_reject =
+                check_limit_optional(Self::NAME, quantity_broker, notional_broker, None);
+
+            if let Some(reject) = axis_reject.or(broker_reject) {
+                return Err(Rejects::from(reject));
+            }
+
+            Ok(())
+        })
     }
 }
 
@@ -573,18 +582,24 @@ struct ResolvedMetricLimit<MetricValue> {
     maximum: MetricValue,
 }
 
+/// Selects an account+asset cap, falling back to the asset cap.
+///
+/// `account_id` is `None` only when settings contain no account-keyed barrier;
+/// it never means that the order's account identifier was unavailable.
 fn select_asset_limit<MetricValue: Copy>(
     settings: &OrderSizeLimitSettings,
-    account_id: AccountId,
+    account_id: Option<AccountId>,
     asset: &Asset,
     metric: impl Fn(&OrderSizeLimit) -> Option<MetricValue>,
 ) -> Option<SelectedMetricLimit<MetricValue>> {
-    if let Some(limit) = settings
-        .account_asset_limits
-        .get(&(account_id, asset.clone()))
-    {
-        if let Some(maximum) = metric(limit) {
-            return Some(SelectedMetricLimit { maximum });
+    if let Some(account_id) = account_id {
+        if let Some(limit) = settings
+            .account_asset_limits
+            .get(&(account_id, asset.clone()))
+        {
+            if let Some(maximum) = metric(limit) {
+                return Some(SelectedMetricLimit { maximum });
+            }
         }
     }
 
@@ -727,12 +742,15 @@ fn order_value_calculation_failed_reject(policy: &str, details: &'static str) ->
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use crate::core::{HasAccountId, Instrument, OrderOperation};
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Price, Quantity, Side, Volume};
     use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope};
     use crate::storage::{ConfigCell, LocalConfigCell, NoLocking};
-    use crate::{HasInstrument, HasOrderPrice, HasTradeAmount, RequestFieldAccessError};
+    use crate::{Engine, HasInstrument, HasOrderPrice, HasTradeAmount, RequestFieldAccessError};
     use rust_decimal::Decimal;
 
     use super::{
@@ -742,6 +760,90 @@ mod tests {
 
     type TestPolicy = OrderSizeLimitPolicy<NoLocking>;
     type TestOrder = OrderOperation;
+
+    struct AccountAccessErrorOrder {
+        instrument: Instrument,
+        trade_amount_access_count: Cell<usize>,
+        trade_amount_access_error: bool,
+    }
+
+    #[derive(Clone)]
+    struct AccountAccessCountingOrder {
+        instrument: Instrument,
+        account_id: AccountId,
+        instrument_access_count: Rc<Cell<usize>>,
+        account_id_access_count: Rc<Cell<usize>>,
+        trade_amount_access_count: Rc<Cell<usize>>,
+        price_access_count: Rc<Cell<usize>>,
+    }
+
+    impl HasInstrument for AccountAccessCountingOrder {
+        fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+            self.instrument_access_count
+                .set(self.instrument_access_count.get() + 1);
+            Ok(&self.instrument)
+        }
+    }
+
+    impl HasAccountId for AccountAccessCountingOrder {
+        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+            self.account_id_access_count
+                .set(self.account_id_access_count.get() + 1);
+            Ok(self.account_id)
+        }
+    }
+
+    impl HasTradeAmount for AccountAccessCountingOrder {
+        fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+            self.trade_amount_access_count
+                .set(self.trade_amount_access_count.get() + 1);
+            Ok(TradeAmount::Quantity(
+                Quantity::from_str("1").expect("quantity literal must be valid"),
+            ))
+        }
+    }
+
+    impl HasOrderPrice for AccountAccessCountingOrder {
+        fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+            self.price_access_count
+                .set(self.price_access_count.get() + 1);
+            Ok(None)
+        }
+    }
+
+    impl HasInstrument for AccountAccessErrorOrder {
+        fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+            Ok(&self.instrument)
+        }
+    }
+
+    impl HasAccountId for AccountAccessErrorOrder {
+        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+            Err(RequestFieldAccessError::new("account_id"))
+        }
+    }
+
+    impl HasTradeAmount for AccountAccessErrorOrder {
+        fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+            self.trade_amount_access_count
+                .set(self.trade_amount_access_count.get() + 1);
+            if self.trade_amount_access_error {
+                Err(RequestFieldAccessError::new("trade_amount"))
+            } else {
+                Ok(TradeAmount::Quantity(
+                    Quantity::from_str("1").expect("quantity literal must be valid"),
+                ))
+            }
+        }
+    }
+
+    impl HasOrderPrice for AccountAccessErrorOrder {
+        fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+            Ok(Some(
+                Price::from_str("1").expect("price literal must be valid"),
+            ))
+        }
+    }
 
     fn order(settlement: &str, quantity: &str, price: &str) -> TestOrder {
         order_for_account(settlement, quantity, price, AccountId::from_u64(99224416))
@@ -1603,6 +1705,80 @@ mod tests {
         .is_ok());
     }
 
+    #[test]
+    fn trade_amount_reconfiguration_uses_one_coherent_settings_snapshot() {
+        use crate::pretrade::ConfigurablePolicy;
+
+        struct ReconfiguringTradeAmountOrder {
+            settings: LocalConfigCell<OrderSizeLimitSettings>,
+            instrument: Instrument,
+            account_id: AccountId,
+        }
+
+        impl HasInstrument for ReconfiguringTradeAmountOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+
+        impl HasAccountId for ReconfiguringTradeAmountOrder {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Ok(self.account_id)
+            }
+        }
+
+        impl HasTradeAmount for ReconfiguringTradeAmountOrder {
+            fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+                self.settings
+                    .update::<OrderSizeLimitPolicyError>(|settings| {
+                        settings.set_account_asset_barriers([OrderSizeAccountAssetBarrier {
+                            limit: quantity_limit("10"),
+                            account_id: self.account_id,
+                            asset: Asset::new("AAPL").expect("asset code must be valid"),
+                        }])
+                    })
+                    .expect("trade amount accessor must reconfigure policy");
+                Ok(TradeAmount::Quantity(
+                    Quantity::from_str("11").expect("quantity literal must be valid"),
+                ))
+            }
+        }
+
+        impl HasOrderPrice for ReconfiguringTradeAmountOrder {
+            fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+                Ok(None)
+            }
+        }
+
+        let account_id = AccountId::from_u64(99224416);
+        let p = policy(Some(broker_quantity_barrier("100")), [], []);
+        let reconfiguring_order = ReconfiguringTradeAmountOrder {
+            settings: p.settings_cell(),
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            account_id,
+        };
+
+        <TestPolicy as PreTradePolicy<
+            ReconfiguringTradeAmountOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &p,
+            &PreTradeContext::<NoLocking>::new(None),
+            &reconfiguring_order,
+        )
+        .expect("the pre-trade-amount snapshot must apply the broker cap");
+
+        let reject = check(&p, &order_for_account("USD", "11", "1", account_id))
+            .expect_err("the reconfigured account+asset cap must apply to later orders");
+        assert_eq!(reject[0].code, RejectCode::OrderQtyExceedsLimit);
+        assert_eq!(reject[0].details, "requested 11, max allowed: 10");
+    }
+
     // ── resolve helpers ────────────────────────────────────────────────────
 
     #[test]
@@ -1753,6 +1929,212 @@ mod tests {
             "failed to access required field 'instrument'"
         );
         assert_eq!(reject.details, "failed to access field 'instrument'");
+    }
+
+    #[test]
+    fn broker_barrier_ignores_account_id_access_error() {
+        let p = policy(Some(broker_barrier("10", "1000")), [], []);
+        let order_val = AccountAccessErrorOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            trade_amount_access_count: Cell::new(0),
+            trade_amount_access_error: false,
+        };
+        assert!(<TestPolicy as PreTradePolicy<
+            AccountAccessErrorOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn unmatched_asset_barrier_does_not_access_trade_amount() {
+        let p = policy(None, [asset_quantity_barrier("IBM", "10")], []);
+        let order_val = AccountAccessErrorOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            trade_amount_access_count: Cell::new(0),
+            trade_amount_access_error: true,
+        };
+
+        assert!(<TestPolicy as PreTradePolicy<
+            AccountAccessErrorOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+        )
+        .is_ok());
+        assert_eq!(
+            order_val.trade_amount_access_count.get(),
+            0,
+            "an unmatched asset barrier must not access the trade amount"
+        );
+    }
+
+    #[test]
+    fn account_id_is_accessed_only_for_account_asset_barriers() {
+        let account_id = AccountId::from_u64(99224416);
+        let order_val = AccountAccessCountingOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            account_id,
+            instrument_access_count: Rc::new(Cell::new(0)),
+            account_id_access_count: Rc::new(Cell::new(0)),
+            trade_amount_access_count: Rc::new(Cell::new(0)),
+            price_access_count: Rc::new(Cell::new(0)),
+        };
+        let check_order = |policy: &TestPolicy| {
+            <TestPolicy as PreTradePolicy<
+                AccountAccessCountingOrder,
+                (),
+                (),
+                crate::core::LocalSync,
+            >>::check_pre_trade_start(
+                policy, &PreTradeContext::<NoLocking>::new(None), &order_val
+            )
+        };
+
+        let broker_policy = policy(Some(broker_quantity_barrier("10")), [], []);
+        assert!(check_order(&broker_policy).is_ok());
+        assert_eq!(
+            order_val.account_id_access_count.get(),
+            0,
+            "broker-only settings must not access the account ID"
+        );
+
+        let asset_policy = policy(None, [asset_quantity_barrier("AAPL", "10")], []);
+        assert!(check_order(&asset_policy).is_ok());
+        assert_eq!(
+            order_val.account_id_access_count.get(),
+            0,
+            "asset-only settings must not access the account ID"
+        );
+
+        let account_asset_policy = policy(
+            None,
+            [],
+            [OrderSizeAccountAssetBarrier {
+                limit: quantity_limit("10"),
+                account_id,
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
+            }],
+        );
+        assert!(check_order(&account_asset_policy).is_ok());
+        assert_eq!(
+            order_val.account_id_access_count.get(),
+            1,
+            "account+asset settings must access the account ID once"
+        );
+    }
+
+    #[test]
+    fn drop_copy_only_reads_the_engine_required_account_id() {
+        let account_id = AccountId::from_u64(99224416);
+        let p = policy(
+            Some(broker_barrier("10", "1000")),
+            [asset_barrier("AAPL", "10", "1000")],
+            [OrderSizeAccountAssetBarrier {
+                limit: limit("10", "1000"),
+                account_id,
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
+            }],
+        );
+        let order_val = AccountAccessCountingOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            account_id,
+            instrument_access_count: Rc::new(Cell::new(0)),
+            account_id_access_count: Rc::new(Cell::new(0)),
+            trade_amount_access_count: Rc::new(Cell::new(0)),
+            price_access_count: Rc::new(Cell::new(0)),
+        };
+        let engine = Engine::builder::<AccountAccessCountingOrder, (), ()>()
+            .no_sync()
+            .pre_trade(p)
+            .build()
+            .expect("engine must build");
+        let mut operation = engine
+            .apply_drop_copy(order_val.clone())
+            .expect("drop-copy order must bypass size limits");
+        operation.commit();
+
+        assert_eq!(
+            order_val.instrument_access_count.get(),
+            0,
+            "drop-copy must not access the instrument"
+        );
+        assert_eq!(
+            order_val.account_id_access_count.get(),
+            1,
+            "only the engine must access the account ID"
+        );
+        assert_eq!(
+            order_val.trade_amount_access_count.get(),
+            0,
+            "drop-copy must not access the trade amount"
+        );
+        assert_eq!(
+            order_val.price_access_count.get(),
+            0,
+            "drop-copy must not access the price"
+        );
+    }
+
+    #[test]
+    fn account_id_access_error_precedes_trade_amount_access_error() {
+        let p = policy(
+            None,
+            [],
+            [OrderSizeAccountAssetBarrier {
+                limit: limit("10", "1000"),
+                account_id: AccountId::from_u64(1),
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
+            }],
+        );
+        let order_val = AccountAccessErrorOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            trade_amount_access_count: Cell::new(0),
+            trade_amount_access_error: true,
+        };
+        let reject = <TestPolicy as PreTradePolicy<
+            AccountAccessErrorOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+        )
+        .expect_err("field access error must reject");
+        let reject = &reject[0];
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'account ID'"
+        );
+        assert_eq!(reject.details, "failed to access field 'account_id'");
+        assert_eq!(
+            order_val.trade_amount_access_count.get(),
+            0,
+            "an account ID access error must precede trade amount access"
+        );
     }
 
     #[test]

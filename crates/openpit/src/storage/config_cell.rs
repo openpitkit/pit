@@ -60,7 +60,27 @@ pub trait ConfigCell<T: 'static>: Clone + 'static {
 
     /// Reads the current value without cloning it, returning whatever the
     /// closure computes from a shared reference.
+    ///
+    /// A cell borrow or read guard remains held while the closure runs. The
+    /// closure must not update this cell, directly or through code it calls.
+    /// Use [`Self::with_snapshot`] when calling caller-supplied accessors or
+    /// other code that may update the cell.
     fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R;
+
+    /// Reads one stable version while allowing updates during the closure.
+    ///
+    /// No cell borrow or lock prevents publication, so the closure may call
+    /// code that updates this cell, including caller-supplied field accessors.
+    /// The reference remains valid only for the duration of the closure.
+    ///
+    /// An update published during the closure is visible to subsequent reads,
+    /// but not through this reference. All decisions made from the reference
+    /// use the version selected before the closure started.
+    ///
+    /// [`LocalConfigCell`] retains an `Rc` without borrowing the cell during
+    /// the closure. [`ArcSwapConfigCell`] uses the same guarded read as
+    /// [`Self::with`], without unconditionally cloning the stored `Arc`.
+    fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R;
 
     /// Replaces the current value transactionally.
     ///
@@ -94,6 +114,12 @@ impl<T: Clone + 'static> ConfigCell<T> for LocalConfigCell<T> {
         f(&guard)
     }
 
+    #[inline]
+    fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        let snapshot = Rc::clone(&self.0.borrow());
+        f(&snapshot)
+    }
+
     fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E> {
         // Mutate a private clone so a failing closure cannot leave a
         // half-updated value visible. The borrow is taken only after the
@@ -109,10 +135,11 @@ impl<T: Clone + 'static> ConfigCell<T> for LocalConfigCell<T> {
 /// Thread-shared [`ConfigCell`] backed by [`arc_swap::ArcSwap`].
 ///
 /// Runtime-configurable policies use this cell in full and account locking
-/// modes; no-locking mode uses [`LocalConfigCell`]. Reads are lock-free and
-/// never clone the inner `Arc`. A writer-only mutex
-/// serializes the rare transactional updates so two concurrent
-/// read-modify-write closures cannot overwrite each other.
+/// modes; no-locking mode uses [`LocalConfigCell`]. [`ConfigCell::with`] and
+/// [`ConfigCell::with_snapshot`] use lock-free guarded reads that avoid cloning
+/// the inner `Arc` on the fast path. A writer-only mutex serializes the rare
+/// transactional updates so two concurrent read-modify-write closures cannot
+/// overwrite each other.
 ///
 /// The cell is `Send + Sync` whenever `T: Send + Sync`.
 pub struct ArcSwapConfigCell<T>(Arc<ArcSwapConfigInner<T>>);
@@ -142,6 +169,13 @@ impl<T: Clone + 'static> ConfigCell<T> for ArcSwapConfigCell<T> {
         // `load` (not `load_full`) avoids bumping the inner `Arc`'s
         // refcount on the hot read path; the guard keeps the pointee
         // alive for the duration of the call.
+        let guard = self.0.value.load();
+        f(&guard)
+    }
+
+    #[inline]
+    fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        // Unlike a RefCell borrow, an ArcSwap guard permits publication.
         let guard = self.0.value.load();
         f(&guard)
     }
@@ -207,6 +241,27 @@ mod tests {
         assert_eq!(other.with(|v| *v), 5);
     }
 
+    fn assert_snapshot_remains_at_its_linearization_point<Cell: ConfigCell<i32>>() {
+        let cell = Cell::new(1);
+        let observed = cell.with_snapshot(|snapshot| {
+            cell.update::<()>(|value| {
+                *value = 2;
+                Ok(())
+            })
+            .expect("update succeeds while the snapshot is alive");
+
+            assert_eq!(*snapshot, 1, "held snapshot changed after update");
+            assert_eq!(
+                cell.with_snapshot(|value| *value),
+                2,
+                "nested snapshot missed update"
+            );
+            *snapshot
+        });
+        assert_eq!(observed, 1);
+        assert_eq!(cell.with(|value| *value), 2, "with missed update");
+    }
+
     #[test]
     fn local_update_visible_through_with() {
         assert_update_visible::<LocalConfigCell<i32>>();
@@ -223,6 +278,11 @@ mod tests {
     }
 
     #[test]
+    fn local_snapshot_remains_at_its_linearization_point() {
+        assert_snapshot_remains_at_its_linearization_point::<LocalConfigCell<i32>>();
+    }
+
+    #[test]
     fn arc_swap_update_visible_through_with() {
         assert_update_visible::<ArcSwapConfigCell<i32>>();
     }
@@ -235,6 +295,36 @@ mod tests {
     #[test]
     fn arc_swap_clone_shares_underlying() {
         assert_clone_shares_underlying::<ArcSwapConfigCell<i32>>();
+    }
+
+    #[test]
+    fn arc_swap_snapshot_remains_at_its_linearization_point() {
+        assert_snapshot_remains_at_its_linearization_point::<ArcSwapConfigCell<i32>>();
+    }
+
+    #[test]
+    fn arc_swap_snapshot_survives_update_from_another_thread() {
+        let cell = ArcSwapConfigCell::new(1);
+        cell.with_snapshot(|snapshot| {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        cell.update::<()>(|value| {
+                            *value = 2;
+                            Ok(())
+                        })
+                        .expect("update succeeds while another thread holds a snapshot");
+                    })
+                    .join()
+                    .expect("writer completes while the snapshot is alive");
+            });
+
+            assert_eq!(
+                *snapshot, 1,
+                "held snapshot changed after concurrent update"
+            );
+            assert_eq!(cell.with_snapshot(|value| *value), 2);
+        });
     }
 
     #[test]

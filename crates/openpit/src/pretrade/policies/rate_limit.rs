@@ -643,13 +643,15 @@ where
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        // One coherent settings read decides both applicability and the exact
-        // live counter/log to push. ALL applicable axes are pushed before
+        // One coherent settings snapshot decides both applicability and the
+        // exact live counter/log to push. ALL applicable axes are pushed before
         // resolving (flood semantics): every applicable axis must consume its
         // slot even when an earlier-priority axis already breaches, so a flood
         // cannot bypass a counter by tripping another. The breach is resolved
         // in priority order: broker -> asset -> account -> account+asset.
-        self.settings.with(|s| -> Result<(), Rejects> {
+        // Accessors may publish new settings; this check keeps the version
+        // selected before they run.
+        self.settings.with_snapshot(|s| {
             let needs_settlement = !s.asset_limits.is_empty() || !s.account_asset_limits.is_empty();
             let needs_account = !s.account_limits.is_empty() || !s.account_asset_limits.is_empty();
 
@@ -754,7 +756,9 @@ where
         // Read-only mirror of `check_pre_trade_start`: same axes, same priority
         // resolution, but every count is the would-be count from a peek rather
         // than a mutating push, so no budget is consumed.
-        self.settings.with(|s| -> Result<(), Rejects> {
+        // Accessors may publish new settings; this check keeps the version
+        // selected before they run.
+        self.settings.with_snapshot(|s| {
             let needs_settlement = !s.asset_limits.is_empty() || !s.account_asset_limits.is_empty();
             let needs_account = !s.account_limits.is_empty() || !s.account_asset_limits.is_empty();
 
@@ -911,7 +915,7 @@ mod tests {
     use crate::pretrade::{
         ConfigurablePolicy, PreTradeContext, PreTradePolicy, RejectCode, RejectScope, Rejects,
     };
-    use crate::storage::{ConfigCell, NoLocking};
+    use crate::storage::{ConfigCell, LocalConfigCell, NoLocking};
 
     use super::{
         RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
@@ -1221,6 +1225,132 @@ mod tests {
                 .with(|s| s.broker.as_ref().map(|b| b.limit.max_orders)),
             Some(7)
         );
+    }
+
+    #[test]
+    fn check_pre_trade_start_accessor_can_reconfigure_without_borrow_panic() {
+        struct ReconfiguringInstrumentOrder {
+            settings: LocalConfigCell<RateLimitSettings>,
+            instrument: Instrument,
+            account_id: AccountId,
+        }
+
+        impl crate::HasInstrument for ReconfiguringInstrumentOrder {
+            fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
+                self.settings
+                    .update::<RateLimitPolicyError>(|settings| {
+                        settings.set_asset_barriers([RateLimitAssetBarrier {
+                            limit: RateLimit {
+                                max_orders: 10,
+                                window: Duration::from_secs(60),
+                            },
+                            settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                        }])
+                    })
+                    .expect("instrument accessor must reconfigure without a borrow panic");
+                Ok(&self.instrument)
+            }
+        }
+
+        impl crate::HasAccountId for ReconfiguringInstrumentOrder {
+            fn account_id(&self) -> Result<AccountId, crate::RequestFieldAccessError> {
+                Ok(self.account_id)
+            }
+        }
+
+        let policy = asset_policy("USD", 1, Duration::from_secs(60));
+        let base = Instant::now();
+        assert!(check_at(&policy, &order(account(1)), base).is_ok());
+
+        let reconfiguring_order = ReconfiguringInstrumentOrder {
+            settings: policy.settings_cell(),
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            account_id: account(1),
+        };
+        let reject = with_start_pre_trade_now(base + Duration::from_secs(1), || {
+            <TestPolicy as PreTradePolicy<
+                ReconfiguringInstrumentOrder,
+                (),
+                (),
+                crate::core::LocalSync,
+            >>::check_pre_trade_start(
+                &policy,
+                &PreTradeContext::<NoLocking>::new(None),
+                &reconfiguring_order,
+            )
+        })
+        .expect_err("the pre-update asset limit must reject");
+        assert_eq!(reject[0].reason, "rate limit exceeded: asset barrier");
+        assert_eq!(
+            reject[0].details,
+            "submitted 2 orders in 60s window, max allowed: 1"
+        );
+
+        assert!(check_at(&policy, &order(account(1)), base + Duration::from_secs(2),).is_ok());
+    }
+
+    #[test]
+    fn check_pre_trade_start_dry_run_accessor_can_reconfigure_without_borrow_panic() {
+        struct ReconfiguringAccountOrder {
+            settings: LocalConfigCell<RateLimitSettings>,
+            account_id: AccountId,
+        }
+
+        impl crate::HasInstrument for ReconfiguringAccountOrder {
+            fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
+                Err(crate::RequestFieldAccessError::new("instrument"))
+            }
+        }
+
+        impl crate::HasAccountId for ReconfiguringAccountOrder {
+            fn account_id(&self) -> Result<AccountId, crate::RequestFieldAccessError> {
+                self.settings
+                    .update::<RateLimitPolicyError>(|settings| {
+                        settings.set_account_barriers([RateLimitAccountBarrier {
+                            limit: RateLimit {
+                                max_orders: 2,
+                                window: Duration::from_secs(60),
+                            },
+                            account_id: self.account_id,
+                        }])
+                    })
+                    .expect("account accessor must reconfigure without a borrow panic");
+                Ok(self.account_id)
+            }
+        }
+
+        let account_id = account(1);
+        let policy = account_policy(account_id, 1, Duration::from_secs(60));
+        let base = Instant::now();
+        assert!(check_at(&policy, &order(account_id), base).is_ok());
+
+        let reconfiguring_order = ReconfiguringAccountOrder {
+            settings: policy.settings_cell(),
+            account_id,
+        };
+        let reject = with_start_pre_trade_now(base + Duration::from_secs(1), || {
+            <TestPolicy as PreTradePolicy<
+                ReconfiguringAccountOrder,
+                (),
+                (),
+                crate::core::LocalSync,
+            >>::check_pre_trade_start_dry_run(
+                &policy,
+                &PreTradeContext::<NoLocking>::new(None),
+                &reconfiguring_order,
+            )
+        })
+        .expect_err("the pre-update account limit must reject");
+        assert_eq!(reject[0].reason, "rate limit exceeded: account barrier");
+        assert_eq!(
+            reject[0].details,
+            "submitted 2 orders in 60s window, max allowed: 1"
+        );
+
+        assert!(check_at(&policy, &order(account_id), base + Duration::from_secs(2),).is_ok());
     }
 
     // ── broker barrier ─────────────────────────────────────────────────────

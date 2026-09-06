@@ -674,6 +674,14 @@ mod tests {
             f(&value)
         }
 
+        fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+            let value = {
+                let value = self.0.lock().expect("test config mutex must not poison");
+                value.clone()
+            };
+            f(&value)
+        }
+
         fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E> {
             let mut value = self.0.lock().expect("test config mutex must not poison");
             let mut next = value.clone();
