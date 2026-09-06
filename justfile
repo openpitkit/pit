@@ -155,20 +155,8 @@ build-release:
 
 # The wasm32 target and wasm-bindgen-cli come from `just install`.
 
-# Build the JS package (wasm-bindgen build + TS bundle).
-[unix]
-build-js: ensure-node
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ -f bindings/js/package-lock.json ]]; then
-      ( cd bindings/js && npm ci --no-audit --no-fund )
-    else
-      ( cd bindings/js && npm install --no-audit --no-fund )
-    fi
-    cd bindings/js && npm run build
-[windows]
-build-js: ensure-node
-    cd bindings/js && npm ci --no-audit --no-fund
+# Build the JS package using the already installed local toolchain/dependencies.
+build-js:
     cd bindings/js && npm run build
 
 # Build Go against the debug FFI runtime.
@@ -566,7 +554,7 @@ test-go-release:
 test-go-full: test-go-debug test-go-release test-go-race
 
 # Full JS suite: package Node/browser tests, Node examples, and browser build.
-test-js-debug: build-js _js-examples-install
+test-js-debug: build-js
     cd bindings/js && npm test
     cd examples/js && npm test
 
@@ -574,7 +562,7 @@ test-js-debug: build-js _js-examples-install
 test-js: test-js-debug
 
 # Run the workspace JS examples from examples/js against the local build.
-run-examples-js-debug: build-js _js-examples-install
+run-examples-js-debug: build-js
     cd examples/js && node --import tsx rate_pnl_killswitch/main.ts
     cd examples/js && node --import tsx spot_funds/main.ts
     just run-examples-js-table-debug
@@ -584,10 +572,10 @@ run-examples-js: run-examples-js-debug
 
 # Run a spot-policy scenario table through the JS spot_table example.
 [unix]
-run-examples-js-table-debug test_file="examples/tables/spot/coverage.md": build-js _js-examples-install
+run-examples-js-table-debug test_file="examples/tables/spot/coverage.md": build-js
     table="$(pwd)/{{ test_file }}" && cd examples/js && node --import tsx spot_table/main.ts --table "$table"
 [windows]
-run-examples-js-table-debug test_file="examples/tables/spot/coverage.md": build-js _js-examples-install
+run-examples-js-table-debug test_file="examples/tables/spot/coverage.md": build-js
     cd examples/js && node --import tsx spot_table/main.ts --table "{{ repo_dir }}/{{ test_file }}"
 
 # Mode-neutral table-runner alias used by the public example READMEs.
@@ -824,7 +812,7 @@ fmt-go:
     cd bindings/go && gofmt -w .
     gofmt -w examples/go
 # Format JS (prettier --write).
-fmt-js: ensure-node
+fmt-js:
     cd bindings/js && npm run format
 
 # Prepare new release (kind is patch, minor or major).
@@ -863,13 +851,6 @@ gen-api-c: _ensure-python-env
 # Generate the committed FFI artifacts. Documentation is generated only in the
 # CI pipeline (see pipeline.just), never by the local delivery gate.
 gen-all: gen-api-c
-
-# Link the locally built @openpit/engine into the examples/js workspace. The
-# examples depend on it via a `file:` reference, so this must run after
-# `build-js` produced bindings/js/dist. Local development keeps the install
-# incremental; the CI pipeline owns its reproducible clean install separately.
-_js-examples-install: ensure-node
-    cd examples/js && npm install --no-audit --no-fund
 
 # Build FFI in the requested mode.
 [unix]

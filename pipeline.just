@@ -22,8 +22,15 @@
 
 import 'justfile'
 
+# Install the JS binding reproducibly before any CI build, lint, or docs step.
+_js-ci-install: ensure-node
+    cd bindings/js && npm ci --no-audit --no-fund
+
+# Build the JS package from a clean dependency installation in CI.
+build-js-ci: _js-ci-install build-js
+
 # Lint and test JS from clean lockfiles in CI.
-check-js-ci-debug: lint-js build-js _js-examples-ci-install
+check-js-ci-debug: build-js-ci lint-js _js-examples-ci-install
     cd bindings/js && npm test
     cd examples/js && npm test
 
@@ -258,7 +265,7 @@ gen-docs-cpp: _ensure-python-env
     {{ python_path }} {{ just_helper }} gen-docs-cpp
 
 # Generate the TypeDoc-backed JS API reference.
-gen-docs-js: _ensure-python-env build-js
+gen-docs-js: _ensure-python-env build-js-ci
     cd bindings/js && npm run docs
 
 # Build the generated C, C++, and JS API references under docs/. The sitemap is

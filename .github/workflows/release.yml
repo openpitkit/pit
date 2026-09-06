@@ -560,7 +560,7 @@ jobs:
           # Publish path: wasm-opt is mandatory (build-wasm.mjs fails hard if it
           # is missing or errors) so the released artifact is always optimized.
           OPENPIT_WASM_OPT: require
-        run: just --justfile "$JUSTFILE" build-js
+        run: just --justfile "$JUSTFILE" build-js-ci
 
       - name: Verify npm package version
         shell: bash
