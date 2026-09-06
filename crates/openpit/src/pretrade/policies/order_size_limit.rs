@@ -321,9 +321,10 @@ impl OrderSizeLimitSettings {
 /// Drop-copy operations replay historical orders and bypass these admission
 /// limits. The policy does not request their instrument, account, trade amount,
 /// or price.
-/// For live orders, it requests the account identifier only when at least one
-/// account+asset barrier is configured, then the trade amount only when an
-/// applicable quantity or notional cap was selected.
+/// For live orders, it requests the instrument only when at least one asset or
+/// account+asset barrier is configured, the account identifier only when at
+/// least one account+asset barrier is configured, then the trade amount only
+/// when an applicable quantity or notional cap was selected.
 ///
 /// Constructor rules:
 /// - at least one barrier across all three axes must be configured;
@@ -463,15 +464,21 @@ where
         if ctx.is_drop_copy() {
             return Ok(());
         }
-        let instrument = order
-            .instrument()
-            .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
-        let underlying = instrument.underlying_asset();
-        let settlement = instrument.settlement_asset();
-
         // Accessors may publish new settings; cap selection and enforcement
         // must still use the same version for this order.
         self.settings.with_snapshot(|settings| {
+            // Read the instrument before the account ID because field-access
+            // reject priority is part of the policy contract. `None` skips only
+            // the exact asset maps whose emptiness made the access unnecessary.
+            let needs_instrument =
+                !settings.asset_limits.is_empty() || !settings.account_asset_limits.is_empty();
+            let instrument = if needs_instrument {
+                Some(order.instrument().map_err(|e| {
+                    Rejects::from(missing_required_field_reject(self, "instrument", &e))
+                })?)
+            } else {
+                None
+            };
             let needs_account = !settings.account_asset_limits.is_empty();
             let account_id = if needs_account {
                 Some(order.account_id().map_err(|e| {
@@ -481,10 +488,22 @@ where
                 None
             };
 
-            let quantity_axis_limit =
-                select_asset_limit(settings, account_id, underlying, |limit| limit.max_quantity);
-            let notional_axis_limit =
-                select_asset_limit(settings, account_id, settlement, |limit| limit.max_notional);
+            let quantity_axis_limit = instrument.and_then(|instrument| {
+                select_asset_limit(
+                    settings,
+                    account_id,
+                    instrument.underlying_asset(),
+                    |limit| limit.max_quantity,
+                )
+            });
+            let notional_axis_limit = instrument.and_then(|instrument| {
+                select_asset_limit(
+                    settings,
+                    account_id,
+                    instrument.settlement_asset(),
+                    |limit| limit.max_notional,
+                )
+            });
             let broker_limit = settings.broker.as_ref().map(|barrier| barrier.limit);
 
             let quantity_broker_limit = broker_limit
@@ -534,7 +553,9 @@ where
                 Self::NAME,
                 quantity_axis,
                 notional_axis,
-                Some((underlying, settlement)),
+                instrument.map(|instrument| {
+                    (instrument.underlying_asset(), instrument.settlement_asset())
+                }),
             );
             let broker_reject =
                 check_limit_optional(Self::NAME, quantity_broker, notional_broker, None);
@@ -761,6 +782,8 @@ mod tests {
     type TestPolicy = OrderSizeLimitPolicy<NoLocking>;
     type TestOrder = OrderOperation;
 
+    struct InstrumentAccessErrorOrder;
+
     struct AccountAccessErrorOrder {
         instrument: Instrument,
         trade_amount_access_count: Cell<usize>,
@@ -775,6 +798,34 @@ mod tests {
         account_id_access_count: Rc<Cell<usize>>,
         trade_amount_access_count: Rc<Cell<usize>>,
         price_access_count: Rc<Cell<usize>>,
+    }
+
+    impl HasInstrument for InstrumentAccessErrorOrder {
+        fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+            Err(RequestFieldAccessError::new("instrument"))
+        }
+    }
+
+    impl HasAccountId for InstrumentAccessErrorOrder {
+        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+            Err(RequestFieldAccessError::new("account_id"))
+        }
+    }
+
+    impl HasTradeAmount for InstrumentAccessErrorOrder {
+        fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+            Ok(TradeAmount::Quantity(
+                Quantity::from_str("1").expect("quantity literal must be valid"),
+            ))
+        }
+    }
+
+    impl HasOrderPrice for InstrumentAccessErrorOrder {
+        fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+            Ok(Some(
+                Price::from_str("1").expect("price literal must be valid"),
+            ))
+        }
     }
 
     impl HasInstrument for AccountAccessCountingOrder {
@@ -1882,34 +1933,23 @@ mod tests {
     // ── field access error paths ───────────────────────────────────────────
 
     #[test]
-    fn maps_instrument_access_error_to_missing_required_field() {
-        struct InstrumentAccessErrorOrder;
+    fn broker_barrier_ignores_instrument_access_error() {
+        let p = policy(Some(broker_barrier("10", "1000")), [], []);
+        let order_val = InstrumentAccessErrorOrder;
 
-        impl HasInstrument for InstrumentAccessErrorOrder {
-            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
-                Err(RequestFieldAccessError::new("instrument"))
-            }
-        }
-        impl HasAccountId for InstrumentAccessErrorOrder {
-            fn account_id(&self) -> Result<AccountId, crate::RequestFieldAccessError> {
-                Ok(AccountId::from_u64(1))
-            }
-        }
-        impl HasTradeAmount for InstrumentAccessErrorOrder {
-            fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
-                Ok(TradeAmount::Quantity(
-                    Quantity::from_str("1").expect("quantity literal must be valid"),
-                ))
-            }
-        }
-        impl HasOrderPrice for InstrumentAccessErrorOrder {
-            fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
-                Ok(Some(
-                    Price::from_str("1").expect("price literal must be valid"),
-                ))
-            }
-        }
+        assert!(<TestPolicy as PreTradePolicy<
+            InstrumentAccessErrorOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+        )
+        .is_ok());
+    }
 
+    #[test]
+    fn asset_barrier_maps_instrument_access_error_to_missing_required_field() {
         let p = policy(None, [asset_barrier("USD", "10", "1000")], []);
         let order_val = InstrumentAccessErrorOrder;
         let reject = <TestPolicy as PreTradePolicy<
@@ -1921,6 +1961,37 @@ mod tests {
             &p, &PreTradeContext::<NoLocking>::new(None), &order_val
         )
         .expect_err("field access error must reject");
+        let reject = &reject[0];
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'instrument'"
+        );
+        assert_eq!(reject.details, "failed to access field 'instrument'");
+    }
+
+    #[test]
+    fn instrument_access_error_precedes_account_id_access_error() {
+        let p = policy(
+            None,
+            [],
+            [OrderSizeAccountAssetBarrier {
+                limit: limit("10", "1000"),
+                account_id: AccountId::from_u64(1),
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
+            }],
+        );
+        let order_val = InstrumentAccessErrorOrder;
+        let reject = <TestPolicy as PreTradePolicy<
+            InstrumentAccessErrorOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+        )
+        .expect_err("instrument access error must reject before account ID access");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
@@ -1982,7 +2053,7 @@ mod tests {
     }
 
     #[test]
-    fn account_id_is_accessed_only_for_account_asset_barriers() {
+    fn instrument_and_account_id_are_accessed_only_for_their_axes() {
         let account_id = AccountId::from_u64(99224416);
         let order_val = AccountAccessCountingOrder {
             instrument: Instrument::new(
@@ -2009,6 +2080,11 @@ mod tests {
         let broker_policy = policy(Some(broker_quantity_barrier("10")), [], []);
         assert!(check_order(&broker_policy).is_ok());
         assert_eq!(
+            order_val.instrument_access_count.get(),
+            0,
+            "broker-only settings must not access the instrument"
+        );
+        assert_eq!(
             order_val.account_id_access_count.get(),
             0,
             "broker-only settings must not access the account ID"
@@ -2016,6 +2092,11 @@ mod tests {
 
         let asset_policy = policy(None, [asset_quantity_barrier("AAPL", "10")], []);
         assert!(check_order(&asset_policy).is_ok());
+        assert_eq!(
+            order_val.instrument_access_count.get(),
+            1,
+            "asset settings must access the instrument once"
+        );
         assert_eq!(
             order_val.account_id_access_count.get(),
             0,
@@ -2032,6 +2113,11 @@ mod tests {
             }],
         );
         assert!(check_order(&account_asset_policy).is_ok());
+        assert_eq!(
+            order_val.instrument_access_count.get(),
+            2,
+            "account+asset settings must access the instrument once"
+        );
         assert_eq!(
             order_val.account_id_access_count.get(),
             1,
