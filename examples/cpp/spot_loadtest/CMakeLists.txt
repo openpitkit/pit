@@ -126,8 +126,6 @@ if(SPOT_LOADTEST_BUILD_TESTS)
   include(GoogleTest)
   enable_testing()
 
-  get_filename_component(SPOT_LOADTEST_REPO_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
   set(SPOT_LOADTEST_CLI_HELPER_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
   file(GENERATE
@@ -135,7 +133,7 @@ if(SPOT_LOADTEST_BUILD_TESTS)
     CONTENT [=[
 execute_process(
   COMMAND "$<TARGET_FILE:spot_loadtest>"
-    --config examples/cpp/spot_loadtest/configs/baseline.ini
+    --config configs/baseline.ini
     --validate-config
   RESULT_VARIABLE result
   OUTPUT_VARIABLE stdout
@@ -152,14 +150,14 @@ endif()
     COMMAND ${CMAKE_COMMAND} -P
       "${SPOT_LOADTEST_CLI_HELPER_DIR}/cli_validates_baseline.cmake")
   set_tests_properties(spot_loadtest_cli_baseline_recipe PROPERTIES
-    WORKING_DIRECTORY "${SPOT_LOADTEST_REPO_ROOT}")
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
   file(GENERATE
     OUTPUT "${SPOT_LOADTEST_CLI_HELPER_DIR}/cli_rejects_single_dash.cmake"
     CONTENT [=[
 execute_process(
   COMMAND "$<TARGET_FILE:spot_loadtest>"
-    -config examples/cpp/spot_loadtest/configs/baseline.ini
+    -config configs/baseline.ini
     --validate-config
   RESULT_VARIABLE result
   OUTPUT_VARIABLE stdout
@@ -176,7 +174,7 @@ endif()
     COMMAND ${CMAKE_COMMAND} -P
       "${SPOT_LOADTEST_CLI_HELPER_DIR}/cli_rejects_single_dash.cmake")
   set_tests_properties(spot_loadtest_cli_rejects_single_dash_config PROPERTIES
-    WORKING_DIRECTORY "${SPOT_LOADTEST_REPO_ROOT}")
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
   file(GENERATE
     OUTPUT "${SPOT_LOADTEST_CLI_HELPER_DIR}/cli_rejects_missing_path.cmake"
@@ -198,7 +196,7 @@ endif()
     COMMAND ${CMAKE_COMMAND} -P
       "${SPOT_LOADTEST_CLI_HELPER_DIR}/cli_rejects_missing_path.cmake")
   set_tests_properties(spot_loadtest_cli_rejects_missing_config_path PROPERTIES
-    WORKING_DIRECTORY "${SPOT_LOADTEST_REPO_ROOT}")
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
   function(spot_loadtest_add_test name source)
     add_executable(${name} "${source}")

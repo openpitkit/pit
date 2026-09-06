@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@openpit/engine": "file:../../../bindings/js/dist",
+    "@openpit/engine": "file:../../../bindings/js",
     "@xterm/xterm": "^5.5.0"
   },
   "devDependencies": {

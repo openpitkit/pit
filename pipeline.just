@@ -22,6 +22,15 @@
 
 import 'justfile'
 
+# Lint and test JS from clean lockfiles in CI.
+check-js-ci-debug: lint-js build-js _js-examples-ci-install
+    cd bindings/js && npm test
+    cd examples/js && npm test
+
+# Install the JS examples reproducibly after build-js produced the local package.
+_js-examples-ci-install: ensure-node
+    cd examples/js && npm ci --no-audit --no-fund
+
 # Includes bindings/js/Cargo.toml: cargo-release shared-version bumps the
 # openpit-js crate in lockstep, and the npm package version is derived from it
 # at build time (see bindings/js/scripts/sync-version.mjs), so it is the JS

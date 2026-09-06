@@ -56,9 +56,9 @@ const metadataFiles = [
 const source = JSON.parse(readFileSync(sourceManifestPath, "utf8"));
 const version = resolveVersion();
 
-// The published manifest lives at the dist/ root, so every relative path in
-// `exports`/`module`/`types`/`browser` is already written without a `dist/`
-// prefix in the source manifest. We trim dev-only fields and inject the synced
+// The source manifest points runtime consumers at `dist/`, while the published
+// manifest itself lives at that directory's root. Strip that development-only
+// prefix recursively while trimming dev-only fields and injecting the synced
 // version.
 //
 // `imports` is re-declared (not copied) for the published layout: the source
@@ -78,6 +78,24 @@ const publishedImports = {
   },
 };
 
+function withoutDistPrefix(value) {
+  if (typeof value === "string") {
+    return value.replace(/^\.\/dist\//u, "./");
+  }
+  if (Array.isArray(value)) {
+    return value.map(withoutDistPrefix);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        withoutDistPrefix(entry),
+      ]),
+    );
+  }
+  return value;
+}
+
 const published = {
   name: source.name,
   version,
@@ -89,15 +107,15 @@ const published = {
   bugs: source.bugs,
   keywords: source.keywords,
   type: source.type,
-  sideEffects: source.sideEffects,
+  sideEffects: withoutDistPrefix(source.sideEffects),
   engines: source.engines,
   publishConfig: source.publishConfig,
   imports: publishedImports,
-  exports: source.exports,
-  main: source.main,
-  module: source.module,
-  types: source.types,
-  browser: source.browser,
+  exports: withoutDistPrefix(source.exports),
+  main: withoutDistPrefix(source.main),
+  module: withoutDistPrefix(source.module),
+  types: withoutDistPrefix(source.types),
+  browser: withoutDistPrefix(source.browser),
   files: source.files,
 };
 

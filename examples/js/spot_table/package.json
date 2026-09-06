@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@openpit/engine": "file:../../../bindings/js/dist"
+    "@openpit/engine": "file:../../../bindings/js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

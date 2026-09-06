@@ -866,8 +866,8 @@ gen-all: gen-api-c
 
 # Link the locally built @openpit/engine into the examples/js workspace. The
 # examples depend on it via a `file:` reference, so this must run after
-# `build-js` produced bindings/js/dist. The lockfile is gitignored (the link
-# target is a local path), so this uses `npm install`, not `npm ci`.
+# `build-js` produced bindings/js/dist. Local development keeps the install
+# incremental; the CI pipeline owns its reproducible clean install separately.
 _js-examples-install: ensure-node
     cd examples/js && npm install --no-audit --no-fund
 

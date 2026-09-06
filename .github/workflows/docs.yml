@@ -127,8 +127,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.CI_PYTHON }}
-          cache: pip
-          cache-dependency-path: requirements.txt
 
       - name: Create virtual environment
         run: |

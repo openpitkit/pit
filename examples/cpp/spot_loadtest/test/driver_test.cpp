@@ -47,6 +47,8 @@ namespace driver = spot_loadtest::driver;
 namespace gen = spot_loadtest::generator;
 using spot_loadtest::Decimal;
 
+constexpr std::chrono::seconds kFunctionalTestMaxSubmitLag{30};
+
 [[nodiscard]] Decimal Dec(const std::string &s) {
   return Decimal::FromString(s);
 }
@@ -61,7 +63,7 @@ using spot_loadtest::Decimal;
   c.arrival.offeredRate = 0; // unpaced (saturated).
   c.reject = config::Reject{target, 0.01};
   c.accounts = config::Accounts{200};
-  c.concurrency = config::Concurrency{64, 8, std::chrono::seconds(1)};
+  c.concurrency = config::Concurrency{64, 8, kFunctionalTestMaxSubmitLag};
   c.asyncEngine.strategy = config::AsyncEngineStrategy::Dynamic;
   c.asyncEngine.maxQueues = 256;
   c.asyncEngine.idleCleanup = std::chrono::seconds(2);
@@ -110,7 +112,7 @@ struct SingleEventRun {
 [[nodiscard]] SingleEventRun MakeSingleEventRun(std::uint64_t seed) {
   config::Config cfg = TestConfig(seed, 1, 0.05);
   cfg.accounts.count = 1;
-  cfg.concurrency = config::Concurrency{1, 1, std::chrono::seconds(1)};
+  cfg.concurrency = config::Concurrency{1, 1, kFunctionalTestMaxSubmitLag};
   std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
 
   driver::Config dcfg = driver::FromAppConfig(cfg);
@@ -150,7 +152,7 @@ TEST(Driver, OraclePipeline) {
   dcfg.submitterWorkers = 8;
   dcfg.collectors = 16;
   dcfg.windowSize = 1000;
-  dcfg.maxSubmitLag = std::chrono::seconds(1);
+  dcfg.maxSubmitLag = kFunctionalTestMaxSubmitLag;
   dcfg.overheadProbes = 50;
 
   const driver::RunResult result = driver::Run(*stream, dcfg);
@@ -192,7 +194,7 @@ TEST(Driver, OpenLoopHighRejectRate) {
   dcfg.submitterWorkers = 8;
   dcfg.collectors = 16;
   dcfg.windowSize = 1000;
-  dcfg.maxSubmitLag = std::chrono::seconds(1);
+  dcfg.maxSubmitLag = kFunctionalTestMaxSubmitLag;
   dcfg.overheadProbes = 0;
 
   const driver::RunResult result = driver::Run(*stream, dcfg);
@@ -261,7 +263,7 @@ TEST(Driver, RunRequiresPositiveWindowSize) {
   driver::Config cfg;
   cfg.collectors = 1;
   cfg.finalizers = 1;
-  cfg.maxSubmitLag = std::chrono::seconds(1);
+  cfg.maxSubmitLag = kFunctionalTestMaxSubmitLag;
   cfg.overheadProbes = 0;
 
   cfg.windowSize = 0;
@@ -365,7 +367,7 @@ TEST(Driver, WorkerFailureDoesNotLoseSleepingSubmitterWakeup) {
   config::Config cfg = TestConfig(0xFA18, 1, 0.05);
   cfg.accounts.count = kSleepers + 1;
   cfg.concurrency = config::Concurrency{kSleepers + 1, kSleepers + 1,
-                                        std::chrono::seconds(1)};
+                                        kFunctionalTestMaxSubmitLag};
   std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
 
   std::vector<std::string> accounts;
@@ -422,7 +424,7 @@ TEST(Driver, WorkerFailureDoesNotLoseSleepingSubmitterWakeup) {
 TEST(Driver, SubmitterShardMergesChainsByVirtualTime) {
   config::Config cfg = TestConfig(0x5A4D, 80, 0.05);
   cfg.accounts.count = 4;
-  cfg.concurrency = config::Concurrency{4, 1, std::chrono::seconds(1)};
+  cfg.concurrency = config::Concurrency{4, 1, kFunctionalTestMaxSubmitLag};
   cfg.arrival.offeredRate = 40;
   const std::unique_ptr<gen::Stream> stream = gen::Generate(cfg);
 
@@ -494,7 +496,7 @@ TEST(Driver, PacedSubmission) {
   dcfg.submitterWorkers = 8;
   dcfg.collectors = 16;
   dcfg.windowSize = 1000;
-  dcfg.maxSubmitLag = std::chrono::seconds(1);
+  dcfg.maxSubmitLag = kFunctionalTestMaxSubmitLag;
   dcfg.overheadProbes = 0;
 
   const driver::RunResult result = driver::Run(*stream, dcfg);
@@ -546,7 +548,7 @@ TEST(Driver, DocBackingBaselineRecipe) {
   reduced.run.window = 5000;
   reduced.accounts.count = 500;
   reduced.concurrency.activeAccounts = 64;
-  reduced.concurrency.maxSubmitLag = std::chrono::seconds(1);
+  reduced.concurrency.maxSubmitLag = kFunctionalTestMaxSubmitLag;
   reduced.asyncEngine.maxQueues = 0;
   reduced.asyncEngine.idleCleanup = std::chrono::seconds(2);
 

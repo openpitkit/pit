@@ -42,6 +42,10 @@ const manifest = JSON.parse(
   readFileSync(resolve(packageDir, "package.json"), "utf8"),
 );
 
+function distributionTarget(target) {
+  return target.replace(/^\.\/dist\//u, "./");
+}
+
 function relativeSpecifier(from, to) {
   const specifier = relative(dirname(from), to);
   return specifier.startsWith(".") ? specifier : `./${specifier}`;
@@ -192,7 +196,9 @@ function finalizeNode() {
     if (typeof conditions === "string") {
       continue;
     }
-    const namespace = namespaceName(conditions.require);
+    const requireTarget = distributionTarget(conditions.require);
+    const importTarget = distributionTarget(conditions.import);
+    const namespace = namespaceName(requireTarget);
     const namespaceExports = shared[namespace];
     if (namespaceExports === undefined) {
       throw new Error(`shared CJS namespace missing: ${namespace}`);
@@ -200,14 +206,9 @@ function finalizeNode() {
     const exportNames = Object.keys(namespaceExports).filter(
       (name) => name !== "__esModule",
     );
-    publicEsmEntries.push(conditions.import);
-    writeNodeCjsWrapper(conditions.require, sharedTarget, namespace);
-    writeNodeEsmWrapper(
-      conditions.import,
-      sharedTarget,
-      namespace,
-      exportNames,
-    );
+    publicEsmEntries.push(importTarget);
+    writeNodeCjsWrapper(requireTarget, sharedTarget, namespace);
+    writeNodeEsmWrapper(importTarget, sharedTarget, namespace, exportNames);
   }
   const runtimeExports = shared.runtime;
   if (runtimeExports === undefined) {
@@ -230,11 +231,10 @@ function finalizeBrowser() {
     if (typeof conditions === "string") {
       continue;
     }
-    publicCjsEntries.push(conditions.browser.require);
-    writeBrowserCjsWrapper(
-      conditions.browser.require,
-      conditions.browser.import,
-    );
+    const requireTarget = distributionTarget(conditions.browser.require);
+    const importTarget = distributionTarget(conditions.browser.import);
+    publicCjsEntries.push(requireTarget);
+    writeBrowserCjsWrapper(requireTarget, importTarget);
   }
   writeBrowserCjsWrapper("./browser/runtime.cjs", "./browser/runtime.js");
   publicCjsEntries.push("./browser/runtime.cjs");

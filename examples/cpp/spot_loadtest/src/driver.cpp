@@ -765,7 +765,7 @@ void RunState::RecordThreadFailure(const char *context,
   {
     std::lock_guard<std::mutex> lock(m_failureMutex);
     if (!m_threadFailure) {
-      m_threadFailure = failure;
+      std::swap(m_threadFailure, failure);
       m_failureContext = context;
     }
   }

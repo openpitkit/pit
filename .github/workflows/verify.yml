@@ -353,7 +353,7 @@ jobs:
         uses: extractions/setup-just@v3
 
       - name: Check JS
-        run: just --justfile "$JUSTFILE" check-js-dry-debug
+        run: just --justfile "$JUSTFILE" check-js-ci-debug
 
   invariants:
     name: Invariant checks

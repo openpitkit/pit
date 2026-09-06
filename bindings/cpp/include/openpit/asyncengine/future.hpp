@@ -156,9 +156,11 @@ class Result : private detail::ResultConsumption<T> {
   Result(T value) : m_value(std::move(value)) {}  // NOLINT: implicit by design.
   Result(Error error) : m_value(std::move(error)) {}  // NOLINT: implicit.
   Result(const Result&) = default;
-  Result(Result&&) = default;
+  Result(Result&&) noexcept(
+      std::is_nothrow_move_constructible_v<std::variant<T, Error>>) = default;
   Result& operator=(const Result&) = default;
-  Result& operator=(Result&&) = default;
+  Result& operator=(Result&&) noexcept(
+      std::is_nothrow_move_assignable_v<std::variant<T, Error>>) = default;
 
   [[nodiscard]] bool HasValue() const noexcept {
     return std::holds_alternative<T>(m_value);
