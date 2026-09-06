@@ -33,6 +33,7 @@ using openpit::param::GroupId;
 using openpit::param::Leverage;
 using openpit::param::MonetaryAmount;
 using openpit::param::Pnl;
+using openpit::param::PositionSize;
 using openpit::param::Price;
 using openpit::param::Quantity;
 using openpit::param::Volume;
@@ -76,6 +77,41 @@ TEST(ParamAsset, EmptyAndWhitespaceOnlyValuesThrowStructuredError) {
   } catch (const openpit::Error& error) {
     ASSERT_TRUE(error.Code().has_value());
     EXPECT_EQ(*error.Code(), openpit::ParamErrorCode::AssetEmpty);
+  }
+}
+
+//------------------------------------------------------------------------------
+// Decimal parameters
+
+TEST(ParamDecimal, RejectsPrecisionLoss) {
+  for (const char* input : {
+           "999999999999999999999.000000000000000001",
+           "0.00000000000000000000000000001",
+       }) {
+    SCOPED_TRACE(input);
+    try {
+      (void)PositionSize::FromString(input);
+      FAIL() << "expected position size precision loss to fail";
+    } catch (const openpit::Error& error) {
+      EXPECT_EQ(error.Code(), openpit::ParamErrorCode::InvalidFormat);
+    }
+    try {
+      (void)Quantity::FromString(input);
+      FAIL() << "expected quantity precision loss to fail";
+    } catch (const openpit::Error& error) {
+      EXPECT_EQ(error.Code(), openpit::ParamErrorCode::InvalidFormat);
+    }
+  }
+}
+
+TEST(ParamDecimal, PreservesExactBoundaries) {
+  for (const char* input : {
+           "79228162514264337593543950335",
+           "0.0000000000000000000000000001",
+       }) {
+    SCOPED_TRACE(input);
+    EXPECT_EQ(PositionSize::FromString(input).ToString(), input);
+    EXPECT_EQ(Quantity::FromString(input).ToString(), input);
   }
 }
 

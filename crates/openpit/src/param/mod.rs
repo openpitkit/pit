@@ -22,9 +22,9 @@
 //! floating-point arithmetic internally.
 //! [`Leverage`] is represented as fixed-point integer with scale `10`.
 //!
-//! Prefer exact constructors such as `from_str` or `from_decimal_rounded` in
-//! domain code. `from_f64` and related helpers exist for integration
-//! boundaries that already expose floating-point inputs.
+//! Prefer exact constructors such as `from_str` in domain code.
+//! `from_f64` and related helpers exist for integration boundaries that
+//! already expose floating-point inputs.
 //!
 //! # Type categories
 //!
@@ -445,7 +445,10 @@ macro_rules! define_non_negative_value_type {
                 Self::new(decimal)
             }
 
-            /// Creates a value from a string representation.
+            /// Creates a value from a string representation without rounding.
+            ///
+            /// Values exceeding decimal precision or range return
+            /// [`Error::InvalidFormat`](super::Error::InvalidFormat).
             ///
             /// # Examples
             ///
@@ -462,7 +465,7 @@ macro_rules! define_non_negative_value_type {
             /// Returns [`Error::Negative`](super::Error::Negative) when parsed value is negative.
             #[allow(clippy::should_implement_trait)]
             pub fn from_str(s: &str) -> Result<Self, super::Error> {
-                let decimal = s.parse::<rust_decimal::Decimal>().map_err(|_| {
+                let decimal = rust_decimal::Decimal::from_str_exact(s).map_err(|_| {
                     super::Error::InvalidFormat {
                         param: Self::KIND,
                         input: s.into(),
@@ -793,7 +796,10 @@ macro_rules! define_signed_value_type {
                 Ok(Self::new(decimal))
             }
 
-            /// Creates a value from a string representation.
+            /// Creates a value from a string representation without rounding.
+            ///
+            /// Values exceeding decimal precision or range return
+            /// [`Error::InvalidFormat`](super::Error::InvalidFormat).
             ///
             /// # Examples
             ///
@@ -812,7 +818,7 @@ macro_rules! define_signed_value_type {
             /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat) when string cannot be parsed.
             #[allow(clippy::should_implement_trait)]
             pub fn from_str(s: &str) -> Result<Self, super::Error> {
-                let decimal = s.parse::<rust_decimal::Decimal>().map_err(|_| {
+                let decimal = rust_decimal::Decimal::from_str_exact(s).map_err(|_| {
                     super::Error::InvalidFormat {
                         param: Self::KIND,
                         input: s.into(),
@@ -1247,11 +1253,76 @@ macro_rules! test_value_type_common_methods {
 #[cfg(test)]
 #[allow(clippy::wrong_self_convention)]
 mod tests {
-    use super::{Error, ParamKind, RoundingStrategy};
+    use super::{Error, ParamKind, PositionSize, Quantity, RoundingStrategy};
     use rust_decimal::Decimal;
 
     define_non_negative_value_type!(TestUnsigned, ParamKind::Quantity);
     define_signed_value_type!(TestSigned, ParamKind::Price);
+
+    #[test]
+    fn exact_string_constructors_reject_precision_loss() {
+        for input in [
+            "999999999999999999999.000000000000000001",
+            "0.00000000000000000000000000001",
+            "79228162514264337593543950336",
+        ] {
+            assert_eq!(
+                PositionSize::from_str(input),
+                Err(Error::InvalidFormat {
+                    param: ParamKind::PositionSize,
+                    input: input.into(),
+                }),
+                "{input}",
+            );
+            assert_eq!(
+                Quantity::from_str(input),
+                Err(Error::InvalidFormat {
+                    param: ParamKind::Quantity,
+                    input: input.into(),
+                }),
+                "{input}",
+            );
+            let negative = format!("-{input}");
+            assert_eq!(
+                PositionSize::from_str(&negative),
+                Err(Error::InvalidFormat {
+                    param: ParamKind::PositionSize,
+                    input: negative.clone().into(),
+                }),
+                "{negative}",
+            );
+        }
+    }
+
+    #[test]
+    fn exact_string_constructors_preserve_decimal_boundaries() {
+        for scale in 0..=28 {
+            let expected = Decimal::from_parts(u32::MAX, u32::MAX, u32::MAX, false, scale);
+            let input = expected.to_string();
+            assert_eq!(
+                PositionSize::from_str(&input)
+                    .expect("representable position size")
+                    .to_decimal(),
+                expected,
+                "{input}",
+            );
+            assert_eq!(
+                Quantity::from_str(&input)
+                    .expect("representable quantity")
+                    .to_decimal(),
+                expected,
+                "{input}",
+            );
+            let negative = -expected;
+            assert_eq!(
+                PositionSize::from_str(&negative.to_string())
+                    .expect("representable negative position size")
+                    .to_decimal(),
+                negative,
+                "{negative}",
+            );
+        }
+    }
 
     #[test]
     fn error_display_messages_are_stable() {

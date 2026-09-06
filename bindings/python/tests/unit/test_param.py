@@ -129,6 +129,35 @@ def test_param_numeric_wrappers_accept_and_validate_values() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [
+        "999999999999999999999.000000000000000001",
+        "0.00000000000000000000000000001",
+    ],
+)
+def test_param_exact_constructors_reject_precision_loss(value: str) -> None:
+    for constructor in (openpit.param.PositionSize, openpit.param.Quantity):
+        with pytest.raises(ValueError, match="invalid format"):
+            constructor(value)
+        with pytest.raises(ValueError, match="invalid format"):
+            constructor(Decimal(value))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [
+        "79228162514264337593543950335",
+        "0.0000000000000000000000000001",
+    ],
+)
+def test_param_exact_constructors_preserve_boundaries(value: str) -> None:
+    for constructor in (openpit.param.PositionSize, openpit.param.Quantity):
+        assert str(constructor(value)) == value
+
+
+@pytest.mark.unit
 def test_trade_amount_quantity_factory_accepts_all_supported_inputs() -> None:
     from_quantity = openpit.param.TradeAmount.quantity(openpit.param.Quantity("10.5"))
     from_str = openpit.param.TradeAmount.quantity("11.5")

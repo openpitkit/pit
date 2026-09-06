@@ -67,6 +67,42 @@ func TestPositionSizeFromString(t *testing.T) {
 	}
 }
 
+func TestDecimalStringPrecision(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"999999999999999999999.000000000000000001",
+		"0.00000000000000000000000000001",
+	} {
+		if _, err := NewPositionSizeFromString(input); !errors.Is(err, ErrInvalidFormat) {
+			t.Fatalf("NewPositionSizeFromString(%q) error = %v, want ErrInvalidFormat", input, err)
+		}
+		if _, err := NewQuantityFromString(input); !errors.Is(err, ErrInvalidFormat) {
+			t.Fatalf("NewQuantityFromString(%q) error = %v, want ErrInvalidFormat", input, err)
+		}
+	}
+
+	for _, input := range []string{
+		"79228162514264337593543950335",
+		"0.0000000000000000000000000001",
+	} {
+		position, err := NewPositionSizeFromString(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := position.String(); got != input {
+			t.Fatalf("PositionSize.String() = %q, want %q", got, input)
+		}
+		quantity, err := NewQuantityFromString(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := quantity.String(); got != input {
+			t.Fatalf("Quantity.String() = %q, want %q", got, input)
+		}
+	}
+}
+
 func TestPositionSizeFromIntAndUint(t *testing.T) {
 	t.Parallel()
 

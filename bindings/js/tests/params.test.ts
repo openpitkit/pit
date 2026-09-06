@@ -16,6 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { describe, expect, it } from "vitest";
+import { ParamError } from "@openpit/engine";
 
 // See engine.test.ts for the import-resolution scheme. Run `npm run build`
 // first.
@@ -23,6 +24,7 @@ import {
   FillType,
   Leverage,
   ParamKind,
+  PositionSize,
   Price,
   Quantity,
   RoundingStrategies,
@@ -189,6 +191,30 @@ describe("rounding via fromStringRounded", () => {
 });
 
 describe("invalid input handling", () => {
+  it.each([
+    "999999999999999999999.000000000000000001",
+    "0.00000000000000000000000000001",
+  ])("rejects precision loss for %s", (input) => {
+    for (const constructor of [PositionSize, Quantity]) {
+      let error: unknown;
+      try {
+        constructor.fromString(input);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(ParamError);
+      expect(error).toMatchObject({ code: "InvalidFormat", input });
+    }
+  });
+
+  it.each(["79228162514264337593543950335", "0.0000000000000000000000000001"])(
+    "preserves the exact boundary %s",
+    (input) => {
+      expect(PositionSize.fromString(input).toString()).toBe(input);
+      expect(Quantity.fromString(input).toString()).toBe(input);
+    },
+  );
+
   it("throws ParamError on a malformed decimal string", () => {
     expect(() => Price.fromString("not-a-number")).toThrowError(
       /invalid format/,
