@@ -21,18 +21,54 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
+
+# Placeholder to release asset. The port installs the prebuilt engine itself, so
+# every asset it can select needs its digest pinned in the rendered portfile.
+RUNTIME_ASSETS = {
+    "@OPENPIT_RUNTIME_SHA512_LINUX_X64@": (
+        "openpit-ffi--linux-amd64-libopenpit_ffi.so"
+    ),
+    "@OPENPIT_RUNTIME_SHA512_LINUX_ARM64@": (
+        "openpit-ffi--linux-arm64-libopenpit_ffi.so"
+    ),
+    "@OPENPIT_RUNTIME_SHA512_OSX_X64@": (
+        "openpit-ffi--darwin-amd64-libopenpit_ffi.dylib"
+    ),
+    "@OPENPIT_RUNTIME_SHA512_OSX_ARM64@": (
+        "openpit-ffi--darwin-arm64-libopenpit_ffi.dylib"
+    ),
+    "@OPENPIT_RUNTIME_SHA512_WINDOWS_X64@": (
+        "openpit-ffi--windows-amd64-openpit_ffi.dll"
+    ),
+    "@OPENPIT_IMPLIB_SHA512_WINDOWS_X64@": (
+        "openpit-ffi--windows-amd64-openpit_ffi.dll.lib"
+    ),
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--package-version", required=True)
+    parser.add_argument("--runtime-dir", type=Path, required=True)
+    parser.add_argument("--runtime-url-base", required=True)
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument("--source-ref", required=True)
     parser.add_argument("--source-sha512", required=True)
     parser.add_argument("--version", required=True)
     return parser.parse_args()
+
+
+def runtime_digests(runtime_dir: Path) -> dict[str, str]:
+    digests = {}
+    for placeholder, asset in RUNTIME_ASSETS.items():
+        path = runtime_dir / asset
+        if not path.is_file():
+            raise FileNotFoundError(f"missing runtime asset {path}")
+        digests[placeholder] = hashlib.sha512(path.read_bytes()).hexdigest()
+    return digests
 
 
 def render(template: Path, replacements: dict[str, str]) -> str:
@@ -49,11 +85,13 @@ def main() -> None:
     root = Path(__file__).resolve().parent.parent / "packaging" / "vcpkg" / "openpit"
     replacements = {
         "@OPENPIT_PACKAGE_VERSION@": args.package_version,
+        "@OPENPIT_RUNTIME_URL_BASE@": args.runtime_url_base,
         "@OPENPIT_RUNTIME_VERSION@": args.runtime_version,
         "@OPENPIT_SOURCE_REF@": args.source_ref,
         "@OPENPIT_SOURCE_SHA512@": args.source_sha512,
         "@OPENPIT_VERSION@": args.version,
     }
+    replacements.update(runtime_digests(args.runtime_dir))
 
     args.destination.mkdir(parents=True, exist_ok=True)
     (args.destination / "portfile.cmake").write_text(

@@ -15,6 +15,15 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
+# The C++ layer is a header-only wrapper around the C ABI, so a debug variant
+# would build the same headers twice and install nothing extra.
+set(VCPKG_BUILD_TYPE release)
+# The engine itself ships as a prebuilt shared library.
+set(VCPKG_LIBRARY_LINKAGE dynamic)
+# That prebuilt engine is released in one flavour, so there is no debug binary
+# to pair it with and nothing to gain from installing a second copy.
+set(VCPKG_POLICY_MISMATCHED_NUMBER_OF_BINARIES enabled)
+
 vcpkg_from_github(
   OUT_SOURCE_PATH SOURCE_PATH
   REPO openpitkit/pit
@@ -22,29 +31,99 @@ vcpkg_from_github(
   SHA512 @OPENPIT_SOURCE_SHA512@
   HEAD_REF main)
 
-set(openpit_cmake_options
-  "-DOPENPIT_CPP_BUILD_TESTS=OFF"
-  "-DOPENPIT_PACKAGE_VERSION=@OPENPIT_PACKAGE_VERSION@"
-  "-DOPENPIT_RUNTIME_VERSION=@OPENPIT_RUNTIME_VERSION@")
+# Select the engine for the TARGET triplet. The upstream resolver in
+# OpenPitDownloadRuntime.cmake keys off the build host instead, which is wrong
+# here, so the port resolves the asset itself and hands the path to the
+# exported config below - that also keeps the config off the network.
+if(VCPKG_TARGET_IS_WINDOWS)
+  if(NOT VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+    message(FATAL_ERROR
+      "openpit: no prebuilt engine for windows-${VCPKG_TARGET_ARCHITECTURE}")
+  endif()
+  set(openpit_runtime_asset "openpit-ffi--windows-amd64-openpit_ffi.dll")
+  set(openpit_runtime_sha512 "@OPENPIT_RUNTIME_SHA512_WINDOWS_X64@")
+  set(openpit_runtime_file "openpit_ffi.dll")
+  set(openpit_implib_asset "openpit-ffi--windows-amd64-openpit_ffi.dll.lib")
+  set(openpit_implib_sha512 "@OPENPIT_IMPLIB_SHA512_WINDOWS_X64@")
+  set(openpit_implib_file "openpit_ffi.lib")
+elseif(VCPKG_TARGET_IS_OSX)
+  set(openpit_runtime_file "libopenpit_ffi.dylib")
+  if(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm64")
+    set(openpit_runtime_asset "openpit-ffi--darwin-arm64-libopenpit_ffi.dylib")
+    set(openpit_runtime_sha512 "@OPENPIT_RUNTIME_SHA512_OSX_ARM64@")
+  elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+    set(openpit_runtime_asset "openpit-ffi--darwin-amd64-libopenpit_ffi.dylib")
+    set(openpit_runtime_sha512 "@OPENPIT_RUNTIME_SHA512_OSX_X64@")
+  else()
+    message(FATAL_ERROR
+      "openpit: no prebuilt engine for osx-${VCPKG_TARGET_ARCHITECTURE}")
+  endif()
+elseif(VCPKG_TARGET_IS_LINUX)
+  set(openpit_runtime_file "libopenpit_ffi.so")
+  if(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm64")
+    set(openpit_runtime_asset "openpit-ffi--linux-arm64-libopenpit_ffi.so")
+    set(openpit_runtime_sha512 "@OPENPIT_RUNTIME_SHA512_LINUX_ARM64@")
+  elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+    set(openpit_runtime_asset "openpit-ffi--linux-amd64-libopenpit_ffi.so")
+    set(openpit_runtime_sha512 "@OPENPIT_RUNTIME_SHA512_LINUX_X64@")
+  else()
+    message(FATAL_ERROR
+      "openpit: no prebuilt engine for linux-${VCPKG_TARGET_ARCHITECTURE}")
+  endif()
+else()
+  message(FATAL_ERROR "openpit: unsupported target platform")
+endif()
 
-# The release pipeline supplies a local runtime only while its GitHub release
-# is not public yet. Normal registry consumers resolve the published runtime.
-if(DEFINED ENV{OPENPIT_VCPKG_RUNTIME_LIBRARY}
-    AND NOT "$ENV{OPENPIT_VCPKG_RUNTIME_LIBRARY}" STREQUAL "")
-  list(APPEND openpit_cmake_options
-    "-DOPENPIT_RUNTIME_LIBRARY=$ENV{OPENPIT_VCPKG_RUNTIME_LIBRARY}")
+vcpkg_download_distfile(openpit_runtime_path
+  URLS "@OPENPIT_RUNTIME_URL_BASE@/${openpit_runtime_asset}"
+  FILENAME "${openpit_runtime_asset}"
+  SHA512 "${openpit_runtime_sha512}")
+
+if(VCPKG_TARGET_IS_WINDOWS)
+  vcpkg_download_distfile(openpit_implib_path
+    URLS "@OPENPIT_RUNTIME_URL_BASE@/${openpit_implib_asset}"
+    FILENAME "${openpit_implib_asset}"
+    SHA512 "${openpit_implib_sha512}")
 endif()
 
 vcpkg_cmake_configure(
   SOURCE_PATH "${SOURCE_PATH}/bindings/cpp"
-  OPTIONS ${openpit_cmake_options})
+  OPTIONS
+    "-DOPENPIT_CPP_BUILD_TESTS=OFF"
+    "-DOPENPIT_PACKAGE_VERSION=@OPENPIT_PACKAGE_VERSION@"
+    "-DOPENPIT_RUNTIME_VERSION=@OPENPIT_RUNTIME_VERSION@")
 
 vcpkg_cmake_install()
 vcpkg_cmake_config_fixup(CONFIG_PATH lib/cmake/OpenPit)
 
-file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug")
-file(INSTALL "${SOURCE_PATH}/LICENSE"
-  DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")
-file(INSTALL "${SOURCE_PATH}/OWNERS"
-  DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")
+if(VCPKG_TARGET_IS_WINDOWS)
+  file(INSTALL "${openpit_runtime_path}"
+    DESTINATION "${CURRENT_PACKAGES_DIR}/bin"
+    RENAME "${openpit_runtime_file}")
+  file(INSTALL "${openpit_implib_path}"
+    DESTINATION "${CURRENT_PACKAGES_DIR}/lib"
+    RENAME "${openpit_implib_file}")
+  set(openpit_runtime_dir "bin")
+else()
+  file(INSTALL "${openpit_runtime_path}"
+    DESTINATION "${CURRENT_PACKAGES_DIR}/lib"
+    RENAME "${openpit_runtime_file}")
+  set(openpit_runtime_dir "lib")
+endif()
+
+# Point the exported config at the engine this port just installed. The
+# resolver returns on the first branch when the path is set, so a consumer
+# never reaches for a release asset. The config lives in share/${PORT}, hence
+# two levels up.
+set(openpit_config_prelude
+  "set(OPENPIT_RUNTIME_LIBRARY \"\${CMAKE_CURRENT_LIST_DIR}/../../${openpit_runtime_dir}/${openpit_runtime_file}\")")
+if(VCPKG_TARGET_IS_WINDOWS)
+  string(APPEND openpit_config_prelude
+    "\nset(OPENPIT_RUNTIME_IMPORT_LIBRARY \"\${CMAKE_CURRENT_LIST_DIR}/../../lib/${openpit_implib_file}\")")
+endif()
+vcpkg_replace_string(
+  "${CURRENT_PACKAGES_DIR}/share/${PORT}/OpenPitConfig.cmake"
+  "openpit_resolve_runtime()"
+  "${openpit_config_prelude}\nopenpit_resolve_runtime()")
+
 vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")

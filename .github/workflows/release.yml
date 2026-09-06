@@ -822,11 +822,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Linux runtime artifact
+      - name: Download runtime artifacts
         uses: actions/download-artifact@v4
         with:
-          name: runtime-linux-amd64
+          pattern: runtime-*
           path: ${{ runner.temp }}/openpit-vcpkg-runtime
+          merge-multiple: true
 
       - name: Bootstrap vcpkg
         shell: bash
@@ -848,18 +849,13 @@ jobs:
           set -euo pipefail
 
           VCPKG_ROOT="$RUNNER_TEMP/vcpkg"
-          RUNTIME_LIBRARY="$RUNNER_TEMP/openpit-vcpkg-runtime/openpit-ffi--linux-amd64-libopenpit_ffi.so"
+          RUNTIME_DIR="$RUNNER_TEMP/openpit-vcpkg-runtime"
           RENDERED_PORT="$RUNNER_TEMP/openpit-vcpkg-port"
           REGISTRY_DIR="$RUNNER_TEMP/openpit-vcpkg-registry"
           VERIFY_ROOT="$RUNNER_TEMP/openpit-vcpkg-verify"
           SOURCE_REF="v${VERSION}"
           if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
             SOURCE_REF="${GITHUB_SHA}"
-          fi
-
-          if [[ ! -f "${RUNTIME_LIBRARY}" ]]; then
-            echo "::error::missing Linux runtime artifact: ${RUNTIME_LIBRARY}"
-            exit 1
           fi
 
           source_archive="$RUNNER_TEMP/openpit-source.tar.gz"
@@ -871,10 +867,21 @@ jobs:
           python3 scripts/materialize_vcpkg_port.py \
             --destination "${RENDERED_PORT}" \
             --package-version "${BASE_VERSION}" \
+            --runtime-dir "${RUNTIME_DIR}" \
+            --runtime-url-base "https://github.com/openpitkit/pit/releases/download/v${VERSION}" \
             --runtime-version "${VERSION}" \
             --source-ref "${SOURCE_REF}" \
             --source-sha512 "${source_sha512}" \
             --version "${VERSION}"
+
+          # This job runs before publish-github-release, so the release assets
+          # the rendered port points at do not exist yet. Seed the vcpkg
+          # download cache with the artifacts built in this run: the digests
+          # match by construction, so verification below installs the very
+          # binaries that the release will carry, without reaching the network
+          # and without the port having to know it is being tested.
+          mkdir -p "${VCPKG_ROOT}/downloads"
+          cp "${RUNTIME_DIR}"/openpit-ffi--*-* "${VCPKG_ROOT}/downloads/"
 
           if [[ "${RELEASE_MODE}" == "production" ]]; then
             if [[ -z "${VCPKG_REGISTRY_PUSH_TOKEN}" ]]; then
@@ -935,15 +942,15 @@ jobs:
           echo "==> Installing OpenPit from the clean vcpkg registry"
           (
             cd "${VERIFY_ROOT}"
-            OPENPIT_VCPKG_RUNTIME_LIBRARY="${RUNTIME_LIBRARY}" \
-              "${VCPKG_ROOT}/vcpkg" install --triplet x64-linux
+            "${VCPKG_ROOT}/vcpkg" install --triplet x64-linux
           )
+          # No runtime override anywhere below: the consumer must link the
+          # engine the port installed, which is what a real consumer gets.
           cmake -S "${VERIFY_ROOT}/consumer" -B "${VERIFY_ROOT}/consumer-build" \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_MANIFEST_DIR="${VERIFY_ROOT}" \
             -DVCPKG_INSTALLED_DIR="${VERIFY_ROOT}/vcpkg_installed" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DOPENPIT_RUNTIME_LIBRARY="${RUNTIME_LIBRARY}"
+            -DVCPKG_TARGET_TRIPLET=x64-linux
           cmake --build "${VERIFY_ROOT}/consumer-build" --parallel
           "${VERIFY_ROOT}/consumer-build/openpit_cpp_consumer"
 
@@ -960,7 +967,7 @@ jobs:
           {"default":{"openpit":{"baseline":"${VERSION}","port-version":0}}}
           EOF
             cat > "${STAGING_REGISTRY}/versions/o-/openpit.json" <<EOF
-          {"versions":[{"path":"$/ports/openpit","version-semver":"${VERSION}","port-version":0}]}
+          {"versions":[{"path":"$/ports/openpit","version":"${VERSION}","port-version":0}]}
           EOF
           fi
 
