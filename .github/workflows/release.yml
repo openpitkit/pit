@@ -1022,12 +1022,23 @@ jobs:
           fork_owner="${VCPKG_UPSTREAM_FORK%%/*}"
           branch="openpit-${VERSION}"
           worktree="$RUNNER_TEMP/microsoft-vcpkg"
+
+          # Fast-forward the fork server-side. Branching from upstream/master
+          # instead would push microsoft/vcpkg history the fork does not have,
+          # including .github/workflows changes, which a push token without the
+          # workflow scope is refused. Everything below then pushes a single
+          # port commit on top of a fork that already matches upstream.
+          if ! GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh api --method POST \
+              "repos/${VCPKG_UPSTREAM_FORK}/merge-upstream" \
+              --field branch=master; then
+            echo "::error::cannot fast-forward ${VCPKG_UPSTREAM_FORK} master onto microsoft/vcpkg; the fork must carry no local commits on master"
+            exit 1
+          fi
+
           git clone \
             "https://x-access-token:${VCPKG_UPSTREAM_PUSH_TOKEN}@github.com/${VCPKG_UPSTREAM_FORK}.git" \
             "${worktree}"
-          git -C "${worktree}" remote add upstream https://github.com/microsoft/vcpkg.git
-          git -C "${worktree}" fetch upstream master
-          git -C "${worktree}" checkout -B "${branch}" upstream/master
+          git -C "${worktree}" checkout -B "${branch}" origin/master
           git -C "${worktree}" config user.name "github-actions[bot]"
           git -C "${worktree}" config user.email "github-actions[bot]@users.noreply.github.com"
           rm -rf "${worktree}/ports/openpit"
