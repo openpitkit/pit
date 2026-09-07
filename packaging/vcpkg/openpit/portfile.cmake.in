@@ -31,10 +31,8 @@ vcpkg_from_github(
   SHA512 @OPENPIT_SOURCE_SHA512@
   HEAD_REF main)
 
-# Select the engine for the TARGET triplet. The upstream resolver in
-# OpenPitDownloadRuntime.cmake keys off the build host instead, which is wrong
-# here, so the port resolves the asset itself and hands the path to the
-# exported config below - that also keeps the config off the network.
+# Select the engine for the target triplet and supply it to both the package
+# build and the exported config. All downloads stay in the vcpkg asset cache.
 if(VCPKG_TARGET_IS_WINDOWS)
   if(NOT VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
     message(FATAL_ERROR
@@ -79,16 +77,21 @@ vcpkg_download_distfile(openpit_runtime_path
   FILENAME "${openpit_runtime_asset}"
   SHA512 "${openpit_runtime_sha512}")
 
+set(openpit_runtime_options
+  "-DOPENPIT_RUNTIME_LIBRARY=${openpit_runtime_path}")
 if(VCPKG_TARGET_IS_WINDOWS)
   vcpkg_download_distfile(openpit_implib_path
     URLS "@OPENPIT_RUNTIME_URL_BASE@/${openpit_implib_asset}"
     FILENAME "${openpit_implib_asset}"
     SHA512 "${openpit_implib_sha512}")
+  list(APPEND openpit_runtime_options
+    "-DOPENPIT_RUNTIME_IMPORT_LIBRARY=${openpit_implib_path}")
 endif()
 
 vcpkg_cmake_configure(
   SOURCE_PATH "${SOURCE_PATH}/bindings/cpp"
   OPTIONS
+    ${openpit_runtime_options}
     "-DOPENPIT_CPP_BUILD_TESTS=OFF"
     "-DOPENPIT_PACKAGE_VERSION=@OPENPIT_PACKAGE_VERSION@"
     "-DOPENPIT_RUNTIME_VERSION=@OPENPIT_RUNTIME_VERSION@")
@@ -121,9 +124,16 @@ if(VCPKG_TARGET_IS_WINDOWS)
   string(APPEND openpit_config_prelude
     "\nset(OPENPIT_RUNTIME_IMPORT_LIBRARY \"\${CMAKE_CURRENT_LIST_DIR}/../../lib/${openpit_implib_file}\")")
 endif()
+set(openpit_config_runtime "${openpit_config_prelude}\nopenpit_resolve_runtime()")
+if(VCPKG_TARGET_IS_LINUX)
+  # The release ELF has no SONAME. Link by the installed library name so that
+  # consumers do not embed the absolute package path in DT_NEEDED.
+  string(APPEND openpit_config_runtime
+    "\nset_target_properties(OpenPit::runtime PROPERTIES IMPORTED_NO_SONAME TRUE)")
+endif()
 vcpkg_replace_string(
   "${CURRENT_PACKAGES_DIR}/share/${PORT}/OpenPitConfig.cmake"
   "openpit_resolve_runtime()"
-  "${openpit_config_prelude}\nopenpit_resolve_runtime()")
+  "${openpit_config_runtime}")
 
 vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")
