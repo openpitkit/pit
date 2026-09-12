@@ -4,14 +4,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Page not found - OpenPit Go SDK</title>
+  <title>Pit Officer - OpenPit</title>
 
-  <meta name="description" content="Go SDK for OpenPit - Pre-trade Integrity Toolkit. Page not found." />
-  <link rel="canonical" href="https://go.openpit.dev/openpit" />
-
-  <meta name="go-import" content="go.openpit.dev/openpit git https://github.com/openpitkit/pit-go">
-  <meta name="go-source"
-    content="go.openpit.dev/openpit https://github.com/openpitkit/pit-go https://github.com/openpitkit/pit-go/tree/main{/dir} https://github.com/openpitkit/pit-go/blob/main{/dir}/{file}#L{line}">
+  <meta name="description" content="Pit Officer - control plane over the OpenPit pre-trade risk engine." />
+  <link rel="canonical" href="https://go.openpit.dev/officer/" />
 
   <meta name="go-import" content="go.openpit.dev/officer git https://github.com/openpitkit/officer">
   <meta name="go-source"
@@ -19,7 +15,8 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap"
+    rel="stylesheet" />
   <link rel="stylesheet" href="/assets/styles.css" />
 
   <link rel="icon" href="/favicon.ico">
@@ -44,7 +41,7 @@
     <header style="text-align: center; margin-bottom: 28px;">
       <div style="margin-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 16px;">
-          <img src="/assets/pit-logo.svg" width="512" height="512"
+          <img src="/assets/pit-logo.svg" width="512" height="512" alt="OpenPit logo"
             style="width: 56px; height: 56px; display: block;" />
           <div style="font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em;">
             OpenPit
@@ -57,42 +54,54 @@
 
       <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 28px;">
         <span class="tag">pre-trade risk</span>
+        <span class="tag">control plane</span>
         <span class="tag">go</span>
-        <span class="tag">python</span>
-        <span class="tag">rust</span>
-        <span class="tag">c api</span>
+        <span class="tag">rest api</span>
+        <span class="tag">mcp</span>
         <span class="tag">open source</span>
         <span class="tag">apache 2.0</span>
       </div>
 
-      <h1 style="font-size: 2.6rem; margin-bottom: 6px;">404</h1>
-      <div style="font-size: 1rem; color: var(--muted);">Not Found</div>
+      <h1 style="max-width: 500px; margin: 0 auto;">
+        <span style="display: block; font-size: 1.5rem; font-weight: 700; color: var(--text); line-height: 1.35;">
+          Pit Officer
+        </span>
+      </h1>
     </header>
 
     <main style="flex: 1;">
       <div style="display: flex; flex-direction: column; gap: 14px;">
 
-        <!-- Go SDK -->
-        <a class="card" href="https://pkg.go.dev/go.openpit.dev/openpit" target="_blank" rel="noopener"
+        <!-- Pit Officer -->
+        <a class="card" href="https://pkg.go.dev/go.openpit.dev/officer" target="_blank" rel="noopener"
           style="border-top: 2px solid #ff7a00;">
-          <div class="card-title">Go SDK</div>
+          <div class="card-title">Pit Officer</div>
           <div class="card-desc">
-            Public Go module for embedding OpenPit into Go services.
-            <br /><code class="card-cmd">go get go.openpit.dev/openpit</code>
+            Control plane that hydrates, observes and operates the OpenPit engine.
+            <br /><code class="card-cmd">go get go.openpit.dev/officer</code>
           </div>
-          <div class="card-link">→ go.openpit.dev/openpit</div>
+          <div class="card-link">→ go.openpit.dev/officer</div>
         </a>
 
-        <a href="https://github.com/openpitkit/pit-go" target="_blank" rel="noopener" class="card">
+        <a class="card" href="https://pkg.go.dev/go.openpit.dev/officer/framework" target="_blank" rel="noopener">
+          <div class="card-title">Framework</div>
+          <div class="card-desc">
+            Reusable module for composing your own control plane on the same core.
+            <br /><code class="card-cmd">go get go.openpit.dev/officer/framework</code>
+          </div>
+          <div class="card-link">→ go.openpit.dev/officer/framework</div>
+        </a>
+
+        <a href="https://github.com/openpitkit/officer" target="_blank" rel="noopener" class="card">
           <div class="card-title">Source</div>
-          <div class="card-desc">Go bindings repository</div>
-          <div class="card-link">→ github.com/openpitkit/pit-go</div>
+          <div class="card-desc">Pit Officer repository</div>
+          <div class="card-link">→ github.com/openpitkit/officer</div>
         </a>
 
-        <a href="https://github.com/openpitkit/pit/tree/main/bindings/go" target="_blank" rel="noopener" class="card">
-          <div class="card-title">Monorepo</div>
-          <div class="card-desc">Bindings inside core project</div>
-          <div class="card-link">→ github.com/openpitkit/pit/tree/main/bindings/go</div>
+        <a href="https://go.openpit.dev/openpit/" class="card">
+          <div class="card-title">Go SDK</div>
+          <div class="card-desc">The engine Pit Officer is built on</div>
+          <div class="card-link">→ go.openpit.dev/openpit</div>
         </a>
 
         <a href="https://openpit.dev/" class="card">
@@ -109,7 +118,7 @@
                   flex-wrap: wrap; gap: 12px; font-size: 0.7rem; color: var(--muted);">
 
         <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: center;">
-          <a href="https://github.com/openpitkit/pit" target="_blank" rel="noopener" class="foot-link">
+          <a href="https://github.com/openpitkit/officer" target="_blank" rel="noopener" class="foot-link">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"
               style="display:inline;vertical-align:middle;margin-right:5px;">
               <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577
@@ -125,7 +134,7 @@
             </svg>
             GitHub
           </a>
-          <a href="https://github.com/openpitkit/pit/blob/main/LICENSE" target="_blank" rel="noopener"
+          <a href="https://github.com/openpitkit/officer/blob/main/LICENSE" target="_blank" rel="noopener"
             class="foot-link">Apache 2.0</a>
         </div>
 
