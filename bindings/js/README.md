@@ -200,4 +200,6 @@ Workers usage is zero-config.
 
 Apache-2.0. See
 [`LICENSE`](https://github.com/openpitkit/pit/blob/main/LICENSE) and
-[`OWNERS`](https://github.com/openpitkit/pit/blob/main/OWNERS).
+[`OWNERS`](https://github.com/openpitkit/pit/blob/main/OWNERS). Licenses of the
+third-party crates compiled into the WebAssembly module are in
+[`THIRD-PARTY-LICENSES`](https://github.com/openpitkit/pit/blob/main/THIRD-PARTY-LICENSES).

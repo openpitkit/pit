@@ -69,9 +69,10 @@ install: ensure-node
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # This installs a lot: the wasm32 Rust target, wasm-bindgen-cli, JS dev
-    # dependencies, and the Python dev install. If you only build some
-    # components, read this recipe and run just the parts you need instead.
+    # This installs a lot: the wasm32 Rust target, wasm-bindgen-cli,
+    # cargo-about, JS dev dependencies, and the Python dev install. If you only
+    # build some components, read this recipe and run just the parts you need
+    # instead.
 
     # 1. wasm32 Rust target for the JS/WASM binding.
     if rustup target list --installed | grep -qx wasm32-unknown-unknown; then
@@ -110,7 +111,28 @@ install: ensure-node
         || cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
     fi
 
-    # 3. JS dev dependencies. Prefer a reproducible install from the committed
+    # 3. cargo-about at the version CI pins, for gen-third-party-licenses.
+    CA_VERSION="$(sed -n 's/^CI_CARGO_ABOUT=//p' .github/ci-versions.env)"
+    if [[ -z "${CA_VERSION}" ]]; then
+      echo "error: CI_CARGO_ABOUT is missing from .github/ci-versions.env" >&2
+      exit 1
+    fi
+    CA_INSTALLED="$(cargo about --version 2>/dev/null || true)"
+    if [[ "${CA_INSTALLED##* }" == "${CA_VERSION}" ]]; then
+      echo "cargo-about ${CA_VERSION}: already installed"
+    else
+      echo "cargo-about ${CA_VERSION}: installing"
+      # The binary sits behind the `cli` feature: without it cargo install
+      # exits 0 and installs nothing.
+      cargo install cargo-about --version "${CA_VERSION}" --locked --features cli
+      CA_INSTALLED="$(cargo about --version 2>/dev/null || true)"
+      if [[ "${CA_INSTALLED##* }" != "${CA_VERSION}" ]]; then
+        echo "error: cargo-about ${CA_VERSION} is not on PATH after install" >&2
+        exit 1
+      fi
+    fi
+
+    # 4. JS dev dependencies. Prefer a reproducible install from the committed
     # lockfile, falling back to a plain install when it is absent.
     echo "bindings/js: installing JS dev dependencies"
     if [[ -f bindings/js/package-lock.json ]]; then
@@ -119,10 +141,10 @@ install: ensure-node
       ( cd bindings/js && npm install --no-audit --no-fund )
     fi
 
-    # 4. Python dev install (reuses the existing debug recipe).
+    # 5. Python dev install (reuses the existing debug recipe).
     just python-develop-debug
 
-    # 5. wasm-opt (binaryen) is optional: it only enables the release -Oz pass
+    # 6. wasm-opt (binaryen) is optional: it only enables the release -Oz pass
     # and is not a cargo tool. Never fail the recipe when it is missing.
     if command -v wasm-opt >/dev/null 2>&1; then
       echo "wasm-opt: already installed"
@@ -851,6 +873,47 @@ gen-api-c: _ensure-python-env
 # Generate the committed FFI artifacts. Documentation is generated only in the
 # CI pipeline (see pipeline.just), never by the local delivery gate.
 gen-all: gen-api-c
+
+# THIRD-PARTY-LICENSES holds the notices of every crate the released binaries
+# are built from. Generating it needs cargo-about at the CI_CARGO_ABOUT version
+# of .github/ci-versions.env, which `just install` provides.
+
+# Regenerate THIRD-PARTY-LICENSES from the locked dependencies.
+[unix]
+gen-third-party-licenses output="THIRD-PARTY-LICENSES":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    expected="$(sed -n 's/^CI_CARGO_ABOUT=//p' .github/ci-versions.env)"
+    if [[ -z "${expected}" ]]; then
+      echo "error: CI_CARGO_ABOUT is missing from .github/ci-versions.env" >&2
+      exit 1
+    fi
+    installed="$(cargo about --version 2>/dev/null || true)"
+    if [[ "${installed##* }" != "${expected}" ]]; then
+      echo "error: cargo-about ${expected} is required, found '${installed}': run just install" >&2
+      exit 1
+    fi
+    mkdir -p "$(dirname "{{ output }}")"
+    generated="$(mktemp)"
+    trap 'rm -f "${generated}"' EXIT
+    cargo about generate --workspace --locked --fail \
+      --config packaging/third-party-licenses/about.toml \
+      --output-file "${generated}" \
+      packaging/third-party-licenses/about.hbs
+    # Some crates ship their license texts with CRLF endings. The repository
+    # checks text out as LF, so keep the file LF-only: otherwise CI regenerates
+    # CRLF against an LF checkout and the byte-exact check fails.
+    tr -d '\r' < "${generated}" > "{{ output }}"
+
+# Fail when THIRD-PARTY-LICENSES no longer matches the locked dependencies.
+[unix]
+check-third-party-licenses: (gen-third-party-licenses "target/THIRD-PARTY-LICENSES")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! diff -u THIRD-PARTY-LICENSES target/THIRD-PARTY-LICENSES; then
+      echo "error: THIRD-PARTY-LICENSES is stale: run just gen-third-party-licenses" >&2
+      exit 1
+    fi
 
 # Build FFI in the requested mode.
 [unix]

@@ -41,6 +41,7 @@ For normal end-user installation, use the published [GitHub release assets](http
 - `openpit_ffi.dll` on Windows
 - `LICENSE`
 - `OWNERS`
+- `THIRD-PARTY-LICENSES`
 
 If you need local development/debugging, clone this repository and generate the
 header plus the reference docs.

@@ -156,7 +156,8 @@
     "types",
     "README.md",
     "LICENSE",
-    "OWNERS"
+    "OWNERS",
+    "THIRD-PARTY-LICENSES"
   ],
   "scripts": {
     "build:wasm": "node scripts/build-wasm.mjs",

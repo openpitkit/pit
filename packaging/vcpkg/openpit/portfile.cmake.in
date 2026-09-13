@@ -19,7 +19,7 @@
 # would build the same headers twice and install nothing extra.
 set(VCPKG_BUILD_TYPE release)
 # The engine itself ships as a prebuilt shared library.
-set(VCPKG_LIBRARY_LINKAGE dynamic)
+vcpkg_check_linkage(ONLY_DYNAMIC_LIBRARY)
 # That prebuilt engine is released in one flavour, so there is no debug binary
 # to pair it with and nothing to gain from installing a second copy.
 set(VCPKG_POLICY_MISMATCHED_NUMBER_OF_BINARIES enabled)
@@ -136,4 +136,6 @@ vcpkg_replace_string(
   "openpit_resolve_runtime()"
   "${openpit_config_runtime}")
 
-vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")
+vcpkg_install_copyright(FILE_LIST
+  "${SOURCE_PATH}/LICENSE"
+  "${SOURCE_PATH}/THIRD-PARTY-LICENSES")

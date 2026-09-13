@@ -48,6 +48,10 @@ vendor/
 /bindings/c/openpit.h
 /bindings/go/internal/native/openpit.h
 
+# Third-party license texts, reproduced verbatim by cargo-about, and the
+# packaging-time copies of them.
+THIRD-PARTY-LICENSES
+
 # Lock files and dependency manifests: machine-written, byte-for-byte.
 Cargo.lock
 go.work.sum
