@@ -17,11 +17,7 @@
 
 package reject
 
-import (
-	"unsafe"
-
-	"go.openpit.dev/openpit/internal/native"
-)
+import "go.openpit.dev/openpit/internal/native"
 
 // Scope identifies whether a reject applies to an order or an account.
 type Scope uint8
@@ -99,10 +95,9 @@ type Reject struct {
 	Details string
 	// Policy name that produced the reject.
 	Policy string
-	// Opaque caller-defined payload copied through reject paths.
-	//
-	// Nil means "not set". Ownership and lifecycle are caller-managed.
-	UserData unsafe.Pointer
+	// Opaque integer token the engine carries verbatim; 0 means not set. The
+	// SDK never inspects or dereferences it.
+	UserData uintptr
 	// Stable machine-readable reject code.
 	Code Code
 	// Reject scope.
@@ -123,7 +118,7 @@ func New(
 		Policy:   policy,
 		Reason:   reason,
 		Details:  details,
-		UserData: nil,
+		UserData: 0,
 	}
 }
 
@@ -153,12 +148,12 @@ func (r Reject) NewHandle() native.PretradeReject {
 	)
 }
 
-// WithUserData returns a copy of Reject with updated UserData.
+// WithUserData returns a copy of Reject with UserData set to userData, an
+// opaque integer token the engine carries verbatim; 0 means not set. The SDK
+// never inspects or dereferences it.
 //
 // Uses copy-on-write semantics. Original instance is unchanged.
-//
-// Caller manages lifetime of userData.
-func (r Reject) WithUserData(userData unsafe.Pointer) Reject {
+func (r Reject) WithUserData(userData uintptr) Reject {
 	r.UserData = userData
 	return r
 }

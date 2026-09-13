@@ -32,8 +32,8 @@ use openpit::pretrade::policies::{
     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
 };
 use openpit::pretrade::{
-    PolicyPreTradeResult, PostTradeContext, PreTradeContext, PreTradePolicy, Reject, RejectCode,
-    RejectScope, Rejects,
+    AccountBlock, PolicyPreTradeResult, PostTradeContext, PreTradeContext, PreTradePolicy, Reject,
+    RejectCode, RejectScope, Rejects,
 };
 use openpit::storage::NoLocking;
 use openpit::{
@@ -144,6 +144,67 @@ fn integration_scenario_rate_limit_then_kill_switch() {
     assert_eq!(kill_switch_reject.scope, RejectScope::Account);
     assert_eq!(kill_switch_reject.code, RejectCode::PnlKillSwitchTriggered);
     assert_eq!(kill_switch_reject.reason, "pnl kill switch triggered");
+}
+
+#[test]
+fn block_with_cause_restores_durable_cause_and_first_cause_wins() {
+    let engine = Engine::builder::<TestOrder, TestReport, ()>()
+        .no_sync()
+        .pre_trade(OrderValidationPolicy::new())
+        .build()
+        .expect("engine must build");
+    let account = AccountId::from_u64(99224416);
+    let accounts = engine.accounts();
+    accounts.block_with_cause(
+        account,
+        AccountBlock::new(
+            "PersistedPnlPolicy",
+            RejectCode::PnlKillSwitchTriggered,
+            "persisted pnl floor breach",
+            "account pnl -501 is below floor -500",
+        )
+        .with_user_data(0xfeed),
+    );
+
+    let assert_restored_cause = || {
+        let rejects = match engine.start_pre_trade(order_aapl_usd("100", "1")) {
+            Ok(_) => panic!("restored block must reject pre-trade"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(rejects.len(), 1);
+        let reject = &rejects[0];
+        assert_eq!(
+            reject.policy, "PersistedPnlPolicy",
+            "restored block policy must be preserved"
+        );
+        assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
+        assert_eq!(reject.reason, "persisted pnl floor breach");
+        assert_eq!(reject.details, "account pnl -501 is below floor -500");
+        assert_eq!(reject.user_data, 0xfeed);
+    };
+
+    assert_restored_cause();
+    accounts.block_with_cause(
+        account,
+        AccountBlock::new(
+            "LaterCompliancePolicy",
+            RejectCode::ComplianceRestriction,
+            "later compliance restriction",
+            "later cause must not replace the persisted cause",
+        )
+        .with_user_data(0xcafe),
+    );
+    assert_restored_cause();
+    accounts.block(account, "later operator block".to_owned());
+    assert_restored_cause();
+
+    accounts.unblock(account);
+    let mut reservation = engine
+        .start_pre_trade(order_aapl_usd("100", "1"))
+        .expect("unblock must clear the restored cause")
+        .execute()
+        .expect("unblocked request must execute");
+    reservation.rollback();
 }
 
 #[test]

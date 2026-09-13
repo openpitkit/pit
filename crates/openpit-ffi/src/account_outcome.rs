@@ -1025,7 +1025,7 @@ mod tests {
                     policy: OpenPitStringView::from_utf8("custom.policy"),
                     reason: OpenPitStringView::from_utf8("blocked"),
                     details: OpenPitStringView::from_utf8("test"),
-                    user_data: std::ptr::null_mut(),
+                    user_data: 0,
                     code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
                 },
             );

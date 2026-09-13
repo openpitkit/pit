@@ -29,7 +29,7 @@ func TestCreateRejectListClampsNegativeReserve(t *testing.T) {
 		NewStringView("policy"),
 		NewStringView("reason"),
 		NewStringView("details"),
-		nil,
+		0,
 	)
 	if !PretradeRejectListPush(list, reject) {
 		t.Fatal("PretradeRejectListPush() = false, want true")
@@ -52,7 +52,7 @@ func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
 			NewStringView("policy"),
 			NewStringView("reason"),
 			NewStringView("details"),
-			nil,
+			0,
 		),
 	) {
 		t.Fatal("PretradeRejectListPush() = false, want true")
@@ -74,8 +74,8 @@ func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
 	if PretradeRejectGetDetails(outOfBounds).IsSet() {
 		t.Fatal("PretradeRejectGetDetails(outOfBounds).IsSet() = true, want false")
 	}
-	if PretradeRejectGetUserData(outOfBounds) != nil {
-		t.Fatalf("PretradeRejectGetUserData(outOfBounds) = %v, want nil", PretradeRejectGetUserData(outOfBounds))
+	if PretradeRejectGetUserData(outOfBounds) != 0 {
+		t.Fatalf("PretradeRejectGetUserData(outOfBounds) = %v, want 0", PretradeRejectGetUserData(outOfBounds))
 	}
 }
 
@@ -91,7 +91,7 @@ func TestRejectListPushRejectsUnknownScope(t *testing.T) {
 			NewStringView("policy"),
 			NewStringView("reason"),
 			NewStringView("details"),
-			nil,
+			0,
 		),
 	)
 	if ok {
@@ -99,5 +99,94 @@ func TestRejectListPushRejectsUnknownScope(t *testing.T) {
 	}
 	if got := PretradeRejectListLen(list); got != 0 {
 		t.Fatalf("PretradeRejectListLen() = %d, want 0", got)
+	}
+}
+
+// A full-width token has its top bit set, so any narrowing conversion on the
+// way through the native lists would lose it.
+func TestUserDataTokenRoundTripsThroughNativeLists(t *testing.T) {
+	const token = ^uintptr(0)
+
+	rejects := CreatePretradeRejectList(1)
+	t.Cleanup(func() { DestroyPretradeRejectList(rejects) })
+	if !PretradeRejectListPush(
+		rejects,
+		CreatePretradeReject(
+			RejectCodeOther,
+			RejectScopeOrder,
+			NewStringView("policy"),
+			NewStringView("reason"),
+			NewStringView("details"),
+			token,
+		),
+	) {
+		t.Fatal("PretradeRejectListPush() = false, want true")
+	}
+	if got := PretradeRejectGetUserData(PretradeRejectListGet(rejects, 0)); got != token {
+		t.Fatalf("reject user data = %#x, want %#x", got, token)
+	}
+
+	blocks := CreatePretradeAccountBlockList(1)
+	t.Cleanup(func() { DestroyPretradeAccountBlockList(blocks) })
+	PretradeAccountBlockListPush(
+		blocks,
+		CreatePretradeAccountBlock(
+			RejectCodeOther,
+			NewStringView("policy"),
+			NewStringView("reason"),
+			NewStringView("details"),
+			token,
+		),
+	)
+	if got := PretradeAccountBlockGetUserData(PretradeAccountBlockListGet(blocks, 0)); got != token {
+		t.Fatalf("account block user data = %#x, want %#x", got, token)
+	}
+}
+
+const (
+	// stackGrowthDepth frames of at least stackFrameBytes each outgrow any
+	// initial goroutine stack, so growStack forces the stack to be copied.
+	stackGrowthDepth = 2000
+	stackFrameBytes  = 256
+)
+
+//go:noinline
+func growStack(depth int) int {
+	var frame [stackFrameBytes]byte
+	frame[depth%len(frame)] = 1
+	if depth == 0 {
+		return int(frame[0])
+	}
+	return growStack(depth-1) + int(frame[(depth+1)%len(frame)])
+}
+
+// A stack copy aborts the process when a pointer-typed slot of a live frame
+// holds a value below 4096, so a small token must never travel as a pointer.
+func TestSmallUserDataTokenSurvivesStackCopy(t *testing.T) {
+	const token uintptr = 1
+
+	reject := CreatePretradeReject(
+		RejectCodeOther,
+		RejectScopeOrder,
+		NewStringView("policy"),
+		NewStringView("reason"),
+		NewStringView("details"),
+		token,
+	)
+	block := CreatePretradeAccountBlock(
+		RejectCodeOther,
+		NewStringView("policy"),
+		NewStringView("reason"),
+		NewStringView("details"),
+		token,
+	)
+
+	growStack(stackGrowthDepth)
+
+	if got := PretradeRejectGetUserData(reject); got != token {
+		t.Fatalf("reject user data = %#x, want %#x", got, token)
+	}
+	if got := PretradeAccountBlockGetUserData(block); got != token {
+		t.Fatalf("account block user data = %#x, want %#x", got, token)
 	}
 }

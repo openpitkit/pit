@@ -2271,17 +2271,16 @@ struct OpenPitPretradeReject {
      */
     OpenPitStringView details;
     /**
-     * Opaque caller-defined token.
+     * Opaque caller-defined integer token.
      *
      * The SDK never inspects, dereferences, or frees this value. Its meaning,
-     * lifetime, and thread-safety are the caller's responsibility. `0` / null
-     * means "not set". See the project Threading Contract for the full lifetime
-     * model.
+     * lifetime, and thread-safety are the caller's responsibility. `0` means "not
+     * set". See the project Threading Contract for the full lifetime model.
      *
      * The token flows through every reject path the SDK exposes (start-stage,
      * main-stage, account-adjustment, batch results) and is preserved on `Clone`.
      */
-    void * user_data;
+    size_t user_data;
     /**
      * Stable machine-readable reject code.
      */
@@ -2309,14 +2308,13 @@ struct OpenPitPretradeAccountBlock {
      */
     OpenPitStringView details;
     /**
-     * Opaque caller-defined token.
+     * Opaque caller-defined integer token.
      *
      * The SDK never inspects, dereferences, or frees this value. Its meaning,
-     * lifetime, and thread-safety are the caller's responsibility. `0` / null
-     * means "not set". See the project Threading Contract for the full lifetime
-     * model.
+     * lifetime, and thread-safety are the caller's responsibility. `0` means "not
+     * set". See the project Threading Contract for the full lifetime model.
      */
-    void * user_data;
+    size_t user_data;
     /**
      * Stable machine-readable reject code.
      */
@@ -6523,6 +6521,47 @@ void openpit_engine_block_account(
     OpenPitEngine * engine,
     OpenPitParamAccountId account_id,
     OpenPitStringView reason
+);
+
+/**
+ * Restores a persisted account block with its original cause.
+ *
+ * Later pre-trade requests are rejected with that cause before any policy
+ * runs. Transaction provenance is not restored, so rollback cannot remove the
+ * restored cause; only `openpit_engine_unblock_account` can. User data is an
+ * opaque bit pattern and refers to nothing the engine knows after restart.
+ *
+ * The first cause in the account's own slot wins. An occupied slot makes this
+ * a successful no-op. Group and engine-wide blocks do not occupy that slot:
+ * this call still inserts the account cause, which checks report before the
+ * group cause and then the engine-wide cause.
+ *
+ * Restore on a newly built engine before pre-trade, account adjustment,
+ * execution-report, drop-copy, policy-reconfiguration, or account-group work
+ * can record a cause for this account, and wait for this call to return. If an
+ * in-flight operation already holds a provisional cause, this succeeds without
+ * replacing it; rollback may then remove it and leave the account unblocked.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer;
+ * - every non-null string pointer in `cause` must address `len` readable
+ *   bytes for the duration of the call;
+ * - a null string pointer is valid only when its length is zero;
+ * - every string in `cause` must be valid UTF-8;
+ * - `cause.code` must be a recognized reject code;
+ * - on failure, if `out_error` is not null, writes a caller-owned
+ *   `OpenPitParamError` pointer that MUST be released with
+ *   `openpit_destroy_param_error`.
+ *
+ * Returns `true` when the cause was accepted, including a no-op. Returns
+ * `false` and writes an `OpenPitParamError` through `out_error` for a null
+ * engine, an unrecognized code, or an invalid string view or UTF-8 string.
+ */
+bool openpit_engine_block_account_with_cause(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id,
+    OpenPitPretradeAccountBlock cause,
+    OpenPitOutParamError out_error
 );
 
 /**

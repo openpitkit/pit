@@ -128,6 +128,9 @@ class PolicyReject:
             flows. ``0`` means "not set". The SDK never inspects it; lifetime
             and thread-safety are caller-managed. See the
             `Threading Contract <https://wiki.openpit.dev/Threading-Contract/>`_.
+            When the engine reads the reject, a negative token or one of
+            ``2**64`` or more raises ``ValueError``, and a 64-bit token that
+            does not fit a narrower platform word raises ``OverflowError``.
     """
 
     code: str

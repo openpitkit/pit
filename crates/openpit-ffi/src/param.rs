@@ -388,7 +388,7 @@ fn import_decimal(value: OpenPitParamDecimal) -> Result<Decimal, String> {
     Ok(Decimal::from_i128_with_scale(value.to_mantissa(), scale))
 }
 
-unsafe fn parse_string_view(value: OpenPitStringView) -> Result<String, String> {
+pub(crate) unsafe fn parse_string_view(value: OpenPitStringView) -> Result<String, String> {
     if value.ptr.is_null() {
         if value.len == 0 {
             return Ok(String::new());

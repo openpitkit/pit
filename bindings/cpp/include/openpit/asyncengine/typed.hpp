@@ -819,6 +819,26 @@ class AsyncAccounts {
       ::openpit::param::AccountId account, std::string reason,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0));
 
+  // Restores a persisted cause on the account queue. The restored cause has no
+  // provenance, so rollback cannot remove it; only `Unblock` can.
+  //
+  // The first cause in the account's own slot wins. Group and engine-wide
+  // blocks do not occupy that slot, so the account cause is reported first.
+  //
+  // Call and await this on a newly built engine before pre-trade, account
+  // adjustment, execution report, drop copy, policy reconfiguration, or
+  // account-group work can record a cause for this account. The queue orders it
+  // only against operations submitted through this async engine. A provisional
+  // cause already in the slot makes this a successful no-op and can later roll
+  // back, leaving no block.
+  //
+  // A malformed cause fails the future with `ErrorCode::TaskFailed` and its
+  // message.
+  [[nodiscard]] Future<std::monostate> BlockWithCause(
+      ::openpit::param::AccountId account,
+      ::openpit::accounts::AccountBlock cause,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0));
+
   // Unblocks `account`; infallible (resolves with `std::monostate`).
   [[nodiscard]] Future<std::monostate> Unblock(
       ::openpit::param::AccountId account,
@@ -1475,6 +1495,19 @@ template <typename Driver>
       account,
       [engine, account, reason = std::move(reason)]() {
         engine->DriverRef().Accounts().Block(account, reason);
+      },
+      timeout);
+}
+
+template <typename Driver>
+[[nodiscard]] Future<std::monostate> AsyncAccounts<Driver>::BlockWithCause(
+    ::openpit::param::AccountId account,
+    ::openpit::accounts::AccountBlock cause, std::chrono::nanoseconds timeout) {
+  AsyncEngine<Driver>* engine = m_engine;
+  return engine->Submit(
+      account,
+      [engine, account, cause = std::move(cause)]() {
+        engine->DriverRef().Accounts().BlockWithCause(account, cause);
       },
       timeout);
 }

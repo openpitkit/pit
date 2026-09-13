@@ -2606,6 +2606,63 @@ pub extern "C" fn openpit_engine_block_account(
 }
 
 #[no_mangle]
+/// Restores a persisted account block with its original cause.
+///
+/// Later pre-trade requests are rejected with that cause before any policy
+/// runs. Transaction provenance is not restored, so rollback cannot remove the
+/// restored cause; only `openpit_engine_unblock_account` can. User data is an
+/// opaque bit pattern and refers to nothing the engine knows after restart.
+///
+/// The first cause in the account's own slot wins. An occupied slot makes this
+/// a successful no-op. Group and engine-wide blocks do not occupy that slot:
+/// this call still inserts the account cause, which checks report before the
+/// group cause and then the engine-wide cause.
+///
+/// Restore on a newly built engine before pre-trade, account adjustment,
+/// execution-report, drop-copy, policy-reconfiguration, or account-group work
+/// can record a cause for this account, and wait for this call to return. If an
+/// in-flight operation already holds a provisional cause, this succeeds
+/// without replacing it; rollback may then remove it and leave the account
+/// unblocked.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - every non-null string pointer in `cause` must address `len` readable
+///   bytes for the duration of the call;
+/// - a null string pointer is valid only when its length is zero;
+/// - every string in `cause` must be valid UTF-8;
+/// - `cause.code` must be a recognized reject code;
+/// - on failure, if `out_error` is not null, writes a caller-owned
+///   `OpenPitParamError` pointer that MUST be released with
+///   `openpit_destroy_param_error`.
+///
+/// Returns `true` when the cause was accepted, including a no-op. Returns
+/// `false` and writes an `OpenPitParamError` through `out_error` for a null
+/// engine, an unrecognized code, or an invalid string view or UTF-8 string.
+pub extern "C" fn openpit_engine_block_account_with_cause(
+    engine: *mut OpenPitEngine,
+    account_id: crate::param::OpenPitParamAccountId,
+    cause: crate::reject::OpenPitPretradeAccountBlock,
+    out_error: crate::last_error::OpenPitOutParamError,
+) -> bool {
+    if engine.is_null() {
+        crate::last_error::write_param_error_unspecified(out_error, "engine is null");
+        return false;
+    }
+    let cause = match cause.try_to_block() {
+        Ok(cause) => cause,
+        Err(message) => {
+            crate::last_error::write_param_error_unspecified(out_error, &message);
+            return false;
+        }
+    };
+    let engine = unsafe { &*engine };
+    let account = openpit::param::AccountId::from_u64(account_id);
+    engine.inner.accounts().block_with_cause(account, cause);
+    true
+}
+
+#[no_mangle]
 /// Unblocks `account`, clearing any block on it.
 ///
 /// Idempotent: a no-op when `account` is not blocked. Both admin blocks and
@@ -3030,7 +3087,7 @@ mod tests {
                 policy: OpenPitStringView::from_utf8("test_policy"),
                 reason: OpenPitStringView::from_utf8("test_reason"),
                 details: OpenPitStringView::from_utf8("test_details"),
-                user_data: std::ptr::null_mut(),
+                user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
             },
@@ -3058,7 +3115,7 @@ mod tests {
                 policy: OpenPitStringView::from_utf8("start.reject"),
                 reason: OpenPitStringView::from_utf8("blocked"),
                 details: OpenPitStringView::from_utf8("by test"),
-                user_data: std::ptr::null_mut(),
+                user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
             },
@@ -3078,7 +3135,7 @@ mod tests {
             policy: OpenPitStringView::from_utf8("pretrade.reject"),
             reason: OpenPitStringView::from_utf8("blocked"),
             details: OpenPitStringView::from_utf8("by test"),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
@@ -3098,7 +3155,7 @@ mod tests {
             policy: OpenPitStringView::from_utf8("pretrade.missing"),
             reason: OpenPitStringView::from_utf8("missing field"),
             details: OpenPitStringView::from_utf8("by test"),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
@@ -3868,7 +3925,7 @@ mod tests {
             policy: OpenPitStringView::not_set(),
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
@@ -4669,7 +4726,7 @@ mod tests {
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             policy: OpenPitStringView::not_set(),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         assert!(openpit_pretrade_reject_list_get(rejects, 0, &mut reject));
@@ -4710,7 +4767,7 @@ mod tests {
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             policy: OpenPitStringView::not_set(),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         assert!(openpit_pretrade_reject_list_get(
@@ -4726,7 +4783,7 @@ mod tests {
             reject_ptr.scope,
             crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT
         );
-        assert_eq!(reject_ptr.user_data, std::ptr::null_mut());
+        assert_eq!(reject_ptr.user_data, 0);
 
         let policy = string_view_to_string(reject_ptr.policy);
         assert_eq!(policy, "test_policy");
@@ -5271,7 +5328,7 @@ mod tests {
                 policy: OpenPitStringView::from_utf8("start.account.reject"),
                 reason: OpenPitStringView::from_utf8("blocked"),
                 details: OpenPitStringView::from_utf8("by test"),
-                user_data: std::ptr::null_mut(),
+                user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
             },
@@ -5480,7 +5537,7 @@ mod tests {
             policy: OpenPitStringView::not_set(),
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
         };
         assert!(crate::reject::openpit_pretrade_account_block_list_get(

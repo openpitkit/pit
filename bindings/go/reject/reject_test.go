@@ -19,7 +19,6 @@ package reject
 
 import (
 	"testing"
-	"unsafe"
 
 	"go.openpit.dev/openpit/internal/native"
 )
@@ -98,12 +97,11 @@ func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {
 		"details-a",
 		ScopeOrder,
 	)
-	var token byte
-	userData := unsafe.Pointer(&token) //nolint:gosec // unsafe.Pointer for testing user data field
+	const userData uintptr = 0xfeed
 	withUserData := base.WithUserData(userData)
 
-	if base.UserData != nil {
-		t.Fatalf("base UserData = %v, want nil", base.UserData)
+	if base.UserData != 0 {
+		t.Fatalf("base UserData = %v, want 0", base.UserData)
 	}
 	if withUserData.UserData != userData {
 		t.Fatalf("copy UserData = %v, want %v", withUserData.UserData, userData)
@@ -126,8 +124,7 @@ func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {
 }
 
 func TestRejectNewWithUserDataInitialisesAllFields(t *testing.T) {
-	var token byte
-	userData := unsafe.Pointer(&token) //nolint:gosec // unsafe.Pointer for testing user data field
+	const userData uintptr = 0xfeed
 	rej := New(
 		CodeRiskLimitExceeded,
 		"policy-b",

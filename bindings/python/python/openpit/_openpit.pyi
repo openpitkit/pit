@@ -2031,7 +2031,13 @@ class AccountBlock:
 
     @property
     def user_data(self) -> int:
-        """Opaque caller-defined integer token."""
+        """Opaque caller-defined integer token.
+
+        Constructing ``AccountBlock`` raises ``ValueError`` for an unrecognized
+        code and ``OverflowError`` for a token outside ``0..2**64-1``.
+        ``Accounts.block_with_cause`` and ``AccountControl.block`` raise
+        ``OverflowError`` only where the platform word is narrower than 64 bits.
+        """
 
 class AccountBlockOutcome:
     """Account block inserted for an account selected by the engine."""
@@ -2118,7 +2124,14 @@ class AccountControl:
     transaction has completed is unspecified and must not be relied upon.
     """
 
-    def block(self, block: AccountBlock) -> None: ...
+    def block(self, block: AccountBlock) -> None:
+        """Record this callback's block against its bound account.
+
+        Constructing ``AccountBlock`` raises ``ValueError`` for an unrecognized
+        code and ``OverflowError`` for a token outside ``0..2**64-1``. This
+        method raises ``OverflowError`` only where the platform word is
+        narrower than 64 bits.
+        """
 
 class Context:
     """Context of the current pre-trade operation."""
@@ -2368,6 +2381,27 @@ class Accounts:
         """
 
     def block(self, account: AccountId, reason: str) -> None: ...
+    def block_with_cause(self, account: AccountId, cause: AccountBlock) -> None:
+        """Restore a persisted account block with its original cause.
+
+        Later pre-trade requests reject with that cause before policies run.
+        Provenance is not restored, so rollback cannot remove it; only
+        ``unblock`` can. The first cause in the account's own slot wins; group
+        and engine-wide blocks leave that slot free, and checks prefer account,
+        group, then engine-wide causes. User data remains opaque bits with no
+        engine-known referent after restart.
+
+        Call on a newly built engine before pre-trade, adjustments, reports,
+        drop copy, policy reconfiguration, or group changes can record a cause
+        for the account. Do not race those operations with this call: a
+        provisional cause can win, then roll back and leave no block.
+
+        Constructing ``AccountBlock`` raises ``ValueError`` for an unrecognized
+        code and ``OverflowError`` for a token outside ``0..2**64-1``. This
+        method raises ``OverflowError`` only where the platform word is
+        narrower than 64 bits.
+        """
+
     def unblock(self, account: AccountId) -> None: ...
     def unblock_all(self) -> None: ...
     def replace_block_reason(self, account: AccountId, reason: str) -> None: ...

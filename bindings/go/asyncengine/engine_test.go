@@ -1220,6 +1220,17 @@ func TestAsyncEngineAdministrativeRoutingKinds(t *testing.T) {
 			},
 		},
 		{
+			name: "block account with cause",
+			want: routingKey{kind: routingKeyAccount, id: 7},
+			call: func() *future.Future[struct{}] {
+				return accounts.BlockWithCause(ctx, account, reject.AccountBlock{
+					Policy: "restore-policy",
+					Code:   reject.CodePnlKillSwitchTriggered,
+					Reason: "restored",
+				})
+			},
+		},
+		{
 			name: "block group",
 			want: routingKey{kind: routingKeyAccountGroup, id: 7},
 			call: func() *future.Future[struct{}] {

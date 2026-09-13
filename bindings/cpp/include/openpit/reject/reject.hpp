@@ -138,7 +138,7 @@ struct Reject {
     out.details =
         ::openpit::detail::FromNative<::openpit::StringView>(raw.details)
             .ToString();
-    out.userData = reinterpret_cast<std::uintptr_t>(raw.user_data);
+    out.userData = raw.user_data;
     out.code = static_cast<RejectCode>(raw.code);
     out.scope = static_cast<RejectScope>(raw.scope);
     return out;
@@ -149,7 +149,7 @@ struct Reject {
     raw.policy = ::openpit::detail::MakeStringView(policy);
     raw.reason = ::openpit::detail::MakeStringView(reason);
     raw.details = ::openpit::detail::MakeStringView(details);
-    raw.user_data = reinterpret_cast<void*>(userData);
+    raw.user_data = userData;
     raw.code = static_cast<OpenPitPretradeRejectCode>(
         static_cast<std::uint16_t>(code));
     raw.scope = static_cast<OpenPitPretradeRejectScope>(

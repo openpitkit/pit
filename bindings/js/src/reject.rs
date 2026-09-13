@@ -215,7 +215,8 @@ impl JsAccountBlock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `code` is not a recognized reject code.
+    /// Throws `ParamError` when `code` is not a recognized reject code, or
+    /// `RangeError` when `userData` exceeds the supported token range.
     #[wasm_bindgen(constructor)]
     pub fn new(
         policy: String,
@@ -276,8 +277,9 @@ impl JsAccountBlock {
 
     /// The opaque caller-defined token as a `bigint`.
     ///
-    /// The core token is `usize`, so on wasm32 it must fit `u32`; a larger
-    /// value is rejected when the block is converted to its core form.
+    /// The core token is `usize`, so on wasm32 it must fit `u32`; the
+    /// constructor rejects a larger value with `RangeError`, so no
+    /// `AccountBlock` holds one.
     #[wasm_bindgen(getter, js_name = userData)]
     pub fn user_data(&self) -> u64 {
         self.user_data
@@ -307,9 +309,9 @@ impl JsAccountBlock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` if the stored code is no longer recognized, or if
-    /// the `userData` token exceeds the supported range (the core token is
-    /// `usize`, so on wasm32 it must fit `u32`).
+    /// Throws `ParamError` if the stored code is no longer recognized, or
+    /// `RangeError` if the `userData` token exceeds the supported range (the
+    /// core token is `usize`, so on wasm32 it must fit `u32`).
     pub(crate) fn to_core(&self) -> Result<openpit::pretrade::AccountBlock, JsValue> {
         let code = parse_reject_code(&self.code)?;
         // The core token is `usize` (32-bit on wasm32); reject an out-of-range

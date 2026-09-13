@@ -62,6 +62,27 @@ func EngineBlockAccount(engine Engine, account ParamAccountID, reason string) {
 	C.openpit_engine_block_account(engine, account, importString(reason))
 }
 
+// EngineBlockAccountWithCause restores account with a durable block cause. The
+// first cause wins. It returns a non-nil error for a malformed cause
+// (unrecognized code, null-with-length, or non-UTF-8); consumeParamError has
+// already consumed the native error handle.
+func EngineBlockAccountWithCause(
+	engine Engine,
+	account ParamAccountID,
+	cause PretradeAccountBlock,
+) error {
+	var outError ParamError
+	if !C.openpit_engine_block_account_with_cause(
+		engine,
+		account,
+		cause,
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return consumeParamError(outError, "block account with cause failed")
+	}
+	return nil
+}
+
 // EngineUnblockAccount unblocks account. Unblocking an account that is not
 // blocked is a no-op. It is infallible.
 func EngineUnblockAccount(engine Engine, account ParamAccountID) {

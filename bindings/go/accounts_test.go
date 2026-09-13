@@ -18,6 +18,7 @@
 package openpit
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"unicode/utf8"
@@ -477,6 +478,130 @@ func TestAccountsBlockIdempotentKeepsFirstReason(t *testing.T) {
 
 	// The account is still blocked and the first reason must be preserved.
 	assertAccountBlockedWithReason(t, engine, "first")
+}
+
+func TestAccountsBlockWithCauseRestoresTypedCause(t *testing.T) {
+	engine := newAccountsTestEngine(t)
+	defer engine.Stop()
+
+	accounts := engine.Accounts()
+	account := param.NewAccountIDFromUint64(1)
+	cause := reject.AccountBlock{
+		Policy:   "PersistedPnlPolicy",
+		Code:     reject.CodePnlKillSwitchTriggered,
+		Reason:   "persisted pnl floor breach",
+		Details:  "account pnl -501 is below floor -500",
+		UserData: 0xfeed,
+	}
+	if err := accounts.BlockWithCause(account, cause); err != nil {
+		t.Fatalf("BlockWithCause() error = %v", err)
+	}
+	later := reject.AccountBlock{
+		Policy:  "LaterCompliancePolicy",
+		Code:    reject.CodeAccountBlocked,
+		Reason:  "later compliance restriction",
+		Details: "later cause must not replace the persisted cause",
+	}
+	if err := accounts.BlockWithCause(account, later); err != nil {
+		t.Fatalf("second BlockWithCause() error = %v", err)
+	}
+
+	request, rejects, err := engine.StartPreTrade(rateLimitTestOrder(t, 1))
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request != nil {
+		request.Close()
+		t.Fatal("StartPreTrade(): request != nil, want blocked")
+	}
+	if len(rejects) != 1 {
+		t.Fatalf("reject len = %d, want 1", len(rejects))
+	}
+	got := rejects[0]
+	if got.Policy != cause.Policy || got.Code != cause.Code ||
+		got.Reason != cause.Reason || got.Details != cause.Details ||
+		got.UserData != cause.UserData {
+		t.Fatalf("restored reject = %+v, want cause %+v", got, cause)
+	}
+
+	accounts.Unblock(account)
+	invalid := cause
+	invalid.Code = reject.Code(0xffff)
+	if err := accounts.BlockWithCause(account, invalid); err == nil {
+		t.Fatal("BlockWithCause() error = nil for unknown reject code")
+	}
+	assertAccountPasses(t, engine)
+}
+
+func TestAsyncAccountsBlockWithCauseRestoresTypedCause(t *testing.T) {
+	builder, err := NewEngineBuilder().
+		AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		BuildAsync()
+	if err != nil {
+		t.Fatalf("BuildAsync() error = %v", err)
+	}
+	engine, err := builder.Dynamic().Build()
+	if err != nil {
+		t.Fatalf("AsyncEngine Build() error = %v", err)
+	}
+	defer func() {
+		if err := engine.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	accounts := engine.Accounts()
+	restored := param.NewAccountIDFromUint64(1)
+	cause := reject.AccountBlock{
+		Policy:   "PersistedPnlPolicy",
+		Code:     reject.CodePnlKillSwitchTriggered,
+		Reason:   "persisted pnl floor breach",
+		Details:  "account pnl -501 is below floor -500",
+		UserData: 0xfeed,
+	}
+	if _, err := accounts.BlockWithCause(ctx, restored, cause).Await(ctx); err != nil {
+		t.Fatalf("BlockWithCause() error = %v", err)
+	}
+
+	request, rejects, err := engine.StartPreTrade(ctx, rateLimitTestOrder(t, 1)).Await(ctx)
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request != nil {
+		_, closeErr := request.Close(ctx).Await(ctx)
+		t.Fatalf(
+			"StartPreTrade() request != nil, want blocked (Close() error = %v)",
+			closeErr,
+		)
+	}
+	if len(rejects) != 1 {
+		t.Fatalf("reject len = %d, want 1", len(rejects))
+	}
+	got := rejects[0]
+	if got.Policy != cause.Policy || got.Code != cause.Code ||
+		got.Reason != cause.Reason || got.Details != cause.Details ||
+		got.UserData != cause.UserData {
+		t.Fatalf("restored reject = %+v, want cause %+v", got, cause)
+	}
+
+	untouched := param.NewAccountIDFromUint64(2)
+	invalid := cause
+	invalid.Code = reject.Code(0xffff)
+	if _, err := accounts.BlockWithCause(ctx, untouched, invalid).Await(ctx); err == nil {
+		t.Fatal("BlockWithCause() error = nil for unknown reject code")
+	}
+	request, rejects, err = engine.StartPreTrade(ctx, rateLimitTestOrder(t, 2)).Await(ctx)
+	if err != nil {
+		t.Fatalf("StartPreTrade(untouched) error = %v", err)
+	}
+	if request == nil {
+		t.Fatalf("StartPreTrade(untouched) rejects = %+v, want accepted", rejects)
+	}
+	if _, err := request.Close(ctx).Await(ctx); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 }
 
 func TestAccountsBlockGroupIdempotentKeepsFirstReason(t *testing.T) {

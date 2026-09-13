@@ -660,11 +660,18 @@ class CountingRollbackPolicy {
 class MockAccounts {
  public:
   MockAccounts(std::atomic<std::size_t>* blocks,
+               std::atomic<std::size_t>* blockWithCauses,
                std::atomic<std::size_t>* globalUnblocks)
-      : m_blocks(blocks), m_globalUnblocks(globalUnblocks) {}
+      : m_blocks(blocks),
+        m_blockWithCauses(blockWithCauses),
+        m_globalUnblocks(globalUnblocks) {}
 
   void Block(AccountId, std::string_view) const noexcept {
     m_blocks->fetch_add(1, std::memory_order_relaxed);
+  }
+  void BlockWithCause(AccountId,
+                      const openpit::accounts::AccountBlock&) const noexcept {
+    m_blockWithCauses->fetch_add(1, std::memory_order_relaxed);
   }
   void Unblock(AccountId) const noexcept {}
   void UnblockAll() const noexcept {
@@ -673,6 +680,7 @@ class MockAccounts {
 
  private:
   std::atomic<std::size_t>* m_blocks;
+  std::atomic<std::size_t>* m_blockWithCauses;
   std::atomic<std::size_t>* m_globalUnblocks;
 };
 
@@ -681,6 +689,7 @@ struct MockEngineAdapter {
   ConcurrencyProbe* probe = nullptr;
   std::atomic<std::size_t> starts{0};
   std::atomic<std::size_t> blocks{0};
+  std::atomic<std::size_t> blockWithCauses{0};
   std::atomic<std::size_t> globalUnblocks{0};
   std::atomic<std::size_t> dropCopies{0};
 
@@ -721,7 +730,7 @@ struct MockEngineAdapter {
   }
 
   [[nodiscard]] MockAccounts Accounts() {
-    return MockAccounts(&blocks, &globalUnblocks);
+    return MockAccounts(&blocks, &blockWithCauses, &globalUnblocks);
   }
 };
 
@@ -3333,6 +3342,36 @@ TEST(TypedAsyncAccounts, BlockRoutesThroughAccountQueue) {
   EXPECT_EQ(driver.blocks.load(), 1u);
 }
 
+TEST(TypedAsyncAccounts, BlockWithCauseRoutesThroughAccountQueue) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .Dynamic()
+                   .MaxQueues(2)
+                   .Build();
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  Gate workerEntered;
+  Gate releaseWorker;
+  ae::Future<std::monostate> running = async.Submit(account, [&] {
+    workerEntered.Open();
+    releaseWorker.Wait();
+  });
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+
+  ae::AsyncAccounts<MockEngineAdapter> accounts = async.Accounts();
+  openpit::accounts::AccountBlock cause(
+      RejectCode::PnlKillSwitchTriggered, "PersistedPnlPolicy",
+      "persisted pnl floor breach", "pnl is below the persisted floor");
+  ae::Future<std::monostate> restored =
+      accounts.BlockWithCause(account, std::move(cause));
+  EXPECT_FALSE(restored.Await(std::chrono::milliseconds(10)).has_value());
+
+  releaseWorker.Open();
+  ASSERT_TRUE(running.Await(kAwaitCap).has_value());
+  ASSERT_TRUE(restored.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+  EXPECT_EQ(driver.blockWithCauses.load(), 1u);
+}
+
 // UnblockAll names neither an account nor a group, so it pins to the
 // engine-wide queue and still reaches the driver.
 TEST(TypedAsyncAccounts, UnblockAllRoutesThroughEngineWideQueue) {
@@ -3365,6 +3404,43 @@ TEST(TypedAsyncAccounts, UnblockAllLeavesIndividuallyBlockedAccountBlocked) {
   ASSERT_EQ(start.rejects.size(), 1u);
   EXPECT_EQ(start.rejects.front().code, RejectCode::AccountBlocked);
   EXPECT_EQ(start.rejects.front().reason, "by operator");
+
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncAccounts, BlockWithCauseRestoresCauseAndRejectsMalformedCause) {
+  Engine engine = OrderValidationEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Sharded(1).Build();
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  openpit::accounts::AccountBlock cause(
+      RejectCode::PnlKillSwitchTriggered, "PersistedPnlPolicy",
+      "persisted pnl floor breach", "pnl is below the persisted floor");
+  cause.userData = 0xfeed;
+
+  ae::AsyncAccounts<ae::EngineAdapter> accounts = async.Accounts();
+  ASSERT_TRUE(
+      accounts.BlockWithCause(account, cause).Await(kAwaitCap).has_value());
+  const ae::StartOutcome<ae::EngineAdapter> start =
+      async.StartPreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  EXPECT_FALSE(start.Passed());
+  ASSERT_EQ(start.rejects.size(), 1u);
+  EXPECT_EQ(start.rejects.front().policy, cause.policy);
+  EXPECT_EQ(start.rejects.front().code, cause.code);
+  EXPECT_EQ(start.rejects.front().reason, cause.reason);
+  EXPECT_EQ(start.rejects.front().details, cause.details);
+  EXPECT_EQ(start.rejects.front().userData, cause.userData);
+
+  openpit::accounts::AccountBlock malformed = cause;
+  malformed.code = static_cast<RejectCode>(0xffff);
+  try {
+    (void)accounts.BlockWithCause(account, std::move(malformed))
+        .Await(kAwaitCap);
+    FAIL() << "expected TaskFailed";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::TaskFailed);
+    EXPECT_NE(err.Message().find("not recognized"), std::string::npos);
+  }
 
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
