@@ -570,6 +570,51 @@ func (a AsyncAccounts) Block(
 	return f
 }
 
+// BlockWithCause restores a persisted cause on the account queue. Later
+// pre-trade requests reject with it before policies run. Provenance is not
+// restored, so rollback cannot remove it; only Unblock can. UserData is carried
+// as documented on reject.AccountBlock.
+//
+// The first cause in the account's own slot wins. Group and engine-wide blocks
+// leave that slot free, and checks prefer the account cause, then group, then
+// engine-wide. The account queue orders this restore only against operations
+// submitted through this AsyncEngine.
+//
+// Submit on a newly built engine before pre-trade, account adjustment,
+// execution report, drop copy, policy reconfiguration, or account-group work
+// can record a cause for account, and wait for the future. A racing provisional
+// cause can make this a successful no-op and later roll back, leaving the
+// account unblocked.
+//
+// The future resolves with an error for an unrecognized code or invalid UTF-8
+// in any string.
+func (a AsyncAccounts) BlockWithCause(
+	ctx context.Context,
+	account param.AccountID,
+	cause reject.AccountBlock,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &blockWithCauseTask{f: f, engine: a.engine, account: account, cause: cause}
+	if err := a.engine.submit(ctx, accountRoutingKey(account), task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// blockWithCauseTask carries one BlockWithCause call to its worker.
+type blockWithCauseTask struct {
+	f       *future.Future[struct{}]
+	engine  *AsyncEngine
+	account param.AccountID
+	cause   reject.AccountBlock
+}
+
+func (t *blockWithCauseTask) run() {
+	t.f.Resolve(struct{}{}, t.engine.driver.Accounts().BlockWithCause(t.account, t.cause))
+}
+
+func (t *blockWithCauseTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
 // blockTask carries one Block call to its worker.
 type blockTask struct {
 	f       *future.Future[struct{}]

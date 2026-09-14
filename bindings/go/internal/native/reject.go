@@ -22,8 +22,6 @@ package native
 */
 import "C"
 
-import "unsafe"
-
 //------------------------------------------------------------------------------
 // PretradeReject
 
@@ -33,13 +31,13 @@ func CreatePretradeReject(
 	policy StringView,
 	reason StringView,
 	details StringView,
-	userData unsafe.Pointer,
+	userData uintptr,
 ) PretradeReject {
 	return PretradeReject{
 		policy:    policy.value,
 		reason:    reason.value,
 		details:   details.value,
-		user_data: userData,
+		user_data: C.size_t(userData),
 		code:      code,
 		scope:     scope,
 	}
@@ -65,8 +63,8 @@ func PretradeRejectGetDetails(reject PretradeReject) StringView {
 	return newStringView(reject.details)
 }
 
-func PretradeRejectGetUserData(reject PretradeReject) unsafe.Pointer {
-	return reject.user_data
+func PretradeRejectGetUserData(reject PretradeReject) uintptr {
+	return uintptr(reject.user_data)
 }
 
 func PretradeRejectCodeIsEvaluationFailure(code PretradeRejectCode) bool {
@@ -115,13 +113,13 @@ func CreatePretradeAccountBlock(
 	policy StringView,
 	reason StringView,
 	details StringView,
-	userData unsafe.Pointer,
+	userData uintptr,
 ) PretradeAccountBlock {
 	return PretradeAccountBlock{
 		policy:    policy.value,
 		reason:    reason.value,
 		details:   details.value,
-		user_data: userData,
+		user_data: C.size_t(userData),
 		code:      code,
 	}
 }
@@ -142,8 +140,8 @@ func PretradeAccountBlockGetDetails(block PretradeAccountBlock) StringView {
 	return newStringView(block.details)
 }
 
-func PretradeAccountBlockGetUserData(block PretradeAccountBlock) unsafe.Pointer {
-	return block.user_data
+func PretradeAccountBlockGetUserData(block PretradeAccountBlock) uintptr {
+	return uintptr(block.user_data)
 }
 
 //------------------------------------------------------------------------------

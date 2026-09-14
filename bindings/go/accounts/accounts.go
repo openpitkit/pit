@@ -20,6 +20,8 @@
 package accounts
 
 import (
+	"runtime"
+
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -186,6 +188,29 @@ func (a Accounts) ClearGroupCurrency(group param.AccountGroupID) {
 // already-blocked account keeps the original reason. reason may be empty.
 func (a Accounts) Block(account param.AccountID, reason string) {
 	native.EngineBlockAccount(a.engine, account.Handle(), reason)
+}
+
+// BlockWithCause restores a persisted account block with its original cause.
+// Later pre-trade requests reject with it before policies run. Provenance is
+// not restored, so rollback cannot remove it; only Unblock can. UserData is
+// carried as documented on reject.AccountBlock.
+//
+// The first cause in the account's own slot wins. Group and engine-wide blocks
+// do not occupy that slot; the restored account cause takes precedence over
+// group and then engine-wide causes.
+//
+// Call this on a newly built engine before pre-trade, account adjustment,
+// execution report, drop copy, policy reconfiguration, or account-group work
+// can record a cause for account, and wait for it to return. A racing
+// provisional cause can make this a successful no-op and later roll back,
+// leaving the account unblocked.
+//
+// It returns an error for an unrecognized code or invalid UTF-8 in any string.
+func (a Accounts) BlockWithCause(account param.AccountID, cause reject.AccountBlock) error {
+	handle := cause.NewHandle()
+	err := native.EngineBlockAccountWithCause(a.engine, account.Handle(), handle)
+	runtime.KeepAlive(cause)
+	return err
 }
 
 // Unblock lifts the block on account. Unblocking an account that is not blocked

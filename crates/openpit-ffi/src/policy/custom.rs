@@ -870,7 +870,7 @@ mod tests {
                     policy: OpenPitStringView::from_utf8("custom.account.adjustment"),
                     reason: OpenPitStringView::from_utf8("accepted"),
                     details: OpenPitStringView::from_utf8("block after apply"),
-                    user_data: std::ptr::null_mut(),
+                    user_data: 0,
                     code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
                 },
             );
@@ -1587,7 +1587,7 @@ mod tests {
                 policy: OpenPitStringView::from_utf8("dry.run.custom"),
                 reason: OpenPitStringView::from_utf8("blocked"),
                 details: OpenPitStringView::from_utf8("by normal hook"),
-                user_data: std::ptr::null_mut(),
+                user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
             },

@@ -1165,6 +1165,7 @@ def command_package_runtime(args: argparse.Namespace) -> None:
     shutil.copy2(ROOT / "bindings" / "c" / "openpit.h", dist / "openpit.h")
     shutil.copy2(ROOT / "LICENSE", dist / "LICENSE")
     shutil.copy2(ROOT / "OWNERS", dist / "OWNERS")
+    shutil.copy2(ROOT / "THIRD-PARTY-LICENSES", dist / "THIRD-PARTY-LICENSES")
 
 
 def command_go_embed_runtime(args: argparse.Namespace) -> None:

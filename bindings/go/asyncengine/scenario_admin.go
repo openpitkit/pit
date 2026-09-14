@@ -94,7 +94,10 @@ type SpotFundsAccountPnlHooks[State any] struct {
 	OnSet func(context.Context, State, configure.PolicyConfigurationResult) error
 }
 
-// BlockAccount blocks the source account and then runs its result hook.
+// BlockAccount blocks the source account and then runs its result hook. The
+// chain has no restore step on purpose; restore a persisted cause with
+// AsyncAccounts.BlockWithCause on a newly built engine before any operation can
+// record a block for the account.
 func (c *ChainBuilder[State]) BlockAccount(
 	hooks BlockHooks[State],
 ) *ChainBuilder[State] {

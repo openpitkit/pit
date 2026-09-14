@@ -43,10 +43,11 @@
 // block the engine raises on its own. Account blocking is owned by the engine;
 // this handle only forwards to it.
 //
-// Block/unblock by id and clearing the engine-wide block are infallible.
+// Block/unblock by id and clearing the engine-wide block are infallible except
+// that `BlockWithCause` throws `openpit::Error` for a malformed cause.
 // Reason-replacement and every group-scoped operation can fail with an
 // expected, structured outcome - returned as a `std::optional` value, never
-// thrown. SDK boundary failures throw `openpit::Error`.
+// thrown. Other SDK boundary failures also throw `openpit::Error`.
 //
 // `AccountControl` is the engine-provided handle a custom callback uses to
 // record a kill-switch block against the account bound to its context; it is
@@ -91,7 +92,7 @@ struct AccountBlock {
     out.details =
         ::openpit::detail::FromNative<::openpit::StringView>(raw.details)
             .ToString();
-    out.userData = reinterpret_cast<std::uintptr_t>(raw.user_data);
+    out.userData = raw.user_data;
     out.code = static_cast<::openpit::pretrade::RejectCode>(raw.code);
     return out;
   }
@@ -103,7 +104,7 @@ struct AccountBlock {
     raw.policy = ::openpit::detail::MakeStringView(policy);
     raw.reason = ::openpit::detail::MakeStringView(reason);
     raw.details = ::openpit::detail::MakeStringView(details);
-    raw.user_data = reinterpret_cast<void*>(userData);
+    raw.user_data = userData;
     raw.code = static_cast<OpenPitPretradeRejectCode>(
         static_cast<std::uint16_t>(code));
     return raw;
@@ -402,6 +403,33 @@ class Accounts {
              std::string_view reason) const noexcept {
     openpit_engine_block_account(m_engine, ::openpit::detail::Native(account),
                                  ::openpit::detail::MakeStringView(reason));
+  }
+
+  // Restores a persisted block for `account` with its original cause. Later
+  // pre-trade requests reject with it before policies run. Provenance is not
+  // restored, so rollback cannot remove it; only `Unblock` can. `userData`
+  // remains an opaque bit pattern with no engine-known referent after restart.
+  //
+  // The first cause in the account's own slot wins. Group and engine-wide
+  // blocks do not occupy that slot; this still inserts the account cause, and
+  // checks prefer account, group, then engine-wide causes.
+  //
+  // Call on a newly built engine before pre-trade, adjustment, report,
+  // drop-copy, policy-reconfiguration, or account-group work can record a
+  // cause for this account, and wait for return. A racing provisional cause
+  // can make this a successful no-op and later roll back, leaving no block.
+  //
+  // Throws `openpit::Error` for an unrecognized code, invalid UTF-8, or another
+  // malformed C-ABI payload.
+  void BlockWithCause(::openpit::param::AccountId account,
+                      const AccountBlock& cause) const {
+    OpenPitParamError* error = nullptr;
+    if (!openpit_engine_block_account_with_cause(
+            m_engine, ::openpit::detail::Native(account),
+            ::openpit::detail::Native(cause), &error)) {
+      ::openpit::detail::ThrowFromParamError(error,
+                                             "block account with cause failed");
+    }
   }
 
   // Lifts the block on `account`. Unblocking an unblocked account is a no-op.

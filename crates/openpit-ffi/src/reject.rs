@@ -15,12 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-use crate::param::OpenPitParamAccountId;
+use crate::param::{parse_string_view, OpenPitParamAccountId};
 use crate::OpenPitStringView;
 use openpit::pretrade::{
     AccountBlock, AccountBlockOutcome, Reject, RejectCode, RejectScope, Rejects,
 };
-use std::ffi::c_void;
 
 /// Raw reject-scope code accepted from C callers.
 ///
@@ -155,17 +154,17 @@ pub struct OpenPitPretradeReject {
     pub reason: OpenPitStringView,
     /// Case-specific reject details.
     pub details: OpenPitStringView,
-    /// Opaque caller-defined token.
+    /// Opaque caller-defined integer token.
     ///
     /// The SDK never inspects, dereferences, or frees this value. Its meaning,
-    /// lifetime, and thread-safety are the caller's responsibility. `0` / null
-    /// means "not set". See the project Threading Contract for the full lifetime
+    /// lifetime, and thread-safety are the caller's responsibility. `0` means
+    /// "not set". See the project Threading Contract for the full lifetime
     /// model.
     ///
     /// The token flows through every reject path the SDK exposes (start-stage,
     /// main-stage, account-adjustment, batch results) and is preserved on
     /// `Clone`.
-    pub user_data: *mut c_void,
+    pub user_data: usize,
     /// Stable machine-readable reject code.
     pub code: OpenPitPretradeRejectCode,
     /// Reject scope.
@@ -178,7 +177,7 @@ impl OpenPitPretradeReject {
             policy: OpenPitStringView::from_utf8(inner.policy.as_str()),
             reason: OpenPitStringView::from_utf8(inner.reason.as_str()),
             details: OpenPitStringView::from_utf8(inner.details.as_str()),
-            user_data: inner.user_data as *mut c_void,
+            user_data: inner.user_data,
             code: export_reject_code(inner.code),
             scope: export_reject_scope(inner.scope.clone()),
         }
@@ -193,7 +192,7 @@ impl OpenPitPretradeReject {
                 import_string(self.reason),
                 import_string(self.details),
             )
-            .with_user_data(self.user_data as usize),
+            .with_user_data(self.user_data),
         )
     }
 }
@@ -547,13 +546,13 @@ pub struct OpenPitPretradeAccountBlock {
     pub reason: OpenPitStringView,
     /// Case-specific reject details.
     pub details: OpenPitStringView,
-    /// Opaque caller-defined token.
+    /// Opaque caller-defined integer token.
     ///
     /// The SDK never inspects, dereferences, or frees this value. Its meaning,
-    /// lifetime, and thread-safety are the caller's responsibility. `0` / null
-    /// means "not set". See the project Threading Contract for the full lifetime
+    /// lifetime, and thread-safety are the caller's responsibility. `0` means
+    /// "not set". See the project Threading Contract for the full lifetime
     /// model.
-    pub user_data: *mut c_void,
+    pub user_data: usize,
     /// Stable machine-readable reject code.
     pub code: OpenPitPretradeRejectCode,
 }
@@ -564,7 +563,7 @@ impl OpenPitPretradeAccountBlock {
             policy: OpenPitStringView::from_utf8(inner.policy.as_str()),
             reason: OpenPitStringView::from_utf8(inner.reason.as_str()),
             details: OpenPitStringView::from_utf8(inner.details.as_str()),
-            user_data: inner.user_data as *mut c_void,
+            user_data: inner.user_data,
             code: export_reject_code(inner.code),
         }
     }
@@ -576,7 +575,28 @@ impl OpenPitPretradeAccountBlock {
             import_string(self.reason),
             import_string(self.details),
         )
-        .with_user_data(self.user_data as usize)
+        .with_user_data(self.user_data)
+    }
+
+    pub(crate) fn try_to_block(self) -> Result<AccountBlock, String> {
+        let code = import_reject_code(self.code);
+        if code == RejectCode::Other && self.code != OPENPIT_PRETRADE_REJECT_CODE_OTHER {
+            return Err("account block code is not recognized".to_owned());
+        }
+        let parse_field = |value, field| {
+            // SAFETY: The C ABI requires every non-null view to address `len`
+            // readable bytes for the duration of this call.
+            unsafe { parse_string_view(value) }
+                .map_err(|error| format!("account block {field}: {error}"))
+        };
+
+        Ok(AccountBlock::new(
+            parse_field(self.policy, "policy")?,
+            code,
+            parse_field(self.reason, "reason")?,
+            parse_field(self.details, "details")?,
+        )
+        .with_user_data(self.user_data))
     }
 }
 
@@ -813,7 +833,7 @@ mod tests {
         assert_eq!(string_view_to_string(exported.policy), "test_policy");
         assert_eq!(string_view_to_string(exported.reason), "reason");
         assert_eq!(string_view_to_string(exported.details), "details");
-        assert_eq!(exported.user_data, std::ptr::null_mut());
+        assert_eq!(exported.user_data, 0);
     }
 
     #[test]
@@ -823,7 +843,7 @@ mod tests {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
-            user_data: 55usize as *mut std::ffi::c_void,
+            user_data: 55usize,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
@@ -835,13 +855,13 @@ mod tests {
             policy: OpenPitStringView::not_set(),
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         assert!(openpit_pretrade_reject_list_get(list, 0, &mut first));
         assert_eq!(first.code, OPENPIT_PRETRADE_REJECT_CODE_OTHER);
-        assert_eq!(first.user_data, 55usize as *mut std::ffi::c_void);
+        assert_eq!(first.user_data, 55usize);
         assert_eq!(string_view_to_string(first.policy), "policy");
         assert!(!openpit_pretrade_reject_list_get(list, 1, &mut first));
         openpit_destroy_pretrade_reject_list(list);
@@ -853,7 +873,7 @@ mod tests {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
-            user_data: 77usize as *mut std::ffi::c_void,
+            user_data: 77usize,
             code: OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
         };
@@ -995,7 +1015,7 @@ mod tests {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
@@ -1029,7 +1049,7 @@ mod tests {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: u8::MAX,
         };
@@ -1047,10 +1067,49 @@ mod tests {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: u16::MAX,
         };
         assert_eq!(block.to_block().code, RejectCode::Other);
+    }
+
+    #[test]
+    fn account_block_try_to_block_rejects_null_pointer_with_length() {
+        let block = OpenPitPretradeAccountBlock {
+            policy: OpenPitStringView {
+                ptr: std::ptr::null(),
+                len: 1,
+            },
+            reason: OpenPitStringView::from_utf8("reason"),
+            details: OpenPitStringView::from_utf8("details"),
+            user_data: 0,
+            code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+        };
+
+        assert!(block
+            .try_to_block()
+            .expect_err("null pointer with a length must be rejected")
+            .contains("policy"));
+    }
+
+    #[test]
+    fn account_block_try_to_block_rejects_invalid_utf8() {
+        let invalid_utf8 = [0xff];
+        let block = OpenPitPretradeAccountBlock {
+            policy: OpenPitStringView::from_utf8("policy"),
+            reason: OpenPitStringView {
+                ptr: invalid_utf8.as_ptr(),
+                len: invalid_utf8.len(),
+            },
+            details: OpenPitStringView::from_utf8("details"),
+            user_data: 0,
+            code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+        };
+
+        assert!(block
+            .try_to_block()
+            .expect_err("invalid UTF-8 must be rejected")
+            .contains("reason"));
     }
 
     #[test]
@@ -1070,7 +1129,7 @@ mod tests {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
-            user_data: 42usize as *mut std::ffi::c_void,
+            user_data: 42usize,
             code: OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED,
         };
         openpit_pretrade_account_block_list_push(list, block);
@@ -1081,7 +1140,7 @@ mod tests {
             policy: OpenPitStringView::not_set(),
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
-            user_data: std::ptr::null_mut(),
+            user_data: 0,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
         };
         assert!(openpit_pretrade_account_block_list_get(list, 0, &mut out));
@@ -1089,7 +1148,7 @@ mod tests {
             out.code,
             OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
         );
-        assert_eq!(out.user_data, 42usize as *mut std::ffi::c_void);
+        assert_eq!(out.user_data, 42usize);
         assert_eq!(string_view_to_string(out.policy), "policy");
         assert!(!openpit_pretrade_account_block_list_get(list, 1, &mut out));
         openpit_destroy_pretrade_account_block_list(list);
@@ -1122,7 +1181,7 @@ mod tests {
                 policy: OpenPitStringView::not_set(),
                 reason: OpenPitStringView::not_set(),
                 details: OpenPitStringView::not_set(),
-                user_data: std::ptr::null_mut(),
+                user_data: 0,
                 code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             },
         };
@@ -1163,7 +1222,7 @@ mod tests {
             string_view_to_string(exported.details),
             "loss exceeded configured threshold"
         );
-        assert_eq!(exported.user_data, 99usize as *mut std::ffi::c_void);
+        assert_eq!(exported.user_data, 99usize);
         assert_eq!(
             exported.code,
             OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED

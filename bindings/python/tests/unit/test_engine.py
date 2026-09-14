@@ -203,6 +203,31 @@ def test_engine_block_rejects_pre_trade_with_account_blocked_code() -> None:
 
 
 @pytest.mark.unit
+def test_engine_block_with_cause_restores_typed_cause() -> None:
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=AcceptPolicy()).build()
+    account = openpit.param.AccountId.from_int(99224416)
+    cause = openpit.pretrade.AccountBlock(
+        policy="PersistedPnlPolicy",
+        code=openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED,
+        reason="persisted pnl floor breach",
+        details="account pnl -501 is below floor -500",
+        user_data=0xFEED,
+    )
+
+    engine.accounts().block_with_cause(account, cause)
+    result = engine.start_pre_trade(order=conftest.make_order(account_id=account))
+
+    assert not result.ok
+    assert len(result.rejects) == 1
+    reject = result.rejects[0]
+    assert reject.policy == cause.policy
+    assert reject.code == cause.code
+    assert reject.reason == cause.reason
+    assert reject.details == cause.details
+    assert reject.user_data == cause.user_data
+
+
+@pytest.mark.unit
 def test_engine_unblock_lifts_block() -> None:
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=AcceptPolicy()).build()
     a = openpit.param.AccountId.from_int(99224416)

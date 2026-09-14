@@ -19,7 +19,8 @@
 // (see sync-version.mjs) and `exports` paths relative to the `dist/` publish
 // root. Dev-only fields (devDependencies, scripts) are dropped. Also stages the
 // package metadata files the manifest's `files` list declares (README, LICENSE,
-// OWNERS) into `dist/`, since the publish runs from there.
+// OWNERS, THIRD-PARTY-LICENSES) into `dist/`, since the publish runs from
+// there.
 
 import {
   copyFileSync,
@@ -40,13 +41,18 @@ const sourceManifestPath = join(packageDir, "package.json");
 const distDir = join(packageDir, "dist");
 const distManifestPath = join(distDir, "package.json");
 
-// Metadata files the published `files` list references; LICENSE and OWNERS live
-// at the monorepo root, README beside this package. Each must exist - a missing
-// one is a build error, not a silently incomplete package.
+// Metadata files the published `files` list references; LICENSE, OWNERS and
+// THIRD-PARTY-LICENSES live at the monorepo root, README beside this package.
+// Each must exist - a missing one is a build error, not a silently incomplete
+// package.
 const metadataFiles = [
   { from: join(packageDir, "README.md"), to: join(distDir, "README.md") },
   { from: join(repoRoot, "LICENSE"), to: join(distDir, "LICENSE") },
   { from: join(repoRoot, "OWNERS"), to: join(distDir, "OWNERS") },
+  {
+    from: join(repoRoot, "THIRD-PARTY-LICENSES"),
+    to: join(distDir, "THIRD-PARTY-LICENSES"),
+  },
   {
     from: join(packageDir, "src-ts", "wasm", "openpit_js.d.ts"),
     to: join(distDir, "types", "wasm", "openpit_js.d.ts"),

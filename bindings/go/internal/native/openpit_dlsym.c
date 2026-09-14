@@ -351,6 +351,7 @@ static void (*_fn_openpit_destroy_configure_error)(OpenPitConfigureError *) = NU
 static OpenPitStringView (*_fn_openpit_configure_error_get_message)(const OpenPitConfigureError *) = NULL;
 static OpenPitConfigureErrorKind (*_fn_openpit_configure_error_get_kind)(const OpenPitConfigureError *) = NULL;
 static void (*_fn_openpit_engine_block_account)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView) = NULL;
+static bool (*_fn_openpit_engine_block_account_with_cause)(OpenPitEngine *, OpenPitParamAccountId, OpenPitPretradeAccountBlock, OpenPitOutParamError) = NULL;
 static void (*_fn_openpit_engine_unblock_account)(OpenPitEngine *, OpenPitParamAccountId) = NULL;
 static void (*_fn_openpit_engine_unblock_all_accounts)(OpenPitEngine *) = NULL;
 static bool (*_fn_openpit_engine_replace_account_block_reason)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
@@ -1108,6 +1109,8 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_configure_error_get_kind == NULL) return "openpit_configure_error_get_kind";
     _fn_openpit_engine_block_account = (void (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView))openpit_dlsym(handle, "openpit_engine_block_account");
     if (_fn_openpit_engine_block_account == NULL) return "openpit_engine_block_account";
+    _fn_openpit_engine_block_account_with_cause = (bool (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitPretradeAccountBlock, OpenPitOutParamError))openpit_dlsym(handle, "openpit_engine_block_account_with_cause");
+    if (_fn_openpit_engine_block_account_with_cause == NULL) return "openpit_engine_block_account_with_cause";
     _fn_openpit_engine_unblock_account = (void (*)(OpenPitEngine *, OpenPitParamAccountId))openpit_dlsym(handle, "openpit_engine_unblock_account");
     if (_fn_openpit_engine_unblock_account == NULL) return "openpit_engine_unblock_account";
     _fn_openpit_engine_unblock_all_accounts = (void (*)(OpenPitEngine *))openpit_dlsym(handle, "openpit_engine_unblock_all_accounts");
@@ -2607,6 +2610,10 @@ OpenPitConfigureErrorKind openpit_configure_error_get_kind(const OpenPitConfigur
 
 void openpit_engine_block_account(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitStringView reason) {
     _fn_openpit_engine_block_account(engine, account_id, reason);
+}
+
+bool openpit_engine_block_account_with_cause(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitPretradeAccountBlock cause, OpenPitOutParamError out_error) {
+    return _fn_openpit_engine_block_account_with_cause(engine, account_id, cause, out_error);
 }
 
 void openpit_engine_unblock_account(OpenPitEngine * engine, OpenPitParamAccountId account_id) {

@@ -19,8 +19,6 @@
 package reject
 
 import (
-	"unsafe"
-
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
 )
@@ -33,8 +31,9 @@ type AccountBlock struct {
 	Details string
 	// Policy name that produced the block.
 	Policy string
-	// Opaque caller-defined payload. Nil means "not set".
-	UserData unsafe.Pointer
+	// Opaque integer token the engine carries verbatim; 0 means not set. The
+	// SDK never inspects or dereferences it.
+	UserData uintptr
 	// Stable machine-readable reject code.
 	Code Code
 }
@@ -71,8 +70,10 @@ func (b AccountBlock) NewHandle() native.PretradeAccountBlock {
 	)
 }
 
-// WithUserData returns a copy of this block with updated UserData.
-func (b AccountBlock) WithUserData(userData unsafe.Pointer) AccountBlock {
+// WithUserData returns a copy of this block with UserData set to userData, an
+// opaque integer token the engine carries verbatim; 0 means not set. The SDK
+// never inspects or dereferences it.
+func (b AccountBlock) WithUserData(userData uintptr) AccountBlock {
 	b.UserData = userData
 	return b
 }

@@ -80,6 +80,7 @@ use crate::policy::pnl_killswitch::JsPnlBoundsKillswitchBuilder;
 use crate::policy::rate_limit::JsRateLimitBuilder;
 use crate::policy::spot_funds::{JsSpotFundsBuilder, JsSpotFundsPnlBoundsKillswitchBuilder};
 use crate::policy::{BuiltinReadyBuilder, CallbackErrorScope, JsPreTradePolicyAdapter, PolicyLike};
+use crate::reject::JsAccountBlock;
 use crate::result::{
     JsAccountAdjustmentBatchResult, JsDropCopyResult, JsDryRunReport, JsExecuteResult,
     JsPostTradeResult, JsStartResult,
@@ -1053,6 +1054,41 @@ impl JsAccounts {
         self.ensure_callable()?;
         let account = resolve_account_id(account.into())?;
         self.inner.block(account, reason);
+        Ok(())
+    }
+
+    /// Restores a persisted account block with its original cause.
+    ///
+    /// Later pre-trade requests reject with it before policies run. Provenance
+    /// is not restored, so rollback cannot remove it; only `unblock` can. User
+    /// data remains opaque bits with no engine-known referent after restart.
+    ///
+    /// The first cause in the account's own slot wins. Group and engine-wide
+    /// blocks leave that slot free; checks prefer account, group, then
+    /// engine-wide causes.
+    ///
+    /// Call on a newly built engine before pre-trade, adjustments, reports,
+    /// drop copy, policy reconfiguration, or group changes can record a cause
+    /// for this account. Do not race those operations with this call: a
+    /// provisional cause can win, then roll back and leave no block.
+    ///
+    /// `account` accepts an `AccountId` or a numeric/string identifier.
+    ///
+    /// # Errors
+    ///
+    /// Throws `AccountIdError` on an invalid identifier or `LifecycleError`
+    /// when this same engine is re-entered synchronously from one of its policy
+    /// callbacks. The cause was validated when it was constructed.
+    #[wasm_bindgen(js_name = blockWithCause)]
+    pub fn block_with_cause(
+        &self,
+        account: AccountIdLike,
+        cause: &JsAccountBlock,
+    ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
+        let account = resolve_account_id(account.into())?;
+        let cause = cause.to_core()?;
+        self.inner.block_with_cause(account, cause);
         Ok(())
     }
 

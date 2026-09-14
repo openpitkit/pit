@@ -53,6 +53,27 @@ pub(super) fn outside_bounds(
     !breached_sides(lower_bound, upper_bound, realized).is_empty()
 }
 
+/// Formats the breached value and only the bounds that were configured.
+pub(super) fn barrier_breach_details(
+    breached_sides: &[&'static str],
+    lower_bound: Option<Pnl>,
+    upper_bound: Option<Pnl>,
+    realized: Pnl,
+    asset_label: &'static str,
+    asset: &Asset,
+) -> String {
+    let desc = breached_sides.join(" and ");
+    let mut details = format!("{desc} bound breached: realized pnl {realized}");
+    if let Some(lower) = lower_bound {
+        details.push_str(&format!(", lower bound {lower}"));
+    }
+    if let Some(upper) = upper_bound {
+        details.push_str(&format!(", upper bound {upper}"));
+    }
+    details.push_str(&format!(", {asset_label} {asset}"));
+    details
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn barrier_breach_reject(
     policy_name: &'static str,
@@ -64,16 +85,18 @@ pub(super) fn barrier_breach_reject(
     asset_label: &'static str,
     asset: &Asset,
 ) -> Reject {
-    let desc = breached_sides.join(" and ");
     Reject::new(
         policy_name,
         RejectScope::Account,
         RejectCode::PnlKillSwitchTriggered,
         reason,
-        format!(
-            "{desc} bound breached: realized pnl {realized}, \
-             lower_bound {lower_bound:?}, upper_bound {upper_bound:?}, \
-             {asset_label} {asset}"
+        barrier_breach_details(
+            breached_sides,
+            lower_bound,
+            upper_bound,
+            realized,
+            asset_label,
+            asset,
         ),
     )
 }
@@ -138,6 +161,27 @@ pub(super) fn set_or_clear<Key, Value>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn breach_details_preserve_decimal_values_and_configured_bounds() {
+        let asset = Asset::new("USD").expect("valid asset");
+        let lower = Pnl::from_str("-1.25").expect("valid lower bound");
+        let upper = Pnl::from_str("2.75").expect("valid upper bound");
+        for (side, low, high, realized, expected) in [
+            ("lower", Some(lower), None, "-1.25001", "lower bound breached: realized pnl -1.25001, lower bound -1.25, currency USD"),
+            ("upper", None, Some(upper), "2.75001", "upper bound breached: realized pnl 2.75001, upper bound 2.75, currency USD"),
+            ("lower", Some(lower), Some(upper), "-1.25001", "lower bound breached: realized pnl -1.25001, lower bound -1.25, upper bound 2.75, currency USD"),
+        ] {
+            assert_eq!(
+                barrier_breach_details(
+                    &[side], low, high,
+                    Pnl::from_str(realized).expect("valid realized pnl"),
+                    "currency", &asset,
+                ),
+                expected,
+            );
+        }
+    }
 
     // The account id must never surface in the pnl-bounds reject free text:
     // those strings flow into logs and to managers who could otherwise use the

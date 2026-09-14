@@ -387,3 +387,31 @@ jobs:
       # lint-all; the whole-repository rule set therefore needs its own job.
       - name: Check invariants
         run: just --justfile "$JUSTFILE" check-semgrep
+
+  licenses:
+    name: Third-party licenses
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@${{ env.CI_CARGO_ABOUT }}
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      # Every shipped binary carries this file, so it must track Cargo.lock.
+      - name: Check third-party licenses
+        run: just --justfile "$JUSTFILE" check-third-party-licenses

@@ -283,10 +283,12 @@ assemble-docs-site: _ensure-python-env gen-docs-site
 # Build Python API docs; warnings are errors.
 build-python-docs: python-develop-debug
     cd bindings/python && sphinx-build -b html docs docs/_build -W
-# Copy monorepo LICENSE and OWNERS into the Python package.
+# Copy monorepo LICENSE, OWNERS and THIRD-PARTY-LICENSES into the Python
+# package.
 copy-python-metadata:
     cp LICENSE bindings/python/LICENSE
     cp OWNERS bindings/python/OWNERS
+    cp THIRD-PARTY-LICENSES bindings/python/THIRD-PARTY-LICENSES
 # Resolve the built wheel path; prints the path to stdout.
 resolve-wheel version:
     #!/usr/bin/env bash
@@ -477,9 +479,15 @@ package-runtime target goos goarch lib_name:
 
     DST="dist/openpit-ffi--{{ goos }}-{{ goarch }}-{{ lib_name }}"
     cp "${SRC}" "${DST}"
+    if [[ "{{ goos }}" == "darwin" ]]; then
+      install_name_tool -id "@rpath/{{ lib_name }}" "${DST}"
+      # Changing Mach-O metadata invalidates the linker's ad-hoc signature.
+      codesign --force --sign - "${DST}"
+    fi
     cp bindings/c/openpit.h dist/openpit.h
     cp LICENSE dist/LICENSE
     cp OWNERS dist/OWNERS
+    cp THIRD-PARTY-LICENSES dist/THIRD-PARTY-LICENSES
 
     if command -v sha256sum >/dev/null 2>&1; then
       sha256sum "${DST}" | awk '{print $1}' > "${DST}.sha256"
@@ -494,7 +502,8 @@ package-runtime target goos goarch lib_name:
 # Package the C++ binding distributable into dist/ with a sha256 sidecar.
 # Bundles: public headers, generated C ABI header, CMake config-file package
 # (OpenPitConfig, OpenPitConfigVersion, OpenPitTargets, OpenPitDownloadRuntime),
-# LICENSE, and OWNERS. The cmake install tree is expected at CPP_INSTALL_DIR.
+# LICENSE, OWNERS, and THIRD-PARTY-LICENSES. The cmake install tree is expected
+# at CPP_INSTALL_DIR.
 package-cpp cpp_install_dir:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -513,7 +522,8 @@ package-cpp cpp_install_dir:
       include \
       lib \
       LICENSE \
-      OWNERS
+      OWNERS \
+      THIRD-PARTY-LICENSES
 
     if command -v sha256sum >/dev/null 2>&1; then
       sha256sum "dist/${ARCHIVE_NAME}" | awk '{print $1}' > "dist/${ARCHIVE_NAME}.sha256"

@@ -321,7 +321,8 @@ where
 ///
 /// - **Group membership**: [`register_group`](Self::register_group),
 ///   [`unregister_group`](Self::unregister_group), [`group_of`](Self::group_of).
-/// - **Admin blocking**: [`block`](Self::block), [`unblock`](Self::unblock),
+/// - **Admin blocking**: [`block`](Self::block),
+///   [`block_with_cause`](Self::block_with_cause), [`unblock`](Self::unblock),
 ///   [`replace_block_reason`](Self::replace_block_reason), and their group
 ///   counterparts [`block_group`](Self::block_group),
 ///   [`unblock_group`](Self::unblock_group),
@@ -636,6 +637,29 @@ where
             .block_account(account, engine_block(reason));
     }
 
+    /// Restores a persisted block for `account` with its original cause.
+    ///
+    /// Later pre-trade requests are rejected with that cause before any policy
+    /// runs. Transaction provenance is not restored, so rollback cannot remove
+    /// the cause; only [`unblock`](Self::unblock) can. User data remains an
+    /// opaque bit pattern and refers to no engine-known object after restart.
+    ///
+    /// The first cause in the account's own slot wins. An occupied slot makes
+    /// this call a successful no-op. Group and engine-wide blocks do not occupy
+    /// that slot: this call still inserts the account cause, which pre-trade
+    /// checks prefer in account, group, engine-wide order.
+    ///
+    /// Call this on a newly built engine before pre-trade, account adjustment,
+    /// execution-report, drop-copy, policy-reconfiguration, or account-group
+    /// work can record a cause for `account`, and wait for it to return. If an
+    /// in-flight operation already holds a provisional cause, this succeeds
+    /// without replacing it; rollback may then remove that cause and leave the
+    /// account unblocked.
+    pub fn block_with_cause(&self, account: AccountId, cause: AccountBlock) {
+        self.block_handle
+            .block_account(account, cause.with_provenance(None));
+    }
+
     /// Unblocks `account`, clearing any block on it.
     ///
     /// Idempotent: a no-op when `account` is not blocked. This clears the block
@@ -931,6 +955,119 @@ mod tests {
         assert!(blocked
             .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
             .is_none());
+    }
+
+    #[test]
+    fn accounts_block_with_cause_discards_internal_provenance() {
+        let (accounts, blocked, registry) = new_accounts();
+        let cause = AccountBlock::new(
+            "PersistedPnlPolicy",
+            RejectCode::PnlKillSwitchTriggered,
+            "persisted pnl floor breach",
+            "account pnl -501 is below floor -500",
+        )
+        .with_provenance(Some(42));
+
+        accounts.block_with_cause(account(1), cause.clone());
+
+        assert!(
+            blocked.invalidate_provenance(account(1), 42).is_none(),
+            "restored durable block must not be invalidated by its former provenance"
+        );
+        let rejects = blocked
+            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .expect("restored account must stay blocked");
+        assert_eq!(rejects[0].policy, cause.policy);
+        assert_eq!(rejects[0].code, cause.code);
+        assert_eq!(rejects[0].reason, cause.reason);
+        assert_eq!(rejects[0].details, cause.details);
+    }
+
+    #[test]
+    fn accounts_block_with_cause_keeps_existing_account_cause() {
+        let (accounts, blocked, registry) = new_accounts();
+        accounts.block(account(1), "manual review".to_owned());
+
+        accounts.block_with_cause(
+            account(1),
+            AccountBlock::new(
+                "PersistedPnlPolicy",
+                RejectCode::PnlKillSwitchTriggered,
+                "persisted pnl floor breach",
+                "pnl is below the persisted floor",
+            ),
+        );
+
+        let rejects = blocked
+            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .expect("the first account cause must remain active");
+        assert_eq!(rejects[0].policy, "Engine");
+        assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
+        assert_eq!(rejects[0].reason, "manual review");
+        assert_eq!(rejects[0].details, "manual review");
+    }
+
+    #[test]
+    fn accounts_block_with_cause_keeps_provisional_cause_until_rollback() {
+        let (accounts, blocked, registry) = new_accounts();
+        let provisional = AccountBlock::new(
+            "LivePnlPolicy",
+            RejectCode::PnlKillSwitchTriggered,
+            "live pnl floor breach",
+            "pnl is below the live floor",
+        )
+        .with_provenance(Some(42));
+        blocked.block_account(account(1), provisional.clone());
+
+        accounts.block_with_cause(
+            account(1),
+            AccountBlock::new(
+                "PersistedPnlPolicy",
+                RejectCode::RiskLimitExceeded,
+                "persisted risk breach",
+                "risk is above the persisted limit",
+            ),
+        );
+
+        let rejects = blocked
+            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .expect("the provisional cause must win the occupied slot");
+        assert_eq!(rejects[0].policy, provisional.policy);
+        assert_eq!(rejects[0].reason, provisional.reason);
+        assert!(blocked.invalidate_provenance(account(1), 42).is_some());
+        assert!(
+            blocked
+                .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+                .is_none(),
+            "rollback must remove the winning provisional cause"
+        );
+    }
+
+    #[test]
+    fn accounts_block_with_cause_wins_over_group_cause() {
+        let (accounts, blocked, registry) = new_accounts();
+        accounts
+            .register_group(&[account(1)], group(7))
+            .expect("registration must succeed");
+        accounts
+            .block_group(group(7), "group halt".to_owned())
+            .expect("group block must succeed");
+        let restored = AccountBlock::new(
+            "PersistedPnlPolicy",
+            RejectCode::PnlKillSwitchTriggered,
+            "persisted pnl floor breach",
+            "pnl is below the persisted floor",
+        );
+
+        accounts.block_with_cause(account(1), restored.clone());
+
+        let rejects = blocked
+            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .expect("the restored account cause must block the account");
+        assert_eq!(rejects[0].policy, restored.policy);
+        assert_eq!(rejects[0].code, restored.code);
+        assert_eq!(rejects[0].reason, restored.reason);
+        assert_eq!(rejects[0].details, restored.details);
     }
 
     #[test]

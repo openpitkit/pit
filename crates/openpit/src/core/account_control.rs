@@ -25,9 +25,10 @@
 //!   before any policy is invoked.
 //! - **Admin.** Through the public [`Accounts`](crate::Accounts) handle an
 //!   operator may block or unblock an individual account or a whole account
-//!   group out of band. Group blocking is a live predicate evaluated at check
-//!   time against the engine's [`AccountGroups`](crate::core::AccountGroups)
-//!   registry, so membership changes take effect without re-blocking.
+//!   group out of band, or restore a persisted account cause. Group blocking
+//!   is a live predicate evaluated at check time against the engine's
+//!   [`AccountGroups`](crate::core::AccountGroups) registry, so membership
+//!   changes take effect without re-blocking.
 
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;

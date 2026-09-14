@@ -2031,3 +2031,27 @@ describe("engine-wide block", () => {
     result.request!.execute().reservation!.rollback();
   });
 });
+
+describe("durable account block restore", () => {
+  it("replays the supplied typed cause", () => {
+    const engine = Engine.builder().preTrade(sellGate).build();
+    const cause = new AccountBlock(
+      "PersistedPnlPolicy",
+      "PnlKillSwitchTriggered",
+      "persisted pnl floor breach",
+      "account pnl -501 is below floor -500",
+      0xfeedn,
+    );
+
+    engine.accounts().blockWithCause(OTHER_ACCOUNT, cause);
+    const result = engine.startPreTrade(orderFor(OTHER_ACCOUNT));
+
+    expect(result.ok).toBe(false);
+    expect(result.rejects).toHaveLength(1);
+    expect(result.rejects[0]?.policy).toBe(cause.policy);
+    expect(result.rejects[0]?.code).toBe(cause.code);
+    expect(result.rejects[0]?.reason).toBe(cause.reason);
+    expect(result.rejects[0]?.details).toBe(cause.details);
+    expect(result.rejects[0]?.userData).toBe(cause.userData);
+  });
+});

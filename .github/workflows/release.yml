@@ -272,7 +272,7 @@ jobs:
           STAGING_VERSION: ${{ needs.verify-tag.outputs.version }}
         run: just --justfile "$JUSTFILE" apply-staging-version "$STAGING_VERSION"
 
-      - name: Copy monorepo LICENSE and OWNERS into Python package
+      - name: Copy monorepo LICENSE, OWNERS and THIRD-PARTY-LICENSES into Python package
         shell: bash
         run: just --justfile "$JUSTFILE" copy-python-metadata
 
@@ -417,7 +417,7 @@ jobs:
           STAGING_VERSION: ${{ needs.verify-tag.outputs.version }}
         run: just --justfile "$JUSTFILE" apply-staging-version "$STAGING_VERSION"
 
-      - name: Copy monorepo LICENSE and OWNERS into Python package
+      - name: Copy monorepo LICENSE, OWNERS and THIRD-PARTY-LICENSES into Python package
         shell: bash
         run: just --justfile "$JUSTFILE" copy-python-metadata
 
@@ -780,6 +780,7 @@ jobs:
             --config Release
           cp LICENSE /tmp/openpit-cpp-install/LICENSE
           cp OWNERS  /tmp/openpit-cpp-install/OWNERS
+          cp THIRD-PARTY-LICENSES /tmp/openpit-cpp-install/THIRD-PARTY-LICENSES
 
       - name: Package C++ distributable
         shell: bash
@@ -988,94 +989,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  sync-vcpkg-upstream:
-    name: Propose microsoft/vcpkg port update
-    needs:
-      - publish-github-release
-      - publish-vcpkg-registry
-      - verify-tag
-    if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
-    continue-on-error: true
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Download generated vcpkg port
-        uses: actions/download-artifact@v4
-        with:
-          name: openpit-vcpkg-port
-          path: ${{ runner.temp }}/openpit-vcpkg-port
-
-      - name: Create or update upstream pull request
-        shell: bash
-        env:
-          VERSION: ${{ needs.verify-tag.outputs.version }}
-          VCPKG_UPSTREAM_FORK: ${{ vars.VCPKG_UPSTREAM_FORK }}
-          VCPKG_UPSTREAM_PUSH_TOKEN: ${{ secrets.VCPKG_UPSTREAM_PUSH_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${VCPKG_UPSTREAM_FORK}" \
-              || -z "${VCPKG_UPSTREAM_PUSH_TOKEN}" ]]; then
-            echo "::warning::Skipping microsoft/vcpkg sync: configure VCPKG_UPSTREAM_FORK and VCPKG_UPSTREAM_PUSH_TOKEN"
-            exit 0
-          fi
-          if [[ "${VCPKG_UPSTREAM_FORK}" != */* ]]; then
-            echo "::error::VCPKG_UPSTREAM_FORK must be an owner/repository value"
-            exit 1
-          fi
-
-          fork_owner="${VCPKG_UPSTREAM_FORK%%/*}"
-          branch="openpit-${VERSION}"
-          worktree="$RUNNER_TEMP/microsoft-vcpkg"
-
-          # Fast-forward the fork server-side. Branching from upstream/master
-          # instead would push microsoft/vcpkg history the fork does not have,
-          # including .github/workflows changes, which a push token without the
-          # workflow scope is refused. Everything below then pushes a single
-          # port commit on top of a fork that already matches upstream.
-          if ! GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh api --method POST \
-              "repos/${VCPKG_UPSTREAM_FORK}/merge-upstream" \
-              --field branch=master; then
-            echo "::error::cannot fast-forward ${VCPKG_UPSTREAM_FORK} master onto microsoft/vcpkg; the fork must carry no local commits on master"
-            exit 1
-          fi
-
-          git clone \
-            "https://x-access-token:${VCPKG_UPSTREAM_PUSH_TOKEN}@github.com/${VCPKG_UPSTREAM_FORK}.git" \
-            "${worktree}"
-          git -C "${worktree}" checkout -B "${branch}" origin/master
-          git -C "${worktree}" config user.name "github-actions[bot]"
-          git -C "${worktree}" config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -rf "${worktree}/ports/openpit"
-          cp -R "$RUNNER_TEMP/openpit-vcpkg-port" "${worktree}/ports/openpit"
-          "${worktree}/bootstrap-vcpkg.sh" -disableMetrics
-          git -C "${worktree}" add ports/openpit
-          if git -C "${worktree}" diff --cached --quiet; then
-            echo "microsoft/vcpkg already contains OpenPit v${VERSION}"
-            exit 0
-          fi
-          git -C "${worktree}" commit -m "Add OpenPit v${VERSION}"
-          "${worktree}/vcpkg" x-add-version openpit
-          git -C "${worktree}" add versions
-          git -C "${worktree}" commit --amend --no-edit
-          git -C "${worktree}" push --force origin "HEAD:${branch}"
-
-          existing_pr="$(GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh pr list \
-            --repo microsoft/vcpkg \
-            --head "${fork_owner}:${branch}" \
-            --state open --json url --jq '.[0].url // empty')"
-          if [[ -n "${existing_pr}" ]]; then
-            echo "Updated upstream vcpkg PR: ${existing_pr}"
-          else
-            GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh pr create \
-              --repo microsoft/vcpkg \
-              --head "${fork_owner}:${branch}" \
-              --base master \
-              --title "[openpit] Update to ${VERSION}" \
-              --body "Updates the OpenPit C++ SDK port to ${VERSION}."
-          fi
+  # The microsoft/vcpkg port update runs by hand for now: vcpkg-upstream.yml
+  # names the condition for bringing sync-vcpkg-upstream back here.
 
   publish-go-sources:
     name: Publish pit-go sources
@@ -1146,6 +1061,7 @@ jobs:
 
           cp "${MONOREPO}/LICENSE" "${WORKTREE}/LICENSE"
           cp "${MONOREPO}/OWNERS"  "${WORKTREE}/OWNERS"
+          cp "${MONOREPO}/THIRD-PARTY-LICENSES" "${WORKTREE}/THIRD-PARTY-LICENSES"
 
           declare -A PLATFORMS=(
             ["linux-amd64"]="libopenpit_ffi.so"
@@ -1179,7 +1095,7 @@ jobs:
             cd "${WORKTREE}"
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add LICENSE OWNERS
+            git add LICENSE OWNERS THIRD-PARTY-LICENSES
             git add -f internal/runtime/
             git commit -m "Release v${VERSION}: add runtime binaries and monorepo metadata"
 

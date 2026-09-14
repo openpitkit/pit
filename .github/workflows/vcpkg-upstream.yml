@@ -1,0 +1,147 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Proposes a released OpenPit port to microsoft/vcpkg.
+#
+# Manual until microsoft/vcpkg accepts the initial openpit port
+# (https://github.com/microsoft/vcpkg/pull/53799). That PR is updated by hand
+# with new commits, and a run before it merges would open a second PR for the
+# same new port. Do not run it until then.
+#
+# Once the port is in microsoft/vcpkg master, move this job back into
+# release.yml: production only, needs publish-github-release,
+# publish-vcpkg-registry and verify-tag, continue-on-error: true, and the port
+# taken from the openpit-vcpkg-port artifact of the release run instead of the
+# registry. Then delete this file.
+
+name: vcpkg upstream
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Released OpenPit version, for example 0.8.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sync-vcpkg-upstream:
+    name: Propose microsoft/vcpkg port update
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Take the released port from the managed registry
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version ${VERSION} does not match MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+
+          # The managed registry pins every released port to a git tree, so
+          # this is exactly the port the release verified and published.
+          registry="$RUNNER_TEMP/openpit-vcpkg-registry"
+          git clone https://github.com/openpitkit/vcpkg-registry.git "${registry}"
+          tree="$(jq -r --arg version "${VERSION}" \
+            'first(.versions[] | select(.version == $version) | ."git-tree") // empty' \
+            "${registry}/versions/o-/openpit.json")"
+          if [[ -z "${tree}" ]]; then
+            echo "::error::openpit ${VERSION} is not in the managed vcpkg registry"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/openpit-vcpkg-port"
+          git -C "${registry}" archive "${tree}" \
+            | tar -x -C "$RUNNER_TEMP/openpit-vcpkg-port"
+
+      - name: Create or update upstream pull request
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          VCPKG_UPSTREAM_FORK: ${{ vars.VCPKG_UPSTREAM_FORK }}
+          VCPKG_UPSTREAM_PUSH_TOKEN: ${{ secrets.VCPKG_UPSTREAM_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${VCPKG_UPSTREAM_FORK}" \
+              || -z "${VCPKG_UPSTREAM_PUSH_TOKEN}" ]]; then
+            echo "::warning::Skipping microsoft/vcpkg sync: configure VCPKG_UPSTREAM_FORK and VCPKG_UPSTREAM_PUSH_TOKEN"
+            exit 0
+          fi
+          if [[ "${VCPKG_UPSTREAM_FORK}" != */* ]]; then
+            echo "::error::VCPKG_UPSTREAM_FORK must be an owner/repository value"
+            exit 1
+          fi
+
+          fork_owner="${VCPKG_UPSTREAM_FORK%%/*}"
+          branch="openpit-${VERSION}"
+          worktree="$RUNNER_TEMP/microsoft-vcpkg"
+
+          # Fast-forward the fork server-side. Branching from upstream/master
+          # instead would push microsoft/vcpkg history the fork does not have,
+          # including .github/workflows changes, which a push token without the
+          # workflow scope is refused. Everything below then pushes a single
+          # port commit on top of a fork that already matches upstream.
+          if ! GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh api --method POST \
+              "repos/${VCPKG_UPSTREAM_FORK}/merge-upstream" \
+              --field branch=master; then
+            echo "::error::cannot fast-forward ${VCPKG_UPSTREAM_FORK} master onto microsoft/vcpkg; the fork must carry no local commits on master"
+            exit 1
+          fi
+
+          git clone \
+            "https://x-access-token:${VCPKG_UPSTREAM_PUSH_TOKEN}@github.com/${VCPKG_UPSTREAM_FORK}.git" \
+            "${worktree}"
+          git -C "${worktree}" checkout -B "${branch}" origin/master
+          git -C "${worktree}" config user.name "github-actions[bot]"
+          git -C "${worktree}" config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf "${worktree}/ports/openpit"
+          cp -R "$RUNNER_TEMP/openpit-vcpkg-port" "${worktree}/ports/openpit"
+          "${worktree}/bootstrap-vcpkg.sh" -disableMetrics
+          git -C "${worktree}" add ports/openpit
+          if git -C "${worktree}" diff --cached --quiet; then
+            echo "microsoft/vcpkg already contains OpenPit v${VERSION}"
+            exit 0
+          fi
+          git -C "${worktree}" commit -m "Add OpenPit v${VERSION}"
+          "${worktree}/vcpkg" x-add-version openpit
+          git -C "${worktree}" add versions
+          git -C "${worktree}" commit --amend --no-edit
+          git -C "${worktree}" push --force origin "HEAD:${branch}"
+
+          existing_pr="$(GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh pr list \
+            --repo microsoft/vcpkg \
+            --head "${fork_owner}:${branch}" \
+            --state open --json url --jq '.[0].url // empty')"
+          if [[ -n "${existing_pr}" ]]; then
+            echo "Updated upstream vcpkg PR: ${existing_pr}"
+          else
+            GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh pr create \
+              --repo microsoft/vcpkg \
+              --head "${fork_owner}:${branch}" \
+              --base master \
+              --title "[openpit] Update to ${VERSION}" \
+              --body "Updates the OpenPit C++ SDK port to ${VERSION}."
+          fi

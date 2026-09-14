@@ -2023,6 +2023,37 @@ impl PyAccounts {
         Ok(())
     }
 
+    /// Restore a persisted account block with its original cause.
+    ///
+    /// Later pre-trade requests reject with it before policies run. Provenance
+    /// is not restored, so rollback cannot remove it; only `unblock` can. User
+    /// data remains opaque bits with no engine-known referent after restart.
+    ///
+    /// The first cause in the account's own slot wins. Group and engine-wide
+    /// blocks leave that slot free; checks prefer account, group, then
+    /// engine-wide causes.
+    ///
+    /// Call on a newly built engine before pre-trade, adjustments, reports,
+    /// drop copy, policy reconfiguration, or group changes can record a cause
+    /// for this account. Do not race those operations with this call: a
+    /// provisional cause can win, then roll back and leave no block.
+    ///
+    /// Constructing `AccountBlock` raises `ValueError` for an unrecognized code
+    /// and `OverflowError` for a token outside `0..2**64-1`. This method raises
+    /// `OverflowError` only where the platform word is narrower than 64 bits.
+    #[pyo3(signature = (account, cause))]
+    fn block_with_cause(
+        &self,
+        py: Python<'_>,
+        account: &Bound<'_, PyAny>,
+        cause: PyRef<'_, PyAccountBlock>,
+    ) -> PyResult<()> {
+        let account_id = parse_account_id_input(account)?;
+        let cause = account_block_to_core(&cause)?;
+        py.detach(|| self.inner.block_with_cause(account_id, cause));
+        Ok(())
+    }
+
     #[pyo3(signature = (account))]
     fn unblock(&self, py: Python<'_>, account: &Bound<'_, PyAny>) -> PyResult<()> {
         let account_id = parse_account_id_input(account)?;
@@ -2711,15 +2742,13 @@ struct PyAccountControl {
 
 #[pymethods]
 impl PyAccountControl {
+    /// Record this callback's block against its bound account.
+    ///
+    /// Constructing `AccountBlock` raises `ValueError` for an unrecognized code
+    /// and `OverflowError` for a token outside `0..2**64-1`. This method raises
+    /// `OverflowError` only where the platform word is narrower than 64 bits.
     fn block(&self, block: PyRef<'_, PyAccountBlock>) -> PyResult<()> {
-        let native = openpit::pretrade::AccountBlock::new(
-            block.policy.clone(),
-            parse_reject_code(&block.code)?,
-            block.reason.clone(),
-            block.details.clone(),
-        )
-        .with_user_data(block.user_data as usize);
-        self.inner.block(native);
+        self.inner.block(account_block_to_core(&block)?);
         Ok(())
     }
 }
@@ -3576,6 +3605,12 @@ fn parse_policy_rejects(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult
     Ok(rejects)
 }
 
+fn user_data_to_usize(user_data: u64) -> PyResult<usize> {
+    usize::try_from(user_data).map_err(|_| {
+        pyo3::exceptions::PyOverflowError::new_err("user_data token exceeds the supported range")
+    })
+}
+
 fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult<Reject> {
     let code = parse_reject_code(
         value
@@ -3606,7 +3641,8 @@ fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult<
     } else {
         0
     };
-    Ok(Reject::new(policy_name, scope, code, reason, details).with_user_data(user_data as usize))
+    Ok(Reject::new(policy_name, scope, code, reason, details)
+        .with_user_data(user_data_to_usize(user_data)?))
 }
 
 fn parse_policy_mutation(value: &Bound<'_, PyAny>) -> PyResult<Mutation> {
@@ -3728,13 +3764,7 @@ fn parse_account_outcome_entry(value: &Bound<'_, PyAny>) -> PyResult<AccountOutc
 
 fn parse_account_block(value: &Bound<'_, PyAny>) -> PyResult<openpit::pretrade::AccountBlock> {
     if let Ok(value) = value.extract::<PyRef<'_, PyAccountBlock>>() {
-        return Ok(openpit::pretrade::AccountBlock::new(
-            value.policy.clone(),
-            parse_reject_code(&value.code)?,
-            value.reason.clone(),
-            value.details.clone(),
-        )
-        .with_user_data(value.user_data as usize));
+        return account_block_to_core(&value);
     }
 
     let code = value
@@ -3762,7 +3792,7 @@ fn parse_account_block(value: &Bound<'_, PyAny>) -> PyResult<openpit::pretrade::
     };
     Ok(
         openpit::pretrade::AccountBlock::new(policy, parse_reject_code(&code)?, reason, details)
-            .with_user_data(user_data as usize),
+            .with_user_data(user_data_to_usize(user_data)?),
     )
 }
 
@@ -8595,6 +8625,17 @@ fn convert_account_block(block: &openpit::pretrade::AccountBlock) -> PyAccountBl
         details: block.details.clone(),
         user_data: block.user_data as u64,
     }
+}
+
+fn account_block_to_core(block: &PyAccountBlock) -> PyResult<openpit::pretrade::AccountBlock> {
+    let user_data = user_data_to_usize(block.user_data)?;
+    Ok(openpit::pretrade::AccountBlock::new(
+        block.policy.clone(),
+        parse_reject_code(&block.code)?,
+        block.reason.clone(),
+        block.details.clone(),
+    )
+    .with_user_data(user_data))
 }
 
 /// Account block inserted for an account selected by the engine.

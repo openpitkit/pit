@@ -38,6 +38,7 @@ namespace {
 using openpit::Engine;
 using openpit::EngineBuilder;
 using openpit::SyncPolicy;
+using openpit::accounts::AccountBlock;
 using openpit::accounts::AccountBlockError;
 using openpit::accounts::AccountBlockErrorKind;
 using openpit::accounts::AccountGroupError;
@@ -215,6 +216,33 @@ TEST(Accounts, BlockIdempotentKeepsFirstReason) {
   accounts.Block(account, "second");
 
   ExpectAccountBlockedWithReason(engine, "first");
+}
+
+TEST(Accounts, BlockWithCauseRestoresTypedCause) {
+  Engine engine = NewAccountsTestEngine();
+  Accounts accounts = engine.Accounts();
+  const AccountId account = AccountId::FromUint64(1);
+  AccountBlock cause(RejectCode::PnlKillSwitchTriggered, "PersistedPnlPolicy",
+                     "persisted pnl floor breach",
+                     "account pnl -501 is below floor -500");
+  cause.userData = 0xfeed;
+
+  accounts.BlockWithCause(account, cause);
+
+  openpit::pretrade::StartResult result = engine.StartPreTrade(TestOrder(1));
+  ASSERT_FALSE(result.request.has_value());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  const auto& reject = result.rejects.front();
+  EXPECT_EQ(reject.policy, cause.policy);
+  EXPECT_EQ(reject.code, cause.code);
+  EXPECT_EQ(reject.reason, cause.reason);
+  EXPECT_EQ(reject.details, cause.details);
+  EXPECT_EQ(reject.userData, cause.userData);
+
+  accounts.Unblock(account);
+  cause.code = static_cast<RejectCode>(0xffff);
+  EXPECT_THROW(accounts.BlockWithCause(account, cause), openpit::Error);
+  ExpectAccountPasses(engine);
 }
 
 TEST(Accounts, ReplaceBlockReasonUpdatesBlockedAccount) {

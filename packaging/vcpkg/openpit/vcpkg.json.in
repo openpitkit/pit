@@ -3,8 +3,8 @@
   "version": "@OPENPIT_VERSION@",
   "description": "C++17 binding for the OpenPit pre-trade risk SDK",
   "homepage": "https://openpit.dev",
-  "license": "Apache-2.0",
-  "supports": "((linux | osx) & (x64 | arm64)) | (windows & x64 & !uwp & !mingw)",
+  "license": "Apache-2.0 AND MIT",
+  "supports": "(((linux | osx) & (x64 | arm64)) | (windows & x64 & !uwp & !mingw)) & !(static & staticcrt)",
   "dependencies": [
     {
       "name": "vcpkg-cmake",
