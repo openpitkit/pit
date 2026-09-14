@@ -82,19 +82,12 @@ target_link_libraries(your_target PRIVATE OpenPit::openpit)
 Configure your project with the vcpkg toolchain file. The normal OpenPit runtime
 resolver then downloads and verifies the matching released runtime asset.
 
-#### Public [`microsoft/vcpkg`](https://github.com/microsoft/vcpkg) registry
-
-The preferred path: the manifest above is the whole setup, because vcpkg
-resolves `openpit` from the registry it already ships with. Ports land there
-through upstream review, so a fresh OpenPit release becomes installable this
-way with a delay.
-
 #### Managed OpenPit registry
 
 [`openpitkit/vcpkg-registry`](https://github.com/openpitkit/vcpkg-registry)
-receives every OpenPit release first. Use it when the release you need has not
-reached the public registry yet, or when pinning an exact OpenPit version. The
-cost is one extra file next to the manifest, `vcpkg-configuration.json`:
+receives every OpenPit release first and is the way to install OpenPit through
+vcpkg today. It takes one extra file next to the manifest,
+`vcpkg-configuration.json`:
 
 <!-- Test mirror: e2e/scripts/cpp-vcpkg.sh -->
 ```json
@@ -112,6 +105,13 @@ cost is one extra file next to the manifest, `vcpkg-configuration.json`:
 
 This `baseline` is a commit of the managed registry, not of `microsoft/vcpkg`;
 every OpenPit release note publishes the commit to use.
+
+#### Public [`microsoft/vcpkg`](https://github.com/microsoft/vcpkg) registry
+
+Not available yet: the OpenPit port is in upstream review. Once it is accepted,
+the manifest above is the whole setup, because vcpkg already ships with this
+registry; new OpenPit releases reach it with a delay, and the managed registry
+keeps getting them first.
 
 ## Quick Start
 
