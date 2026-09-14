@@ -80,6 +80,21 @@ def render(template: Path, replacements: dict[str, str]) -> str:
     return contents
 
 
+# Every tracked source file opens with the project license header, the template
+# included. The rendered port is contributed to microsoft/vcpkg, where that
+# header would misstate the file's license, so rendering drops it.
+def without_license_header(contents: str, template: Path) -> str:
+    header, separator, body = contents.partition("\n\n")
+    header_lines = header.splitlines()
+    if (
+        not separator
+        or not all(line.startswith("#") for line in header_lines)
+        or not any("SPDX-License-Identifier:" in line for line in header_lines)
+    ):
+        raise ValueError(f"{template} does not open with the license header")
+    return body
+
+
 def main() -> None:
     args = parse_args()
     root = Path(__file__).resolve().parent.parent / "packaging" / "vcpkg" / "openpit"
@@ -94,8 +109,10 @@ def main() -> None:
     replacements.update(runtime_digests(args.runtime_dir))
 
     args.destination.mkdir(parents=True, exist_ok=True)
+    portfile_template = root / "portfile.cmake.in"
+    portfile = render(portfile_template, replacements)
     (args.destination / "portfile.cmake").write_text(
-        render(root / "portfile.cmake.in", replacements), encoding="utf-8"
+        without_license_header(portfile, portfile_template), encoding="utf-8"
     )
     (args.destination / "vcpkg.json").write_text(
         render(root / "vcpkg.json.in", replacements), encoding="utf-8"
