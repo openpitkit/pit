@@ -18,6 +18,8 @@ Please see https://openpit.dev and the OWNERS file for details.
 
 Template of THIRD-PARTY-LICENSES (`just gen-third-party-licenses`). Triple
 braces keep license texts verbatim: double braces would HTML-escape them.
+Crate versions are left out on purpose: the notices depend on license texts,
+and a release version bump must not make the file stale.
 --}}
 Third-party licenses
 
@@ -31,7 +33,7 @@ license text is followed by the crates it covers.
 
 Used by:
 {{#each used_by}}
-- {{crate.name}} {{crate.version}}
+- {{crate.name}}
 {{/each}}
 
 {{{text}}}
