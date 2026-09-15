@@ -641,14 +641,16 @@ def command_clean(_: argparse.Namespace) -> None:
     target = ROOT / "target"
     if not target.is_dir():
         return
-    # Keep caches other just recipes place directly under target/ (see the
-    # justfile exports for GOCACHE, PIP_CACHE_DIR, GOLANGCI_LINT_CACHE, and
-    # node_dir) plus cargo-llvm-cov output and rust-analyzer's own build dir.
+    # Keep caches and tools other just recipes place directly under target/
+    # (see the justfile exports for GOCACHE, PIP_CACHE_DIR, GOLANGCI_LINT_CACHE,
+    # node_dir, and cargo_about_dir) plus cargo-llvm-cov output and
+    # rust-analyzer's own build dir.
     preserved = {
         "go-cache",
         "pip-cache",
         "golangci-lint-cache",
         "node",
+        "cargo-about",
         "llvm-cov",
         "rust-analyzer",
     }

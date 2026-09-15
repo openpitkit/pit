@@ -25,6 +25,7 @@ venv_bin := if os_family() == "windows" { venv_dir / "Scripts" } else { venv_dir
 default_python_path := if os_family() == "windows" { venv_bin / "python.exe" } else { venv_bin / "python" }
 node_dir := env_var_or_default("PIT_NODE_DIR", repo_dir / "target" / "node")
 node_bin_dir := if os_family() == "windows" { node_dir } else { node_dir / "bin" }
+cargo_about_dir := repo_dir / "target" / "cargo-about"
 path_separator := if os_family() == "windows" { ";" } else { ":" }
 python_path := env_var_or_default("PYTHON_PATH", default_python_path)
 semgrep_path := if os_family() == "windows" { venv_bin / "semgrep.exe" } else { venv_bin / "semgrep" }
@@ -35,7 +36,7 @@ python_config := "bindings/python/pyproject.toml"
 export VIRTUAL_ENV := venv_dir
 export PYO3_PYTHON := python_path
 export PIT_WINDOWS_TARGET := windows_target
-export PATH := node_bin_dir + path_separator + venv_bin + path_separator + env_var("PATH")
+export PATH := node_bin_dir + path_separator + venv_bin + path_separator + (cargo_about_dir / "bin") + path_separator + env_var("PATH")
 export PIP_CACHE_DIR := env_var_or_default("PIP_CACHE_DIR", repo_dir / "target/pip-cache")
 export PIP_DISABLE_PIP_VERSION_CHECK := env_var_or_default("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 export GOCACHE := env_var_or_default("GOCACHE", repo_dir / "target/go-cache")
@@ -111,7 +112,8 @@ install: ensure-node
         || cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
     fi
 
-    # 3. cargo-about at the version CI pins, for gen-third-party-licenses.
+    # 3. cargo-about at the version CI pins, for gen-third-party-licenses. It
+    # stays project-local in target/cargo-about, which the recipes' PATH covers.
     CA_VERSION="$(sed -n 's/^CI_CARGO_ABOUT=//p' .github/ci-versions.env)"
     if [[ -z "${CA_VERSION}" ]]; then
       echo "error: CI_CARGO_ABOUT is missing from .github/ci-versions.env" >&2
@@ -124,7 +126,8 @@ install: ensure-node
       echo "cargo-about ${CA_VERSION}: installing"
       # The binary sits behind the `cli` feature: without it cargo install
       # exits 0 and installs nothing.
-      cargo install cargo-about --version "${CA_VERSION}" --locked --features cli
+      cargo install cargo-about --version "${CA_VERSION}" --locked --features cli \
+        --root "{{ cargo_about_dir }}"
       CA_INSTALLED="$(cargo about --version 2>/dev/null || true)"
       if [[ "${CA_INSTALLED##* }" != "${CA_VERSION}" ]]; then
         echo "error: cargo-about ${CA_VERSION} is not on PATH after install" >&2

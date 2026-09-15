@@ -37,6 +37,18 @@ def load_module():
     return module
 
 
+def test_clean_keeps_project_local_tools(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    target = tmp_path / "target"
+    for name in ("node", "cargo-about", "debug"):
+        (target / name).mkdir(parents=True)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+
+    module.command_clean(module.argparse.Namespace())
+
+    assert sorted(entry.name for entry in target.iterdir()) == ["cargo-about", "node"]
+
+
 def test_c_readme_syntax_command_prefers_windows_clang(monkeypatch) -> None:
     module = load_module()
 
