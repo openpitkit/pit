@@ -19,6 +19,9 @@
 //! C-ABI accessor `openpit_get_runtime_build_profile` can report it to FFI
 //! consumers. A consumer can then refuse a debug-built core whose latency
 //! numbers would be meaningless.
+//!
+//! On Linux it also gives the library a SONAME, so a consumer records the bare
+//! `libopenpit_ffi.so` in `DT_NEEDED` and finds it through its run path.
 
 use std::env;
 
@@ -31,6 +34,7 @@ fn main() {
     let profile = required_env("PROFILE");
     let opt_level = required_env("OPT_LEVEL");
     let target = required_env("TARGET");
+    let target_os = required_env("CARGO_CFG_TARGET_OS");
 
     // Best-effort values, parsed from the encoded rustflags. They become the
     // literal `unknown` when absent rather than being dropped from the output.
@@ -48,6 +52,12 @@ fn main() {
     println!("cargo:rustc-env=OPENPIT_BUILD_TARGET={target}");
     println!("cargo:rustc-env=OPENPIT_BUILD_TARGET_CPU={target_cpu}");
     println!("cargo:rustc-env=OPENPIT_BUILD_LTO={lto}");
+
+    // Without a SONAME the linker records the path the library was linked
+    // from, and a relative one resolves against the process working directory.
+    if target_os == "linux" {
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libopenpit_ffi.so");
+    }
 
     // Keep the embedded values correct when the profile or the rustflags change.
     println!("cargo:rerun-if-changed=build.rs");

@@ -124,17 +124,10 @@ if(VCPKG_TARGET_IS_WINDOWS)
   string(APPEND openpit_config_prelude
     "\nset(OPENPIT_RUNTIME_IMPORT_LIBRARY \"\${CMAKE_CURRENT_LIST_DIR}/../../lib/${openpit_implib_file}\")")
 endif()
-set(openpit_config_runtime "${openpit_config_prelude}\nopenpit_resolve_runtime()")
-if(VCPKG_TARGET_IS_LINUX)
-  # The release ELF has no SONAME. Link by the installed library name so that
-  # consumers do not embed the absolute package path in DT_NEEDED.
-  string(APPEND openpit_config_runtime
-    "\nset_target_properties(OpenPit::runtime PROPERTIES IMPORTED_NO_SONAME TRUE)")
-endif()
 vcpkg_replace_string(
   "${CURRENT_PACKAGES_DIR}/share/${PORT}/OpenPitConfig.cmake"
   "openpit_resolve_runtime()"
-  "${openpit_config_runtime}")
+  "${openpit_config_prelude}\nopenpit_resolve_runtime()")
 
 vcpkg_install_copyright(FILE_LIST
   "${SOURCE_PATH}/LICENSE"
