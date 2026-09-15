@@ -55,7 +55,16 @@ RUN Invoke-WebRequest 'https://go.dev/dl/go1.22.3.windows-amd64.zip' -OutFile C:
     Expand-Archive C:\go.zip -DestinationPath C:\; `
     Remove-Item C:\go.zip
 
-ENV PATH="C:\cmake\bin;C:\Git\cmd;C:\Python310;C:\Python310\Scripts;C:\go\bin;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows\System32;C:\Windows"
+# cgo needs a MinGW-w64 compiler. Without one Go silently drops every cgo file,
+# so CGO_ENABLED=1 turns a missing compiler into an explicit error.
+RUN Invoke-WebRequest 'https://github.com/brechtsanders/winlibs_mingw/releases/download/14.3.0posix-12.0.0-ucrt-r1/winlibs-x86_64-posix-seh-gcc-14.3.0-mingw-w64ucrt-12.0.0-r1.zip' -OutFile C:\mingw.zip; `
+    if ((Get-FileHash -Algorithm SHA256 C:\mingw.zip).Hash -ne 'd6e83bf3cfff02ddcb4ccb485a8a162e3852bf09976d0cb9d521f3d0d6855ea3') { throw 'MinGW-w64 archive sha256 mismatch' }; `
+    Expand-Archive C:\mingw.zip -DestinationPath C:\; `
+    Remove-Item C:\mingw.zip
+
+ENV CGO_ENABLED=1
+# MinGW-w64 goes last so its bundled tools never shadow the ones above.
+ENV PATH="C:\cmake\bin;C:\Git\cmd;C:\Python310;C:\Python310\Scripts;C:\go\bin;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows\System32;C:\Windows;C:\mingw64\bin"
 
 RUN & C:\Python310\python.exe -m pip install --disable-pip-version-check --no-cache-dir --upgrade pip pytest
 
