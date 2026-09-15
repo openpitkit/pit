@@ -104,7 +104,7 @@ verify_sha256 "${work_root}/${asset}" "${work_root}/${asset}.sha256"
 
 tar -xzf "${work_root}/${asset}" -C "${install_dir}"
 
-runtime_args=()
+runtime_path=""
 if [[ -n "${OPENPIT_RELEASE_DOWNLOAD_TOKEN:-}" ]]; then
   runtime_asset="openpit-ffi--linux-amd64-libopenpit_ffi.so"
   runtime_path="${work_root}/libopenpit_ffi.so"
@@ -112,14 +112,26 @@ if [[ -n "${OPENPIT_RELEASE_DOWNLOAD_TOKEN:-}" ]]; then
   download_release_asset "${runtime_asset}" "${runtime_path}"
   download_release_asset "${runtime_asset}.sha256" "${runtime_path}.sha256"
   verify_sha256 "${runtime_path}" "${runtime_path}.sha256"
-  runtime_args+=("-DOPENPIT_RUNTIME_LIBRARY=${runtime_path}")
 fi
+
+# Draft assets are not public, so the resolver cannot download them. Put the
+# verified runtime where the resolver would have downloaded it: the build then
+# takes the same resolver branch and link line as a published-release consumer.
+seed_draft_runtime() {
+  local build="$1"
+  if [[ -z "${runtime_path}" ]]; then
+    return
+  fi
+  local download_dir="${build}/openpit-runtime/v${OPENPIT_VERSION}"
+  mkdir -p "${download_dir}"
+  cp "${runtime_path}" "${download_dir}/libopenpit_ffi.so"
+}
 
 # Source: bindings/cpp/README.md - Install / CMake find_package
 echo "==> Building minimal C++ consumer"
+seed_draft_runtime "${work_root}/consumer-build"
 cmake -S /opt/e2e/cpp-consumer -B "${work_root}/consumer-build" \
-  -DCMAKE_PREFIX_PATH="${install_dir}" \
-  "${runtime_args[@]}"
+  -DCMAKE_PREFIX_PATH="${install_dir}"
 cmake --build "${work_root}/consumer-build" --parallel
 "${work_root}/consumer-build/openpit_cpp_consumer"
 
@@ -134,9 +146,9 @@ run_example() {
   local build="${work_root}/examples/${name}"
 
   echo "==> Building C++ example ${name}"
+  seed_draft_runtime "${build}"
   cmake -S "${src}" -B "${build}" \
     -DCMAKE_PREFIX_PATH="${install_dir}" \
-    "${runtime_args[@]}" \
     "$@"
   cmake --build "${build}" --parallel
 
