@@ -23,6 +23,10 @@ vcpkg_check_linkage(ONLY_DYNAMIC_LIBRARY)
 # That prebuilt engine is released in one flavour, so there is no debug binary
 # to pair it with and nothing to gain from installing a second copy.
 set(VCPKG_POLICY_MISMATCHED_NUMBER_OF_BINARIES enabled)
+# The engine library is code-signed and already carries an @rpath install
+# name. Rewriting its load commands would break the signature, and arm64
+# macOS refuses to load a library whose signature is broken.
+set(VCPKG_FIXUP_MACHO_RPATH OFF)
 
 vcpkg_from_github(
   OUT_SOURCE_PATH SOURCE_PATH
