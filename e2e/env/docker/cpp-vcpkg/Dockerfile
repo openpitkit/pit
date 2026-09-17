@@ -38,6 +38,13 @@ COPY e2e/clients/cpp /opt/e2e/cpp-consumer
 COPY examples/cpp /opt/e2e/examples
 COPY examples/tables /opt/e2e/tables
 
+# The runner script takes these from its environment so that the same script
+# also runs natively on macOS (see e2e/run.sh).
+ENV OPENPIT_VCPKG_TRIPLET=x64-linux \
+    OPENPIT_E2E_CONSUMER_DIR=/opt/e2e/cpp-consumer \
+    OPENPIT_E2E_EXAMPLES_DIR=/opt/e2e/examples \
+    OPENPIT_E2E_TABLES_DIR=/opt/e2e/tables
+
 RUN chmod +x /usr/local/bin/run-release-e2e
 
 ENTRYPOINT ["/usr/local/bin/run-release-e2e"]

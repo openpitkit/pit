@@ -1403,6 +1403,13 @@ jobs:
           - name: Linux
             os: ubuntu-22.04
             setup_qemu: true
+          # Apple Silicon: the only place a broken code signature of the
+          # engine library shows, because arm64 refuses to load it. The runner
+          # has no Docker, so only the native scenario is selected.
+          - name: macOS
+            os: macos-14
+            setup_qemu: false
+            e2e_targets: cpp-vcpkg-macos-arm64
           - name: Windows
             os: windows-2022
             setup_qemu: false
@@ -1435,6 +1442,7 @@ jobs:
         id: release-e2e
         shell: bash
         env:
+          OPENPIT_RELEASE_E2E_TARGETS: ${{ matrix.e2e_targets }}
           OPENPIT_VCPKG_REGISTRY_BASELINE: ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
         run: just --justfile "$JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
 

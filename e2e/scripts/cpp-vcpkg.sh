@@ -19,6 +19,21 @@
 set -euo pipefail
 
 : "${OPENPIT_VERSION:?OPENPIT_VERSION is required}"
+# The container image sets these for its baked-in copies; the native macOS lane
+# in run.sh points them at the checkout.
+: "${OPENPIT_VCPKG_TRIPLET:?OPENPIT_VCPKG_TRIPLET is required}"
+: "${OPENPIT_E2E_CONSUMER_DIR:?OPENPIT_E2E_CONSUMER_DIR is required}"
+: "${OPENPIT_E2E_EXAMPLES_DIR:?OPENPIT_E2E_EXAMPLES_DIR is required}"
+: "${OPENPIT_E2E_TABLES_DIR:?OPENPIT_E2E_TABLES_DIR is required}"
+
+# Linux ships sha256sum, macOS ships shasum.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
 
 work_root="/tmp/openpit-cpp-vcpkg-release-e2e"
 examples_root="/tmp/openpit-cpp-vcpkg-examples"
@@ -55,7 +70,25 @@ download_draft_runtime() {
     return
   fi
 
-  local asset="openpit-ffi--linux-amd64-libopenpit_ffi.so"
+  local asset runtime_file
+  case "${OPENPIT_VCPKG_TRIPLET}" in
+    x64-linux)
+      asset="openpit-ffi--linux-amd64-libopenpit_ffi.so"
+      runtime_file="libopenpit_ffi.so"
+      ;;
+    arm64-osx)
+      asset="openpit-ffi--darwin-arm64-libopenpit_ffi.dylib"
+      runtime_file="libopenpit_ffi.dylib"
+      ;;
+    x64-osx)
+      asset="openpit-ffi--darwin-amd64-libopenpit_ffi.dylib"
+      runtime_file="libopenpit_ffi.dylib"
+      ;;
+    *)
+      echo "no release runtime asset is known for triplet ${OPENPIT_VCPKG_TRIPLET}" >&2
+      exit 1
+      ;;
+  esac
   download_release_metadata
   local asset_id
   asset_id="$(python3 - "${release_metadata}" "${asset}" <<'PY'
@@ -73,7 +106,7 @@ else:
     raise SystemExit(f"release asset not found: {asset_name}")
 PY
 )"
-  OPENPIT_VCPKG_RUNTIME_LIBRARY="${work_root}/libopenpit_ffi.so"
+  OPENPIT_VCPKG_RUNTIME_LIBRARY="${work_root}/${runtime_file}"
   curl -fsSL \
     --header "Authorization: Bearer ${OPENPIT_RELEASE_DOWNLOAD_TOKEN}" \
     --header "Accept: application/octet-stream" \
@@ -101,7 +134,7 @@ PY
     "${release_api}/releases/assets/${sha_asset_id}" \
     -o "${OPENPIT_VCPKG_RUNTIME_LIBRARY}.sha256"
   expected_sha="$(tr -d '[:space:]' < "${OPENPIT_VCPKG_RUNTIME_LIBRARY}.sha256")"
-  actual_sha="$(sha256sum "${OPENPIT_VCPKG_RUNTIME_LIBRARY}" | awk '{print $1}')"
+  actual_sha="$(sha256_of "${OPENPIT_VCPKG_RUNTIME_LIBRARY}")"
   if [[ "${actual_sha}" != "${expected_sha}" ]]; then
     echo "sha256 mismatch for ${asset}" >&2
     exit 1
@@ -195,28 +228,37 @@ write_vcpkg_configuration
 echo "==> Installing OpenPit from vcpkg"
 (
   cd "${work_root}"
-  "${vcpkg_root}/vcpkg" install --triplet x64-linux
+  "${vcpkg_root}/vcpkg" install --triplet "${OPENPIT_VCPKG_TRIPLET}"
 )
+
+if [[ "${OPENPIT_VCPKG_TRIPLET}" == *-osx ]]; then
+  # A successful install does not prove the library loads: arm64 macOS refuses
+  # a library whose signature a post-install rewrite of its load commands
+  # broke, and only a native run on arm64 shows that.
+  echo "==> Verifying the installed engine library signature"
+  codesign --verify --verbose \
+    "${work_root}/vcpkg_installed/${OPENPIT_VCPKG_TRIPLET}/lib/libopenpit_ffi.dylib"
+fi
 
 cmake_args=(
   "-DCMAKE_TOOLCHAIN_FILE=${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
   "-DVCPKG_MANIFEST_DIR=${work_root}"
   "-DVCPKG_INSTALLED_DIR=${work_root}/vcpkg_installed"
-  "-DVCPKG_TARGET_TRIPLET=x64-linux"
+  "-DVCPKG_TARGET_TRIPLET=${OPENPIT_VCPKG_TRIPLET}"
 )
 if [[ -n "${OPENPIT_VCPKG_RUNTIME_LIBRARY:-}" ]]; then
   cmake_args+=("-DOPENPIT_RUNTIME_LIBRARY=${OPENPIT_VCPKG_RUNTIME_LIBRARY}")
 fi
 
 echo "==> Building minimal C++ consumer through vcpkg"
-cmake -S /opt/e2e/cpp-consumer -B "${work_root}/consumer-build" \
+cmake -S "${OPENPIT_E2E_CONSUMER_DIR}" -B "${work_root}/consumer-build" \
   "${cmake_args[@]}"
 cmake --build "${work_root}/consumer-build" --parallel
 "${work_root}/consumer-build/openpit_cpp_consumer"
 
 mkdir -p "${examples_root}/cpp"
-cp -R /opt/e2e/examples/. "${examples_root}/cpp"
-cp -R /opt/e2e/tables "${examples_root}/tables"
+cp -R "${OPENPIT_E2E_EXAMPLES_DIR}/." "${examples_root}/cpp"
+cp -R "${OPENPIT_E2E_TABLES_DIR}" "${examples_root}/tables"
 
 run_example() {
   local name="$1"

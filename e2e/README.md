@@ -1,19 +1,22 @@
 # Release e2e
 
-Docker-based end-to-end checks that verify the **published** OpenPit artifacts
-work for a real downstream consumer. For a given version, each scenario pulls
-the released artifact from its public registry or release asset set, builds a
-minimal consumer and the workspace examples against it, and runs their tests -
-exactly what an SDK user sees when they add the dependency.
+End-to-end checks that verify the **published** OpenPit artifacts work for a
+real downstream consumer. For a given version, each scenario pulls the released
+artifact from its public registry or release asset set, builds a minimal
+consumer and the workspace examples against it, and runs their tests - exactly
+what an SDK user sees when they add the dependency. Linux and Windows scenarios
+run in Docker; the macOS scenario runs natively.
 
 ## Layout
 
-- `run.sh` - orchestrator: builds one image per scenario and runs its checks.
+- `run.sh` - orchestrator: on Linux builds one image per scenario and runs its
+  checks, on macOS runs the macOS scenario on the host.
 - `run-windows.ps1` - Windows-container orchestrator for the Windows binary
   surfaces.
 - `env/docker/<target>/Dockerfile` - per-target build environment.
-- `scripts/<target>.sh` and `scripts/windows-binary.ps1` - in-container
-  runners (fetch the release, build, test).
+- `scripts/<target>.sh` and `scripts/windows-binary.ps1` - scenario runners
+  (fetch the release, build, test), run inside the container or, for
+  `cpp-vcpkg.sh` on macOS, on the host.
 - `clients/<lang>` - the minimal smoke consumer for each language.
 
 ## How to run
@@ -35,6 +38,21 @@ The Linux suite builds and checks these scenarios, then prints a pass/fail
 summary: `rust-amd64`, `rust-arm64`, `python-wheel-amd64`,
 `python-wheel-arm64`, `python-source-arm64`, `go-amd64`, `cpp-amd64`,
 `cpp-vcpkg-amd64`, `js-amd64`.
+
+### macOS
+
+A macOS host adds one scenario that runs natively, without Docker, for the
+host architecture: `cpp-vcpkg-macos-arm64` on Apple Silicon,
+`cpp-vcpkg-macos-amd64` on Intel. It installs the port from the managed vcpkg
+registry, verifies the code signature of the installed engine library, then
+builds and runs the consumer and the C++ examples. Requires CMake and the
+Xcode command line tools. Without a selection the Linux scenarios run as well,
+through Docker, so on a host without it, such as a GitHub macOS runner, select
+the native scenario:
+
+```sh
+OPENPIT_RELEASE_E2E_TARGETS=cpp-vcpkg-macos-arm64 just test-release-e2e 0.4.0
+```
 
 ### Windows
 

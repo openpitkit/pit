@@ -38,6 +38,26 @@ known_targets=(
   cpp-vcpkg-amd64
   js-amd64
 )
+host_os="$(uname -s)"
+if [[ "${host_os}" == "Darwin" ]]; then
+  # The macOS scenario runs natively, for the host architecture: GitHub's macOS
+  # runners have no Docker, and the Docker scenarios only emulate Linux there.
+  case "$(uname -m)" in
+    arm64)
+      host_arch="arm64"
+      host_triplet="arm64-osx"
+      ;;
+    x86_64)
+      host_arch="amd64"
+      host_triplet="x64-osx"
+      ;;
+    *)
+      echo "unsupported macOS architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+  known_targets+=("cpp-vcpkg-macos-${host_arch}")
+fi
 requested_targets=()
 if [[ -n "${OPENPIT_RELEASE_E2E_TARGETS:-}" ]]; then
   read -r -a requested_targets <<< "${OPENPIT_RELEASE_E2E_TARGETS}"
@@ -108,6 +128,23 @@ run_case() {
     "${image}" || return
 }
 
+# Runs a scenario script on the host against the checkout, the way the
+# container runs it against its baked-in copies.
+run_native_case() {
+  local name="$1"
+  local script="$2"
+  local triplet="$3"
+
+  echo
+  echo "==> Running ${name} checks"
+  OPENPIT_VERSION="${VERSION}" \
+  OPENPIT_VCPKG_TRIPLET="${triplet}" \
+  OPENPIT_E2E_CONSUMER_DIR="${ROOT_DIR}/e2e/clients/cpp" \
+  OPENPIT_E2E_EXAMPLES_DIR="${ROOT_DIR}/examples/cpp" \
+  OPENPIT_E2E_TABLES_DIR="${ROOT_DIR}/examples/tables" \
+    bash "${script}" || return
+}
+
 failures=0
 passes=0
 passed_cases=()
@@ -122,8 +159,8 @@ print_banner() {
 
 run_or_record() {
   local name="$1"
-  local dockerfile="$2"
-  local platform="${3:-}"
+  local runner="$2"
+  shift 2
 
   if [[ ${#requested_targets[@]} -ne 0 ]]; then
     local selected=false
@@ -140,7 +177,7 @@ run_or_record() {
     fi
   fi
 
-  if run_case "${name}" "${dockerfile}" "${platform}"; then
+  if "${runner}" "${name}" "$@"; then
     passes=$((passes + 1))
     passed_cases+=("${name}")
     printf '==> %s checks passed\n' "${name}"
@@ -153,15 +190,18 @@ run_or_record() {
 
 print_banner "Release e2e for openpit ${VERSION}"
 
-run_or_record "rust-amd64" "${ROOT_DIR}/e2e/env/docker/rust-crate/Dockerfile" "linux/amd64"
-run_or_record "rust-arm64" "${ROOT_DIR}/e2e/env/docker/rust-crate/Dockerfile" "linux/arm64"
-run_or_record "python-wheel-amd64" "${ROOT_DIR}/e2e/env/docker/python-wheel/Dockerfile" "linux/amd64"
-run_or_record "python-wheel-arm64" "${ROOT_DIR}/e2e/env/docker/python-wheel/Dockerfile" "linux/arm64"
-run_or_record "python-source-arm64" "${ROOT_DIR}/e2e/env/docker/python-sdist/Dockerfile" "linux/arm64"
-run_or_record "go-amd64" "${ROOT_DIR}/e2e/env/docker/go-module/Dockerfile" "linux/amd64"
-run_or_record "cpp-amd64" "${ROOT_DIR}/e2e/env/docker/cpp-distributable/Dockerfile" "linux/amd64"
-run_or_record "cpp-vcpkg-amd64" "${ROOT_DIR}/e2e/env/docker/cpp-vcpkg/Dockerfile" "linux/amd64"
-run_or_record "js-amd64" "${ROOT_DIR}/e2e/env/docker/js-package/Dockerfile" "linux/amd64"
+run_or_record "rust-amd64" run_case "${ROOT_DIR}/e2e/env/docker/rust-crate/Dockerfile" "linux/amd64"
+run_or_record "rust-arm64" run_case "${ROOT_DIR}/e2e/env/docker/rust-crate/Dockerfile" "linux/arm64"
+run_or_record "python-wheel-amd64" run_case "${ROOT_DIR}/e2e/env/docker/python-wheel/Dockerfile" "linux/amd64"
+run_or_record "python-wheel-arm64" run_case "${ROOT_DIR}/e2e/env/docker/python-wheel/Dockerfile" "linux/arm64"
+run_or_record "python-source-arm64" run_case "${ROOT_DIR}/e2e/env/docker/python-sdist/Dockerfile" "linux/arm64"
+run_or_record "go-amd64" run_case "${ROOT_DIR}/e2e/env/docker/go-module/Dockerfile" "linux/amd64"
+run_or_record "cpp-amd64" run_case "${ROOT_DIR}/e2e/env/docker/cpp-distributable/Dockerfile" "linux/amd64"
+run_or_record "cpp-vcpkg-amd64" run_case "${ROOT_DIR}/e2e/env/docker/cpp-vcpkg/Dockerfile" "linux/amd64"
+run_or_record "js-amd64" run_case "${ROOT_DIR}/e2e/env/docker/js-package/Dockerfile" "linux/amd64"
+if [[ "${host_os}" == "Darwin" ]]; then
+  run_or_record "cpp-vcpkg-macos-${host_arch}" run_native_case "${ROOT_DIR}/e2e/scripts/cpp-vcpkg.sh" "${host_triplet}"
+fi
 
 if [[ "${failures}" -ne 0 ]]; then
   print_banner "RELEASE E2E FAILED"
