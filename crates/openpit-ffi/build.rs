@@ -21,7 +21,11 @@
 //! numbers would be meaningless.
 //!
 //! On Linux it also gives the library a SONAME, so a consumer records the bare
-//! `libopenpit_ffi.so` in `DT_NEEDED` and finds it through its run path.
+//! `libopenpit_ffi.so` in `DT_NEEDED` and finds it through its run path. On
+//! macOS it sets the install name to `@rpath/libopenpit_ffi.dylib` for the
+//! same reason, at link time: the linker then signs the final binary, and that
+//! signature survives later edits of the load commands, which a post-link
+//! `codesign` one does not.
 
 use std::env;
 
@@ -57,6 +61,9 @@ fn main() {
     // from, and a relative one resolves against the process working directory.
     if target_os == "linux" {
         println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libopenpit_ffi.so");
+    }
+    if target_os == "macos" {
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-install_name,@rpath/libopenpit_ffi.dylib");
     }
 
     // Keep the embedded values correct when the profile or the rustflags change.

@@ -480,9 +480,15 @@ package-runtime target goos goarch lib_name:
     DST="dist/openpit-ffi--{{ goos }}-{{ goarch }}-{{ lib_name }}"
     cp "${SRC}" "${DST}"
     if [[ "{{ goos }}" == "darwin" ]]; then
-      install_name_tool -id "@rpath/{{ lib_name }}" "${DST}"
-      # Changing Mach-O metadata invalidates the linker's ad-hoc signature.
-      codesign --force --sign - "${DST}"
+      # The install name comes from the linker (see crates/openpit-ffi/build.rs),
+      # so the library keeps its linker signature. Package managers rewrite
+      # install names and run paths after the fact; only a linker signature
+      # survives that, so prove it on a throwaway copy.
+      probe="$(mktemp)"
+      cp "${DST}" "${probe}"
+      install_name_tool -add_rpath @loader_path "${probe}"
+      codesign --verify "${probe}"
+      rm -f "${probe}"
     fi
     cp bindings/c/openpit.h dist/openpit.h
     cp LICENSE dist/LICENSE
