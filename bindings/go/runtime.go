@@ -17,7 +17,10 @@
 
 package openpit
 
-import "go.openpit.dev/openpit/internal/native"
+import (
+	"go.openpit.dev/openpit/internal/loader"
+	"go.openpit.dev/openpit/internal/native"
+)
 
 // GetVersion returns the version of the OpenPit.
 func GetVersion() string {
@@ -27,4 +30,13 @@ func GetVersion() string {
 // GetBuildProfile returns the build profile of the OpenPit.
 func GetBuildProfile() string {
 	return native.GetRuntimeBuildProfile().Safe()
+}
+
+// RuntimeLibraryPath returns the filesystem path of the native runtime library
+// the SDK loaded at process start: the OPENPIT_RUNTIME_LIBRARY_PATH override,
+// cleaned, or the copy extracted from the embedded runtime. Nothing after
+// package initialization changes which library runs, so a host that lets an
+// operator name the library compares that name with this path.
+func RuntimeLibraryPath() string {
+	return loader.LoadedPath()
 }

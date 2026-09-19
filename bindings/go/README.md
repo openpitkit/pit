@@ -164,6 +164,8 @@ Environment overrides:
 
 - `OPENPIT_RUNTIME_LIBRARY_PATH` - use an explicit pre-extracted library
   path instead of the embedded copy; extraction is skipped entirely.
+  `openpit.RuntimeLibraryPath()` reports which library the process loaded,
+  override or extracted copy.
 - `OPENPIT_RUNTIME_CACHE_DIR` - override the root directory for extraction
   instead of the OS user cache directory.
 
