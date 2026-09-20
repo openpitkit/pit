@@ -1349,12 +1349,13 @@ jobs:
         run: just --justfile "$env:JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
 
   cleanup-dry-run-release:
-    name: Delete dry-run draft release
+    name: Delete dry-run draft release and pit-go branch
     needs:
       - publish-github-release
       - release-e2e
       - release-e2e-windows
       - verify-tag
+      - publish-go-sources
     if: ${{ always() && needs.verify-tag.outputs.release_mode == 'dry-run' }}
     runs-on: ubuntu-22.04
     permissions:
@@ -1385,6 +1386,41 @@ jobs:
               >/dev/null 2>&1; then
             gh api --method DELETE \
               "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}"
+          fi
+
+      - name: Delete dry-run pit-go branch
+        if: ${{ always() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PIT_GO_PUSH_TOKEN }}
+          PIT_GO_REF: ${{ needs.verify-tag.outputs.pit_go_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::PIT_GO_PUSH_TOKEN secret is required to delete the dry-run branch in pit-go repository"
+            exit 1
+          fi
+          # Git ref names cannot contain "..", so rejecting it never rejects a
+          # real branch and keeps the API path inside refs/heads/release-dry-run/.
+          if [[ "${PIT_GO_REF}" != release-dry-run/?* || "${PIT_GO_REF}" == *..* ]]; then
+            echo "::error::refusing to delete pit-go ref '${PIT_GO_REF}': expected release-dry-run/<version>-<sha>"
+            exit 1
+          fi
+
+          # Only HTTP 404 means the push never happened. gh prints the status
+          # line with --include even on HTTP errors; a transport failure prints
+          # nothing, so it falls through to the error branch.
+          if LOOKUP="$(gh api --include \
+              "repos/openpitkit/pit-go/git/ref/heads/${PIT_GO_REF}")"; then
+            gh api --method DELETE \
+              "repos/openpitkit/pit-go/git/refs/heads/${PIT_GO_REF}"
+            echo "deleted pit-go branch ${PIT_GO_REF}"
+          elif [[ "${LOOKUP%%$'\n'*}" =~ ^HTTP/[^[:space:]]+[[:space:]]404([[:space:]]|$) ]]; then
+            echo "pit-go branch ${PIT_GO_REF} does not exist; the push never happened"
+          else
+            echo "::error::failed to look up pit-go branch ${PIT_GO_REF}"
+            exit 1
           fi
 
   release-e2e-advisory:
