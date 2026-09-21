@@ -64,6 +64,8 @@ fn main() {
     }
     if target_os == "macos" {
         println!("cargo:rustc-cdylib-link-arg=-Wl,-install_name,@rpath/libopenpit_ffi.dylib");
+        // The linker signs arm64 output on its own and leaves x86_64 unsigned.
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-adhoc_codesign");
     }
 
     // Keep the embedded values correct when the profile or the rustflags change.
