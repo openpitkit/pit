@@ -880,9 +880,13 @@ jobs:
           # download cache with the artifacts built in this run: the digests
           # match by construction, so verification below installs the very
           # binaries that the release will carry, without reaching the network
-          # and without the port having to know it is being tested.
+          # and without the port having to know it is being tested. The port
+          # stores each download under a versioned name, so seed under it.
           mkdir -p "${VCPKG_ROOT}/downloads"
-          cp "${RUNTIME_DIR}"/openpit-ffi--*-* "${VCPKG_ROOT}/downloads/"
+          for runtime_asset in "${RUNTIME_DIR}"/openpit-ffi--*-*; do
+            cp "${runtime_asset}" \
+              "${VCPKG_ROOT}/downloads/openpit-${VERSION}-$(basename "${runtime_asset}")"
+          done
 
           if [[ "${RELEASE_MODE}" == "production" ]]; then
             if [[ -z "${VCPKG_REGISTRY_PUSH_TOKEN}" ]]; then
