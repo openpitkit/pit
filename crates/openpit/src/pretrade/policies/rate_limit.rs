@@ -634,7 +634,7 @@ where
 
     fn check_pre_trade_start(
         &self,
-        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
         let now = start_pre_trade_now();
@@ -669,7 +669,7 @@ where
                 None
             };
             let account_id_opt: Option<AccountId> = if needs_account {
-                Some(order.account_id().map_err(|e| {
+                Some(ctx.account_id().map_err(|e| {
                     Rejects::from(missing_required_field_reject(self, "account ID", &e))
                 })?)
             } else {
@@ -744,7 +744,7 @@ where
     /// window is rejected here too, with no side effect.
     fn check_pre_trade_start_dry_run(
         &self,
-        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
         let now = start_pre_trade_now();
@@ -776,7 +776,7 @@ where
                 None
             };
             let account_id_opt: Option<AccountId> = if needs_account {
-                Some(order.account_id().map_err(|e| {
+                Some(ctx.account_id().map_err(|e| {
                     Rejects::from(missing_required_field_reject(self, "account ID", &e))
                 })?)
             } else {
@@ -1278,7 +1278,7 @@ mod tests {
                 crate::core::LocalSync,
             >>::check_pre_trade_start(
                 &policy,
-                &PreTradeContext::<NoLocking>::new(None),
+                &PreTradeContext::<NoLocking>::new(None, &reconfiguring_order),
                 &reconfiguring_order,
             )
         })
@@ -1292,65 +1292,76 @@ mod tests {
         assert!(check_at(&policy, &order(account(1)), base + Duration::from_secs(2),).is_ok());
     }
 
+    /// Dry-run twin of
+    /// [`check_pre_trade_start_accessor_can_reconfigure_without_borrow_panic`].
+    ///
+    /// The reconfiguring accessor is the instrument one, because that is the
+    /// only kind the check still invokes while its settings snapshot is held:
+    /// the account comes from the context, read once when the operation
+    /// started and long before any snapshot is taken.
     #[test]
     fn check_pre_trade_start_dry_run_accessor_can_reconfigure_without_borrow_panic() {
-        struct ReconfiguringAccountOrder {
+        struct ReconfiguringInstrumentOrder {
             settings: LocalConfigCell<RateLimitSettings>,
+            instrument: Instrument,
             account_id: AccountId,
         }
 
-        impl crate::HasInstrument for ReconfiguringAccountOrder {
+        impl crate::HasInstrument for ReconfiguringInstrumentOrder {
             fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
-                Err(crate::RequestFieldAccessError::new("instrument"))
+                self.settings
+                    .update::<RateLimitPolicyError>(|settings| {
+                        settings.set_asset_barriers([RateLimitAssetBarrier {
+                            limit: RateLimit {
+                                max_orders: 10,
+                                window: Duration::from_secs(60),
+                            },
+                            settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                        }])
+                    })
+                    .expect("instrument accessor must reconfigure without a borrow panic");
+                Ok(&self.instrument)
             }
         }
 
-        impl crate::HasAccountId for ReconfiguringAccountOrder {
+        impl crate::HasAccountId for ReconfiguringInstrumentOrder {
             fn account_id(&self) -> Result<AccountId, crate::RequestFieldAccessError> {
-                self.settings
-                    .update::<RateLimitPolicyError>(|settings| {
-                        settings.set_account_barriers([RateLimitAccountBarrier {
-                            limit: RateLimit {
-                                max_orders: 2,
-                                window: Duration::from_secs(60),
-                            },
-                            account_id: self.account_id,
-                        }])
-                    })
-                    .expect("account accessor must reconfigure without a borrow panic");
                 Ok(self.account_id)
             }
         }
 
-        let account_id = account(1);
-        let policy = account_policy(account_id, 1, Duration::from_secs(60));
+        let policy = asset_policy("USD", 1, Duration::from_secs(60));
         let base = Instant::now();
-        assert!(check_at(&policy, &order(account_id), base).is_ok());
+        assert!(check_at(&policy, &order(account(1)), base).is_ok());
 
-        let reconfiguring_order = ReconfiguringAccountOrder {
+        let reconfiguring_order = ReconfiguringInstrumentOrder {
             settings: policy.settings_cell(),
-            account_id,
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            account_id: account(1),
         };
         let reject = with_start_pre_trade_now(base + Duration::from_secs(1), || {
             <TestPolicy as PreTradePolicy<
-                ReconfiguringAccountOrder,
+                ReconfiguringInstrumentOrder,
                 (),
                 (),
                 crate::core::LocalSync,
             >>::check_pre_trade_start_dry_run(
                 &policy,
-                &PreTradeContext::<NoLocking>::new(None),
+                &PreTradeContext::<NoLocking>::new(None, &reconfiguring_order),
                 &reconfiguring_order,
             )
         })
-        .expect_err("the pre-update account limit must reject");
-        assert_eq!(reject[0].reason, "rate limit exceeded: account barrier");
+        .expect_err("the pre-update asset limit must reject");
+        assert_eq!(reject[0].reason, "rate limit exceeded: asset barrier");
         assert_eq!(
             reject[0].details,
             "submitted 2 orders in 60s window, max allowed: 1"
         );
 
-        assert!(check_at(&policy, &order(account_id), base + Duration::from_secs(2),).is_ok());
+        assert!(check_at(&policy, &order(account(1)), base + Duration::from_secs(2),).is_ok());
     }
 
     // ── broker barrier ─────────────────────────────────────────────────────
@@ -1554,7 +1565,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None, &order),
+            &order,
         );
 
         assert!(result.is_ok());
@@ -1573,7 +1586,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None, &order),
+            &order,
         );
 
         assert!(result.is_ok());
@@ -1725,7 +1740,7 @@ mod tests {
         let policy = account_policy(account(1), 10, Duration::from_secs(60));
         let reject = <TestPolicy as PreTradePolicy<NoAccountId, (), (), crate::core::LocalSync>>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &NoAccountId),
             &NoAccountId,
         )
         .expect_err("missing account_id must reject");
@@ -1761,7 +1776,7 @@ mod tests {
         assert!(
             <TestPolicy as PreTradePolicy<NoAccountId, (), (), crate::core::LocalSync>>::check_pre_trade_start(
                 &policy,
-                &PreTradeContext::<NoLocking>::new(None),
+                &PreTradeContext::<NoLocking>::new(None, &NoAccountId),
                 &NoAccountId,
             )
             .is_ok()
@@ -1781,7 +1796,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None, &order),
+            &order,
         )
         .expect_err("asset-axis policy must require instrument");
         let reject = &reject[0];
@@ -1816,7 +1833,7 @@ mod tests {
         with_start_pre_trade_now(now, || {
             <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::core::LocalSync>>::check_pre_trade_start(
                 policy,
-                &PreTradeContext::<NoLocking>::new(None),
+                &PreTradeContext::<NoLocking>::new(None, order),
                 order,
             )
         })
@@ -1830,7 +1847,7 @@ mod tests {
         with_start_pre_trade_now(now, || {
             <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::core::LocalSync>>::check_pre_trade_start_dry_run(
                 policy,
-                &PreTradeContext::<NoLocking>::new(None),
+                &PreTradeContext::<NoLocking>::new(None, order),
                 order,
             )
         })
@@ -1918,6 +1935,64 @@ mod tests {
         policy_from(account_asset_settings(
             account_id, settlement, max_orders, window,
         ))
+    }
+
+    /// The account axis takes the operation's account from the context, so the
+    /// order's own accessor is called exactly once per operation - by the
+    /// engine, at the entry. A second call would both show up in this counter
+    /// and let the policy meter an account the request was never admitted on.
+    #[test]
+    fn the_account_axis_adds_no_second_read_of_the_order_account() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct CountedAccountOrder {
+            instrument: Instrument,
+            account_id: AccountId,
+            reads: Rc<Cell<usize>>,
+        }
+
+        impl crate::HasInstrument for CountedAccountOrder {
+            fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+
+        impl crate::HasAccountId for CountedAccountOrder {
+            fn account_id(&self) -> Result<AccountId, crate::RequestFieldAccessError> {
+                self.reads.set(self.reads.get() + 1);
+                Ok(self.account_id)
+            }
+        }
+
+        let account_id = account(1);
+        let builder = crate::Engine::builder::<CountedAccountOrder, (), ()>().no_sync();
+        let policy = RateLimitPolicy::new(
+            account_settings(account_id, 10, Duration::from_secs(60)),
+            builder.storage_builder(),
+        );
+        let engine = builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+        let counted = |reads: &Rc<Cell<usize>>| CountedAccountOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            account_id,
+            reads: Rc::clone(reads),
+        };
+
+        let reads = Rc::new(Cell::new(0));
+        engine
+            .start_pre_trade(counted(&reads))
+            .expect("an order within the account limit must pass the start stage");
+        assert_eq!(reads.get(), 1);
+
+        let reads = Rc::new(Cell::new(0));
+        assert!(engine.start_pre_trade_dry_run(counted(&reads)).is_pass());
+        assert_eq!(reads.get(), 1);
     }
 
     fn order(account_id: AccountId) -> OrderOperation {

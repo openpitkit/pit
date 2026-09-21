@@ -689,10 +689,11 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .is_none_or(|r| r.is_empty())
     );
     // EUR-only policy has no barrier for USD: order passes.
+    let usd_order = order_aapl_usd("100", "1");
     <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::check_pre_trade_start(
         &pnl_policy,
-        &PreTradeContext::new(None),
-        &order_aapl_usd("100", "1"),
+        &PreTradeContext::new(None, &usd_order),
+        &usd_order,
     )
     .expect("no barrier configured for USD: order must pass");
 
@@ -1055,12 +1056,12 @@ impl PreTradePolicy<TestOrder, TestReport, (), LocalSync> for SharedPnlPolicy {
 
     fn check_pre_trade_start(
         &self,
-        _ctx: &PreTradeContext<NoLocking>,
+        ctx: &PreTradeContext<NoLocking>,
         order: &TestOrder,
     ) -> Result<(), Rejects> {
         <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::check_pre_trade_start(
             &self.inner,
-            &PreTradeContext::new(None),
+            ctx,
             order,
         )
     }

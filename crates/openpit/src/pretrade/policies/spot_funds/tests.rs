@@ -871,7 +871,7 @@ fn pre_trade_check(
 ) -> Result<(), crate::pretrade::Rejects> {
     <TestPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment, crate::core::FullSync>>::perform_pre_trade_check(
         policy,
-        &PreTradeContext::new(None),
+        &PreTradeContext::new(None, order),
         order,
         mutations,
     )
@@ -889,7 +889,10 @@ fn dry_run_check(
         TestAdjustment,
         crate::core::FullSync,
     >>::perform_pre_trade_check_dry_run(
-        policy, &PreTradeContext::new(None), order, &mut mutations
+        policy,
+        &PreTradeContext::new(None, order),
+        order,
+        &mut mutations,
     );
     // A dry-run must never register a mutation.
     assert!(mutations.is_empty(), "dry-run must push no mutations");
@@ -3468,7 +3471,7 @@ fn run_pre_trade(
 ) -> crate::pretrade::PolicyPreTradeResult {
     <TestPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment, crate::core::FullSync>>::perform_pre_trade_check(
         policy,
-        &PreTradeContext::new(None),
+        &PreTradeContext::new(None, order),
         order,
         mutations,
     )
@@ -5066,7 +5069,7 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
     let mut hold_mutations = Mutations::new();
     <Policy>::perform_pre_trade_check(
         &policy,
-        &PreTradeContext::new(Some(make_control())),
+        &PreTradeContext::new(Some(make_control()), &order),
         &order,
         &mut hold_mutations,
     )
@@ -5104,15 +5107,8 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
     // store through the sealed adapter.
     let _ = hold_mutations.rollback_all();
 
-    let probe = make_order(
-        acc,
-        aapl_usd,
-        Side::Sell,
-        TradeAmount::Quantity(qty("0")),
-        Some(px("1")),
-    );
     let rejects = blocked
-        .check(&groups, &probe, crate::pretrade::RejectScope::Order)
+        .check(&groups, Some(acc), crate::pretrade::RejectScope::Order)
         .expect("account must be blocked");
     assert!(
         rejects
@@ -5144,7 +5140,7 @@ fn pre_trade_full(
 ) -> Result<crate::pretrade::PolicyPreTradeResult, crate::pretrade::Rejects> {
     <TestPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment, crate::core::FullSync>>::perform_pre_trade_check(
         policy,
-        &PreTradeContext::new(None),
+        &PreTradeContext::new(None, order),
         order,
         mutations,
     )
@@ -6748,7 +6744,7 @@ fn ctx_with_group(
         .register_group(&[account_id], group_id)
         .expect("registration must succeed");
     let handle = AccountGroupsHandle::from_inner(FullLocking::new_shared(groups));
-    crate::pretrade::PreTradeContext::with_groups(None, handle, Some(account_id))
+    crate::pretrade::PreTradeContext::with_groups(None, handle, Ok(account_id))
 }
 
 // ── group-tier override selects correct slippage for buy ──────────────────

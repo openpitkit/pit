@@ -453,7 +453,7 @@ where
             let instrument = order.instrument().map_err(|e| {
                 Rejects::from(missing_required_field_reject(self, "instrument", &e))
             })?;
-            let account_id = order.account_id().map_err(|e| {
+            let account_id = ctx.account_id().map_err(|e| {
                 Rejects::from(missing_required_field_reject(self, "account ID", &e))
             })?;
             (instrument, account_id)
@@ -1316,7 +1316,7 @@ mod tests {
             crate::core::LocalSync,
         >>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &InvalidOrder),
             &InvalidOrder,
         )
         .expect_err("field access error must reject");
@@ -1415,6 +1415,91 @@ mod tests {
             .expect("an uncovered settlement must not reread the account");
 
         assert_eq!(account_calls.get(), 1);
+    }
+
+    #[test]
+    fn an_unreadable_account_stops_the_policy_before_it_can_breach() {
+        struct ScriptedAccountOrder {
+            instrument: Instrument,
+            answers: Vec<Result<AccountId, RequestFieldAccessError>>,
+            reads: Rc<Cell<usize>>,
+        }
+
+        impl HasInstrument for ScriptedAccountOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+
+        impl HasAccountId for ScriptedAccountOrder {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                let read = self.reads.get();
+                self.reads.set(read + 1);
+                let Some(answer) = self.answers.get(read) else {
+                    panic!("the order's account was read {} times", read + 1);
+                };
+                answer.clone()
+            }
+        }
+
+        fn scripted(
+            answers: Vec<Result<AccountId, RequestFieldAccessError>>,
+        ) -> (ScriptedAccountOrder, Rc<Cell<usize>>) {
+            let reads = Rc::new(Cell::new(0));
+            (
+                ScriptedAccountOrder {
+                    instrument: Instrument::new(
+                        Asset::new("AAPL").expect("must be valid"),
+                        Asset::new("USD").expect("must be valid"),
+                    ),
+                    answers,
+                    reads: Rc::clone(&reads),
+                },
+                reads,
+            )
+        }
+
+        let builder = crate::Engine::builder::<ScriptedAccountOrder, TestReport, ()>().no_sync();
+        let settings = PnlBoundsKillSwitchSettings::new(
+            [],
+            [PnlBoundsAccountAssetBarrier {
+                barrier: barrier("USD", Some(pnl("-100")), None),
+                account_id: account(1),
+                initial_pnl: pnl("-150"),
+            }],
+        )
+        .expect("settings must be valid");
+        let policy = PnlBoundsKillSwitchPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+
+        // The first read fails and a second one would succeed on an account
+        // whose barrier is already breached. A policy evaluating that second
+        // value would return an account-scope reject, and the engine derives
+        // the block from that reject's scope, so the block is recorded - on
+        // the account a later, independent read happened to answer, which no
+        // stage of the operation ever checked.
+        let (order, reads) = scripted(vec![
+            Err(RequestFieldAccessError::new("account_id")),
+            Ok(account(1)),
+        ]);
+        let Err(rejects) = engine.start_pre_trade(order) else {
+            panic!("an unreadable account must reject");
+        };
+        assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(rejects[0].scope, RejectScope::Order);
+        assert_eq!(reads.get(), 1);
+
+        // Nothing was latched onto the account the policy never evaluated: the
+        // next request is answered by the breached barrier itself, not by a
+        // recorded block.
+        let (breaching, _) = scripted(vec![Ok(account(1))]);
+        let Err(rejects) = engine.start_pre_trade(breaching) else {
+            panic!("the breached barrier must reject");
+        };
+        assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
     }
 
     #[test]
@@ -1670,7 +1755,7 @@ mod tests {
     ) -> Result<(), crate::pretrade::Rejects> {
         <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::core::LocalSync>>::check_pre_trade_start(
             policy,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, order),
             order,
         )
     }

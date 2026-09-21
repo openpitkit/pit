@@ -191,7 +191,7 @@ fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
                 for _ in 0..PER_THREAD {
                     <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start(
                         &policy,
-                        &PreTradeContext::new(None),
+                        &PreTradeContext::new(None, &order),
                         &order,
                     )
                     .expect("all calls within per-account limit must pass");
@@ -205,7 +205,7 @@ fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
         assert!(
             <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start(
                 &policy,
-                &PreTradeContext::new(None),
+                &PreTradeContext::new(None, &overflow_order),
                 &overflow_order,
             )
             .is_err(),

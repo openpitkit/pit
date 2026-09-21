@@ -117,7 +117,7 @@ fn check_start(
 ) -> Result<(), openpit::pretrade::Rejects> {
     <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), FullSync>>::check_pre_trade_start(
         policy,
-        &PreTradeContext::new(None),
+        &PreTradeContext::new(None, order),
         order,
     )
 }

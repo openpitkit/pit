@@ -484,7 +484,7 @@ mod tests {
         );
         let result = <MainPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::perform_pre_trade_check(
             &MainPolicyNoop,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &order),
             &order,
             &mut mutations,
         );
@@ -516,7 +516,7 @@ mod tests {
         assert!(
             <StartPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::check_pre_trade_start(
                 &StartPolicyNoop,
-                &PreTradeContext::<NoLocking>::new(None),
+                &PreTradeContext::<NoLocking>::new(None, &order),
                 &order,
             )
             .is_ok()

@@ -666,7 +666,7 @@ mod tests {
             .register_group(&[account(1)], group(7))
             .expect("registration must succeed");
 
-        let ctx = PreTradeContext::with_groups(None, handle, Some(account(1)));
+        let ctx = PreTradeContext::with_groups(None, handle, Ok(account(1)));
         assert_eq!(ctx.account_group(), Some(group(7)));
     }
 
@@ -680,7 +680,11 @@ mod tests {
             .register_group(&[account(1)], group(7))
             .expect("registration must succeed");
 
-        let ctx = PreTradeContext::with_groups(None, handle, None);
+        let ctx = PreTradeContext::with_groups(
+            None,
+            handle,
+            Err(crate::RequestFieldAccessError::new("account_id")),
+        );
         assert_eq!(ctx.account_group(), None);
     }
 
@@ -694,7 +698,7 @@ mod tests {
             .register_group(&[account(1)], group(7))
             .expect("registration must succeed");
 
-        let ctx = PreTradeContext::with_groups(None, handle.clone(), Some(account(1)));
+        let ctx = PreTradeContext::with_groups(None, handle.clone(), Ok(account(1)));
         // First call populates the cache.
         assert_eq!(ctx.account_group(), Some(group(7)));
 
@@ -732,12 +736,8 @@ mod tests {
             NoLocking::new_shared(AccountCurrencies::new(&builder)),
             NoLocking::new_shared(ConfigRegistry::empty()),
         );
-        let pre_trade = PreTradeContext::with_accounts(
-            None,
-            accounts.clone(),
-            handle.clone(),
-            Some(account(1)),
-        );
+        let pre_trade =
+            PreTradeContext::with_accounts(None, accounts.clone(), handle.clone(), Ok(account(1)));
         let post_trade =
             PostTradeContext::with_accounts(accounts.clone(), handle.clone(), Some(account(1)));
         let adjustment = AccountAdjustmentContext::with_accounts(

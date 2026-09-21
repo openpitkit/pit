@@ -582,6 +582,11 @@ where
 
     /// Checks whether a pre-trade request should be rejected.
     ///
+    /// `account` is the operation's account - the engine's single read of the
+    /// order, `None` when that read failed. Taking the value rather than the
+    /// order is what keeps this check and the pipeline that follows it on the
+    /// same account.
+    ///
     /// `groups` is the engine's account-group registry, consulted only when at
     /// least one group is blocked; it resolves the order account's group live,
     /// so members of a blocked group are rejected without being expanded into
@@ -596,15 +601,15 @@ where
     ///
     /// Callers should return the `Rejects` immediately without running any
     /// policies.
-    pub(crate) fn check<Order: HasAccountId>(
+    pub(crate) fn check(
         &self,
         groups: &AccountGroups<StorageLockingPolicyFactory>,
-        order: &Order,
+        account: Option<AccountId>,
         operation_scope: RejectScope,
     ) -> Option<Rejects> {
         self.with_blocking_cause(
             groups,
-            || order.account_id().ok(),
+            || account,
             |block| Rejects::new(vec![Reject::from(block.clone())]),
             new_account_blocked_rejects,
             || new_unverifiable_block_check_rejects(operation_scope),
@@ -643,12 +648,16 @@ where
 
     /// Records a pre-trade kill-switch event for a readable account only.
     ///
+    /// `account` is the operation's account - the engine's single read of the
+    /// order - so the block lands on the account the pipeline actually
+    /// evaluated.
+    ///
     /// Unlike an execution report, a rejected pre-trade request has not created
     /// exposure. An unreadable account must therefore not activate the global
     /// block, which halts every account until an operator lifts it with
     /// [`Accounts::unblock_all`](crate::Accounts::unblock_all).
-    pub(crate) fn record_pre_trade<Order: HasAccountId>(&self, order: &Order, cause: AccountBlock) {
-        if let Ok(account) = order.account_id() {
+    pub(crate) fn record_pre_trade(&self, account: Option<AccountId>, cause: AccountBlock) {
+        if let Some(account) = account {
             self.block_account(account, cause);
         }
     }
@@ -938,11 +947,9 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_none());
+        assert!(set.check(&groups, None, RejectScope::Order).is_none());
     }
 
     #[test]
@@ -956,21 +963,13 @@ mod tests {
 
         control.block(cause("deferred", RejectCode::AccountBlocked));
         assert!(blocked
-            .check(
-                &empty_groups(),
-                &AccountOrder(account_id),
-                RejectScope::Order
-            )
+            .check(&empty_groups(), Some(account_id), RejectScope::Order)
             .is_none());
 
         deferred.abandon();
         control.block(cause("rollback", RejectCode::ArithmeticOverflow));
         let rejects = blocked
-            .check(
-                &empty_groups(),
-                &AccountOrder(account_id),
-                RejectScope::Order,
-            )
+            .check(&empty_groups(), Some(account_id), RejectScope::Order)
             .expect("rollback safety block must be visible immediately");
         assert_eq!(rejects[0].code, RejectCode::ArithmeticOverflow);
     }
@@ -988,11 +987,7 @@ mod tests {
         control.block(cause("retained", RejectCode::AccountBlocked));
 
         let rejects = blocked
-            .check(
-                &empty_groups(),
-                &AccountOrder(account_id),
-                RejectScope::Order,
-            )
+            .check(&empty_groups(), Some(account_id), RejectScope::Order)
             .expect("a retained account-control handle must write through");
         assert_eq!(rejects[0].policy, "retained");
     }
@@ -1006,7 +1001,7 @@ mod tests {
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_some());
     }
 
@@ -1019,7 +1014,7 @@ mod tests {
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set
-            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .check(&groups, Some(account(2)), RejectScope::Order)
             .is_none());
     }
 
@@ -1032,10 +1027,10 @@ mod tests {
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_some());
         assert!(set
-            .check(&groups, &AccountOrder(account(99)), RejectScope::Order)
+            .check(&groups, Some(account(99)), RejectScope::Order)
             .is_some());
     }
 
@@ -1044,14 +1039,11 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
 
-        set.record_pre_trade(
-            &NoAccountOrder,
-            cause("Policy", RejectCode::PnlKillSwitchTriggered),
-        );
+        set.record_pre_trade(None, cause("Policy", RejectCode::PnlKillSwitchTriggered));
 
         assert!(!set.is_all_blocked());
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1063,9 +1055,7 @@ mod tests {
             &NoAccountOrder,
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_some());
+        assert!(set.check(&groups, None, RejectScope::Order).is_some());
     }
 
     #[test]
@@ -1076,18 +1066,14 @@ mod tests {
             &AccountOrder(account(1)),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_some());
+        assert!(set.check(&groups, None, RejectScope::Order).is_some());
     }
 
     #[test]
     fn initially_unidentifiable_order_is_allowed() {
         let set = new_set();
         let groups = empty_groups();
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_none());
+        assert!(set.check(&groups, None, RejectScope::Order).is_none());
     }
 
     #[test]
@@ -1099,7 +1085,7 @@ mod tests {
             cause("KillSwitch", RejectCode::PnlKillSwitchTriggered),
         );
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects.len(), 1);
         assert_eq!(rejects[0].policy, "KillSwitch");
@@ -1120,7 +1106,7 @@ mod tests {
             cause("Second", RejectCode::Other),
         );
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects[0].policy, "First");
     }
@@ -1141,7 +1127,7 @@ mod tests {
         }
 
         let rejects = set
-            .check(&groups, &AccountOrder(id), RejectScope::Order)
+            .check(&groups, Some(id), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects[0].reason, "first");
     }
@@ -1180,8 +1166,7 @@ mod tests {
             .expect("an own cause must be removed");
         assert_eq!(removed.policy, "Provisional");
         assert!(
-            set.check(&groups, &AccountOrder(id), RejectScope::Order)
-                .is_none(),
+            set.check(&groups, Some(id), RejectScope::Order).is_none(),
             "removing the only cause must unblock the account"
         );
     }
@@ -1203,7 +1188,7 @@ mod tests {
             "an overwritten cause is the operator's, not the assertion's"
         );
         let rejects = set
-            .check(&groups, &AccountOrder(id), RejectScope::Order)
+            .check(&groups, Some(id), RejectScope::Order)
             .expect("the operator's block must stay active");
         assert_eq!(rejects[0].reason, "manual review");
     }
@@ -1220,7 +1205,7 @@ mod tests {
             "a cause that is not the assertion's own must not be removed"
         );
         let rejects = set
-            .check(&groups, &AccountOrder(id), RejectScope::Order)
+            .check(&groups, Some(id), RejectScope::Order)
             .expect("the independent block must stay active");
         assert_eq!(rejects[0].reason, "manual review");
     }
@@ -1235,7 +1220,7 @@ mod tests {
 
         for id in [1, 2] {
             let rejects = set
-                .check(&groups, &AccountOrder(account(id)), RejectScope::Order)
+                .check(&groups, Some(account(id)), RejectScope::Order)
                 .expect("a global block must reject every account");
             assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
             assert_eq!(rejects[0].reason, "test block");
@@ -1252,7 +1237,7 @@ mod tests {
         );
 
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("a global block must reject every account");
         assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
     }
@@ -1265,7 +1250,7 @@ mod tests {
         set.block_all_with_cause(cause("Engine", RejectCode::SystemUnavailable));
 
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("the account is blocked");
         assert_eq!(rejects[0].reason, "individual");
     }
@@ -1279,13 +1264,11 @@ mod tests {
 
         assert!(!set.is_all_blocked());
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
         // The all-clear fast path is restored, so an order with no readable
         // account is admitted again.
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_none());
+        assert!(set.check(&groups, None, RejectScope::Order).is_none());
     }
 
     #[test]
@@ -1297,10 +1280,10 @@ mod tests {
         set.unblock_all();
 
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_some());
         assert!(set
-            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .check(&groups, Some(account(2)), RejectScope::Order)
             .is_none());
     }
 
@@ -1310,7 +1293,7 @@ mod tests {
         let groups = empty_groups();
         set.unblock_all();
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1332,12 +1315,12 @@ mod tests {
             .record_mutation_failure(Some(account(1)), MutationFailureScope::Account);
 
         let rejects = blocked
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("the pipeline account must be blocked");
         assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
         assert_eq!(rejects[0].reason, "mutation finalizer failed");
         assert!(blocked
-            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .check(&groups, Some(account(2)), RejectScope::Order)
             .is_none());
     }
 
@@ -1350,7 +1333,7 @@ mod tests {
 
         for id in [1, 2] {
             let rejects = blocked
-                .check(&groups, &AccountOrder(account(id)), RejectScope::Order)
+                .check(&groups, Some(account(id)), RejectScope::Order)
                 .expect("a custom-policy finalizer failure blocks every account");
             assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
         }
@@ -1364,7 +1347,7 @@ mod tests {
 
         assert!(blocked.is_all_blocked());
         assert!(blocked
-            .check(&groups, &AccountOrder(account(7)), RejectScope::Order)
+            .check(&groups, Some(account(7)), RejectScope::Order)
             .is_some());
     }
 
@@ -1376,7 +1359,7 @@ mod tests {
         let groups = empty_groups();
         set.block_account(account(1), admin("manual review"));
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("admin-blocked account must return rejects");
         assert_eq!(rejects[0].policy, "Engine");
         assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
@@ -1390,7 +1373,7 @@ mod tests {
         set.block_account(account(1), admin("manual review"));
         set.unblock_account(account(1));
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1400,7 +1383,7 @@ mod tests {
         let groups = empty_groups();
         set.unblock_account(account(1));
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1414,7 +1397,7 @@ mod tests {
         );
         set.unblock_account(account(1));
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1426,7 +1409,7 @@ mod tests {
         set.replace_reason(account(1), admin("second"))
             .expect("replacing reason on a blocked account must succeed");
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects[0].reason, "second");
     }
@@ -1452,7 +1435,7 @@ mod tests {
         set.block_account(account(1), admin("first"));
         set.block_account(account(1), admin("second"));
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects[0].reason, "first");
     }
@@ -1470,13 +1453,13 @@ mod tests {
             .expect("group block must succeed");
 
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("member of blocked group must be rejected");
         assert_eq!(rejects[0].policy, "Engine");
         assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
         assert_eq!(rejects[0].reason, "group halt");
         assert!(set
-            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .check(&groups, Some(account(2)), RejectScope::Order)
             .is_some());
     }
 
@@ -1492,7 +1475,7 @@ mod tests {
             .expect("registration must succeed");
 
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_some());
     }
 
@@ -1510,7 +1493,7 @@ mod tests {
             .expect("unregistration must succeed");
 
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1529,7 +1512,7 @@ mod tests {
             .expect("unregistration must succeed");
 
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("individually blocked account must remain blocked");
         assert_eq!(rejects[0].reason, "individual");
     }
@@ -1547,7 +1530,7 @@ mod tests {
             .expect("group unblock must succeed");
 
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1571,7 +1554,7 @@ mod tests {
             .expect("re-blocking a group must be a no-op");
 
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("member of blocked group must be rejected");
         assert_eq!(rejects[0].reason, "first");
     }
@@ -1589,7 +1572,7 @@ mod tests {
             .expect("replacing reason on a blocked group must succeed");
 
         let rejects = set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .expect("member of blocked group must be rejected");
         assert_eq!(rejects[0].reason, "second");
     }
@@ -1683,9 +1666,7 @@ mod tests {
         let groups = empty_groups();
         set.block_account(account(1), admin("manual review"));
         set.unblock_account(account(1));
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_none());
+        assert!(set.check(&groups, None, RejectScope::Order).is_none());
     }
 
     #[test]
@@ -1696,9 +1677,7 @@ mod tests {
             .expect("group block must succeed");
         set.unblock_group(group(7))
             .expect("group unblock must succeed");
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_none());
+        assert!(set.check(&groups, None, RejectScope::Order).is_none());
     }
 
     #[test]
@@ -1710,9 +1689,7 @@ mod tests {
         set.unblock_account(account(1));
         // The per-account set is still non-empty, so the indicator stays set
         // and an unidentifiable order is still rejected.
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_some());
+        assert!(set.check(&groups, None, RejectScope::Order).is_some());
     }
 
     #[test]
@@ -1727,9 +1704,7 @@ mod tests {
             .expect("group unblock must succeed");
         // The blocked-group set is still non-empty, so the group indicator
         // stays set and an unidentifiable order is still rejected.
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_some());
+        assert!(set.check(&groups, None, RejectScope::Order).is_some());
     }
 
     #[test]
@@ -1745,11 +1720,9 @@ mod tests {
         // per-account set, but the global block must survive.
         set.unblock_account(account(1));
         assert!(set
-            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .check(&groups, Some(account(2)), RejectScope::Order)
             .is_some());
-        assert!(set
-            .check(&groups, &NoAccountOrder, RejectScope::Order)
-            .is_some());
+        assert!(set.check(&groups, None, RejectScope::Order).is_some());
     }
 
     #[test]
@@ -1784,7 +1757,7 @@ mod tests {
             });
 
             assert!(set
-                .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+                .check(&groups, Some(account(1)), RejectScope::Order)
                 .is_some());
         }
     }
@@ -1821,11 +1794,9 @@ mod tests {
             });
 
             assert!(set
-                .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+                .check(&groups, Some(account(1)), RejectScope::Order)
                 .is_some());
-            assert!(set
-                .check(&groups, &NoAccountOrder, RejectScope::Order)
-                .is_some());
+            assert!(set.check(&groups, None, RejectScope::Order).is_some());
         }
     }
 
@@ -1869,7 +1840,7 @@ mod tests {
             });
 
             assert!(set
-                .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+                .check(&groups, Some(account(1)), RejectScope::Order)
                 .is_some());
         }
     }
@@ -1914,7 +1885,7 @@ mod tests {
                     for _ in 0..500 {
                         // Either outcome is valid depending on interleaving;
                         // the point is that the clone must not race a write.
-                        let _ = set.check(&groups, &AccountOrder(account(1)), RejectScope::Order);
+                        let _ = set.check(&groups, Some(account(1)), RejectScope::Order);
                     }
                 });
             }
@@ -1924,10 +1895,10 @@ mod tests {
         // clear, and an account never touched by any thread is never blocked.
         set.unblock_account(account(1));
         assert!(set
-            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&groups, Some(account(1)), RejectScope::Order)
             .is_none());
         assert!(set
-            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .check(&groups, Some(account(2)), RejectScope::Order)
             .is_none());
     }
 }

@@ -796,10 +796,8 @@ mod tests {
 
     use crate::core::account_control::BlockedAccounts;
     use crate::core::account_groups::AccountGroups;
-    use crate::core::HasAccountId;
     use crate::pretrade::RejectScope;
     use crate::storage::{FullLocking, LockingPolicyFactory, NoLocking, StorageBuilder};
-    use crate::RequestFieldAccessError;
 
     fn account(id: u64) -> AccountId {
         AccountId::from_u64(id)
@@ -811,14 +809,6 @@ mod tests {
 
     fn asset(value: &str) -> Asset {
         Asset::new(value).expect("asset must be valid")
-    }
-
-    struct AccountOrder(AccountId);
-
-    impl HasAccountId for AccountOrder {
-        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
-            Ok(self.0)
-        }
     }
 
     type TestAccountsHandles = (
@@ -948,12 +938,12 @@ mod tests {
         let (accounts, blocked, registry) = new_accounts();
         accounts.block(account(1), "manual review".to_owned());
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_some());
 
         accounts.unblock(account(1));
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -975,7 +965,7 @@ mod tests {
             "restored durable block must not be invalidated by its former provenance"
         );
         let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .expect("restored account must stay blocked");
         assert_eq!(rejects[0].policy, cause.policy);
         assert_eq!(rejects[0].code, cause.code);
@@ -999,7 +989,7 @@ mod tests {
         );
 
         let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .expect("the first account cause must remain active");
         assert_eq!(rejects[0].policy, "Engine");
         assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
@@ -1030,14 +1020,14 @@ mod tests {
         );
 
         let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .expect("the provisional cause must win the occupied slot");
         assert_eq!(rejects[0].policy, provisional.policy);
         assert_eq!(rejects[0].reason, provisional.reason);
         assert!(blocked.invalidate_provenance(account(1), 42).is_some());
         assert!(
             blocked
-                .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+                .check(&registry, Some(account(1)), RejectScope::Order)
                 .is_none(),
             "rollback must remove the winning provisional cause"
         );
@@ -1062,7 +1052,7 @@ mod tests {
         accounts.block_with_cause(account(1), restored.clone());
 
         let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .expect("the restored account cause must block the account");
         assert_eq!(rejects[0].policy, restored.policy);
         assert_eq!(rejects[0].code, restored.code);
@@ -1080,13 +1070,13 @@ mod tests {
             "engine state may be inconsistent",
         ));
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_some());
 
         accounts.unblock_all();
 
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1095,7 +1085,7 @@ mod tests {
         let (accounts, blocked, registry) = new_accounts();
         accounts.unblock_all();
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1104,7 +1094,7 @@ mod tests {
         let (accounts, blocked, registry) = new_accounts();
         accounts.unblock(account(1));
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1123,7 +1113,7 @@ mod tests {
             .replace_block_reason(account(1), "second".to_owned())
             .expect("replacing reason on a blocked account must succeed");
         let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
         assert_eq!(rejects[0].reason, "second");
@@ -1139,14 +1129,14 @@ mod tests {
             .register_group(&[account(1)], group(7))
             .expect("registration must succeed");
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_some());
 
         registry
             .unregister_group(&[account(1)], group(7))
             .expect("unregistration must succeed");
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 
@@ -1163,7 +1153,7 @@ mod tests {
             .replace_group_block_reason(group(7), "second".to_owned())
             .expect("replacing group reason must succeed");
         let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .expect("member of blocked group must be rejected");
         assert_eq!(rejects[0].reason, "second");
 
@@ -1171,7 +1161,7 @@ mod tests {
             .unblock_group(group(7))
             .expect("group unblock must succeed");
         assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .check(&registry, Some(account(1)), RejectScope::Order)
             .is_none());
     }
 

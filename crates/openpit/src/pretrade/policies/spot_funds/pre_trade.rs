@@ -21,8 +21,7 @@ use crate::core::account_outcome::OutcomeAmount;
 use crate::core::instrument::Instrument;
 use crate::core::sync_mode::SyncMode;
 use crate::core::{
-    AccountControl, AccountOutcomeEntry, HasAccountId, HasInstrument, HasOrderPrice, HasSide,
-    HasTradeAmount,
+    AccountControl, AccountOutcomeEntry, HasInstrument, HasOrderPrice, HasSide, HasTradeAmount,
 };
 use crate::marketdata::{AccountInfo, MarketDataSync};
 
@@ -180,15 +179,16 @@ where
 
     pub(super) fn read_order_request<'i, Order>(
         &self,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         order: &'i Order,
     ) -> Result<OrderRequestView<'i>, Rejects>
     where
-        Order: HasInstrument + HasAccountId + HasSide + HasTradeAmount + HasOrderPrice,
+        Order: HasInstrument + HasSide + HasTradeAmount + HasOrderPrice,
     {
         let instrument = order
             .instrument()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
-        let account_id = order
+        let account_id = ctx
             .account_id()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "account ID", &e)))?;
         let side = order
@@ -373,10 +373,10 @@ where
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects>
     where
-        Order: HasInstrument + HasAccountId + HasSide + HasTradeAmount + HasOrderPrice,
+        Order: HasInstrument + HasSide + HasTradeAmount + HasOrderPrice,
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
-        let request = self.read_order_request(order)?;
+        let request = self.read_order_request(ctx, order)?;
         ctx.with_state_writer(|| self.perform_pre_trade_request_impl(ctx, request, mutations))
     }
 
@@ -479,9 +479,9 @@ where
         order: &Order,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects>
     where
-        Order: HasInstrument + HasAccountId + HasSide + HasTradeAmount + HasOrderPrice,
+        Order: HasInstrument + HasSide + HasTradeAmount + HasOrderPrice,
     {
-        let request = self.read_order_request(order)?;
+        let request = self.read_order_request(ctx, order)?;
         ctx.with_state_writer(|| self.perform_pre_trade_request_dry_run_impl(ctx, request))
     }
 

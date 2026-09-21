@@ -142,7 +142,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None, &order),
+            &order,
         )
         .expect_err("zero quantity must be rejected");
         let reject = &reject[0];
@@ -172,7 +174,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None, &order),
+            &order,
         )
         .expect_err("zero volume must be rejected");
         let reject = &reject[0];
@@ -202,7 +206,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None, &order),
+            &order
         )
         .is_ok());
     }
@@ -230,7 +236,7 @@ mod tests {
             crate::core::LocalSync,
         >>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &zero_price_order),
             &zero_price_order
         )
         .is_ok());
@@ -255,7 +261,7 @@ mod tests {
             crate::core::LocalSync,
         >>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &negative_price_order),
             &negative_price_order
         )
         .is_ok());
@@ -307,7 +313,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None, &order),
+            &order
         )
         .is_ok());
     }
@@ -322,6 +330,15 @@ mod tests {
             }
         }
 
+        // Only the trade amount is unreadable here: the account is what the
+        // operation is routed by, and leaving it readable keeps this test on
+        // the one field it is about.
+        impl crate::HasAccountId for InvalidOrder {
+            fn account_id(&self) -> Result<crate::param::AccountId, RequestFieldAccessError> {
+                Ok(crate::param::AccountId::from_u64(99224416))
+            }
+        }
+
         let policy = OrderValidationPolicy::new();
         let reject = <OrderValidationPolicy as PreTradePolicy<
             InvalidOrder,
@@ -330,7 +347,7 @@ mod tests {
             crate::core::LocalSync,
         >>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &InvalidOrder),
             &InvalidOrder,
         )
         .expect_err("field access error must reject");

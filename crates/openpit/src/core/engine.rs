@@ -266,17 +266,28 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
+        // The operation's clock is taken before any caller code runs: an order
+        // accessor may be arbitrarily slow, and a policy measuring a window
+        // must not have its timestamp moved by how long the caller took.
+        let now: Instant = Instant::now();
+        // The account identifier is read once, here, and that value is the
+        // operation's account everywhere below - the blocked-set check, the
+        // account control, the context handed to policies, and any block this
+        // request records. `HasAccountId` is implemented by the caller and is
+        // not required to answer twice the same, so a second read would let the
+        // stage that clears the request and the stage that executes it disagree
+        // about whose account it is.
+        let account = order.account_id();
+        let known_account = account.as_ref().ok().copied();
         if let Some(rejects) = self.inner.blocked_accounts.check(
             &self.inner.account_groups,
-            &order,
+            known_account,
             RejectScope::Order,
         ) {
             return Err(rejects);
         }
 
-        let now: Instant = Instant::now();
-        let account = order.account_id().ok();
-        let account_control = account.map(|id| {
+        let account_control = known_account.map(|id| {
             let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
             AccountControl::new(handle, id)
         });
@@ -299,7 +310,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
         debug_assert!(account_block.is_none() || start_rejects.is_some());
         if let Some(rejects) = start_rejects {
             if let Some(block) = account_block {
-                self.inner.blocked_accounts.record_pre_trade(&order, block);
+                self.inner
+                    .blocked_accounts
+                    .record_pre_trade(known_account, block);
             }
             return Err(rejects);
         }
@@ -496,17 +509,21 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
+        // One read and one clock reading, as in `start_pre_trade`: a dry-run
+        // reports the verdict the real pipeline would produce, so it must
+        // resolve both the same way.
+        let now: Instant = Instant::now();
+        let account = order.account_id();
+        let known_account = account.as_ref().ok().copied();
         if let Some(rejects) = self.inner.blocked_accounts.check(
             &self.inner.account_groups,
-            &order,
+            known_account,
             RejectScope::Order,
         ) {
             return PreTradeDryRunReport::new(Some(rejects), PreTradeLock::new(), Vec::new(), None);
         }
 
-        let now: Instant = Instant::now();
-        let account = order.account_id().ok();
-        let account_control = account.map(|id| {
+        let account_control = known_account.map(|id| {
             let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
             AccountControl::new(handle, id)
         });
@@ -549,17 +566,21 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
+        // One read and one clock reading, as in `start_pre_trade`: a dry-run
+        // reports the verdict the real pipeline would produce, so it must
+        // resolve both the same way.
+        let now: Instant = Instant::now();
+        let account = order.account_id();
+        let known_account = account.as_ref().ok().copied();
         if let Some(rejects) = self.inner.blocked_accounts.check(
             &self.inner.account_groups,
-            &order,
+            known_account,
             RejectScope::Order,
         ) {
             return PreTradeDryRunReport::new(Some(rejects), PreTradeLock::new(), Vec::new(), None);
         }
 
-        let now: Instant = Instant::now();
-        let account = order.account_id().ok();
-        let account_control = account.map(|id| {
+        let account_control = known_account.map(|id| {
             let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
             AccountControl::new(handle, id)
         });
@@ -1012,10 +1033,7 @@ fn execute_pre_trade_request<Trait: EngineTrait>(
     engine: <Trait::Sync as SyncMode>::Weak<EngineInner<Trait>>,
     ctx: PreTradeContext<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
     order: Trait::Order,
-) -> Result<PreTradeReservation, Rejects>
-where
-    Trait::Order: HasAccountId,
-{
+) -> Result<PreTradeReservation, Rejects> {
     let Some(engine_ref) = <Trait::Sync as SyncMode>::upgrade(&engine) else {
         return Err(Rejects::new(vec![Reject::new(
             "Engine",
@@ -1027,10 +1045,14 @@ where
     };
     let inner: &EngineInner<Trait> = &engine_ref;
 
+    // The account comes from the context: it is the value `start_pre_trade`
+    // read from the order, and the whole point of re-checking here is that the
+    // blocked set may have moved since - not the account.
+    let account = ctx.account_id().ok();
     if let Some(rejects) =
         inner
             .blocked_accounts
-            .check(&inner.account_groups, &order, RejectScope::Order)
+            .check(&inner.account_groups, account, RejectScope::Order)
     {
         return Err(rejects);
     }
@@ -1043,7 +1065,6 @@ where
             |policy, ctx, order, mutations| policy.perform_pre_trade_check(ctx, order, mutations),
         );
 
-    let account = order.account_id().ok();
     let block_handle: AccountBlockHandleOf<Trait> =
         AccountBlockHandle::from_inner(inner.blocked_accounts.clone());
 
@@ -1056,7 +1077,7 @@ where
             // The first block for an account wins. A rollback failure therefore
             // keeps its account-scoped cause, while a global failure still
             // records the policy block for this account.
-            inner.blocked_accounts.record_pre_trade(&order, block);
+            inner.blocked_accounts.record_pre_trade(account, block);
         }
         return Err(rejects);
     }
@@ -1149,6 +1170,73 @@ mod tests {
             } else {
                 Err(RequestFieldAccessError::new("account_id"))
             }
+        }
+    }
+
+    /// Order whose account accessor answers a scripted sequence, so a test can
+    /// tell the operation's single read from a second, independent one.
+    ///
+    /// Reading past the script is the defect these tests exist to catch, so it
+    /// fails the test loudly instead of producing another answer.
+    struct ScriptedAccountOrder {
+        answers: Vec<Result<AccountId, RequestFieldAccessError>>,
+        reads: Rc<Cell<usize>>,
+    }
+
+    impl ScriptedAccountOrder {
+        fn new(
+            answers: Vec<Result<AccountId, RequestFieldAccessError>>,
+        ) -> (Self, Rc<Cell<usize>>) {
+            let reads = Rc::new(Cell::new(0));
+            (
+                Self {
+                    answers,
+                    reads: Rc::clone(&reads),
+                },
+                reads,
+            )
+        }
+    }
+
+    impl HasAccountId for ScriptedAccountOrder {
+        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+            let read = self.reads.get();
+            self.reads.set(read + 1);
+            let Some(answer) = self.answers.get(read) else {
+                panic!(
+                    "the order's account was read {} times, the script answers {}",
+                    read + 1,
+                    self.answers.len()
+                );
+            };
+            answer.clone()
+        }
+    }
+
+    /// Rejects every order in the main stage with an account-scope reject, so a
+    /// test can see which account the engine latches the resulting block onto.
+    struct AccountRejectPolicy;
+
+    impl<Order, ExecutionReport, AccountAdjustment, Sync: crate::core::SyncMode>
+        PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for AccountRejectPolicy
+    {
+        fn name(&self) -> &str {
+            "account_reject"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &Order,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            Err(Rejects::from(Reject::new(
+                "account_reject",
+                RejectScope::Account,
+                RejectCode::Other,
+                "account scope reject",
+                "test policy rejected the order for its account",
+            )))
         }
     }
 
@@ -2208,11 +2296,7 @@ mod tests {
         assert!(engine
             .inner
             .blocked_accounts
-            .check(
-                &engine.inner.account_groups,
-                &NoAccountOrder,
-                RejectScope::Order,
-            )
+            .check(&engine.inner.account_groups, None, RejectScope::Order)
             .is_none());
     }
 
@@ -2242,11 +2326,7 @@ mod tests {
         assert!(engine
             .inner
             .blocked_accounts
-            .check(
-                &engine.inner.account_groups,
-                &NoAccountOrder,
-                RejectScope::Order,
-            )
+            .check(&engine.inner.account_groups, None, RejectScope::Order)
             .is_none());
     }
 
@@ -3055,6 +3135,79 @@ mod tests {
 
         assert!(!result.is_account_blocked());
         assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn pre_trade_reads_the_account_key_once() {
+        // The script's second answer is a different account: a second read
+        // would show up in the counter and hand the rest of the operation an
+        // account nobody checked for blocks.
+        let (order, reads) =
+            ScriptedAccountOrder::new(vec![Ok(AccountId::from_u64(1)), Ok(AccountId::from_u64(2))]);
+        let engine = Engine::builder::<ScriptedAccountOrder, (), ()>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("noop"))
+            .build()
+            .expect("engine must build");
+
+        engine
+            .execute_pre_trade(order)
+            .expect("an unblocked account must pass both stages");
+
+        assert_eq!(reads.get(), 1);
+    }
+
+    #[test]
+    fn pre_trade_dry_runs_read_the_account_key_once() {
+        let engine = Engine::builder::<ScriptedAccountOrder, (), ()>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("noop"))
+            .build()
+            .expect("engine must build");
+
+        let (order, reads) =
+            ScriptedAccountOrder::new(vec![Ok(AccountId::from_u64(1)), Ok(AccountId::from_u64(2))]);
+        assert!(engine.start_pre_trade_dry_run(order).is_pass());
+        assert_eq!(reads.get(), 1);
+
+        let (order, reads) =
+            ScriptedAccountOrder::new(vec![Ok(AccountId::from_u64(1)), Ok(AccountId::from_u64(2))]);
+        assert!(engine.execute_pre_trade_dry_run(order).is_pass());
+        assert_eq!(reads.get(), 1);
+    }
+
+    #[test]
+    fn an_account_scope_reject_blocks_the_account_the_operation_read() {
+        // The blocked account is the one the operation was admitted and
+        // evaluated for. A second read would latch the block onto the other
+        // account: that one keeps trading while this one is stopped without
+        // ever having breached anything.
+        let operation_account = AccountId::from_u64(1);
+        let other_account = AccountId::from_u64(2);
+        let (order, reads) =
+            ScriptedAccountOrder::new(vec![Ok(operation_account), Ok(other_account)]);
+        let engine = Engine::builder::<ScriptedAccountOrder, (), ()>()
+            .no_sync()
+            .pre_trade(AccountRejectPolicy)
+            .build()
+            .expect("engine must build");
+
+        let Err(rejects) = engine.execute_pre_trade(order) else {
+            panic!("the policy must reject the order");
+        };
+        assert_eq!(rejects[0].scope, RejectScope::Account);
+
+        assert_eq!(reads.get(), 1);
+        assert!(engine
+            .inner
+            .blocked_accounts
+            .account_block(operation_account)
+            .is_some());
+        assert!(engine
+            .inner
+            .blocked_accounts
+            .account_block(other_account)
+            .is_none());
     }
 
     #[test]
@@ -4945,7 +5098,7 @@ mod tests {
             crate::core::LocalSync,
         >>::perform_pre_trade_check(
             &policy,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &order),
             &order,
             &mut mutations,
         );

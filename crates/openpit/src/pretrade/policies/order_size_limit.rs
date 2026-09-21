@@ -481,7 +481,7 @@ where
             };
             let needs_account = !settings.account_asset_limits.is_empty();
             let account_id = if needs_account {
-                Some(order.account_id().map_err(|e| {
+                Some(ctx.account_id().map_err(|e| {
                     Rejects::from(missing_required_field_reject(self, "account ID", &e))
                 })?)
             } else {
@@ -1019,7 +1019,7 @@ mod tests {
     fn check(p: &TestPolicy, order: &TestOrder) -> Result<(), crate::pretrade::Rejects> {
         <TestPolicy as PreTradePolicy<TestOrder, (), (), crate::core::LocalSync>>::check_pre_trade_start(
             p,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, order),
             order,
         )
     }
@@ -1743,7 +1743,7 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order
+            &p, &PreTradeContext::<NoLocking>::new(None, &order), &order
         )
         .expect_err("the copied pre-update cap must reject");
         assert_eq!(reject[0].code, RejectCode::OrderNotionalExceedsLimit);
@@ -1819,7 +1819,7 @@ mod tests {
             crate::core::LocalSync,
         >>::check_pre_trade_start(
             &p,
-            &PreTradeContext::<NoLocking>::new(None),
+            &PreTradeContext::<NoLocking>::new(None, &reconfiguring_order),
             &reconfiguring_order,
         )
         .expect("the pre-trade-amount snapshot must apply the broker cap");
@@ -1943,7 +1943,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val
         )
         .is_ok());
     }
@@ -1958,7 +1960,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val,
         )
         .expect_err("field access error must reject");
         let reject = &reject[0];
@@ -1989,7 +1993,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val,
         )
         .expect_err("instrument access error must reject before account ID access");
         let reject = &reject[0];
@@ -2019,7 +2025,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val
         )
         .is_ok());
     }
@@ -2042,7 +2050,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val
         )
         .is_ok());
         assert_eq!(
@@ -2066,15 +2076,17 @@ mod tests {
             trade_amount_access_count: Rc::new(Cell::new(0)),
             price_access_count: Rc::new(Cell::new(0)),
         };
+        // Building the context is the operation's single account read. Every
+        // axis below runs against that same context, so the account counter
+        // stays at one unless a policy reaches back into the order.
+        let ctx = PreTradeContext::<NoLocking>::new(None, &order_val);
         let check_order = |policy: &TestPolicy| {
             <TestPolicy as PreTradePolicy<
                 AccountAccessCountingOrder,
                 (),
                 (),
                 crate::core::LocalSync,
-            >>::check_pre_trade_start(
-                policy, &PreTradeContext::<NoLocking>::new(None), &order_val
-            )
+            >>::check_pre_trade_start(policy, &ctx, &order_val)
         };
 
         let broker_policy = policy(Some(broker_quantity_barrier("10")), [], []);
@@ -2086,8 +2098,8 @@ mod tests {
         );
         assert_eq!(
             order_val.account_id_access_count.get(),
-            0,
-            "broker-only settings must not access the account ID"
+            1,
+            "broker-only settings must add no account read of their own"
         );
 
         let asset_policy = policy(None, [asset_quantity_barrier("AAPL", "10")], []);
@@ -2099,8 +2111,8 @@ mod tests {
         );
         assert_eq!(
             order_val.account_id_access_count.get(),
-            0,
-            "asset-only settings must not access the account ID"
+            1,
+            "asset-only settings must add no account read of their own"
         );
 
         let account_asset_policy = policy(
@@ -2121,7 +2133,7 @@ mod tests {
         assert_eq!(
             order_val.account_id_access_count.get(),
             1,
-            "account+asset settings must access the account ID once"
+            "the account axis must take the value the operation already read"
         );
     }
 
@@ -2205,7 +2217,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val,
         )
         .expect_err("field access error must reject");
         let reject = &reject[0];
@@ -2265,7 +2279,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val,
         )
         .expect_err("field access error must reject");
         let reject = &reject[0];
@@ -2320,7 +2336,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::check_pre_trade_start(
-            &p, &PreTradeContext::<NoLocking>::new(None), &order_val
+            &p,
+            &PreTradeContext::<NoLocking>::new(None, &order_val),
+            &order_val,
         )
         .expect_err("field access error must reject");
         let reject = &reject[0];

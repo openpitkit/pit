@@ -22,10 +22,11 @@ use super::reject::AccountBlock;
 use crate::core::account_control::DeferredAccountOperations;
 use crate::core::{
     AccountControl, AccountGroups, AccountGroupsHandle, Accounts, BlockedAccounts, GroupLookup,
+    HasAccountId,
 };
 use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
-use crate::{Mutation, Mutations};
+use crate::{Mutation, Mutations, RequestFieldAccessError};
 
 /// Drop-copy state of a [`PreTradeContext`].
 ///
@@ -44,7 +45,6 @@ where
     account_control: AccountControl<StorageFactory>,
     account_operations: DeferredAccountOperations,
     start_mutations: DropCopyStartMutationRecorder,
-    account: AccountId,
 }
 
 /// Callback-scoped recorder for atomic drop-copy start-stage mutations.
@@ -102,27 +102,32 @@ impl DropCopyStartMutationRecorder {
 
 /// Context of the current pre-trade operation.
 ///
-/// Carries an [`AccountControl`] bound to the order's account so rollback
-/// closures can record overflow blocks without repeating the account
-/// identifier. The control is `None` when the order carries no recognizable
-/// account identifier; in that case rollback closures must not call
-/// [`AccountControl::block`].
+/// Carries the operation's account, read from the order exactly once when the
+/// operation starts and available to every policy through
+/// [`account_id`](Self::account_id). That single read is what the engine routes
+/// and blocks on, so a policy that reads the order again is not reading the
+/// same operation's account.
+///
+/// Carries an [`AccountControl`] bound to that account so rollback closures can
+/// record overflow blocks without repeating the account identifier. The control
+/// is `None` when the account identifier could not be read; in that case
+/// rollback closures must not call [`AccountControl::block`].
 ///
 /// Also exposes the order account's
 /// [`AccountGroupId`](crate::param::AccountGroupId) through
 /// [`account_group`](Self::account_group).
 ///
-/// Operation arguments (order data, mutations) are passed as explicit method
-/// arguments and intentionally do not live inside this context.
+/// Order data the engine does not need itself, and mutations, are passed as
+/// explicit method arguments and intentionally do not live inside this context.
 pub struct PreTradeContext<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
-    /// Per-account control bound to the order's account, or `None` when the
-    /// account identifier could not be extracted from the order.
+    /// Per-account control bound to the operation's account, or `None` when the
+    /// account identifier could not be read from the order.
     pub account_control: Option<AccountControl<StorageFactory>>,
     accounts: Option<Accounts<StorageFactory>>,
-    account: Option<AccountId>,
+    account: Result<AccountId, RequestFieldAccessError>,
     group_lookup: GroupLookup<StorageFactory>,
     drop_copy: Option<Box<DropCopyState<StorageFactory>>>,
 }
@@ -134,13 +139,14 @@ where
     pub(crate) fn with_groups(
         account_control: Option<AccountControl<StorageFactory>>,
         account_groups: AccountGroupsHandle<StorageFactory>,
-        account: Option<AccountId>,
+        account: Result<AccountId, RequestFieldAccessError>,
     ) -> Self {
+        let lookup_account = account.as_ref().ok().copied();
         Self {
             account_control,
             accounts: None,
             account,
-            group_lookup: GroupLookup::new(account_groups, account),
+            group_lookup: GroupLookup::new(account_groups, lookup_account),
             drop_copy: None,
         }
     }
@@ -149,13 +155,14 @@ where
         account_control: Option<AccountControl<StorageFactory>>,
         accounts: Accounts<StorageFactory>,
         account_groups: AccountGroupsHandle<StorageFactory>,
-        account: Option<AccountId>,
+        account: Result<AccountId, RequestFieldAccessError>,
     ) -> Self {
+        let lookup_account = account.as_ref().ok().copied();
         Self {
             account_control,
             accounts: Some(accounts),
             account,
-            group_lookup: GroupLookup::new(account_groups, account),
+            group_lookup: GroupLookup::new(account_groups, lookup_account),
             drop_copy: None,
         }
     }
@@ -176,13 +183,12 @@ where
         Self {
             account_control: Some(account_control.clone()),
             accounts: Some(accounts),
-            account: Some(account),
+            account: Ok(account),
             group_lookup: GroupLookup::new(account_groups, Some(account)),
             drop_copy: Some(Box::new(DropCopyState {
                 account_control,
                 account_operations,
                 start_mutations: DropCopyStartMutationRecorder::new(),
-                account,
             })),
         }
     }
@@ -190,22 +196,57 @@ where
     /// Creates a standalone context for testing a [`PreTradePolicy`] outside an
     /// engine.
     ///
-    /// The context is backed by an empty, private account-group registry and no
-    /// bound account, so [`account_group`](Self::account_group) returns `None`.
-    /// Inside the engine the registry is the engine's shared one; this
-    /// constructor exists so policy authors can drive a policy's hooks directly
-    /// in unit tests.
+    /// `order` is read exactly once, here, for the fields the engine itself
+    /// needs - the same single read the engine performs when an operation
+    /// starts. Those fields are the bound on `Order`, and a field the engine
+    /// starts reading for itself later joins it: a test order is expected to
+    /// implement the whole engine-read accessor set, not only the accessors the
+    /// policy under test happens to use. Taking the order rather than a
+    /// pre-read value is deliberate - it is what makes the context and the
+    /// order agree by construction.
+    ///
+    /// The context is backed by an empty, private account-group registry, so
+    /// [`account_group`](Self::account_group) returns `None`; inside the engine
+    /// the registry is the engine's shared one. This constructor exists so
+    /// policy authors can drive a policy's hooks directly in unit tests.
     ///
     /// [`PreTradePolicy`]: crate::pretrade::PreTradePolicy
-    pub fn new(account_control: Option<AccountControl<StorageFactory>>) -> Self
+    pub fn new<Order>(
+        account_control: Option<AccountControl<StorageFactory>>,
+        order: &Order,
+    ) -> Self
     where
         StorageFactory: Default,
+        Order: HasAccountId,
     {
         let builder = StorageBuilder::new(StorageFactory::default());
         let handle = AccountGroupsHandle::from_inner(StorageFactory::new_shared(
             AccountGroups::new(&builder),
         ));
-        Self::with_groups(account_control, handle, None)
+        Self::with_groups(account_control, handle, order.account_id())
+    }
+
+    /// Returns the operation's account.
+    ///
+    /// The engine reads the order's account identifier once, when the operation
+    /// starts, and every account decision of that operation - the blocked-set
+    /// check, [`account_control`](Self::account_control), the recorded
+    /// kill-switch block - is made on this value. A policy that needs the
+    /// account takes it from here: reading it from the order again is a second,
+    /// independent read of a caller-implemented accessor, and nothing requires
+    /// that accessor to answer twice the same.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error the order's accessor returned for that single read.
+    /// An unreadable account reaches a policy only when the blocked set could
+    /// clear the request without one: with any account, group, or global block
+    /// armed, the engine rejects an unidentifiable account with
+    /// [`RejectCode::MissingRequiredField`](crate::pretrade::RejectCode) before
+    /// any policy runs. Past that point the operation continues, and an account
+    /// is required only by the policies that need one.
+    pub fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+        self.account.clone()
     }
 
     /// Returns the group of the order's account, or `None` when the account is
@@ -218,10 +259,16 @@ where
     }
 
     pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
-        match (self.accounts.as_ref(), self.account) {
+        match (self.accounts.as_ref(), self.known_account()) {
             (Some(accounts), Some(account)) => accounts.group_of(account),
             _ => self.group_lookup.group(),
         }
+    }
+
+    /// The operation's account when it was readable, for the engine's own
+    /// internal paths that treat an unreadable account as simply absent.
+    fn known_account(&self) -> Option<AccountId> {
+        self.account.as_ref().ok().copied()
     }
 
     /// Returns the effective currency for the order's account.
@@ -230,7 +277,7 @@ where
     /// account -> group -> default currency cascade. Standalone contexts have
     /// no account registry, so they return `None`.
     pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
-        self.account.and_then(|account| {
+        self.known_account().and_then(|account| {
             self.accounts
                 .as_ref()?
                 .currency_of_in_group(account, account_group)
@@ -263,8 +310,14 @@ where
         }
     }
 
+    /// The operation's account when this is a drop copy, derived rather than
+    /// stored: a drop-copy context is only ever built with a readable account,
+    /// so the two can never disagree.
     pub(crate) fn drop_copy_account_id(&self) -> Option<AccountId> {
-        self.drop_copy.as_ref().map(|state| state.account)
+        self.drop_copy
+            .is_some()
+            .then(|| self.known_account())
+            .flatten()
     }
 
     /// Records a start-stage mutation owned by an atomic drop-copy operation.

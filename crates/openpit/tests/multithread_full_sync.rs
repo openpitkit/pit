@@ -81,7 +81,7 @@ fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
                 for _ in 0..PER_THREAD {
                     <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start(
                         &policy,
-                        &PreTradeContext::new(None),
+                        &PreTradeContext::new(None, &order),
                         &order,
                     )
                     .expect("all calls within limit must pass");
@@ -93,7 +93,7 @@ fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
     let overflow_order = build_order(AccountId::from_u64(99));
     <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start(
         &policy,
-        &PreTradeContext::new(None),
+        &PreTradeContext::new(None, &overflow_order),
         &overflow_order,
     )
     .expect_err("call after exhausting limit must be rejected");
