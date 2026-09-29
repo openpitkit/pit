@@ -164,18 +164,18 @@ install:
 
 # Rust build (debug).
 [unix]
-build-debug:
+build-debug: _ensure-python-env
     cargo build --workspace
 [windows]
-build-debug:
+build-debug: _ensure-python-env
     cargo build --workspace --target {{ windows_target }}
 
 # Rust build (release).
 [unix]
-build-release:
+build-release: _ensure-python-env
     cargo build --workspace --release
 [windows]
-build-release:
+build-release: _ensure-python-env
     cargo build --workspace --release --target {{ windows_target }}
 
 # The wasm32 target and wasm-bindgen-cli come from `just install`.
@@ -318,7 +318,7 @@ lint-all: lint-rust lint-python lint-go lint-cpp lint-js check-semgrep
 
 # Lint Rust.
 [unix]
-lint-rust:
+lint-rust: _ensure-python-env
     cargo fmt --all -- --check --quiet
     cargo clippy --workspace --all-targets --no-default-features --locked -q -- -D warnings
     cargo clippy -p openpit --all-targets --all-features --locked -q -- -D warnings
