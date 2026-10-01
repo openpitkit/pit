@@ -18,7 +18,8 @@
 @PACKAGE_INIT@
 
 # `find_package(OpenPit CONFIG REQUIRED)` yields the imported target
-# `OpenPit::openpit`. The consumer still resolves the prebuilt runtime library
+# `OpenPit::openpit`. A package built with OPENPIT_BUNDLE_RUNTIME carries the
+# runtime library and exports it from here; any other package resolves one
 # (download or local override) via the bundled OpenPitDownloadRuntime module.
 
 include(CMakeFindDependencyMacro)
@@ -29,7 +30,21 @@ set(OPENPIT_RUNTIME_REPO "@OPENPIT_RUNTIME_REPO@"
   CACHE STRING "GitHub owner/repo hosting OpenPit runtime releases")
 
 include("${CMAKE_CURRENT_LIST_DIR}/OpenPitDownloadRuntime.cmake")
-openpit_resolve_runtime()
+
+set(_openpit_bundled_runtime "@OPENPIT_BUNDLED_RUNTIME@")
+set(_openpit_bundled_implib "@OPENPIT_BUNDLED_IMPLIB@")
+if(_openpit_bundled_runtime AND _openpit_bundled_implib)
+  _openpit_runtime_define_target(
+    "${PACKAGE_PREFIX_DIR}/${_openpit_bundled_runtime}"
+    "${PACKAGE_PREFIX_DIR}/${_openpit_bundled_implib}")
+elseif(_openpit_bundled_runtime)
+  _openpit_runtime_define_target(
+    "${PACKAGE_PREFIX_DIR}/${_openpit_bundled_runtime}")
+else()
+  openpit_resolve_runtime()
+endif()
+unset(_openpit_bundled_runtime)
+unset(_openpit_bundled_implib)
 
 include("${CMAKE_CURRENT_LIST_DIR}/OpenPitTargets.cmake")
 

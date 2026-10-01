@@ -18,6 +18,7 @@
 #pragma once
 
 #include "openpit/detail/callback_error.hpp"
+#include "openpit/detail/native_access.hpp"
 #include "openpit/error.hpp"
 
 #include <openpit.h>

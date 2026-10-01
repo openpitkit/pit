@@ -63,6 +63,11 @@ endif()
 
 option(OPENPIT_CPP_BUILD_TESTS "Build OpenPit C++ binding tests"
   "${OPENPIT_CPP_IS_TOP_LEVEL}")
+option(OPENPIT_CPP_CHECK_HEADERS
+  "Compile every public header on its own" "${OPENPIT_CPP_IS_TOP_LEVEL}")
+option(OPENPIT_BUNDLE_RUNTIME
+  "Install the resolved runtime into the package and export it from the config"
+  OFF)
 
 #-------------------------------------------------------------------------------
 # Resolve the prebuilt runtime (download or local override) into OpenPit::runtime.
@@ -98,6 +103,28 @@ target_compile_options(openpit_project_warnings INTERFACE
   $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX /permissive->)
 
 #-------------------------------------------------------------------------------
+# Header check: one translation unit per public header, built by whatever
+# toolchain builds the package, so a compiler that chokes on a header fails
+# the packaging build instead of the consumer's.
+
+if(OPENPIT_CPP_CHECK_HEADERS)
+  file(GLOB_RECURSE openpit_public_headers
+    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include" CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/openpit/*.hpp")
+  set(openpit_header_check_sources)
+  foreach(header IN LISTS openpit_public_headers)
+    string(MAKE_C_IDENTIFIER "${header}" source_name)
+    set(source "${CMAKE_CURRENT_BINARY_DIR}/header-check/${source_name}.cpp")
+    file(CONFIGURE OUTPUT "${source}" CONTENT "#include <${header}>\n")
+    list(APPEND openpit_header_check_sources "${source}")
+  endforeach()
+  add_library(openpit_header_check OBJECT ${openpit_header_check_sources})
+  target_link_libraries(openpit_header_check PRIVATE OpenPit::openpit)
+  target_compile_options(openpit_header_check PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/permissive->)
+endif()
+
+#-------------------------------------------------------------------------------
 # Tests.
 
 if(OPENPIT_CPP_BUILD_TESTS)
@@ -131,6 +158,28 @@ install(EXPORT OpenPitTargets
 # Ship the runtime resolver so installed consumers can fetch/override the lib.
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenPitDownloadRuntime.cmake"
   DESTINATION "${OPENPIT_INSTALL_CMAKEDIR}")
+
+# A bundling build installs the runtime it resolved under the platform
+# library name and tells the config where, relative to the package prefix, so
+# consumers of that package never resolve a runtime themselves.
+set(OPENPIT_BUNDLED_RUNTIME "")
+set(OPENPIT_BUNDLED_IMPLIB "")
+if(OPENPIT_BUNDLE_RUNTIME)
+  _openpit_runtime_host_triple(openpit_goos openpit_goarch openpit_runtime_name)
+  get_target_property(openpit_runtime_file OpenPit::runtime IMPORTED_LOCATION)
+  if(WIN32)
+    set(openpit_runtime_dir "${CMAKE_INSTALL_BINDIR}")
+    get_target_property(openpit_implib_file OpenPit::runtime IMPORTED_IMPLIB)
+    set(OPENPIT_BUNDLED_IMPLIB "${CMAKE_INSTALL_LIBDIR}/openpit_ffi.lib")
+    install(FILES "${openpit_implib_file}"
+      DESTINATION "${CMAKE_INSTALL_LIBDIR}" RENAME "openpit_ffi.lib")
+  else()
+    set(openpit_runtime_dir "${CMAKE_INSTALL_LIBDIR}")
+  endif()
+  set(OPENPIT_BUNDLED_RUNTIME "${openpit_runtime_dir}/${openpit_runtime_name}")
+  install(FILES "${openpit_runtime_file}"
+    DESTINATION "${openpit_runtime_dir}" RENAME "${openpit_runtime_name}")
+endif()
 
 configure_package_config_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenPitConfig.cmake.in"

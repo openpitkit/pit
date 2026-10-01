@@ -85,7 +85,9 @@ function(_openpit_runtime_resolve_windows_implib lib_path out_implib_path)
 endfunction()
 
 # Creates the IMPORTED target for a resolved library file. Windows consumers link
-# through the MSVC import library and load the DLL at runtime.
+# through the MSVC import library and load the DLL at runtime; the import
+# library is the optional second argument, otherwise it is resolved from the
+# DLL path.
 function(_openpit_runtime_define_target lib_path)
   if(TARGET OpenPit::runtime)
     return()
@@ -100,7 +102,15 @@ function(_openpit_runtime_define_target lib_path)
   set_target_properties(OpenPit::runtime PROPERTIES
     IMPORTED_LOCATION "${lib_path}")
   if(WIN32)
-    _openpit_runtime_resolve_windows_implib("${lib_path}" implib_path)
+    if(ARGC GREATER 1)
+      set(implib_path "${ARGV1}")
+      if(NOT EXISTS "${implib_path}")
+        message(FATAL_ERROR
+          "OpenPit: runtime import library not found at '${implib_path}'")
+      endif()
+    else()
+      _openpit_runtime_resolve_windows_implib("${lib_path}" implib_path)
+    endif()
     set_target_properties(OpenPit::runtime PROPERTIES
       IMPORTED_IMPLIB "${implib_path}")
   endif()

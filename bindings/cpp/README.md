@@ -42,7 +42,9 @@ target_link_libraries(your_target PRIVATE OpenPit::openpit)
 ```
 
 On Windows, OpenPit resolves both the runtime DLL and the MSVC import library.
-If your application needs the DLL copied next to the executable, call:
+The DLL links its C runtime statically and shares no CRT objects across the C
+ABI, so one binary serves Debug and Release builds alike. If your application
+needs the DLL copied next to the executable, call:
 
 ```cmake
 openpit_copy_runtime_dll(your_target)
@@ -219,7 +221,9 @@ cmake --install bindings/cpp/build --prefix "$PWD/.openpit"
 ```
 
 The command above uses the macOS `.dylib`; on Linux, point
-`OPENPIT_RUNTIME_LIBRARY` at `target/release/libopenpit_ffi.so`.
+`OPENPIT_RUNTIME_LIBRARY` at `target/release/libopenpit_ffi.so`. Add
+`-DOPENPIT_BUNDLE_RUNTIME=ON` to install that runtime into the package as well;
+its config then exports the bundled library instead of resolving one.
 
 </details>
 
