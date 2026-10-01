@@ -2,7 +2,7 @@ module openpit-example-spot-funds
 
 go 1.22
 
-require go.openpit.dev/openpit v0.8.2
+require go.openpit.dev/openpit v0.8.3
 
 require github.com/shopspring/decimal v1.4.0 // indirect
 
