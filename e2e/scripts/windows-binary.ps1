@@ -299,32 +299,24 @@ function Test-CppVcpkg {
     ConvertTo-Json -Depth 6 |
     Set-Content -Encoding ascii (Join-Path $workDirectory 'vcpkg-configuration.json')
 
-  $previousRuntime = $env:OPENPIT_VCPKG_RUNTIME_LIBRARY
-  $previousKeepEnvVars = $env:VCPKG_KEEP_ENV_VARS
+  if ($null -ne $runtimePath) {
+    # The port downloads the engine from the public release URL, which a draft
+    # release does not serve. vcpkg checks its download cache first, so the
+    # verified draft assets go there under the names the port asks for.
+    $downloads = Join-Path $vcpkgRoot 'downloads'
+    New-Item -ItemType Directory -Force $downloads | Out-Null
+    $runtimeAsset = "openpit-$version-openpit-ffi--windows-amd64-openpit_ffi.dll"
+    Copy-Item $runtimePath (Join-Path $downloads $runtimeAsset)
+    Copy-Item "$runtimePath.lib" (Join-Path $downloads "$runtimeAsset.lib")
+  }
+  Push-Location $workDirectory
   try {
-    if ($null -ne $runtimePath) {
-      $env:OPENPIT_VCPKG_RUNTIME_LIBRARY = $runtimePath
-      # On Windows vcpkg builds ports in a clean environment isolated from the
-      # caller, so the draft-runtime override has to be allowed through
-      # explicitly or the port falls back to the not-yet-public release asset.
-      $keepEnvVars = 'OPENPIT_VCPKG_RUNTIME_LIBRARY'
-      if (-not [string]::IsNullOrWhiteSpace($previousKeepEnvVars)) {
-        $keepEnvVars = "$previousKeepEnvVars;$keepEnvVars"
-      }
-      $env:VCPKG_KEEP_ENV_VARS = $keepEnvVars
-    }
-    Push-Location $workDirectory
-    try {
-      Invoke-External (Join-Path $vcpkgRoot 'vcpkg.exe') @('install', '--triplet', 'x64-windows')
-    } catch {
-      Show-VcpkgPortLogs $vcpkgRoot
-      throw
-    } finally {
-      Pop-Location
-    }
+    Invoke-External (Join-Path $vcpkgRoot 'vcpkg.exe') @('install', '--triplet', 'x64-windows')
+  } catch {
+    Show-VcpkgPortLogs $vcpkgRoot
+    throw
   } finally {
-    $env:OPENPIT_VCPKG_RUNTIME_LIBRARY = $previousRuntime
-    $env:VCPKG_KEEP_ENV_VARS = $previousKeepEnvVars
+    Pop-Location
   }
 
   # Toolchain-only arguments, shared by the consumer and every example. Source
@@ -335,9 +327,6 @@ function Test-CppVcpkg {
     "-DVCPKG_INSTALLED_DIR=$workDirectory\vcpkg_installed",
     '-DVCPKG_TARGET_TRIPLET=x64-windows'
   )
-  if ($null -ne $runtimePath) {
-    $vcpkgCmakeArgs += "-DOPENPIT_RUNTIME_LIBRARY=$runtimePath"
-  }
   $consumerBuild = Join-Path $workDirectory 'consumer-build'
   Write-Host '==> Building minimal C++ consumer through vcpkg'
   Invoke-External 'cmake.exe' (

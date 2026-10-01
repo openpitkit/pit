@@ -106,6 +106,7 @@ else:
     raise SystemExit(f"release asset not found: {asset_name}")
 PY
 )"
+  draft_runtime_asset="${asset}"
   OPENPIT_VCPKG_RUNTIME_LIBRARY="${work_root}/${runtime_file}"
   curl -fsSL \
     --header "Authorization: Bearer ${OPENPIT_RELEASE_DOWNLOAD_TOKEN}" \
@@ -212,6 +213,14 @@ echo "==> Bootstrapping isolated vcpkg"
 git clone --depth 1 https://github.com/microsoft/vcpkg.git "${vcpkg_root}"
 "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
 vcpkg_baseline="$(git -C "${vcpkg_root}" rev-parse HEAD)"
+if [[ -n "${draft_runtime_asset:-}" ]]; then
+  # The port downloads the engine from the public release URL, which a draft
+  # release does not serve. vcpkg checks its download cache first, so the
+  # verified draft asset goes there under the name the port asks for.
+  mkdir -p "${vcpkg_root}/downloads"
+  cp "${OPENPIT_VCPKG_RUNTIME_LIBRARY}" \
+    "${vcpkg_root}/downloads/openpit-${OPENPIT_VERSION}-${draft_runtime_asset}"
+fi
 # Source: bindings/cpp/README.md - Install
 # Source: https://wiki.openpit.dev/Getting-Started/ - C++ Through vcpkg
 cat > "${work_root}/vcpkg.json" <<EOF
@@ -246,9 +255,6 @@ cmake_args=(
   "-DVCPKG_INSTALLED_DIR=${work_root}/vcpkg_installed"
   "-DVCPKG_TARGET_TRIPLET=${OPENPIT_VCPKG_TRIPLET}"
 )
-if [[ -n "${OPENPIT_VCPKG_RUNTIME_LIBRARY:-}" ]]; then
-  cmake_args+=("-DOPENPIT_RUNTIME_LIBRARY=${OPENPIT_VCPKG_RUNTIME_LIBRARY}")
-fi
 
 echo "==> Building minimal C++ consumer through vcpkg"
 cmake -S "${OPENPIT_E2E_CONSUMER_DIR}" -B "${work_root}/consumer-build" \
