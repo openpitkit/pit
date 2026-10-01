@@ -371,7 +371,9 @@ jobs:
         with:
           python-version: ${{ env.CI_PYTHON }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            checks/requirements.txt
 
       - name: Create virtual environment
         run: |
@@ -379,6 +381,12 @@ jobs:
           echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> "$GITHUB_ENV"
           echo "PYTHON_PATH=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
           echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+      # Installing outside just populates the pip cache setup-python saves;
+      # just's own PIP_CACHE_DIR points elsewhere.
+      - name: Install Python dependencies
+        run: |
+          "$PYTHON_PATH" -m pip install -r requirements.txt
 
       - name: Setup just
         uses: extractions/setup-just@v3
