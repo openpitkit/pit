@@ -402,6 +402,11 @@ fn fresh_slot(limit: RateLimit) -> RateLimitSlot {
 // can briefly reach up to `2 * max_orders` worst case. This is a deliberate
 // trade-off for lock-free shared accounting.
 //
+// Each caller reads the clock before it pushes, so a delayed thread can arrive
+// with a reading earlier than `window_start_nanos`. Such a reading counts
+// against the current window: it never rolls the window over, so the window
+// start only moves forward and the spent budget is never discarded early.
+//
 // The counter holds no limit of its own: the window length is supplied on each
 // `push` from the current settings, so a window change applies going forward
 // with no reset. The counter lives inside the settings cell behind an `Arc`,
@@ -423,7 +428,7 @@ impl AtomicWindowCounter {
 
     fn push(&self, now_nanos: u64, window_nanos: u64) -> u64 {
         let win_start = self.window_start_nanos.load(Ordering::Relaxed);
-        if now_nanos.wrapping_sub(win_start) >= window_nanos
+        if Self::rolled_over(now_nanos, win_start, window_nanos)
             && self
                 .window_start_nanos
                 .compare_exchange(win_start, now_nanos, Ordering::AcqRel, Ordering::Relaxed)
@@ -442,10 +447,19 @@ impl AtomicWindowCounter {
     // be the live count plus one.
     fn peek(&self, now_nanos: u64, window_nanos: u64) -> u64 {
         let win_start = self.window_start_nanos.load(Ordering::Relaxed);
-        if now_nanos.wrapping_sub(win_start) >= window_nanos {
+        if Self::rolled_over(now_nanos, win_start, window_nanos) {
             return 1;
         }
         self.count.load(Ordering::Acquire) + 1
+    }
+
+    // Shared by `push` and `peek` so the dry-run answers what a push would. A
+    // reading earlier than `win_start` is not a rollover: plain subtraction
+    // would wrap and look like a long-expired window.
+    fn rolled_over(now_nanos: u64, win_start: u64, window_nanos: u64) -> bool {
+        now_nanos
+            .checked_sub(win_start)
+            .is_some_and(|elapsed| elapsed >= window_nanos)
     }
 }
 
@@ -915,7 +929,7 @@ mod tests {
     use crate::pretrade::{
         ConfigurablePolicy, PreTradeContext, PreTradePolicy, RejectCode, RejectScope, Rejects,
     };
-    use crate::storage::{ConfigCell, LocalConfigCell, NoLocking};
+    use crate::storage::{ConfigCell, FullLocking, LocalConfigCell, NoLocking};
 
     use super::{
         RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
@@ -1466,6 +1480,111 @@ mod tests {
 
         // A real order in a fresh window passes: the dry-runs spent no budget.
         assert!(check_at(&policy, &o, base + Duration::from_secs(11)).is_ok());
+    }
+
+    #[test]
+    fn late_clock_reading_counts_in_current_broker_window() {
+        // A call whose clock reading predates the current window start (its
+        // thread was delayed between reading the clock and pushing) counts
+        // against the current window: it neither opens a new window nor moves
+        // the window start backwards.
+        let policy = broker_policy(2, Duration::from_secs(10));
+        let o = order(account(1));
+        let base = Instant::now();
+
+        // Opens the window at base + 20s and exhausts it.
+        assert!(check_at(&policy, &o, base + Duration::from_secs(20)).is_ok());
+        assert!(check_at(&policy, &o, base + Duration::from_secs(21)).is_ok());
+
+        let reject = check_at(&policy, &o, base + Duration::from_secs(15))
+            .expect_err("late reading must count against the exhausted window");
+        assert_eq!(reject[0].reason, "rate limit exceeded: broker barrier");
+        assert_eq!(
+            reject[0].details,
+            "submitted 3 orders in 10s window, max allowed: 2"
+        );
+
+        // The window still starts at base + 20s: base + 29s is inside it and
+        // base + 30s opens the next one.
+        assert!(check_at(&policy, &o, base + Duration::from_secs(29)).is_err());
+        assert!(check_at(&policy, &o, base + Duration::from_secs(30)).is_ok());
+    }
+
+    #[test]
+    fn dry_run_counts_late_clock_reading_in_current_broker_window() {
+        // The dry-run answers what the real check would: a reading that
+        // predates the current window start sees the exhausted window.
+        let policy = broker_policy(1, Duration::from_secs(10));
+        let o = order(account(1));
+        let base = Instant::now();
+
+        assert!(check_at(&policy, &o, base + Duration::from_secs(20)).is_ok());
+
+        let reject = check_dry_run_at(&policy, &o, base + Duration::from_secs(15))
+            .expect_err("late dry-run must report the exhausted window");
+        assert_eq!(reject[0].reason, "rate limit exceeded: broker barrier");
+        assert!(check_at(&policy, &o, base + Duration::from_secs(15)).is_err());
+    }
+
+    #[test]
+    fn late_clock_readings_under_full_sync_do_not_reopen_broker_window() {
+        // Threads share one broker counter under FullSync. Half of them arrive
+        // with readings that predate the current window start, each call
+        // earlier than the previous one. No reading reaches the window end, so
+        // no rollover is due and the documented boundary burst cannot occur:
+        // exactly `max_orders` calls pass.
+        type FullSyncPolicy = RateLimitPolicy<FullLocking>;
+        const MAX_ORDERS: usize = 8;
+        const THREADS: u32 = 8;
+        const PER_THREAD: u32 = 200;
+
+        let builder = crate::Engine::builder::<OrderOperation, (), ()>().full_sync();
+        let policy = FullSyncPolicy::new(
+            broker_settings(MAX_ORDERS, Duration::from_secs(10)),
+            builder.storage_builder(),
+        );
+        let o = order(account(1));
+        let window_start = Instant::now() + Duration::from_secs(20);
+        let check = |now: Instant| {
+            with_start_pre_trade_now(now, || {
+                <FullSyncPolicy as PreTradePolicy<OrderOperation, (), (), crate::core::FullSync>>::check_pre_trade_start(
+                    &policy,
+                    &PreTradeContext::<FullLocking>::new(None, &o),
+                    &o,
+                )
+            })
+            .is_ok()
+        };
+
+        // Opens the window.
+        assert!(check(window_start));
+
+        let passed: usize = std::thread::scope(|s| {
+            let workers: Vec<_> = (0..THREADS)
+                .map(|tid| {
+                    let check = &check;
+                    s.spawn(move || {
+                        (0..PER_THREAD)
+                            .filter(|&i| {
+                                let offset =
+                                    Duration::from_micros(u64::from(tid * PER_THREAD + i + 1));
+                                if tid % 2 == 0 {
+                                    check(window_start + offset)
+                                } else {
+                                    check(window_start - offset)
+                                }
+                            })
+                            .count()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("worker must not panic"))
+                .sum()
+        });
+
+        assert_eq!(passed + 1, MAX_ORDERS);
     }
 
     #[test]
