@@ -59,11 +59,16 @@ Use as ``limit`` inside :class:`OrderSizeBrokerBarrier`,
 
 @dataclasses.dataclass(frozen=True)
 class RateLimit:
-    """Maximum orders within a sliding time window.
+    """Maximum orders within a time window.
+
+    Broker and asset barriers count orders with an approximate fixed-window
+    counter: at a window boundary the observed burst can briefly reach up to
+    ``2 * max_orders``. Account and account+asset barriers count them with a
+    precise sliding-window log.
 
     Args:
         max_orders: Maximum number of orders accepted within *window*.
-        window: Length of the sliding time window.
+        window: Length of the time window.
     """
 
     max_orders: int

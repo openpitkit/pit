@@ -107,8 +107,8 @@ func rateLimitWindowNanoseconds(limit policies.RateLimit) int64 {
 // re-adding the key resumes counting orders still inside its window.
 // Nil axes and nil broker are left unchanged.
 //
-// Returns a *ConfigureError on a domain error (kind TypeMismatch when the name
-// belongs to a different policy type, Validation when values are invalid).
+// Returns a *Error on a domain error (kind TypeMismatch when the name belongs
+// to a different policy type, Validation when values are invalid).
 func (c Configurator) RateLimit(
 	name string,
 	broker *policies.RateLimitBrokerBarrier,

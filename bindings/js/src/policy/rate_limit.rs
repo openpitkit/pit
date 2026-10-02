@@ -44,8 +44,8 @@ use crate::param::ids::JsAccountId;
 #[wasm_bindgen(typescript_custom_section)]
 const RATE_LIMIT_INIT_TS: &'static str = r#"
 /**
- * Plain-object form of {@link RateLimit}. `windowMs` is the rolling-window
- * length in milliseconds.
+ * Plain-object form of {@link RateLimit}. `windowMs` is the window length in
+ * milliseconds.
  */
 export interface RateLimitInit {
   maxOrders: number;
@@ -60,7 +60,12 @@ extern "C" {
     pub type RateLimitLike;
 }
 
-/// Rate-limit configuration: a maximum order count over a rolling window.
+/// Rate-limit configuration: a maximum order count over a time window.
+///
+/// Broker and asset barriers count orders with an approximate fixed-window
+/// counter: at a window boundary the observed burst can briefly reach up to
+/// `2 * maxOrders`. Account and account+asset barriers count them with a
+/// precise sliding-window log.
 #[wasm_bindgen(js_name = RateLimit)]
 #[derive(Clone, Copy)]
 pub struct JsRateLimit {
@@ -72,7 +77,7 @@ pub struct JsRateLimit {
 impl JsRateLimit {
     /// Constructs a rate limit from a max order count and a window.
     ///
-    /// `windowMs` is the rolling-window length in milliseconds. Fractional
+    /// `windowMs` is the window length in milliseconds. Fractional
     /// milliseconds retain nanosecond precision.
     ///
     /// # Errors
@@ -95,7 +100,7 @@ impl JsRateLimit {
         self.max_orders
     }
 
-    /// The rolling-window length in milliseconds.
+    /// The window length in milliseconds.
     #[wasm_bindgen(getter, js_name = windowMs)]
     pub fn window_ms(&self) -> f64 {
         self.window.as_secs_f64() * 1000.0

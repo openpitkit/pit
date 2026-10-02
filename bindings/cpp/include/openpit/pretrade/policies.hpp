@@ -456,8 +456,13 @@ class PnlBoundsKillSwitchPolicy {
 //------------------------------------------------------------------------------
 // RateLimit
 
-// Maximum number of orders accepted within a sliding window expressed in
+// Maximum number of orders accepted within a time window expressed in
 // nanoseconds.
+//
+// Broker and asset barriers count orders with an approximate fixed-window
+// counter: at a window boundary the observed burst can briefly reach up to
+// 2 * maxOrders. Account and account+asset barriers count them with a precise
+// sliding-window log.
 struct RateLimit {
   std::size_t maxOrders = 0;
   std::int64_t windowNanoseconds = 0;

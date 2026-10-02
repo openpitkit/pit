@@ -31,12 +31,17 @@ func rateLimitWindowNanoseconds(limit RateLimit) int64 {
 	return int64(limit.Window)
 }
 
-// RateLimit defines the maximum number of orders allowed within a
-// sliding window.
+// RateLimit defines the maximum number of orders allowed within a time
+// window.
+//
+// Broker and asset barriers count orders with an approximate fixed-window
+// counter: at a window boundary the observed burst can briefly reach up to
+// 2 * MaxOrders. Account and account+asset barriers count them with a precise
+// sliding-window log.
 type RateLimit struct {
 	// MaxOrders is the maximum number of orders accepted within Window.
 	MaxOrders uint
-	// Window is the length of the sliding time window.
+	// Window is the length of the time window.
 	Window time.Duration
 }
 
