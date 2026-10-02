@@ -26,7 +26,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::domain::{
     clone_wrapper_value, has_own_field, is_plain_object, parse_asset, parse_bounded_number,
-    read_field, resolve_account_group_id, resolve_account_id, resolve_pnl,
+    read_field, resolve_account_group_id, resolve_account_id, resolve_optional_quantity,
+    resolve_pnl,
 };
 use crate::engine::EngineTrait;
 use crate::error::{configure_error_to_js, make_error, ErrorKind};
@@ -93,7 +94,14 @@ export interface SpotFundsLimitModeAccountGroupEntry {
   mode?: import("../types.js").SpotFundsLimitMode | null;
 }
 
-/** Runtime spot-funds slippage/pricing/limit-mode options. */
+/** Position bound for one spot-funds account and asset; null clears it. */
+export interface SpotFundsPositionLimitEntry {
+  accountId: AccountId | number | bigint | string;
+  asset: string;
+  limit: Quantity | string | number | bigint | null;
+}
+
+/** Runtime spot-funds slippage, pricing, limit-mode, and position options. */
 export interface SpotFundsConfigureOptions {
   globalSlippageBps?: number;
   pricingSource?: import("../types.js").SpotFundsPricingSource | null;
@@ -101,6 +109,19 @@ export interface SpotFundsConfigureOptions {
   globalLimitMode?: import("../types.js").SpotFundsLimitMode | null;
   accountLimitModes?: Iterable<SpotFundsLimitModeAccountEntry> | null;
   accountGroupLimitModes?: Iterable<SpotFundsLimitModeAccountGroupEntry> | null;
+  /**
+   * Pin, replace, or clear an inclusive long and short position magnitude per
+   * account asset. Each entry requires a limit; null clears its bound. Omit
+   * this option or pass null to leave existing bounds unchanged.
+   * The checked position starts with recorded available plus held. A long
+   * projection adds open positive incoming; a short projection subtracts open
+   * positive held. Only the side the order moves toward is checked, so a
+   * position-reducing order passes while that projection stays within the
+   * bound. A breach is PositionLimitExceeded at Order scope; an inexact
+   * projection is ArithmeticOverflow at Order scope. Changes apply from the
+   * next order without re-evaluating open reservations.
+   */
+  positionLimits?: Iterable<SpotFundsPositionLimitEntry> | null;
 }
 
 /**
@@ -393,6 +414,7 @@ impl JsConfigurator {
             "accountGroupId",
             resolve_account_group_id,
         )?;
+        let position_limits = optional_position_limit_entries(&options)?;
 
         self.inner
             .spot_funds(name, |settings| {
@@ -419,6 +441,11 @@ impl JsConfigurator {
                 if let Some(entries) = account_group_limit_modes {
                     for (group, mode) in entries {
                         settings.set_account_group_limit_mode(group, mode);
+                    }
+                }
+                if let Some(entries) = position_limits {
+                    for (account, asset, limit) in entries {
+                        settings.set_position_limit(account, asset, limit);
                     }
                 }
                 Ok::<(), SpotFundsConfigError>(())
@@ -694,6 +721,49 @@ fn optional_limit_mode_entries<Id>(
         let id = parse_id(required_field(&item, id_field)?)?;
         let mode = parse_limit_mode(&read_field(&item, "mode")?)?;
         entries.push((id, mode));
+    }
+    Ok(Some(entries))
+}
+
+/// One parsed `positionLimits` entry: account, asset, and the limit to pin or
+/// `None` to clear.
+type PositionLimitEntry = (
+    openpit::param::AccountId,
+    openpit::param::Asset,
+    Option<openpit::param::Quantity>,
+);
+
+fn optional_position_limit_entries(
+    options: &JsValue,
+) -> Result<Option<Vec<PositionLimitEntry>>, JsValue> {
+    let value = read_field(options, "positionLimits")?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    let iterator = js_sys::try_iter(&value)?.ok_or_else(|| iterable_error("positionLimits"))?;
+    let mut entries = Vec::new();
+    for item in iterator {
+        let item = item?;
+        require_object(&item, "positionLimits entry")?;
+        let account_id = resolve_account_id(required_field(&item, "accountId")?)?;
+        let asset = parse_asset(&required_string_field(&item, "asset")?)?;
+        if !has_own_field(&item, "limit")? {
+            return Err(make_error(
+                ErrorKind::Type,
+                "limit is required; pass null to clear",
+                None,
+            ));
+        }
+        let limit_value = read_field(&item, "limit")?;
+        if limit_value.is_undefined() {
+            return Err(make_error(
+                ErrorKind::Type,
+                "limit is required; pass null to clear",
+                None,
+            ));
+        }
+        let limit = resolve_optional_quantity(limit_value)?;
+        entries.push((account_id, asset, limit));
     }
     Ok(Some(entries))
 }

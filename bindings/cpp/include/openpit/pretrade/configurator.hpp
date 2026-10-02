@@ -406,6 +406,33 @@ class Configurator {
     }
   }
 
+  /// Pins, replaces, or clears the inclusive long and short position magnitude
+  /// limit for an account and asset in the named SpotFunds policy. The checked
+  /// position starts with recorded available + held, including a negative held
+  /// residual. A long projection adds open positive incoming; a short
+  /// projection subtracts open positive held. Only the side the order moves
+  /// toward is checked, so a position-reducing order passes while that
+  /// projection stays within the limit. A breach rejects with
+  /// PositionLimitExceeded at Order scope. A projection that cannot be computed
+  /// exactly rejects with ArithmeticOverflow at Order scope. A change applies
+  /// from the next order and does not re-evaluate open reservations.
+  /// `std::nullopt` clears the limit.
+  void SpotFundsPositionLimit(
+      std::string_view name, ::openpit::param::AccountId accountId,
+      const ::openpit::param::Asset& asset,
+      std::optional<::openpit::param::Quantity> limit) const {
+    OpenPitConfigureError* error = nullptr;
+    if (!openpit_engine_configure_spot_funds_position_limit(
+            m_engine, ::openpit::detail::MakeStringView(name),
+            ::openpit::detail::Native(accountId),
+            ::openpit::detail::Native(asset),
+            limit ? ::openpit::detail::Native(*limit) : OpenPitParamQuantity{},
+            limit.has_value(), &error)) {
+      ::openpit::detail::ThrowFromConfigureError(
+          error, "openpit_engine_configure_spot_funds_position_limit failed");
+    }
+  }
+
   void SpotFundsAccountGroupLimitMode(
       std::string_view name, ::openpit::param::AccountGroupId accountGroupId,
       std::optional<::openpit::pretrade::policies::SpotFundsLimitMode> mode)

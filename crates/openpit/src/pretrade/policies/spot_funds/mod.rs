@@ -49,6 +49,7 @@ mod execution;
 mod market_data;
 mod market_order_pricer;
 mod pnl;
+mod position_limit;
 mod pre_trade;
 mod rejects;
 mod rollback;
@@ -382,6 +383,14 @@ fn release_account_pnl_lease<StorageFactory>(
 /// `apply_account_adjustment` pipeline. Missing `(account, asset)`
 /// holdings are treated as zero and fail reservations through the
 /// regular [`crate::pretrade::RejectCode::InsufficientFunds`] path.
+///
+/// A configured position-limit barrier rejects an order whose projected
+/// position exceeds its inclusive bound with
+/// [`crate::pretrade::RejectCode::PositionLimitExceeded`] at
+/// [`crate::pretrade::RejectScope::Order`] scope. A projection that cannot be
+/// computed exactly within the decimal range is rejected with
+/// [`crate::pretrade::RejectCode::ArithmeticOverflow`] at
+/// [`crate::pretrade::RejectScope::Order`] scope.
 ///
 /// Average entry price and realized PnL accounting uses the account currency
 /// resolved by the engine account registry as calculation context. The account

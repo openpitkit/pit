@@ -663,6 +663,108 @@ describe("runtime configurator", () => {
     expect(result.rejects[0]!.reason).toBe("spot funds insufficient");
   });
 
+  it("reconfigures a spot-funds position limit for the next order", () => {
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+    const adjustment = engine.applyAccountAdjustment(ACCOUNT, [
+      {
+        operation: { asset: "USD" },
+        amount: { balance: AdjustmentAmount.absolute("1000") },
+      },
+    ]);
+    expect(adjustment.ok).toBe(true);
+
+    engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+      positionLimits: [{ accountId: ACCOUNT, asset: "AAPL", limit: "1" }],
+    });
+    const rejected = engine.executePreTrade(makeOrder("2"));
+    expect(rejected.ok).toBe(false);
+    expect(rejected.rejects[0]?.code).toBe("PositionLimitExceeded");
+    expect(rejected.rejects[0]?.scope).toBe("order");
+
+    const within = engine.executePreTrade(makeOrder("1"));
+    expect(within.ok).toBe(true);
+    within.reservation?.rollback();
+
+    engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+      positionLimits: [{ accountId: ACCOUNT, asset: "AAPL", limit: "3" }],
+    });
+    const withinReplacement = engine.executePreTrade(makeOrder("2"));
+    expect(withinReplacement.ok).toBe(true);
+    withinReplacement.reservation?.rollback();
+    const beyond = engine.executePreTrade(makeOrder("4"));
+    expect(beyond.ok).toBe(false);
+    expect(beyond.rejects[0]?.code).toBe("PositionLimitExceeded");
+    expect(beyond.rejects[0]?.scope).toBe("order");
+
+    engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+      positionLimits: [{ accountId: ACCOUNT, asset: "AAPL", limit: null }],
+    });
+    const cleared = engine.executePreTrade(makeOrder("4"));
+    expect(cleared.ok).toBe(true);
+    cleared.reservation?.rollback();
+  });
+
+  it("requires an explicit spot-funds position limit to preserve an existing bound", () => {
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+    const adjustment = engine.applyAccountAdjustment(ACCOUNT, [
+      {
+        operation: { asset: "USD" },
+        amount: { balance: AdjustmentAmount.absolute("1000") },
+      },
+    ]);
+    expect(adjustment.ok).toBe(true);
+
+    engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+      positionLimits: [{ accountId: ACCOUNT, asset: "AAPL", limit: "1" }],
+    });
+    for (const entry of [
+      { accountId: ACCOUNT, asset: "AAPL" },
+      { accountId: ACCOUNT, asset: "AAPL", limt: "3" },
+      { accountId: ACCOUNT, asset: "AAPL", limit: undefined },
+    ]) {
+      expect(() =>
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+          positionLimits: [entry as never],
+        }),
+      ).toThrow("limit is required");
+    }
+
+    const rejected = engine.executePreTrade(makeOrder("2"));
+    expect(rejected.ok).toBe(false);
+    expect(rejected.rejects[0]?.code).toBe("PositionLimitExceeded");
+  });
+
+  it("rejects invalid spot-funds position entries without applying the batch", () => {
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+    const valid = { accountId: ACCOUNT, asset: "AAPL", limit: "1" };
+    expect(() =>
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        positionLimits: [valid, 7 as never],
+      }),
+    ).toThrow(TypeError);
+    expect(() =>
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        positionLimits: [{ accountId: ACCOUNT, asset: "", limit: "1" }],
+      }),
+    ).toThrow(AssetError);
+    expect(() =>
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        positionLimits: [{ accountId: ACCOUNT, asset: "AAPL", limit: "bad" }],
+      }),
+    ).toThrow(ParamError);
+
+    const adjustment = engine.applyAccountAdjustment(ACCOUNT, [
+      {
+        operation: { asset: "USD" },
+        amount: { balance: AdjustmentAmount.absolute("1000") },
+      },
+    ]);
+    expect(adjustment.ok).toBe(true);
+    const result = engine.executePreTrade(makeOrder("4"));
+    expect(result.ok).toBe(true);
+    result.reservation?.rollback();
+  });
+
   it("builds spot-funds pnl barriers from the public builder", () => {
     // Source: https://wiki.openpit.dev/Spot-Funds/ - Configuring Barriers
     const accountId = 99_224_416n;

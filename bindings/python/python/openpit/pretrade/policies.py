@@ -624,6 +624,31 @@ class SpotFundsLimitModeAccountEntry:
 
 
 @dataclasses.dataclass(frozen=True)
+class SpotFundsPositionLimitEntry:
+    """Position bound for one account and asset.
+
+    The checked position begins with recorded available plus held. A long
+    projection adds open positive incoming; a short projection subtracts open
+    positive held. Only the side an order moves toward is checked, so a
+    position-reducing order passes while that projection stays within the
+    inclusive bound. A breach produces ``PositionLimitExceeded`` at Order
+    scope; an inexact projection produces ``ArithmeticOverflow`` at Order
+    scope. Changes take effect on the next order without re-evaluating open
+    reservations.
+
+    Args:
+        account_id: Account to bound.
+        asset: Asset to bound.
+        limit: Required non-negative long and short magnitude to pin. Pass
+            ``None`` explicitly to clear the bound.
+    """
+
+    account_id: param.AccountId
+    asset: param.Asset
+    limit: param.Quantity | None
+
+
+@dataclasses.dataclass(frozen=True)
 class SpotFundsLimitModeAccountGroupEntry:
     """Per-account-group limit-mode override for the runtime cascade.
 
@@ -1052,6 +1077,7 @@ __all__ = [
     "SpotFundsPricingSource",
     "SpotFundsLimitMode",
     "SpotFundsLimitModeAccountEntry",
+    "SpotFundsPositionLimitEntry",
     "SpotFundsLimitModeAccountGroupEntry",
     "SpotFundsOverrideTarget",
     "SpotFundsOverrideTargetInstrument",

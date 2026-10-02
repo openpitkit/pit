@@ -7625,6 +7625,44 @@ bool openpit_engine_configure_spot_funds_account_limit_mode(
 );
 
 /**
+ * Pins or clears the spot-funds position limit for one account and asset on
+ * the policy registered under `name`.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy; see
+ *   `openpit_engine_configure_spot_funds_global_limit_mode`.
+ * - `account_id` and `asset` select the position; `asset` must be valid
+ *   UTF-8 and a valid asset.
+ * - When `has_limit` is `true`, `limit` pins or replaces the inclusive
+ *   non-negative long and short magnitude for this position. The checked
+ *   position starts with recorded `available + held`, including a negative
+ *   `held` residual. A long projection adds open positive `incoming`; a
+ *   short projection subtracts open positive `held`. Only the side the order
+ *   moves toward is checked, so a position-reducing order passes while that
+ *   projection stays within the limit. `limit` must be a valid non-negative
+ *   quantity. When `has_limit` is `false`, the limit is cleared and `limit`
+ *   is ignored.
+ * - A breach rejects with `PositionLimitExceeded` at Order scope. A
+ *   projection that cannot be computed exactly rejects with
+ *   `ArithmeticOverflow` at Order scope. A change applies from the next
+ *   order and does not re-evaluate open reservations.
+ *
+ * Success / error: as `openpit_engine_configure_spot_funds_global_limit_mode`.
+ * An invalid `asset` or supplied `limit` returns `false` with a `Validation`
+ * error naming the invalid input.
+ */
+bool openpit_engine_configure_spot_funds_position_limit(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    OpenPitParamAccountId account_id,
+    OpenPitStringView asset,
+    OpenPitParamQuantity limit,
+    bool has_limit,
+    OpenPitConfigureError ** out_error
+);
+
+/**
  * Pins or clears the spot-funds limit mode for one account group on the policy
  * registered under `name`.
  *

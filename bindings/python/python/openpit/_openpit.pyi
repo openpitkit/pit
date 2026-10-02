@@ -2549,6 +2549,7 @@ class Configurator:
         account_group_limit_modes: list[
             pretrade.policies.SpotFundsLimitModeAccountGroupEntry
         ] = ...,
+        position_limits: list[pretrade.policies.SpotFundsPositionLimitEntry] = ...,
     ) -> None:
         """Retune a registered spot-funds policy at runtime.
 
@@ -2573,6 +2574,19 @@ class Configurator:
         :class:`~openpit.pretrade.policies.SpotFundsLimitModeAccountGroupEntry`
         entries; each pins the entry's ``mode`` for that scope, or clears the
         pin (deferring to the next cascade tier) when ``mode`` is ``None``.
+
+        *position_limits* contains
+        :class:`~openpit.pretrade.policies.SpotFundsPositionLimitEntry`
+        entries. Each pins or replaces an inclusive long and short position
+        magnitude for one account asset; each entry requires a ``limit`` and
+        explicit ``None`` clears it. The checked position starts with recorded
+        available plus held. Long projections
+        add open positive incoming, and short projections subtract open
+        positive held. Only the side the order moves toward is checked, so a
+        reducing order passes while its projection stays within the bound.
+        A breach is ``PositionLimitExceeded`` at Order scope; an inexact
+        projection is ``ArithmeticOverflow`` at Order scope. Changes apply
+        from the next order without re-evaluating open reservations.
 
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong

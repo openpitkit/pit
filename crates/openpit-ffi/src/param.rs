@@ -385,7 +385,8 @@ fn import_decimal(value: OpenPitParamDecimal) -> Result<Decimal, String> {
         .scale
         .try_into()
         .map_err(|e| format!("invalid decimal scale {} for decimal: {}", value.scale, e))?;
-    Ok(Decimal::from_i128_with_scale(value.to_mantissa(), scale))
+    Decimal::try_from_i128_with_scale(value.to_mantissa(), scale)
+        .map_err(|err| format!("invalid decimal representation: {err}"))
 }
 
 pub(crate) unsafe fn parse_string_view(value: OpenPitStringView) -> Result<String, String> {
@@ -507,7 +508,13 @@ macro_rules! define_decimal_param_wrapper {
                         e
                     )
                 })?;
-                let decimal = Decimal::from_i128_with_scale(self.0.to_mantissa(), scale);
+                let decimal = Decimal::try_from_i128_with_scale(self.0.to_mantissa(), scale)
+                    .map_err(|err| {
+                        format!(
+                            "invalid decimal for typed param.{}: {err}",
+                            stringify!($domain)
+                        )
+                    })?;
                 <$domain>::new(decimal).into_param_result(stringify!($domain))
             }
 
@@ -517,14 +524,15 @@ macro_rules! define_decimal_param_wrapper {
                                                                 "` wrapper into the semantic value, preserving the typed SDK error."
                                                             )]
             ///
-            /// The scale transport failure has no SDK `Error` counterpart, so it
+            /// A decimal transport failure has no SDK `Error` counterpart, so it
             /// is reported as `Err(None)`; an SDK validation failure is reported
             /// as `Err(Some(error))`.
             pub(crate) fn to_param_typed(
                 self,
             ) -> Result<$domain, Option<openpit::param::Error>> {
                 let scale: u32 = self.0.scale.try_into().map_err(|_| None)?;
-                let decimal = Decimal::from_i128_with_scale(self.0.to_mantissa(), scale);
+                let decimal = Decimal::try_from_i128_with_scale(self.0.to_mantissa(), scale)
+                    .map_err(|_| None)?;
                 let result: Result<$domain, openpit::param::Error> =
                     <$domain>::new(decimal).into_typed_param_result();
                 result.map_err(Some)
@@ -562,10 +570,12 @@ macro_rules! define_decimal_param_wrapper {
                     false
                 }
                 Err(None) => {
-                    write_param_error_unspecified(
-                        out_error,
-                        "invalid decimal scale for typed param",
-                    );
+                    let message = if value.scale < 0 {
+                        "invalid decimal scale for typed param"
+                    } else {
+                        "invalid decimal representation for typed param"
+                    };
+                    write_param_error_unspecified(out_error, message);
                     false
                 }
             }
@@ -2850,7 +2860,47 @@ mod tests {
         };
         assert!(!ok);
         assert!(!out_error.is_null());
+        let message = view_to_string(openpit_shared_string_view(unsafe { (*out_error).message }));
+        assert_eq!(message, "invalid decimal scale for typed param");
         unsafe { crate::last_error::openpit_destroy_param_error(out_error) };
+    }
+
+    #[test]
+    fn decimal_import_and_create_reject_out_of_range_values() {
+        let cases = [
+            (
+                "scale",
+                OpenPitParamDecimal {
+                    mantissa_lo: 1,
+                    mantissa_hi: 0,
+                    scale: 29,
+                },
+            ),
+            (
+                "mantissa",
+                OpenPitParamDecimal {
+                    mantissa_lo: 0,
+                    mantissa_hi: 1 << 32,
+                    scale: 0,
+                },
+            ),
+        ];
+        for (case, raw) in cases {
+            assert!(import_decimal(raw).is_err(), "{case} decimal was imported");
+            let mut quantity = OpenPitParamQuantity::default();
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe { openpit_create_param_quantity(raw, &mut quantity, &mut out_error) };
+            assert!(!ok, "{case} decimal was created");
+            assert!(!out_error.is_null(), "{case} decimal had no error");
+            assert_eq!(
+                unsafe { (*out_error).code },
+                crate::last_error::OpenPitParamErrorCode::Unspecified
+            );
+            let message =
+                view_to_string(openpit_shared_string_view(unsafe { (*out_error).message }));
+            assert_eq!(message, "invalid decimal representation for typed param");
+            unsafe { crate::last_error::openpit_destroy_param_error(out_error) };
+        }
     }
 
     #[test]

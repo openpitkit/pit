@@ -422,17 +422,18 @@ where
 
         let underlying_asset = request.instrument.underlying_asset().clone();
         let settlement_asset = request.instrument.settlement_asset().clone();
+        let steps = reservation_steps(&legs, &underlying_asset, &settlement_asset, request.side);
 
         // The funds limit mode resolves once per order along the account-centric
         // cascade (account -> account group -> global) and gates only the `held`
         // legs below; `incoming`, position, average-entry and realized-PnL
         // bookkeeping are mode-independent.
-        let limit_mode = if ctx.is_drop_copy() {
-            SpotFundsLimitMode::TrackOnly
-        } else {
-            self.settings
-                .with(|s| s.limit_mode_for(request.account_id, &account_group))
-        };
+        let (limit_mode, position_limits) = self.reservation_controls(
+            request.account_id,
+            &account_group,
+            ctx.is_drop_copy(),
+            &steps,
+        );
 
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
@@ -442,14 +443,14 @@ where
         // back every mutation pushed so far (see the pre-trade pipeline), undoing
         // earlier steps, so partial reservations never escape. The step order is
         // shared with the dry-run twin so emission order cannot drift.
-        let steps = reservation_steps(&legs, &underlying_asset, &settlement_asset, request.side);
-        for step in steps {
+        for (step, position_limit) in steps.into_iter().zip(position_limits) {
             self.reserve_asset(
                 request.account_id,
                 &step.asset,
                 step.held,
                 step.incoming,
                 limit_mode,
+                position_limit,
                 ctx.account_control.clone(),
                 ctx.state_accounts(),
                 mutations,
@@ -499,12 +500,16 @@ where
 
         let underlying_asset = request.instrument.underlying_asset().clone();
         let settlement_asset = request.instrument.settlement_asset().clone();
+        let steps = reservation_steps(&legs, &underlying_asset, &settlement_asset, request.side);
 
         // Resolve the funds limit mode once, exactly as the mutating path does,
         // so a track-only dry-run mirrors a track-only reservation byte for byte.
-        let limit_mode = self
-            .settings
-            .with(|s| s.limit_mode_for(request.account_id, &account_group));
+        let (limit_mode, position_limits) = self.reservation_controls(
+            request.account_id,
+            &account_group,
+            ctx.is_drop_copy(),
+            &steps,
+        );
 
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
@@ -513,14 +518,15 @@ where
         // same asset (synthetic base == settlement), the first step's would-be
         // holdings are threaded into the second so it observes the first step's
         // held and incoming, matching the mutating path byte-for-byte.
-        let steps = reservation_steps(&legs, &underlying_asset, &settlement_asset, request.side);
         let [first, second] = steps;
+        let [first_position_limit, second_position_limit] = position_limits;
         let first_after = self.reserve_asset_dry_run(
             request.account_id,
             &first.asset,
             first.held,
             first.incoming,
             limit_mode,
+            first_position_limit,
             None,
             &mut outcome,
         )?;
@@ -535,6 +541,7 @@ where
             second.held,
             second.incoming,
             limit_mode,
+            second_position_limit,
             second_current,
             &mut outcome,
         )?;
@@ -544,6 +551,28 @@ where
         }
 
         Ok(Some(outcome))
+    }
+
+    fn reservation_controls(
+        &self,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+        is_drop_copy: bool,
+        steps: &[ReservationStep; 2],
+    ) -> (
+        SpotFundsLimitMode,
+        [Option<super::position_limit::Check>; 2],
+    ) {
+        if is_drop_copy {
+            return (SpotFundsLimitMode::TrackOnly, [None, None]);
+        }
+
+        self.settings.with(|settings| {
+            (
+                settings.limit_mode_for(account_id, account_info),
+                super::position_limit::plan(settings, account_id, steps),
+            )
+        })
     }
 
     /// Read-only twin of [`Self::reserve_asset`].
@@ -567,6 +596,7 @@ where
         held_amount: PositionSize,
         incoming_amount: PositionSize,
         limit_mode: SpotFundsLimitMode,
+        position_limit: Option<super::position_limit::Check>,
         current: Option<Holdings>,
         outcome: &mut PolicyPreTradeResult,
     ) -> Result<Option<Holdings>, Rejects> {
@@ -600,6 +630,14 @@ where
                 ))
             })?;
 
+        super::position_limit::verify(
+            position_limit,
+            asset,
+            current,
+            held_amount,
+            incoming_amount,
+        )?;
+
         outcome.account_adjustments.push(reservation_outcome_entry(
             asset,
             held_amount,
@@ -623,6 +661,7 @@ where
         held_amount: PositionSize,
         incoming_amount: PositionSize,
         limit_mode: SpotFundsLimitMode,
+        position_limit: Option<super::position_limit::Check>,
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
         state_accounts: Option<
             crate::core::Accounts<<Sync as SyncMode>::StorageLockingPolicyFactory>,
@@ -647,6 +686,7 @@ where
             key.clone(),
             Holdings::zero,
             |slot, is_new| {
+                let current = *slot;
                 // Hold then project incoming within one slot mutation so no
                 // concurrent check observes a half-applied step. The hold honors
                 // the resolved limit mode: Enforce gates on available funds,
@@ -669,9 +709,19 @@ where
                             ),
                         ))
                     })
-                    .map(|new| {
+                    .and_then(|new| {
+                        // Keep verification inside this slot mutation, after the
+                        // hold and before the write: same-account pre-trades run
+                        // concurrently under a shared lock.
+                        super::position_limit::verify(
+                            position_limit,
+                            asset,
+                            current,
+                            held_amount,
+                            incoming_amount,
+                        )?;
                         *slot = new;
-                        (new, is_new)
+                        Ok((new, is_new))
                     })
             },
         )?;

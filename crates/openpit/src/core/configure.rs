@@ -487,6 +487,10 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// evaluated normally and can record a block. Neither operation releases a
     /// previously recorded block.
     ///
+    /// Position limits are retuned through this method via
+    /// [`SpotFundsSettings::set_position_limit`], apply from the next order,
+    /// and do not re-evaluate open reservations.
+    ///
     /// # Errors
     ///
     /// Returns the same error variants as [`Self::rate_limit`].

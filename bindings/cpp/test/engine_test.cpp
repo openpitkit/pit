@@ -1331,6 +1331,68 @@ TEST(EngineConfigure, SpotFundsLimitModeUpdateBuildsThroughAccessor) {
       policies::SpotFundsPolicyName, policies::SpotFundsLimitMode::TrackOnly));
 }
 
+TEST(EngineConfigure, SpotFundsPositionLimitRoundTrip) {
+  EngineBuilder builder(SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  Engine engine = builder.Build();
+
+  const AccountId account = AccountId::FromUint64(1);
+  const ::openpit::param::Asset aapl("AAPL");
+  engine.Accounts().SetCurrency(account, ::openpit::param::Asset("USD"));
+  openpit::accountadjustment::BalanceOperation balance;
+  balance.asset = ::openpit::param::Asset("USD");
+  openpit::accountadjustment::AccountAdjustment adjustment;
+  adjustment.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(balance));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = ::openpit::param::AdjustmentAmount::Absolute(
+      ::openpit::param::PositionSize::FromString("1000"));
+  adjustment.amount = std::move(amount);
+  ASSERT_TRUE(
+      engine
+          .ApplyAccountAdjustment(
+              account,
+              std::vector<openpit::accountadjustment::AccountAdjustment>{
+                  adjustment})
+          .Passed());
+
+  engine.Configure().SpotFundsPositionLimit(
+      policies::SpotFundsPolicyName, account, aapl, Quantity::FromString("0"));
+  auto limited = engine.ExecutePreTrade(TestOrder(1));
+  EXPECT_FALSE(limited.Passed());
+  ASSERT_EQ(limited.rejects.size(), 1u);
+  EXPECT_EQ(limited.rejects.front().code, RejectCode::PositionLimitExceeded);
+  EXPECT_EQ(limited.rejects.front().scope,
+            openpit::pretrade::RejectScope::Order);
+
+  engine.Configure().SpotFundsPositionLimit(
+      policies::SpotFundsPolicyName, account, aapl, Quantity::FromString("1"));
+  auto replaced = engine.ExecutePreTrade(TestOrder(1));
+  ASSERT_TRUE(replaced.Passed());
+  ASSERT_TRUE(replaced.reservation.has_value());
+  replaced.reservation->Rollback();
+
+  auto stillLimited = engine.ExecutePreTrade(TwoQuantityOrder());
+  EXPECT_FALSE(stillLimited.Passed());
+  ASSERT_EQ(stillLimited.rejects.size(), 1u);
+  EXPECT_EQ(stillLimited.rejects.front().code,
+            RejectCode::PositionLimitExceeded);
+  EXPECT_EQ(stillLimited.rejects.front().scope,
+            openpit::pretrade::RejectScope::Order);
+
+  engine.Configure().SpotFundsPositionLimit(policies::SpotFundsPolicyName,
+                                            account, aapl, std::nullopt);
+  auto cleared = engine.ExecutePreTrade(TwoQuantityOrder());
+  ASSERT_TRUE(cleared.Passed());
+  ASSERT_TRUE(cleared.reservation.has_value());
+  cleared.reservation->Rollback();
+
+  EXPECT_THROW(
+      engine.Configure().SpotFundsPositionLimit(
+          "missing-spot-funds", account, aapl, Quantity::FromString("1")),
+      openpit::ConfigureError);
+}
+
 //------------------------------------------------------------------------------
 // Account-group lookup via the Accounts view.
 

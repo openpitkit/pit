@@ -1723,6 +1723,101 @@ func TestSpotFundsConfiguratorAccountLimitModeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSpotFundsConfiguratorPositionLimitRoundTrip(t *testing.T) {
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	accountID := param.NewAccountIDFromUint64(77002)
+	aapl := mustAsset(t, "AAPL")
+	seedSpotFundsLifecycleAccount(t, engine, accountID, mustAsset(t, "USD"))
+	configurator := engine.Configure()
+
+	if err := configurator.SpotFundsPositionLimit(
+		policies.SpotFundsPolicyName, accountID, aapl,
+		optional.Some(mustQuantity(t, "0")),
+	); err != nil {
+		t.Fatalf("SpotFundsPositionLimit(Some(0)) error = %v", err)
+	}
+	reservation, rejects, err := engine.ExecutePreTrade(
+		spotFundsLifecycleOrder(t, accountID),
+	)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() with limit 0 error = %v", err)
+	}
+	if reservation != nil {
+		reservation.RollbackAndClose()
+		t.Fatal("ExecutePreTrade() with limit 0 returned a reservation")
+	}
+	if len(rejects) != 1 ||
+		rejects[0].Code != reject.CodePositionLimitExceeded ||
+		rejects[0].Scope != reject.ScopeOrder {
+		t.Fatalf("ExecutePreTrade() with limit 0 rejects = %v, want one PositionLimitExceeded at Order scope", rejects)
+	}
+
+	if err := configurator.SpotFundsPositionLimit(
+		policies.SpotFundsPolicyName, accountID, aapl,
+		optional.Some(mustQuantity(t, "1")),
+	); err != nil {
+		t.Fatalf("SpotFundsPositionLimit(Some(1)) error = %v", err)
+	}
+	reservation, rejects, err = engine.ExecutePreTrade(
+		spotFundsLifecycleOrder(t, accountID),
+	)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() with limit 1 error = %v", err)
+	}
+	if reservation == nil || len(rejects) != 0 {
+		t.Fatalf("ExecutePreTrade() with limit 1 = (%v, %v), want reservation", reservation, rejects)
+	}
+	reservation.RollbackAndClose()
+
+	twoQuantityOrder := spotFundsLifecycleOrder(t, accountID)
+	operation := twoQuantityOrder.EnsureOperationView()
+	operation.SetTradeAmount(
+		param.NewQuantityTradeAmount(mustQuantity(t, "2")),
+	)
+	reservation, rejects, err = engine.ExecutePreTrade(twoQuantityOrder)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() with limit 1 and quantity 2 error = %v", err)
+	}
+	if reservation != nil {
+		reservation.RollbackAndClose()
+		t.Fatal("ExecutePreTrade() with limit 1 and quantity 2 returned a reservation")
+	}
+	if len(rejects) != 1 ||
+		rejects[0].Code != reject.CodePositionLimitExceeded ||
+		rejects[0].Scope != reject.ScopeOrder {
+		t.Fatalf("ExecutePreTrade() with limit 1 and quantity 2 rejects = %v, want one PositionLimitExceeded at Order scope", rejects)
+	}
+
+	if err := configurator.SpotFundsPositionLimit(
+		policies.SpotFundsPolicyName, accountID, aapl,
+		optional.None[param.Quantity](),
+	); err != nil {
+		t.Fatalf("SpotFundsPositionLimit(None) error = %v", err)
+	}
+	reservation, rejects, err = engine.ExecutePreTrade(twoQuantityOrder)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() after clear error = %v", err)
+	}
+	if reservation == nil || len(rejects) != 0 {
+		t.Fatalf("ExecutePreTrade() after clear = (%v, %v), want reservation", reservation, rejects)
+	}
+	reservation.RollbackAndClose()
+
+	if err := configurator.SpotFundsPositionLimit(
+		"missing-spot-funds", accountID, aapl,
+		optional.Some(mustQuantity(t, "1")),
+	); err == nil {
+		t.Fatal("SpotFundsPositionLimit() with unknown policy error = nil")
+	}
+}
+
 // TestSpotFundsConfiguratorAccountGroupLimitModeRoundTrip exercises the dlsym
 // dispatch path for SpotFundsAccountGroupLimitMode: pins a group to TrackOnly,
 // then clears the override.

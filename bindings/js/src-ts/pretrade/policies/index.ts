@@ -85,6 +85,7 @@ export type {
   OrderSizeLimitConfigureOptions,
   SpotFundsConfigureOptions,
   SpotFundsLimitModeAccountEntry,
+  SpotFundsPositionLimitEntry,
   SpotFundsLimitModeAccountGroupEntry,
   SpotFundsPnlBoundsKillswitchConfigureOptions,
   SetSpotFundsAccountPnlOptions,

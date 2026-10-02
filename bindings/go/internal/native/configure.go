@@ -370,6 +370,32 @@ func EngineConfigureSpotFundsAccountLimitMode(
 	return nil
 }
 
+// EngineConfigureSpotFundsPositionLimit pins or clears one account asset limit.
+// The limit is ignored when hasLimit is false. On failure, the caller owns the
+// returned ConfigureError and must release it with DestroyConfigureError.
+func EngineConfigureSpotFundsPositionLimit(
+	engine Engine,
+	name string,
+	accountID ParamAccountID,
+	asset string,
+	limit ParamQuantity,
+	hasLimit bool,
+) ConfigureError {
+	var outError ConfigureError
+	if !C.openpit_engine_configure_spot_funds_position_limit(
+		engine,
+		importString(name),
+		accountID,
+		importString(asset),
+		limit,
+		C.bool(hasLimit),
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return outError
+	}
+	return nil
+}
+
 // EngineConfigureSpotFundsAccountGroupLimitMode pins or clears the spot-funds
 // limit mode for one account group of the named spot-funds policy at runtime.
 //

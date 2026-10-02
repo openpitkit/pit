@@ -34,7 +34,7 @@ use crate::core::instrument::Instrument;
 use crate::marketdata::{
     AccountInfo, InstrumentId, MarketDataService, MarketDataSync, Quote, QuoteResolution,
 };
-use crate::param::{AccountGroupId, AccountId, Asset, Price};
+use crate::param::{AccountGroupId, AccountId, Asset, Price, Quantity};
 
 use super::super::pnl_bounds;
 use super::market_order_pricer::WithSlippage;
@@ -174,6 +174,10 @@ pub enum SpotFundsOverrideTarget {
 /// precomputed here so hot-path reads through the policy's settings cell
 /// allocate nothing and never recompute.
 ///
+/// Per-account, per-asset position limits cap the worst-case projected long or
+/// short position of the next order. They are independent of the funds
+/// limit-mode cascade and can be pinned, replaced, or cleared at runtime.
+///
 /// Built via [`SpotFundsSettings::new`] and handed to
 /// [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new); the slippage knobs and
 /// the limit mode are then mutable at runtime through the setters.
@@ -184,6 +188,7 @@ pub struct SpotFundsSettings {
     instrument_overrides: HashMap<InstrumentId, WithSlippage>,
     account_limit_modes: HashMap<AccountId, SpotFundsLimitMode>,
     account_group_limit_modes: HashMap<AccountGroupId, SpotFundsLimitMode>,
+    position_limits: HashMap<(AccountId, Asset), Quantity>,
     pnl_global_barrier: Option<SpotFundsPnlBoundsBarrier>,
     pnl_account_group_barriers: HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier>,
     pnl_account_barriers: HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier>,
@@ -258,6 +263,7 @@ impl SpotFundsSettings {
             instrument_overrides,
             account_limit_modes: HashMap::new(),
             account_group_limit_modes: HashMap::new(),
+            position_limits: HashMap::new(),
             pnl_global_barrier: None,
             pnl_account_group_barriers: HashMap::new(),
             pnl_account_barriers: HashMap::new(),
@@ -319,6 +325,37 @@ impl SpotFundsSettings {
         mode: Option<SpotFundsLimitMode>,
     ) {
         pnl_bounds::set_or_clear(&mut self.account_group_limit_modes, account_group_id, mode);
+    }
+
+    /// Inserts, replaces, or clears the position limit for one account asset.
+    ///
+    /// The checked position starts with recorded `available + held`, including
+    /// a negative `held` residual. A long projection adds open positive
+    /// `incoming`; a short projection subtracts open positive `held`. The
+    /// configured bound is inclusive, and only the side the order moves toward
+    /// is checked. Open reservations on that side count, so a
+    /// position-reducing order passes only while that projection stays within
+    /// the limit. A zero limit rejects every order that would move the
+    /// position away from zero.
+    ///
+    /// If that projection cannot be computed exactly within the decimal range,
+    /// the order is rejected with
+    /// [`crate::pretrade::RejectCode::ArithmeticOverflow`] at
+    /// [`crate::pretrade::RejectScope::Order`] scope.
+    ///
+    /// Drop-copy orders, account adjustments, and execution reports are not
+    /// gated. A change applies from the next order and does not re-evaluate
+    /// open reservations.
+    ///
+    /// `Some(limit)` sets the non-negative long and short magnitude; `None`
+    /// clears any previous limit.
+    pub fn set_position_limit(
+        &mut self,
+        account_id: AccountId,
+        asset: Asset,
+        limit: Option<Quantity>,
+    ) {
+        pnl_bounds::set_or_clear(&mut self.position_limits, (account_id, asset), limit);
     }
 
     /// Replaces or clears the global account P&L bounds.
@@ -554,6 +591,16 @@ impl SpotFundsSettings {
             }
         }
         self.global_limit_mode
+    }
+
+    pub(super) fn position_limit_for(
+        &self,
+        account_id: AccountId,
+        asset: &Asset,
+    ) -> Option<Quantity> {
+        self.position_limits
+            .get(&(account_id, asset.clone()))
+            .copied()
     }
 
     /// Raw quote field used as the base for buy-side pricing before slippage

@@ -520,6 +520,46 @@ func (c Configurator) SpotFundsAccountLimitMode(
 	return nil
 }
 
+// SpotFundsPositionLimit pins, replaces, or clears the inclusive long and short
+// position magnitude limit for one account and asset in the named SpotFunds
+// policy. The checked position starts with recorded available + held,
+// including a negative held residual. A long projection adds open positive
+// incoming; a short projection subtracts open positive held. Only the side the
+// order moves toward is checked, so a position-reducing order passes while
+// that projection stays within the limit. A breach rejects with
+// PositionLimitExceeded at Order scope. A projection that cannot be computed
+// exactly rejects with ArithmeticOverflow at Order scope. A change applies
+// from the next order and does not re-evaluate open reservations.
+//
+// optional.Some pins or replaces the limit; optional.None clears the limit.
+//
+// Returns a *Error on a domain error.
+func (c Configurator) SpotFundsPositionLimit(
+	name string,
+	accountID param.AccountID,
+	asset param.Asset,
+	limit optional.Option[param.Quantity],
+) error {
+	var nativeLimit native.ParamQuantity
+	value, hasLimit := limit.Get()
+	if hasLimit {
+		nativeLimit = value.Handle()
+	}
+	configErr := native.EngineConfigureSpotFundsPositionLimit(
+		c.engine,
+		name,
+		accountID.Handle(),
+		asset.Handle(),
+		nativeLimit,
+		hasLimit,
+	)
+	runtime.KeepAlive(asset)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
 // SpotFundsAccountGroupLimitMode pins or clears the per-account-group limit
 // mode of the named spot-funds policy at runtime. The override applies to every
 // account in the group that has no per-account override.

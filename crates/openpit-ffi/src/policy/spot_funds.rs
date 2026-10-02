@@ -33,7 +33,7 @@ use crate::account_group_id::OpenPitParamAccountGroupId;
 use crate::account_outcome::{import_pnl_state, OpenPitPnlState};
 use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::marketdata::{OpenPitMarketDataInstrumentId, OpenPitMarketDataService};
-use crate::param::{OpenPitParamAccountId, OpenPitParamPnlOptional};
+use crate::param::{OpenPitParamAccountId, OpenPitParamPnlOptional, OpenPitParamQuantity};
 use crate::reject::{
     block_outcomes_to_list_owned, blocks_to_list_owned, OpenPitPretradeAccountBlockList,
     OpenPitPretradeAccountBlockOutcomeList,
@@ -1142,6 +1142,81 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_limit_mode(
     finish_configure_spot_funds(result, out_error)
 }
 
+/// Pins or clears the spot-funds position limit for one account and asset on
+/// the policy registered under `name`.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; see
+///   `openpit_engine_configure_spot_funds_global_limit_mode`.
+/// - `account_id` and `asset` select the position; `asset` must be valid UTF-8
+///   and a valid asset.
+/// - When `has_limit` is `true`, `limit` pins or replaces the inclusive
+///   non-negative long and short magnitude for this position. The checked
+///   position starts with recorded `available + held`, including a negative
+///   `held` residual. A long projection adds open positive `incoming`; a short
+///   projection subtracts open positive `held`. Only the side the order moves
+///   toward is checked, so a position-reducing order passes while that
+///   projection stays within the limit. `limit` must be a valid non-negative
+///   quantity. When `has_limit` is `false`, the limit is cleared and `limit`
+///   is ignored.
+/// - A breach rejects with `PositionLimitExceeded` at Order scope. A
+///   projection that cannot be computed exactly rejects with
+///   `ArithmeticOverflow` at Order scope. A change applies from the next order
+///   and does not re-evaluate open reservations.
+///
+/// Success / error: as
+/// `openpit_engine_configure_spot_funds_global_limit_mode`. An invalid
+/// `asset` or supplied `limit` returns `false` with a `Validation` error
+/// naming the invalid input.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    account_id: OpenPitParamAccountId,
+    asset: OpenPitStringView,
+    limit: OpenPitParamQuantity,
+    has_limit: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    let name = match unsafe { configure_spot_funds_name(engine, name, out_error) } {
+        Some(name) => name,
+        None => return false,
+    };
+    let asset = match parse_configure_asset(asset, "position_limit", 0, "asset") {
+        Ok(asset) => asset,
+        Err(err) => {
+            write_configure_error(out_error, err);
+            return false;
+        }
+    };
+    let limit = if has_limit {
+        match limit.to_param() {
+            Ok(limit) => Some(limit),
+            Err(err) => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation(format!(
+                        "position_limit limit is invalid: {err}"
+                    )),
+                );
+                return false;
+            }
+        }
+    } else {
+        None
+    };
+    let account_id = AccountId::from_u64(account_id);
+    let result = unsafe { &*engine }.configurator().spot_funds(
+        &name,
+        |settings| -> Result<(), SpotFundsConfigError> {
+            settings.set_position_limit(account_id, asset, limit);
+            Ok(())
+        },
+    );
+    finish_configure_spot_funds(result, out_error)
+}
+
 /// Pins or clears the spot-funds limit mode for one account group on the
 /// policy registered under `name`.
 ///
@@ -1205,7 +1280,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_group_limit
 }
 
 /// Validates the `engine` pointer and `name` shared by the spot-funds
-/// limit-mode configure entry points, returning the decoded name or writing a
+/// configure entry points, returning the decoded name or writing a
 /// `Validation` error and returning `None`.
 unsafe fn configure_spot_funds_name(
     engine: *mut crate::engine::OpenPitEngine,
@@ -1233,7 +1308,7 @@ unsafe fn configure_spot_funds_name(
     }
 }
 
-/// Maps the configurator result of a spot-funds limit-mode update to the FFI
+/// Maps the configurator result of a spot-funds update to the FFI
 /// boolean convention, writing a caller-owned `OpenPitConfigureError` on
 /// failure.
 fn finish_configure_spot_funds(
@@ -1260,6 +1335,7 @@ mod tests {
         openpit_create_marketdata_quote_ttl_infinite, openpit_create_marketdata_service,
         openpit_destroy_marketdata_service,
     };
+    use crate::param::OpenPitParamDecimal;
     use crate::string::openpit_destroy_shared_string;
 
     fn null_out_error() -> OpenPitOutError {
@@ -1961,6 +2037,46 @@ mod tests {
         engine
     }
 
+    fn position_limit_settings_snapshot(engine: *mut crate::engine::OpenPitEngine) -> String {
+        let mut snapshot = String::new();
+        unsafe { &*engine }
+            .configurator()
+            .spot_funds("SpotFundsPolicy", |settings| {
+                snapshot = format!("{settings:?}");
+                Ok::<(), SpotFundsConfigError>(())
+            })
+            .expect("spot-funds settings must be readable");
+        snapshot
+    }
+
+    fn assert_position_limit_validation(
+        engine: *mut crate::engine::OpenPitEngine,
+        case: &str,
+        asset: OpenPitStringView,
+        limit: OpenPitParamDecimal,
+    ) {
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_position_limit(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                42,
+                asset,
+                OpenPitParamQuantity(limit),
+                true,
+                &mut out_error,
+            )
+        };
+        assert!(!ok, "{case} was accepted");
+        assert!(!out_error.is_null(), "{case} had no configure error");
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation,
+            "{case} returned the wrong configure error"
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
+    }
+
     #[test]
     fn configure_spot_funds_limit_modes_happy_path() {
         let engine = engine_with_spot_funds();
@@ -2100,6 +2216,142 @@ mod tests {
             crate::engine::OpenPitConfigureErrorKind::Validation
         );
         crate::engine::openpit_destroy_configure_error(out_error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_position_limit_ignores_limit_when_clearing() {
+        let engine = engine_with_spot_funds();
+        let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+        let asset = OpenPitStringView::from_utf8("AAPL");
+        let initial = position_limit_settings_snapshot(engine);
+        for malformed in [
+            OpenPitParamDecimal {
+                mantissa_lo: -1,
+                mantissa_hi: -1,
+                scale: 0,
+            },
+            OpenPitParamDecimal {
+                mantissa_lo: 1,
+                mantissa_hi: 0,
+                scale: 29,
+            },
+        ] {
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_position_limit(
+                    engine,
+                    name,
+                    42,
+                    asset,
+                    OpenPitParamQuantity(OpenPitParamDecimal {
+                        mantissa_lo: 1,
+                        mantissa_hi: 0,
+                        scale: 0,
+                    }),
+                    true,
+                    std::ptr::null_mut(),
+                )
+            });
+            assert_ne!(position_limit_settings_snapshot(engine), initial);
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe {
+                openpit_engine_configure_spot_funds_position_limit(
+                    engine,
+                    name,
+                    42,
+                    asset,
+                    OpenPitParamQuantity(malformed),
+                    false,
+                    &mut out_error,
+                )
+            };
+            assert!(ok, "malformed limit was read while clearing");
+            assert!(out_error.is_null());
+            assert_eq!(position_limit_settings_snapshot(engine), initial);
+        }
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_position_limit_rejects_invalid_limits_without_change() {
+        let engine = engine_with_spot_funds();
+        let asset = OpenPitStringView::from_utf8("AAPL");
+        let cases = [
+            (
+                "negative quantity",
+                OpenPitParamDecimal {
+                    mantissa_lo: -1,
+                    mantissa_hi: -1,
+                    scale: 0,
+                },
+            ),
+            (
+                "scale 29",
+                OpenPitParamDecimal {
+                    mantissa_lo: 1,
+                    mantissa_hi: 0,
+                    scale: 29,
+                },
+            ),
+            (
+                "mantissa wider than 96 bits",
+                OpenPitParamDecimal {
+                    mantissa_lo: 0,
+                    mantissa_hi: 1 << 32,
+                    scale: 0,
+                },
+            ),
+        ];
+        assert!(unsafe {
+            openpit_engine_configure_spot_funds_position_limit(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                42,
+                asset,
+                OpenPitParamQuantity(OpenPitParamDecimal {
+                    mantissa_lo: 1,
+                    mantissa_hi: 0,
+                    scale: 0,
+                }),
+                true,
+                std::ptr::null_mut(),
+            )
+        });
+        let before = position_limit_settings_snapshot(engine);
+        for (case, limit) in cases {
+            assert_position_limit_validation(engine, case, asset, limit);
+            assert_eq!(
+                position_limit_settings_snapshot(engine),
+                before,
+                "{case} changed the position limit"
+            );
+        }
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_position_limit_rejects_invalid_assets() {
+        let engine = engine_with_spot_funds();
+        let invalid_utf8 = [0xff];
+        let cases = [
+            ("null asset", OpenPitStringView::default()),
+            (
+                "invalid UTF-8 asset",
+                OpenPitStringView {
+                    ptr: invalid_utf8.as_ptr(),
+                    len: invalid_utf8.len(),
+                },
+            ),
+            ("empty asset", OpenPitStringView::from_utf8("")),
+        ];
+        let valid_limit = OpenPitParamDecimal {
+            mantissa_lo: 1,
+            mantissa_hi: 0,
+            scale: 0,
+        };
+        for (case, asset) in cases {
+            assert_position_limit_validation(engine, case, asset, valid_limit);
+        }
         crate::engine::openpit_destroy_engine(engine);
     }
 

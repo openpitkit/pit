@@ -1684,7 +1684,17 @@ impl PyConfigurator {
     /// when provided. ``account_limit_modes`` and ``account_group_limit_modes``
     /// pin or clear per-account and per-account-group limit-mode overrides via
     /// the named entities from ``openpit.pretrade.policies``.
-    #[pyo3(signature = (name, *, global_slippage_bps = None, pricing_source = None, overrides = vec![], global_limit_mode = None, account_limit_modes = vec![], account_group_limit_modes = vec![]))]
+    /// ``position_limits`` pins, replaces, or clears a per-account asset
+    /// position bound. Each entry requires a limit; explicit ``None`` clears
+    /// it. The checked position starts with recorded available plus held. Long
+    /// projections add open positive incoming; short
+    /// projections subtract open positive held. Only the side the order moves
+    /// toward is checked, so a reducing order passes while its projection
+    /// stays within the inclusive bound. A breach rejects the order with
+    /// ``PositionLimitExceeded`` at Order scope; an inexact projection rejects
+    /// it with ``ArithmeticOverflow`` at Order scope. Changes apply from the
+    /// next order without re-evaluating open reservations.
+    #[pyo3(signature = (name, *, global_slippage_bps = None, pricing_source = None, overrides = vec![], global_limit_mode = None, account_limit_modes = vec![], account_group_limit_modes = vec![], position_limits = vec![]))]
     #[allow(clippy::too_many_arguments)]
     fn spot_funds(
         &self,
@@ -1696,6 +1706,7 @@ impl PyConfigurator {
         global_limit_mode: Option<Bound<'_, PyAny>>,
         account_limit_modes: Vec<Bound<'_, PyAny>>,
         account_group_limit_modes: Vec<Bound<'_, PyAny>>,
+        position_limits: Vec<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let parsed_pricing_source = pricing_source
             .as_ref()
@@ -1719,6 +1730,10 @@ impl PyConfigurator {
                 .iter()
                 .map(parse_spot_funds_account_group_limit_mode_entity)
                 .collect::<PyResult<_>>()?;
+        let parsed_position_limits: Vec<(AccountId, Asset, Option<Quantity>)> = position_limits
+            .iter()
+            .map(parse_spot_funds_position_limit_entity)
+            .collect::<PyResult<_>>()?;
 
         py.detach(|| {
             self.inner.spot_funds(name, |s| {
@@ -1739,6 +1754,9 @@ impl PyConfigurator {
                 }
                 for (account_group_id, mode) in &parsed_account_group_limit_modes {
                     s.set_account_group_limit_mode(*account_group_id, *mode);
+                }
+                for (account_id, asset, limit) in &parsed_position_limits {
+                    s.set_position_limit(*account_id, asset.clone(), *limit);
                 }
                 Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
             })
@@ -5051,6 +5069,34 @@ fn parse_spot_funds_account_limit_mode_entity(
         .inner;
     let mode = parse_optional_spot_funds_limit_mode(&value.getattr("mode")?)?;
     Ok((account_id, mode))
+}
+
+fn parse_spot_funds_position_limit_entity(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(AccountId, Asset, Option<Quantity>)> {
+    ensure_policy_entity(value, "SpotFundsPositionLimitEntry")?;
+    let account_id = value
+        .getattr("account_id")?
+        .extract::<PyRef<'_, PyAccountId>>()
+        .map_err(|_| {
+            PyTypeError::new_err(
+                "SpotFundsPositionLimitEntry.account_id must be \
+                 openpit.param.AccountId",
+            )
+        })?
+        .inner;
+    let asset = parse_asset_input(&value.getattr("asset")?)?;
+    let limit = value
+        .getattr("limit")?
+        .extract::<Option<PyRef<'_, PyQuantity>>>()
+        .map_err(|_| {
+            PyTypeError::new_err(
+                "SpotFundsPositionLimitEntry.limit must be \
+                 openpit.param.Quantity or None",
+            )
+        })?
+        .map(|quantity| quantity.inner);
+    Ok((account_id, asset, limit))
 }
 
 fn parse_spot_funds_account_group_limit_mode_entity(

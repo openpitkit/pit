@@ -28,6 +28,7 @@ import {
   RateLimitBuilder,
   SpotFundsBuilder,
   SpotFundsLimitMode,
+  type SpotFundsPositionLimitEntry,
   SpotFundsPnlBoundsAccountBarrier,
   SpotFundsPnlBoundsBarrier,
   SpotFundsPnlBoundsKillswitchBuilder,
@@ -58,7 +59,19 @@ configurator.spotFunds(SpotFundsBuilder.NAME, {
     { accountId: 99_224_417n, mode: null },
   ],
   accountGroupLimitModes: [{ accountGroupId: 7, mode: null }],
+  positionLimits: [
+    { accountId: 99_224_416n, asset: "AAPL", limit: "2" },
+    { accountId: 99_224_417n, asset: "AAPL", limit: null },
+    { accountId: 99_224_418n, asset: "AAPL", limit: 2n },
+  ],
 });
+
+const positionLimitEntry: SpotFundsPositionLimitEntry = {
+  accountId: 99_224_416n,
+  asset: "AAPL",
+  limit: "2",
+};
+void positionLimitEntry;
 
 const sweptPnlConfiguration = configurator.spotFundsPnlBoundsKillswitch(
   SpotFundsPnlBoundsKillswitchBuilder.NAME,

@@ -1510,6 +1510,62 @@ fn configure_spot_funds_settings_retune_takes_effect() {
 }
 
 #[test]
+fn configure_spot_funds_position_limit_applies_to_the_next_order() {
+    let engine = build_spot_engine(0);
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    let account = 1u64;
+    let account_id = AccountId::from_u64(account);
+    let aapl = Asset::new("AAPL").expect("asset code must be valid");
+    seed_spot(&engine, account, "USD", "1000");
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_position_limit(
+                account_id,
+                aapl.clone(),
+                Some(Quantity::from_str("0").expect("limit must be valid")),
+            );
+            Ok(())
+        })
+        .expect("position limit must publish");
+    let rejects = engine
+        .execute_pre_trade(order_with_price(account, "1", "100"))
+        .err()
+        .expect("the next order must see the pinned limit");
+    assert_eq!(rejects[0].scope, RejectScope::Order);
+    assert_eq!(rejects[0].code, RejectCode::PositionLimitExceeded);
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_position_limit(
+                account_id,
+                aapl.clone(),
+                Some(Quantity::from_str("1").expect("limit must be valid")),
+            );
+            Ok(())
+        })
+        .expect("replacement position limit must publish");
+    engine
+        .execute_pre_trade(order_with_price(account, "1", "100"))
+        .expect("the order must fit the replacement limit")
+        .rollback();
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_position_limit(account_id, aapl, None);
+            Ok(())
+        })
+        .expect("clearing the position limit must publish");
+    engine
+        .execute_pre_trade(order_with_price(account, "2", "100"))
+        .expect("the order must pass after the limit is cleared")
+        .rollback();
+}
+
+#[test]
 fn configure_spot_funds_global_slippage_retune_changes_market_lock_price() {
     let (engine, _instrument_id) = build_spot_market_engine(0, "100");
     let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;

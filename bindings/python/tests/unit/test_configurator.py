@@ -1342,6 +1342,139 @@ def test_spot_funds_configuration_uses_named_entities() -> None:
 
 
 @pytest.mark.unit
+def test_spot_funds_position_limit_reconfigures_next_order() -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+    adjustment = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize("1000")
+            )
+        ),
+    )
+    assert engine.apply_account_adjustment(account_id, [adjustment]).ok
+
+    def order(quantity: str) -> openpit.Order:
+        return conftest.make_order(
+            account_id=account_id,
+            trade_amount=openpit.param.TradeAmount.quantity(quantity),
+        )
+
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            policies.SpotFundsPositionLimitEntry(
+                account_id, openpit.param.Asset("AAPL"), openpit.param.Quantity("1")
+            )
+        ],
+    )
+    rejected = engine.execute_pre_trade(order=order("2"))
+    assert not rejected.ok
+    assert (
+        rejected.rejects[0].code == openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED
+    )
+    assert rejected.rejects[0].scope == openpit.pretrade.RejectScope.ORDER
+
+    within = engine.execute_pre_trade(order=order("1"))
+    assert within.ok
+    assert within.reservation is not None
+    within.reservation.rollback()
+
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            policies.SpotFundsPositionLimitEntry(
+                account_id, openpit.param.Asset("AAPL"), openpit.param.Quantity("3")
+            )
+        ],
+    )
+    within_replacement = engine.execute_pre_trade(order=order("2"))
+    assert within_replacement.ok
+    assert within_replacement.reservation is not None
+    within_replacement.reservation.rollback()
+    beyond = engine.execute_pre_trade(order=order("4"))
+    assert not beyond.ok
+    assert beyond.rejects[0].code == openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED
+    assert beyond.rejects[0].scope == openpit.pretrade.RejectScope.ORDER
+
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            policies.SpotFundsPositionLimitEntry(
+                account_id, openpit.param.Asset("AAPL"), None
+            )
+        ],
+    )
+    cleared = engine.execute_pre_trade(order=order("4"))
+    assert cleared.ok
+    assert cleared.reservation is not None
+    cleared.reservation.rollback()
+
+
+@pytest.mark.unit
+def test_spot_funds_position_limit_requires_explicit_limit() -> None:
+    with pytest.raises(TypeError, match="limit"):
+        openpit.pretrade.policies.SpotFundsPositionLimitEntry(
+            openpit.param.AccountId.from_int(99224416),
+            openpit.param.Asset("AAPL"),
+        )
+
+
+@pytest.mark.unit
+def test_spot_funds_position_limit_rejects_invalid_entries_atomically() -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+    valid = policies.SpotFundsPositionLimitEntry(
+        account_id, openpit.param.Asset("AAPL"), openpit.param.Quantity("1")
+    )
+    with pytest.raises(TypeError, match="SpotFundsPositionLimitEntry"):
+        engine.configure().spot_funds(
+            policies.SpotFundsBuilder.NAME,
+            position_limits=[valid, object()],  # type: ignore[list-item]
+        )
+    with pytest.raises(ValueError):
+        engine.configure().spot_funds(
+            policies.SpotFundsBuilder.NAME,
+            position_limits=[
+                policies.SpotFundsPositionLimitEntry(account_id, "", None)  # type: ignore[arg-type]
+            ],
+        )
+    with pytest.raises(TypeError, match="SpotFundsPositionLimitEntry.limit"):
+        engine.configure().spot_funds(
+            policies.SpotFundsBuilder.NAME,
+            position_limits=[
+                policies.SpotFundsPositionLimitEntry(account_id, "AAPL", "bad")  # type: ignore[arg-type]
+            ],
+        )
+
+    adjustment = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize("1000")
+            )
+        ),
+    )
+    assert engine.apply_account_adjustment(account_id, [adjustment]).ok
+    result = engine.execute_pre_trade(
+        order=conftest.make_order(
+            account_id=account_id,
+            trade_amount=openpit.param.TradeAmount.quantity("4"),
+        )
+    )
+    assert result.ok
+    assert result.reservation is not None
+    result.reservation.rollback()
+
+
+@pytest.mark.unit
 def test_configurator_rejects_obsolete_tuple_and_string_inputs() -> None:
     policies = openpit.pretrade.policies
     _, instrument_id = _market_data()
