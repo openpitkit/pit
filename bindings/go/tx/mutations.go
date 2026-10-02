@@ -20,21 +20,51 @@ package tx
 
 import (
 	"errors"
+	"sync"
 
 	"go.openpit.dev/openpit/internal/mutation"
 	"go.openpit.dev/openpit/internal/native"
 )
 
+// ErrMutationsExpired means a mutations collector is not bound to a live policy
+// hook call: it was never received from a hook, or that hook has returned.
+var ErrMutationsExpired = errors.New(
+	"tx: mutations is not bound to a live policy hook call",
+)
+
+type mutationsScope struct {
+	mu      sync.Mutex
+	handle  native.Mutations
+	expired bool
+}
+
 // Mutations is a collection of commit/rollback callbacks registered during a
 // pre-trade check or an account-retirement check.
-type Mutations struct{ handle native.Mutations }
+//
+// A Mutations value is valid only during the policy hook call that received it.
+// Do not retain it or use it after the hook returns. Push then returns
+// ErrMutationsExpired.
+// The zero value is not bound to a policy hook call; Push with non-nil callbacks
+// returns ErrMutationsExpired.
+type Mutations struct{ scope *mutationsScope }
 
-// NewMutationsFromHandle creates a Mutations from a native handle.
-func NewMutationsFromHandle(handle native.Mutations) Mutations {
-	return Mutations{handle: handle}
+// NewMutationsFromHandle creates a Mutations from a native handle and returns
+// the function that expires its per-hook-call scope.
+func NewMutationsFromHandle(handle native.Mutations) (Mutations, func()) {
+	scope := &mutationsScope{handle: handle}
+	expire := func() {
+		scope.mu.Lock()
+		scope.expired = true
+		scope.mu.Unlock()
+	}
+	return Mutations{scope: scope}, expire
 }
 
 // Push registers one mutation with commit and rollback callbacks.
+//
+// The Mutations value is valid only during the policy hook call that received
+// it. Do not retain it or use it after the hook returns. Push then returns
+// ErrMutationsExpired.
 //
 // Apply tentative state before Push. Ordinary reservation finalization calls
 // commit to keep that state or rollback to undo it. A drop-copy operation
@@ -71,9 +101,19 @@ func (m Mutations) Push(commit, rollback func()) error {
 		return errors.New("mutation rollback callback is nil")
 	}
 
+	scope := m.scope
+	if scope == nil {
+		return ErrMutationsExpired
+	}
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+	if scope.expired {
+		return ErrMutationsExpired
+	}
+
 	callbacks := mutation.NewCallbacks(commit, rollback)
 	if err := native.MutationsPush(
-		m.handle,
+		scope.handle,
 		mutation.GetCommitFnAddr(),
 		mutation.GetRollbackFnAddr(),
 		callbacks.Handle(),

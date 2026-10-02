@@ -238,7 +238,8 @@ pub enum OpenPitMarketDataGetStatus {
     /// The account-group resolver reported `Failed`, so the reading account's
     /// group is unknown and no bucket may be selected on its behalf.
     AccountGroupResolutionFailed = 4,
-    /// The supplied quote-resolution selector is invalid.
+    /// The supplied quote-resolution selector is invalid, or `service`,
+    /// `resolve_account_group`, or `out_quote` is null.
     Error = 255,
 }
 
@@ -1187,11 +1188,14 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
 ///   `out_quote` is left untouched. A failed resolution is never degraded into
 ///   "the account has no group", because that would silently move the read onto
 ///   the default-group bucket;
-/// - `Error`: `resolution` is not one of the documented selector constants.
+/// - `Error`: `resolution` is not one of the documented selector constants, or
+///   `service`, `resolve_account_group`, or `out_quote` is null; `out_quote` is
+///   left untouched.
 ///
 /// Contract:
 /// - `service`, `resolve_account_group`, and `out_quote` must be valid non-null
-///   pointers; passing null for any of them aborts the call.
+///   pointers. Passing null for any of them returns `Error` with `out_quote`
+///   left untouched.
 #[no_mangle]
 pub extern "C" fn openpit_marketdata_service_get(
     service: *const OpenPitMarketDataService,
@@ -1202,17 +1206,20 @@ pub extern "C" fn openpit_marketdata_service_get(
     resolution: OpenPitMarketDataQuoteResolution,
     out_quote: *mut OpenPitMarketDataQuote,
 ) -> OpenPitMarketDataGetStatus {
-    assert!(!service.is_null(), "market-data service must be non-null");
-    assert!(
-        resolve_account_group.is_some(),
-        "resolve_account_group must be non-null"
-    );
-    assert!(!out_quote.is_null(), "out_quote must be non-null");
+    if service.is_null() {
+        return OpenPitMarketDataGetStatus::Error;
+    }
+    let Some(resolve) = resolve_account_group else {
+        return OpenPitMarketDataGetStatus::Error;
+    };
+    if out_quote.is_null() {
+        return OpenPitMarketDataGetStatus::Error;
+    }
     let Some(resolution) = import_quote_resolution(resolution) else {
         return OpenPitMarketDataGetStatus::Error;
     };
     let adapter = CallbackAccountInfo {
-        resolve: resolve_account_group.unwrap(),
+        resolve,
         user_data,
         failed: Cell::new(false),
     };
@@ -1441,6 +1448,80 @@ mod tests {
             &mut out_quote,
         );
         assert_eq!(status, OpenPitMarketDataGetStatus::Error);
+        openpit_destroy_marketdata_service(service);
+    }
+
+    #[test]
+    fn get_null_service_returns_error_without_writing_out_quote() {
+        let mut out_quote = quote_with_mark("200");
+        let original = out_quote;
+        let status = openpit_marketdata_service_get(
+            std::ptr::null(),
+            999,
+            0,
+            Some(no_group_resolver),
+            std::ptr::null_mut(),
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
+            &mut out_quote,
+        );
+        assert_eq!(status, OpenPitMarketDataGetStatus::Error);
+        assert_eq!(out_quote, original);
+    }
+
+    #[test]
+    fn get_null_resolver_returns_error_without_writing_out_quote() {
+        let service = build_service();
+        let mut out_quote = quote_with_mark("200");
+        let original = out_quote;
+        let status = openpit_marketdata_service_get(
+            service,
+            999,
+            0,
+            None,
+            std::ptr::null_mut(),
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
+            &mut out_quote,
+        );
+        assert_eq!(status, OpenPitMarketDataGetStatus::Error);
+        assert_eq!(out_quote, original);
+        openpit_destroy_marketdata_service(service);
+    }
+
+    #[test]
+    fn get_null_out_quote_returns_error() {
+        extern "C" fn recording_resolver(
+            user_data: *mut c_void,
+            _out: *mut OpenPitParamAccountGroupId,
+        ) -> u8 {
+            unsafe { *user_data.cast::<usize>() += 1 };
+            OpenPitMarketDataAccountGroupResolution::NoGroup as u8
+        }
+
+        let service = build_service();
+        let inst = instrument("AAPL", "USD");
+        let mut id: u64 = 0;
+        let mut err = null_error();
+        assert_eq!(
+            openpit_marketdata_service_register(service, &inst, &mut id, &mut err),
+            OpenPitMarketDataRegisterStatus::Ok,
+        );
+        assert_eq!(
+            openpit_marketdata_service_push(service, id, quote_with_mark("100"), 0, 0, &mut err),
+            OpenPitMarketDataRegisterStatus::Ok,
+        );
+
+        let mut resolver_calls = 0usize;
+        let status = openpit_marketdata_service_get(
+            service,
+            id,
+            7,
+            Some(recording_resolver),
+            (&mut resolver_calls as *mut usize).cast::<c_void>(),
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, OpenPitMarketDataGetStatus::Error);
+        assert_eq!(resolver_calls, 0);
         openpit_destroy_marketdata_service(service);
     }
 

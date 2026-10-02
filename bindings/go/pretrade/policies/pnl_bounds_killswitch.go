@@ -79,9 +79,11 @@ type PnlBoundsKillSwitchBuilder struct {
 // PnlBoundsKillSwitchReadyBuilder holds a fully-configured P&L bounds
 // kill-switch policy.
 type PnlBoundsKillSwitchReadyBuilder struct {
-	brokerBarriers  []native.PretradePoliciesPnlBoundsBarrier
-	accountBarriers []native.PretradePoliciesPnlBoundsAccountBarrier
-	policyGroupID   model.PolicyGroupID
+	brokerBarriers                 []native.PretradePoliciesPnlBoundsBarrier
+	brokerBarrierSettlementAssets  []param.Asset
+	accountBarriers                []native.PretradePoliciesPnlBoundsAccountBarrier
+	accountBarrierSettlementAssets []param.Asset
+	policyGroupID                  model.PolicyGroupID
 }
 
 // BuildPnlBoundsKillSwitch returns a new P&L bounds kill-switch policy
@@ -132,6 +134,10 @@ func (b *PnlBoundsKillSwitchReadyBuilder) BrokerBarriers(
 				newParamPnlOptionalFromOptional(barrier.UpperBound),
 			),
 		)
+		b.brokerBarrierSettlementAssets = append(
+			b.brokerBarrierSettlementAssets,
+			barrier.SettlementAsset,
+		)
 	}
 	return b
 }
@@ -160,6 +166,10 @@ func (b *PnlBoundsKillSwitchReadyBuilder) AccountBarriers(
 				newParamPnlOptionalFromOptional(barrier.Barrier.UpperBound),
 				barrier.InitialPnl.Handle(),
 			),
+		)
+		b.accountBarrierSettlementAssets = append(
+			b.accountBarrierSettlementAssets,
+			barrier.Barrier.SettlementAsset,
 		)
 	}
 	return b

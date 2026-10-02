@@ -56,12 +56,15 @@ func newFeeOrPanic(value Fee, err error) Fee {
 
 // NewFeeFromDecimal converts a shopspring decimal to a Fee.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewFeeFromDecimal(v decimal.Decimal) (Fee, error) {
-	nativeValue, err := native.CreateParamFee(native.NewNativeDecimalFromDecimal(v))
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Fee{}, err
+	}
+	nativeValue, err := native.CreateParamFee(nativeDecimal)
 	if err != nil {
 		return Fee{}, err
 	}
@@ -149,17 +152,20 @@ func NewFeeFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) 
 
 // NewFeeFromDecimalRounded converts a shopspring decimal to a rounded Fee.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewFeeFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Fee, error) {
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Fee{}, err
+	}
 	nativeValue, err := native.CreateParamFeeFromDecimalRounded(
-		native.NewNativeDecimalFromDecimal(v),
+		nativeDecimal,
 		scale,
 		strategy.native(),
 	)

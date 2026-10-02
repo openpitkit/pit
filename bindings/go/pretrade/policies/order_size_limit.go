@@ -83,10 +83,12 @@ type OrderSizeLimitBuilder struct {
 // settlement asset. Within its account+asset then asset chain, each metric
 // skips matching barriers that omit that cap.
 type OrderSizeLimitReadyBuilder struct {
-	broker               *native.PretradePoliciesOrderSizeBrokerBarrier
-	assetBarriers        []native.PretradePoliciesOrderSizeAssetBarrier
-	accountAssetBarriers []native.PretradePoliciesOrderSizeAccountAssetBarrier
-	policyGroupID        model.PolicyGroupID
+	broker                    *native.PretradePoliciesOrderSizeBrokerBarrier
+	assetBarriers             []native.PretradePoliciesOrderSizeAssetBarrier
+	assetBarrierAssets        []param.Asset
+	accountAssetBarriers      []native.PretradePoliciesOrderSizeAccountAssetBarrier
+	accountAssetBarrierAssets []param.Asset
+	policyGroupID             model.PolicyGroupID
 }
 
 // BuildOrderSizeLimit returns a new order-size-limit policy builder.
@@ -173,6 +175,7 @@ func (b *OrderSizeLimitReadyBuilder) AssetBarriers(
 				barrier.Asset.Handle(),
 			),
 		)
+		b.assetBarrierAssets = append(b.assetBarrierAssets, barrier.Asset)
 	}
 	return b
 }
@@ -204,6 +207,10 @@ func (b *OrderSizeLimitReadyBuilder) AccountAssetBarriers(
 				barrier.AccountID.Handle(),
 				barrier.Asset.Handle(),
 			),
+		)
+		b.accountAssetBarrierAssets = append(
+			b.accountAssetBarrierAssets,
+			barrier.Asset,
 		)
 	}
 	return b

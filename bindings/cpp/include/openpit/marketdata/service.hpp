@@ -325,7 +325,8 @@ class Service {
         &raw);
     callbackExceptions.ThrowIfPending();
     if (status == OpenPitMarketDataGetStatus_Error) {
-      throw ::openpit::Error("invalid market-data quote resolution");
+      throw ::openpit::Error(
+          "invalid market-data quote resolution or empty service handle");
     }
     if (status == OpenPitMarketDataGetStatus_AccountGroupResolutionFailed) {
       // Only reachable when the trampoline reported a failure without a

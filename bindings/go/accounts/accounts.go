@@ -124,11 +124,13 @@ func (a Accounts) GroupOf(account param.AccountID) optional.Option[param.Account
 // change. Barrier selection itself stays deterministic: the next policy access
 // re-resolves the cascade with the new effective currency.
 func (a Accounts) SetCurrency(account param.AccountID, asset param.Asset) error {
-	return native.EngineSetAccountCurrency(
+	err := native.EngineSetAccountCurrency(
 		a.engine,
 		account.Handle(),
 		asset.Handle(),
 	)
+	runtime.KeepAlive(asset)
+	return err
 }
 
 // ClearCurrency clears account's explicit currency.
@@ -163,11 +165,13 @@ func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset
 	if !group.IsInitialized() {
 		return param.ErrUninitializedAccountGroupID
 	}
-	return native.EngineSetAccountGroupCurrency(
+	err := native.EngineSetAccountGroupCurrency(
 		a.engine,
 		group.Handle(),
 		asset.Handle(),
 	)
+	runtime.KeepAlive(asset)
+	return err
 }
 
 // ClearGroupCurrency clears the currency inherited by accounts in group.

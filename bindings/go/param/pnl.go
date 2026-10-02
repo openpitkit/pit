@@ -56,12 +56,15 @@ func newPnlOrPanic(value Pnl, err error) Pnl {
 
 // NewPnlFromDecimal converts a shopspring decimal to a Pnl.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewPnlFromDecimal(v decimal.Decimal) (Pnl, error) {
-	nativeValue, err := native.CreateParamPnl(native.NewNativeDecimalFromDecimal(v))
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Pnl{}, err
+	}
+	nativeValue, err := native.CreateParamPnl(nativeDecimal)
 	if err != nil {
 		return Pnl{}, err
 	}
@@ -149,17 +152,20 @@ func NewPnlFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) 
 
 // NewPnlFromDecimalRounded converts a shopspring decimal to a rounded Pnl.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewPnlFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Pnl, error) {
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Pnl{}, err
+	}
 	nativeValue, err := native.CreateParamPnlFromDecimalRounded(
-		native.NewNativeDecimalFromDecimal(v),
+		nativeDecimal,
 		scale,
 		strategy.native(),
 	)

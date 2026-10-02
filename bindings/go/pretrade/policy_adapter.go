@@ -53,6 +53,9 @@ type ClientExecutionReport interface {
 // Account adjustments use the standard SDK model type because the adjustment
 // payload routing does not carry a client-typed wrapper through the engine
 // callback path.
+// Any tx.Mutations value passed to a hook is valid only for that hook call; do
+// not retain it or use it after return, when Push returns
+// tx.ErrMutationsExpired.
 type ClientPreTradePolicy[Order ClientOrder, Report ClientExecutionReport] interface {
 	Close()
 	Name() string

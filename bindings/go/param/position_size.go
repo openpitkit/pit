@@ -73,14 +73,15 @@ func newPositionSizeQuantitySideOrPanic(
 
 // NewPositionSizeFromDecimal converts a shopspring decimal to a PositionSize.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewPositionSizeFromDecimal(v decimal.Decimal) (PositionSize, error) {
-	nativeValue, err := native.CreateParamPositionSize(
-		native.NewNativeDecimalFromDecimal(v),
-	)
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return PositionSize{}, err
+	}
+	nativeValue, err := native.CreateParamPositionSize(nativeDecimal)
 	if err != nil {
 		return PositionSize{}, err
 	}
@@ -174,17 +175,20 @@ func NewPositionSizeFromFloatRounded(
 
 // NewPositionSizeFromDecimalRounded converts a shopspring decimal to a rounded PositionSize.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewPositionSizeFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (PositionSize, error) {
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return PositionSize{}, err
+	}
 	nativeValue, err := native.CreateParamPositionSizeFromDecimalRounded(
-		native.NewNativeDecimalFromDecimal(v),
+		nativeDecimal,
 		scale,
 		strategy.native(),
 	)

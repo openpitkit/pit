@@ -60,12 +60,15 @@ func newCashFlowOrPanic(value CashFlow, err error) CashFlow {
 
 // NewCashFlowFromDecimal converts a shopspring decimal to a CashFlow.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewCashFlowFromDecimal(v decimal.Decimal) (CashFlow, error) {
-	nativeValue, err := native.CreateParamCashFlow(native.NewNativeDecimalFromDecimal(v))
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return CashFlow{}, err
+	}
+	nativeValue, err := native.CreateParamCashFlow(nativeDecimal)
 	if err != nil {
 		return CashFlow{}, err
 	}
@@ -159,17 +162,20 @@ func NewCashFlowFromFloatRounded(
 
 // NewCashFlowFromDecimalRounded converts a shopspring decimal to a rounded CashFlow.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewCashFlowFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (CashFlow, error) {
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return CashFlow{}, err
+	}
 	nativeValue, err := native.CreateParamCashFlowFromDecimalRounded(
-		native.NewNativeDecimalFromDecimal(v),
+		nativeDecimal,
 		scale,
 		strategy.native(),
 	)

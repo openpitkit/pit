@@ -133,8 +133,9 @@ func (a Asset) Hash() uint64 {
 	return h.Sum64()
 }
 
-// Handle returns a Go string backed by the Asset's C buffer, for use by
-// importString in internal/native.  Because the backing bytes are C-heap,
-// importString stores a C pointer in OpenPitStringView.ptr - not a Go pointer -
-// so no CGo pointer-check violation occurs.
+// Handle returns a Go string that aliases the Asset's C buffer and is valid
+// only while the Asset, or a copy of it, is reachable. A caller passing the
+// returned value, or a native struct built from it, to a native call must keep
+// the Asset alive until the call returns, for example with runtime.KeepAlive
+// after the call.
 func (a Asset) Handle() string { return a.Unsafe() }

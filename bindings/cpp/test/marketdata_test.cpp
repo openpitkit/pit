@@ -494,6 +494,18 @@ TEST(MarketDataService, InvalidResolutionThrows) {
       openpit::Error);
 }
 
+TEST(MarketDataService, GetOnEmptyServiceThrows) {
+  md::Service service;
+
+  EXPECT_THROW(
+      {
+        static_cast<void>(service.Get(
+            md::InstrumentId::FromUint64(5), AccountId::FromUint64(1),
+            NoGroupInfo{}, md::QuoteResolution::AccountThenGroupThenDefault));
+      },
+      openpit::Error);
+}
+
 TEST(MarketDataService, AccountGroupResolverRethrowsOriginalException) {
   md::Service service = BuildService(md::SyncPolicy::None);
   const md::InstrumentId id = Register(

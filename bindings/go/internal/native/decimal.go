@@ -23,15 +23,13 @@ package native
 import "C"
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/shopspring/decimal"
 )
 
-const (
-	decimalMantissaBits = 64 // hi mantissa occupies the upper 64 bits of a 128-bit value
-	decimalSignBitShift = 63 // arithmetic right shift to propagate the sign bit
-)
+const decimalMantissaBits = 64 // width of each native mantissa half
 
 // NewDecimalFromNative constructs a decimal from a native decimal.
 func NewDecimalFromNative(source ParamDecimal) decimal.Decimal {
@@ -41,16 +39,25 @@ func NewDecimalFromNative(source ParamDecimal) decimal.Decimal {
 	return decimal.NewFromBigInt(mantissa, -int32(source.scale))
 }
 
-// NewNativeDecimalFromDecimal converts a shopspring decimal to a native decimal.
+// NewNativeDecimalFromDecimal transfers a shopspring decimal's full coefficient
+// into the native decimal's signed 128-bit mantissa.
 //
-// WARNING:
-// This implementation uses CoefficientInt64(), which truncates the coefficient
-// to 64 bits. If the decimal mantissa exceeds int64 range, higher bits are
-// silently discarded, leading to data loss without any error or panic.
-func NewNativeDecimalFromDecimal(source decimal.Decimal) ParamDecimal {
-	return ParamDecimal{
-		mantissa_lo: C.int64_t(source.CoefficientInt64()),
-		mantissa_hi: C.int64_t(source.CoefficientInt64() >> decimalSignBitShift),
-		scale:       C.int32_t(-source.Exponent()),
+// Coefficients outside signed 128-bit range return an error wrapping ErrOverflow.
+// The core rejects mantissas wider than 96 bits or scales above 28 with its own
+// error.
+func NewNativeDecimalFromDecimal(source decimal.Decimal) (ParamDecimal, error) {
+	coefficient := source.Coefficient()
+	hi := new(big.Int).Rsh(coefficient, decimalMantissaBits)
+	if !hi.IsInt64() {
+		return ParamDecimal{}, fmt.Errorf(
+			"%w: decimal coefficient %s does not fit a 128-bit mantissa",
+			ErrOverflow, coefficient,
+		)
 	}
+	lo := new(big.Int).And(coefficient, new(big.Int).SetUint64(^uint64(0)))
+	return ParamDecimal{
+		mantissa_lo: C.int64_t(lo.Uint64()),
+		mantissa_hi: C.int64_t(hi.Int64()),
+		scale:       C.int32_t(-source.Exponent()),
+	}, nil
 }

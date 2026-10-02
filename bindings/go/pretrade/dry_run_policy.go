@@ -53,5 +53,7 @@ type DryRunPolicy interface {
 	// provided for API symmetry but any mutations pushed to it are discarded
 	// by the engine. Returns the rejects the main stage would produce with
 	// zero side effects.
+	// The mutations value is valid only during this hook call. Do not retain it
+	// or use it after return; Push then returns tx.ErrMutationsExpired.
 	PerformPreTradeCheckDryRun(Context, model.Order, tx.Mutations, Result) []reject.Reject
 }

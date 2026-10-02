@@ -106,7 +106,9 @@ func (o Order) Operation() optional.Option[OrderOperation] {
 	if !native.OrderOperationOptionalIsSet(operation) {
 		return optional.None[OrderOperation]()
 	}
-	return optional.Some(newOrderOperation(native.OrderOperationOptionalGet(operation)))
+	child := newOrderOperation(native.OrderOperationOptionalGet(operation))
+	child.retainInstrument = o.retain.OperationInstrument
+	return optional.Some(child)
 }
 
 // EnsureOperationView ensures the operation exists and returns a mutable view.
@@ -167,7 +169,9 @@ func (o Order) Margin() optional.Option[OrderMargin] {
 	if !native.OrderMarginOptionalIsSet(margin) {
 		return optional.None[OrderMargin]()
 	}
-	return optional.Some(newOrderMargin(native.OrderMarginOptionalGet(margin)))
+	child := newOrderMargin(native.OrderMarginOptionalGet(margin))
+	child.retainCollateralAsset = o.retain.MarginCollateralAsset
+	return optional.Some(child)
 }
 
 // EnsureMarginView ensures the margin exists and returns a mutable view.

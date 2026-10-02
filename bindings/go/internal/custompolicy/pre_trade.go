@@ -177,13 +177,15 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 	}()
 	policy := getPreTrade(userData)
 	policyName = policy.name
+	mutationsValue, expireMutations := tx.NewMutationsFromHandle(
+		native.Mutations(mutations),
+	)
+	defer expireMutations()
 	return newNativeRejectList(
 		policy.impl.PerformPreTradeCheck(
 			pretrade.NewContextFromHandle(native.PretradeContext(ctx)),
 			model.NewOrderFromHandle(*(*native.Order)(unsafe.Pointer(order))),
-			tx.NewMutationsFromHandle(
-				native.Mutations(mutations),
-			),
+			mutationsValue,
 			pretrade.NewPreTradeResultFromHandle(
 				native.PretradePreTradeResult(outResult),
 			),
@@ -246,13 +248,17 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 	}()
 	policy := getPreTrade(userData)
 	policyName = policy.name
+	mutationsValue, expireMutations := tx.NewMutationsFromHandle(
+		native.Mutations(mutations),
+	)
+	defer expireMutations()
 	result, rejects := policy.impl.ApplyAccountAdjustment(
 		accountadjustment.NewContextFromHandle(native.AccountAdjustmentContext(ctx)),
 		param.NewAccountIDFromHandle(native.ParamAccountID(accountID)),
 		model.NewAccountAdjustmentFromHandle(
 			*(*native.AccountAdjustment)(unsafe.Pointer(adjustment)),
 		),
-		tx.NewMutationsFromHandle(native.Mutations(mutations)),
+		mutationsValue,
 		pretrade.NewAccountOutcomesFromHandle(
 			native.PretradeAccountAdjustmentResult(outResult),
 		),
@@ -285,9 +291,13 @@ func pitPretradePreTradePolicyRetireAccount(
 		}
 	}()
 	policy := getPreTrade(userData)
+	mutationsValue, expireMutations := tx.NewMutationsFromHandle(
+		native.Mutations(mutations),
+	)
+	defer expireMutations()
 	return C.uint8_t(policy.retirement.RetireAccount(
 		param.NewAccountIDFromHandle(native.ParamAccountID(accountID)),
-		tx.NewMutationsFromHandle(native.Mutations(mutations)),
+		mutationsValue,
 	))
 }
 
@@ -355,13 +365,15 @@ func pitPretradePreTradePolicyPerformPreTradeCheckDryRun(
 	}()
 	policy := getPreTrade(userData)
 	policyName = policy.name
+	mutationsValue, expireMutations := tx.NewMutationsFromHandle(
+		native.Mutations(mutations),
+	)
+	defer expireMutations()
 	return newNativeRejectList(
 		policy.dryRun.PerformPreTradeCheckDryRun(
 			pretrade.NewContextFromHandle(native.PretradeContext(ctx)),
 			model.NewOrderFromHandle(*(*native.Order)(unsafe.Pointer(order))),
-			tx.NewMutationsFromHandle(
-				native.Mutations(mutations),
-			),
+			mutationsValue,
 			pretrade.NewPreTradeResultFromHandle(
 				native.PretradePreTradeResult(outResult),
 			),

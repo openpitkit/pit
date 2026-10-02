@@ -56,12 +56,15 @@ func newPriceOrPanic(value Price, err error) Price {
 
 // NewPriceFromDecimal converts a shopspring decimal to a Price.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewPriceFromDecimal(v decimal.Decimal) (Price, error) {
-	nativeValue, err := native.CreateParamPrice(native.NewNativeDecimalFromDecimal(v))
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Price{}, err
+	}
+	nativeValue, err := native.CreateParamPrice(nativeDecimal)
 	if err != nil {
 		return Price{}, err
 	}
@@ -149,17 +152,20 @@ func NewPriceFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy
 
 // NewPriceFromDecimalRounded converts a shopspring decimal to a rounded Price.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewPriceFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Price, error) {
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Price{}, err
+	}
 	nativeValue, err := native.CreateParamPriceFromDecimalRounded(
-		native.NewNativeDecimalFromDecimal(v),
+		nativeDecimal,
 		scale,
 		strategy.native(),
 	)

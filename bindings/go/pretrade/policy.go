@@ -70,6 +70,8 @@ type Policy interface {
 	//
 	// A panic is recovered at the SDK boundary and reported as a
 	// SystemUnavailable reject with the panic value in its details.
+	// The mutations value is valid only during this hook call. Do not retain it
+	// or use it after return; Push then returns tx.ErrMutationsExpired.
 	PerformPreTradeCheck(Context, model.Order, tx.Mutations, Result) []reject.Reject
 
 	// ApplyExecutionReport applies post-trade updates from execution reports.
@@ -96,6 +98,8 @@ type Policy interface {
 	//
 	// A panic is recovered at the SDK boundary and reported as a
 	// SystemUnavailable reject with the panic value in its details.
+	// The mutations value is valid only during this hook call. Do not retain it
+	// or use it after return; Push then returns tx.ErrMutationsExpired.
 	ApplyAccountAdjustment(
 		accountadjustment.Context,
 		param.AccountID,

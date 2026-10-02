@@ -82,12 +82,14 @@ type RateLimitBuilder struct {
 
 // RateLimitReadyBuilder holds a fully-configured rate-limit policy.
 type RateLimitReadyBuilder struct {
-	broker               *native.PretradePoliciesRateLimitBrokerBarrier
-	assetBarriers        []native.PretradePoliciesRateLimitAssetBarrier
-	accountBarriers      []native.PretradePoliciesRateLimitAccountBarrier
-	accountAssetBarriers []native.PretradePoliciesRateLimitAccountAssetBarrier
-	policyGroupID        model.PolicyGroupID
-	err                  error
+	broker                              *native.PretradePoliciesRateLimitBrokerBarrier
+	assetBarriers                       []native.PretradePoliciesRateLimitAssetBarrier
+	assetBarrierSettlementAssets        []param.Asset
+	accountBarriers                     []native.PretradePoliciesRateLimitAccountBarrier
+	accountAssetBarriers                []native.PretradePoliciesRateLimitAccountAssetBarrier
+	accountAssetBarrierSettlementAssets []param.Asset
+	policyGroupID                       model.PolicyGroupID
+	err                                 error
 }
 
 // BuildRateLimit returns a new rate-limit policy builder.
@@ -160,6 +162,10 @@ func (b *RateLimitReadyBuilder) AssetBarriers(
 				barrier.SettlementAsset.Handle(),
 			),
 		)
+		b.assetBarrierSettlementAssets = append(
+			b.assetBarrierSettlementAssets,
+			barrier.SettlementAsset,
+		)
 	}
 	return b
 }
@@ -220,6 +226,10 @@ func (b *RateLimitReadyBuilder) AccountAssetBarriers(
 				windowNanos,
 				barrier.SettlementAsset.Handle(),
 			),
+		)
+		b.accountAssetBarrierSettlementAssets = append(
+			b.accountAssetBarrierSettlementAssets,
+			barrier.SettlementAsset,
 		)
 	}
 	return b

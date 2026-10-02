@@ -63,7 +63,11 @@ func NewMonetaryAmountOptionFromHandle(
 	return NewMonetaryAmountFromHandle(native.ParamMonetaryAmountOptionalGet(value))
 }
 
-// Handle returns the underlying native handle.
+// Handle returns a native value whose string view aliases the MonetaryAmount's
+// C buffer and is valid only while the MonetaryAmount, or a copy of it, is
+// reachable. A caller passing the handle to a native call must keep the
+// MonetaryAmount alive until the call returns, for example with
+// runtime.KeepAlive after the call.
 func (v MonetaryAmount) Handle() native.ParamMonetaryAmount {
 	return native.NewParamMonetaryAmount(v.Amount.Handle(), v.Currency.Handle())
 }

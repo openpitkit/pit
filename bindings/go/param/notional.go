@@ -65,12 +65,15 @@ func newNotionalOrPanic(value Notional, err error) Notional {
 
 // NewNotionalFromDecimal converts a shopspring decimal to a Notional.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewNotionalFromDecimal(v decimal.Decimal) (Notional, error) {
-	nativeValue, err := native.CreateParamNotional(native.NewNativeDecimalFromDecimal(v))
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Notional{}, err
+	}
+	nativeValue, err := native.CreateParamNotional(nativeDecimal)
 	if err != nil {
 		return Notional{}, err
 	}
@@ -162,17 +165,20 @@ func NewNotionalFromFloatRounded(
 
 // NewNotionalFromDecimalRounded converts a shopspring decimal to a rounded Notional.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewNotionalFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Notional, error) {
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Notional{}, err
+	}
 	nativeValue, err := native.CreateParamNotionalFromDecimalRounded(
-		native.NewNativeDecimalFromDecimal(v),
+		nativeDecimal,
 		scale,
 		strategy.native(),
 	)

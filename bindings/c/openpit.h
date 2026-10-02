@@ -1358,7 +1358,8 @@ typedef uint8_t OpenPitMarketDataGetStatus;
 #define OpenPitMarketDataGetStatus_AccountGroupResolutionFailed \
     ((OpenPitMarketDataGetStatus) 4)
 /**
- * The supplied quote-resolution selector is invalid.
+ * The supplied quote-resolution selector is invalid, or `service`,
+ * `resolve_account_group`, or `out_quote` is null.
  */
 #define OpenPitMarketDataGetStatus_Error ((OpenPitMarketDataGetStatus) 255)
 
@@ -9049,11 +9050,14 @@ bool openpit_marketdata_service_push_by_instrument(
  *   `Failed`; `out_quote` is left untouched. A failed resolution is never
  *   degraded into "the account has no group", because that would silently
  *   move the read onto the default-group bucket;
- * - `Error`: `resolution` is not one of the documented selector constants.
+ * - `Error`: `resolution` is not one of the documented selector constants,
+ *   or `service`, `resolve_account_group`, or `out_quote` is null;
+ *   `out_quote` is left untouched.
  *
  * Contract:
  * - `service`, `resolve_account_group`, and `out_quote` must be valid
- *   non-null pointers; passing null for any of them aborts the call.
+ *   non-null pointers. Passing null for any of them returns `Error` with
+ *   `out_quote` left untouched.
  */
 OpenPitMarketDataGetStatus openpit_marketdata_service_get(
     const OpenPitMarketDataService * service,

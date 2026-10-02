@@ -201,6 +201,8 @@ func (c Configurator) RateLimitUpdate(
 		nativeAccounts,
 		nativeAccountAssets,
 	)
+	runtime.KeepAlive(assets)
+	runtime.KeepAlive(accountAssets)
 	if configErr != nil {
 		return newErrorFromHandle(configErr)
 	}
@@ -264,6 +266,8 @@ func (c Configurator) PnlBoundsKillSwitch(
 		nativeBrokers,
 		nativeAccounts,
 	)
+	runtime.KeepAlive(brokerBarriers)
+	runtime.KeepAlive(accountBarriers)
 	if configErr != nil {
 		return newErrorFromHandle(configErr)
 	}
@@ -298,6 +302,7 @@ func (c Configurator) SetAccountPnl(
 		settlementAsset.Handle(),
 		pnl.Handle(),
 	)
+	runtime.KeepAlive(settlementAsset)
 	if configErr != nil {
 		return newErrorFromHandle(configErr)
 	}
@@ -400,6 +405,8 @@ func (c Configurator) OrderSizeLimitUpdate(
 		nativeAssets,
 		nativeAccountAssets,
 	)
+	runtime.KeepAlive(assets)
+	runtime.KeepAlive(accountAssets)
 	if configErr != nil {
 		return newErrorFromHandle(configErr)
 	}

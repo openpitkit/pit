@@ -18,9 +18,14 @@
 package param
 
 import (
+	"errors"
+	"fmt"
 	"math"
+	"math/big"
 	"testing"
 	"unsafe"
+
+	"github.com/shopspring/decimal"
 
 	"go.openpit.dev/openpit/internal/native"
 )
@@ -148,6 +153,50 @@ func TestPnlFromDecimal(t *testing.T) {
 	}
 	if got := value.String(); got != pnlCanonicalValue {
 		t.Fatalf("String() = %q, want %q", got, pnlCanonicalValue)
+	}
+}
+
+func TestPnlFromDecimalCoefficientBoundaries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		coefficient  string
+		wantError    bool
+		wantOverflow bool
+	}{
+		{name: "two_to_64_plus_five", coefficient: "18446744073709551621"},
+		{name: "max_96_bit", coefficient: "79228162514264337593543950335"},
+		{name: "two_to_96", coefficient: "79228162514264337593543950336", wantError: true},
+		{name: "two_to_127", coefficient: "170141183460469231731687303715884105728", wantError: true, wantOverflow: true},
+	}
+
+	for _, tt := range tests {
+		for _, exponent := range []int32{0, -4} {
+			t.Run(fmt.Sprintf("%s/exponent_%d", tt.name, exponent), func(t *testing.T) {
+				coefficient, ok := new(big.Int).SetString(tt.coefficient, 10)
+				if !ok {
+					t.Fatalf("invalid test coefficient %q", tt.coefficient)
+				}
+				source := decimal.NewFromBigInt(coefficient, exponent)
+				value, err := NewPnlFromDecimal(source)
+				if tt.wantError {
+					if err == nil {
+						t.Fatalf("NewPnlFromDecimal(%s) error = nil, want an error", source)
+					}
+					if tt.wantOverflow && !errors.Is(err, ErrOverflow) {
+						t.Fatalf("error = %v, want ErrOverflow", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("NewPnlFromDecimal(%s) error = %v", source, err)
+				}
+				if got := value.Decimal(); !got.Equal(source) {
+					t.Fatalf("Decimal() = %s, want %s", got, source)
+				}
+			})
+		}
 	}
 }
 

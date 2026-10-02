@@ -133,11 +133,11 @@ func (a AccountAdjustment) BalanceOperation() optional.Option[AccountAdjustmentB
 	if native.AccountAdjustmentGetOperationKind(a.value) != native.AccountAdjustmentOperationKindBalance {
 		return optional.None[AccountAdjustmentBalanceOperation]()
 	}
-	return optional.Some(
-		newAccountAdjustmentBalanceOperation(
-			native.AccountAdjustmentGetBalanceOperation(a.value),
-		),
+	child := newAccountAdjustmentBalanceOperation(
+		native.AccountAdjustmentGetBalanceOperation(a.value),
 	)
+	child.retainAsset = a.retain.BalanceOperationAsset
+	return optional.Some(child)
 }
 
 // EnsureBalanceOperationView ensures the balance operation exists, clears the
@@ -178,11 +178,12 @@ func (a AccountAdjustment) PositionOperation() optional.Option[AccountAdjustment
 	if native.AccountAdjustmentGetOperationKind(a.value) != native.AccountAdjustmentOperationKindPosition {
 		return optional.None[AccountAdjustmentPositionOperation]()
 	}
-	return optional.Some(
-		newAccountAdjustmentPositionOperation(
-			native.AccountAdjustmentGetPositionOperation(a.value),
-		),
+	child := newAccountAdjustmentPositionOperation(
+		native.AccountAdjustmentGetPositionOperation(a.value),
 	)
+	child.retainInstrument = a.retain.PositionOperationInstrument
+	child.retainCollateralAsset = a.retain.PositionOperationCollateralAsset
+	return optional.Some(child)
 }
 
 // EnsurePositionOperationView ensures the position operation exists, clears the

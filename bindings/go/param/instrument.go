@@ -59,7 +59,11 @@ func (i Instrument) String() string {
 	return fmt.Sprintf("%s/%s", i.UnderlyingAsset, i.SettlementAsset)
 }
 
-// Handle returns the native instrument handle.
+// Handle returns a native instrument whose string views alias the Instrument's
+// C buffers and are valid only while the Instrument, or a copy of it, is
+// reachable. A caller passing the handle to a native call must keep the
+// Instrument alive until the call returns, for example with runtime.KeepAlive
+// after the call.
 func (i Instrument) Handle() native.Instrument {
 	return native.NewInstrument(i.UnderlyingAsset.Handle(), i.SettlementAsset.Handle())
 }

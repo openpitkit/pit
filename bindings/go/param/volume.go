@@ -56,12 +56,15 @@ func newVolumeOrPanic(value Volume, err error) Volume {
 
 // NewVolumeFromDecimal converts a shopspring decimal to a Volume.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewVolumeFromDecimal(v decimal.Decimal) (Volume, error) {
-	nativeValue, err := native.CreateParamVolume(native.NewNativeDecimalFromDecimal(v))
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Volume{}, err
+	}
+	nativeValue, err := native.CreateParamVolume(nativeDecimal)
 	if err != nil {
 		return Volume{}, err
 	}
@@ -149,17 +152,20 @@ func NewVolumeFromFloatRounded(v float64, scale uint32, strategy RoundingStrateg
 
 // NewVolumeFromDecimalRounded converts a shopspring decimal to a rounded Volume.
 //
-// WARNING:
-// This constructor delegates to native decimal conversion that truncates the
-// coefficient to 64 bits. If the decimal mantissa exceeds int64 range, higher
-// bits are silently discarded without any error or panic.
+// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
+// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
+// exceeds 28.
 func NewVolumeFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Volume, error) {
+	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
+	if err != nil {
+		return Volume{}, err
+	}
 	nativeValue, err := native.CreateParamVolumeFromDecimalRounded(
-		native.NewNativeDecimalFromDecimal(v),
+		nativeDecimal,
 		scale,
 		strategy.native(),
 	)
