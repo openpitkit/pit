@@ -325,14 +325,14 @@ RegisterGroupsSync(const openpit::Engine &engine, const GroupMembership &groups,
   groups.CountInReport(report);
   const openpit::accounts::Accounts accountsView = engine.Accounts();
   for (const std::string &label : groups.order) {
-    param::AccountGroupId groupId;
+    std::optional<param::AccountGroupId> groupId;
     try {
-      groupId = AccountGroupIdOf(label);
+      groupId.emplace(AccountGroupIdOf(label));
     } catch (const std::exception &err) {
       return Failure{groups.FirstRow(label), err.what()};
     }
     const std::optional<openpit::accounts::AccountGroupError> groupErr =
-        accountsView.RegisterGroup(groups.members.at(label), groupId);
+        accountsView.RegisterGroup(groups.members.at(label), *groupId);
     if (groupErr.has_value()) {
       return Failure{groups.FirstRow(label),
                      "register group: " + groupErr->message};
@@ -627,15 +627,16 @@ RegisterGroupsAsync([[maybe_unused]] Deadline deadline, AsyncEngine &engine,
   groups.CountInReport(report);
   ae::AsyncAccounts<ae::EngineAdapter> accountsView = engine.Accounts();
   for (const std::string &label : groups.order) {
-    param::AccountGroupId groupId;
+    std::optional<param::AccountGroupId> groupId;
     try {
-      groupId = AccountGroupIdOf(label);
+      groupId.emplace(AccountGroupIdOf(label));
     } catch (const std::exception &err) {
       return Failure{groups.FirstRow(label), err.what()};
     }
     try {
       const std::optional<openpit::accounts::AccountGroupError> groupErr =
-          accountsView.RegisterGroup(groups.members.at(label), groupId).Await();
+          accountsView.RegisterGroup(groups.members.at(label), *groupId)
+              .Await();
       if (groupErr.has_value()) {
         return Failure{groups.FirstRow(label),
                        "register group: " + groupErr->message};

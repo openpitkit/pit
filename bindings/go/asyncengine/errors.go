@@ -37,13 +37,6 @@ var ErrMissingAccountID = errors.New(
 	"openpit/asyncengine: no account ID to route the call by",
 )
 
-// ErrUninitializedAccountGroupID is returned when a direct account-group
-// operation or account-group-sourced chain receives an uninitialized
-// AccountGroupID.
-var ErrUninitializedAccountGroupID = errors.New(
-	"openpit/asyncengine: uninitialized account group ID",
-)
-
 // ErrStopped is returned by Submit and engine methods after the
 // AsyncEngine has been stopped, and via aborted futures for tasks not yet
 // started when StopHard is invoked.

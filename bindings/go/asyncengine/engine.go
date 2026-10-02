@@ -443,7 +443,7 @@ type AsyncAccounts struct {
 
 // RegisterGroup enqueues a group-registration call routed through the queue of
 // the first account in accounts. Returns ErrMissingAccountID when accounts is
-// empty and ErrUninitializedAccountGroupID when group is uninitialized.
+// empty and param.ErrUninitializedAccountGroupID when group is uninitialized.
 //
 // The future resolves with a non-nil error on a domain conflict
 // (*reject.AccountGroupError) or a transport failure.
@@ -484,7 +484,8 @@ func (t *registerGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 
 // UnregisterGroup enqueues a group-unregistration call routed through the queue
 // of the first account in accounts. Returns ErrMissingAccountID when accounts
-// is empty and ErrUninitializedAccountGroupID when group is uninitialized.
+// is empty and param.ErrUninitializedAccountGroupID when group is
+// uninitialized.
 //
 // The future resolves with a non-nil error on a domain conflict
 // (*reject.AccountGroupError) or a transport failure.
@@ -733,8 +734,8 @@ func (t *replaceBlockReasonTask) abort(err error) { t.f.Resolve(struct{}{}, err)
 //
 // The future resolves with a non-nil error (*reject.AccountBlockError with kind
 // ReservedGroup) when group is the reserved param.DefaultAccountGroup,
-// ErrUninitializedAccountGroupID when group is uninitialized, or a transport
-// failure.
+// param.ErrUninitializedAccountGroupID when group is uninitialized, or a
+// transport failure.
 func (a AsyncAccounts) BlockGroup(
 	ctx context.Context,
 	group param.AccountGroupID,
@@ -773,8 +774,8 @@ func (t *blockGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 //
 // The future resolves with a non-nil error (*reject.AccountBlockError with kind
 // ReservedGroup) when group is the reserved param.DefaultAccountGroup,
-// ErrUninitializedAccountGroupID when group is uninitialized, or a transport
-// failure.
+// param.ErrUninitializedAccountGroupID when group is uninitialized, or a
+// transport failure.
 func (a AsyncAccounts) UnblockGroup(
 	ctx context.Context,
 	group param.AccountGroupID,
@@ -812,8 +813,9 @@ func (t *unblockGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 //
 // The future resolves with a non-nil error (*reject.AccountBlockError with kind
 // ReservedGroup when group is the reserved param.DefaultAccountGroup, or
-// GroupNotBlocked when group is not blocked), ErrUninitializedAccountGroupID when
-// group is uninitialized, or a transport failure.
+// GroupNotBlocked when group is not blocked),
+// param.ErrUninitializedAccountGroupID when group is uninitialized, or a
+// transport failure.
 func (a AsyncAccounts) ReplaceGroupBlockReason(
 	ctx context.Context,
 	group param.AccountGroupID,
@@ -860,7 +862,7 @@ func groupRoutingKey(group param.AccountGroupID) routingKey {
 
 func validateAccountGroupID(group param.AccountGroupID) error {
 	if !group.IsInitialized() {
-		return ErrUninitializedAccountGroupID
+		return param.ErrUninitializedAccountGroupID
 	}
 	return nil
 }

@@ -32,6 +32,11 @@ import (
 // included - and no engine operation whose policies read that service. Such a
 // call is not detected and is not reported as an error; it can block the
 // calling goroutine forever.
+//
+// AccountGroup answers optional.None for an account without a group. A Some
+// answer must hold an initialized group: an uninitialized one would read as
+// param.DefaultAccountGroup, so it fails the read with
+// param.ErrUninitializedAccountGroupID instead.
 type AccountInfo interface {
 	AccountGroup() optional.Option[param.AccountGroupID]
 }

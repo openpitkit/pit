@@ -222,8 +222,12 @@ func TestServiceCloseIsIdempotentAndMethodsDoNotUseReleasedHandle(t *testing.T) 
 
 	service.SetAccountTTL(account, ttl)
 	service.ClearAccountTTL(account)
-	service.SetAccountGroupTTL(param.DefaultAccountGroup, ttl)
-	service.ClearAccountGroupTTL(param.DefaultAccountGroup)
+	if err := service.SetAccountGroupTTL(param.DefaultAccountGroup, ttl); err != nil {
+		t.Fatalf("SetAccountGroupTTL() after Close error = %v, want nil", err)
+	}
+	if err := service.ClearAccountGroupTTL(param.DefaultAccountGroup); err != nil {
+		t.Fatalf("ClearAccountGroupTTL() after Close error = %v, want nil", err)
+	}
 	service.Clear(id)
 	if service.GetOptional(
 		id,

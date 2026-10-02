@@ -148,7 +148,8 @@ func (a Accounts) ClearCurrency(account param.AccountID) {
 // SetGroupCurrency sets the currency inherited by accounts in group.
 //
 // The reserved param.DefaultAccountGroup is allowed here and represents the
-// global default tier.
+// global default tier. Returns param.ErrUninitializedAccountGroupID when group
+// is uninitialized: the engine would take it as the global default tier.
 //
 // Effective currency resolves from the account, then its group, then
 // param.DefaultAccountGroup.
@@ -159,6 +160,9 @@ func (a Accounts) ClearCurrency(account param.AccountID) {
 // change. Barrier selection itself stays deterministic: the next policy access
 // re-resolves the cascade with the new effective currency.
 func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset) error {
+	if !group.IsInitialized() {
+		return param.ErrUninitializedAccountGroupID
+	}
 	return native.EngineSetAccountGroupCurrency(
 		a.engine,
 		group.Handle(),
@@ -169,7 +173,8 @@ func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset
 // ClearGroupCurrency clears the currency inherited by accounts in group.
 //
 // The reserved param.DefaultAccountGroup is allowed here and represents the
-// global default tier.
+// global default tier. Returns param.ErrUninitializedAccountGroupID when group
+// is uninitialized: the engine would take it as the global default tier.
 //
 // Effective currency resolves from the account, then its group, then
 // param.DefaultAccountGroup.
@@ -179,8 +184,12 @@ func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset
 // guarantees nothing about them and does not convert, detect, or report the
 // change. Barrier selection itself stays deterministic: the next policy access
 // re-resolves the cascade with the new effective currency.
-func (a Accounts) ClearGroupCurrency(group param.AccountGroupID) {
+func (a Accounts) ClearGroupCurrency(group param.AccountGroupID) error {
+	if !group.IsInitialized() {
+		return param.ErrUninitializedAccountGroupID
+	}
 	native.EngineClearAccountGroupCurrency(a.engine, group.Handle())
+	return nil
 }
 
 // Block blocks account with reason, gating its pre-trade orders until it is

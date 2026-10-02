@@ -959,11 +959,11 @@ func TestChainRejectsUninitializedAccountGroupID(t *testing.T) {
 		t.Fatal("future is unresolved, want synchronous rejection")
 	}
 	outcome, err := result.Await(context.Background())
-	if !errors.Is(err, ErrUninitializedAccountGroupID) {
-		t.Fatalf("Await() error = %v, want ErrUninitializedAccountGroupID", err)
+	if !errors.Is(err, param.ErrUninitializedAccountGroupID) {
+		t.Fatalf("Await() error = %v, want param.ErrUninitializedAccountGroupID", err)
 	}
-	if !errors.Is(outcome.Err, ErrUninitializedAccountGroupID) {
-		t.Errorf("outcome error = %v, want ErrUninitializedAccountGroupID", outcome.Err)
+	if !errors.Is(outcome.Err, param.ErrUninitializedAccountGroupID) {
+		t.Errorf("outcome error = %v, want param.ErrUninitializedAccountGroupID", outcome.Err)
 	}
 	if beginCalled {
 		t.Error("Chain.Begin ran for an uninitialized account-group source")

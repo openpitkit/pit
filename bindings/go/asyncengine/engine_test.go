@@ -1290,11 +1290,6 @@ func TestAsyncEngineAdministrativeRoutingKinds(t *testing.T) {
 func TestAsyncAccountsRejectsUninitializedAccountGroupID(t *testing.T) {
 	t.Parallel()
 
-	const missingGroupError = "openpit/asyncengine: uninitialized account group ID"
-	if got := ErrUninitializedAccountGroupID.Error(); got != missingGroupError {
-		t.Fatalf("ErrUninitializedAccountGroupID.Error() = %q, want %q", got, missingGroupError)
-	}
-
 	strategy := &recordingStrategy{}
 	engine := newAsyncEngine(newFakeDriver(), nil, strategy)
 	accounts := engine.Accounts()
@@ -1351,8 +1346,8 @@ func TestAsyncAccountsRejectsUninitializedAccountGroupID(t *testing.T) {
 				return
 			}
 			_, err := result.Await(context.Background())
-			if !errors.Is(err, ErrUninitializedAccountGroupID) {
-				t.Errorf("Await() error = %v, want ErrUninitializedAccountGroupID", err)
+			if !errors.Is(err, param.ErrUninitializedAccountGroupID) {
+				t.Errorf("Await() error = %v, want param.ErrUninitializedAccountGroupID", err)
 			}
 			if got := strategy.submitCount(); got != before {
 				t.Errorf("submit count = %d, want %d", got, before)

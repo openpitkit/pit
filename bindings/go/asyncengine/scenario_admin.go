@@ -640,7 +640,11 @@ func (t *chainTask[State]) clearAccountGroupCurrency(
 	hooks ClearCurrencyHooks[State],
 ) error {
 	t.retryUnsafe = true
-	t.engine.driver.Accounts().ClearGroupCurrency(*t.plan.groupID)
+	if err := t.engine.driver.Accounts().ClearGroupCurrency(
+		*t.plan.groupID,
+	); err != nil {
+		return fmt.Errorf("async chain clear account-group currency: %w", err)
+	}
 	if err := hooks.OnCleared(ctx, state); err != nil {
 		return fmt.Errorf("async chain account-group currency cleared hook: %w", err)
 	}

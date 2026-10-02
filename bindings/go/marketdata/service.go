@@ -22,6 +22,7 @@ package marketdata
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"runtime/cgo"
 	"sync"
@@ -261,7 +262,9 @@ func (s *Service) RegisterWithIDAndTTL(
 // the time between observation and publication; a negative value is clamped to
 // zero. At least one account or group must be supplied; passing empty slices
 // returns ErrNoTarget. To target the default ("everyone-else") bucket, include
-// [param.DefaultAccountGroup] in accountGroupIDs.
+// [param.DefaultAccountGroup] in accountGroupIDs. An uninitialized element of
+// accountGroupIDs returns [param.ErrUninitializedAccountGroupID] and publishes
+// nothing: the service would take it as the default bucket.
 func (s *Service) PushFor(
 	instrumentID InstrumentID,
 	quote Quote,
@@ -269,6 +272,15 @@ func (s *Service) PushFor(
 	accountIDs []param.AccountID,
 	accountGroupIDs []param.AccountGroupID,
 ) error {
+	for i, g := range accountGroupIDs {
+		if !g.IsInitialized() {
+			return fmt.Errorf(
+				"account group %d: %w",
+				i,
+				param.ErrUninitializedAccountGroupID,
+			)
+		}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.handle == nil {
@@ -358,25 +370,39 @@ func (s *Service) ClearAccountTTL(accountID param.AccountID) {
 
 // SetAccountGroupTTL sets a service-wide TTL override for all instruments when
 // read by accountGroupID. Pass [param.DefaultAccountGroup] to target the
-// service-level default-group TTL.
-func (s *Service) SetAccountGroupTTL(accountGroupID param.AccountGroupID, ttl QuoteTTL) {
+// service-level default-group TTL. Returns
+// [param.ErrUninitializedAccountGroupID] when accountGroupID is uninitialized:
+// the service would take it as the default group. It is a no-op on a closed
+// service.
+func (s *Service) SetAccountGroupTTL(accountGroupID param.AccountGroupID, ttl QuoteTTL) error {
+	if !accountGroupID.IsInitialized() {
+		return param.ErrUninitializedAccountGroupID
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.handle == nil {
-		return
+		return nil
 	}
 	native.MarketDataServiceSetAccountGroupTTL(s.handle, accountGroupID.Handle(), ttl.Handle())
+	return nil
 }
 
 // ClearAccountGroupTTL removes the per-group TTL override. Pass
 // [param.DefaultAccountGroup] to target the service-level default-group TTL.
-func (s *Service) ClearAccountGroupTTL(accountGroupID param.AccountGroupID) {
+// Returns [param.ErrUninitializedAccountGroupID] when accountGroupID is
+// uninitialized: the service would take it as the default group. It is a no-op
+// on a closed service.
+func (s *Service) ClearAccountGroupTTL(accountGroupID param.AccountGroupID) error {
+	if !accountGroupID.IsInitialized() {
+		return param.ErrUninitializedAccountGroupID
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.handle == nil {
-		return
+		return nil
 	}
 	native.MarketDataServiceClearAccountGroupTTL(s.handle, accountGroupID.Handle())
+	return nil
 }
 
 // SetInstrumentAccountTTL sets a per-instrument, per-account TTL override.
@@ -426,12 +452,16 @@ func (s *Service) ClearInstrumentAccountTTL(
 
 // SetInstrumentAccountGroupTTL sets a per-instrument, per-group TTL override.
 // Pass [param.DefaultAccountGroup] to target the instrument's default-group
-// TTL cell.
+// TTL cell. Returns [param.ErrUninitializedAccountGroupID] when accountGroupID
+// is uninitialized: the service would take it as the default group.
 func (s *Service) SetInstrumentAccountGroupTTL(
 	instrumentID InstrumentID,
 	accountGroupID param.AccountGroupID,
 	ttl QuoteTTL,
 ) error {
+	if !accountGroupID.IsInitialized() {
+		return param.ErrUninitializedAccountGroupID
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.handle == nil {
@@ -451,11 +481,16 @@ func (s *Service) SetInstrumentAccountGroupTTL(
 
 // ClearInstrumentAccountGroupTTL removes the per-instrument, per-group TTL
 // override. Pass [param.DefaultAccountGroup] to target the instrument's
-// default-group TTL cell.
+// default-group TTL cell. Returns [param.ErrUninitializedAccountGroupID] when
+// accountGroupID is uninitialized: the service would take it as the default
+// group.
 func (s *Service) ClearInstrumentAccountGroupTTL(
 	instrumentID InstrumentID,
 	accountGroupID param.AccountGroupID,
 ) error {
+	if !accountGroupID.IsInitialized() {
+		return param.ErrUninitializedAccountGroupID
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.handle == nil {
@@ -570,14 +605,14 @@ func (s *Service) GetOptional(
 }
 
 // get performs the native read, keeping the caller's AccountInfo reachable for
-// the duration of the call and returning whatever the account-group resolver
-// failed with.
+// the duration of the call and returning the resolver state that carries
+// whatever the account-group resolver failed with.
 func (s *Service) get(
 	instrumentID InstrumentID,
 	accountID param.AccountID,
 	accountInfo AccountInfo,
 	resolution QuoteResolution,
-) (native.MarketDataGetStatus, native.MarketDataQuote, any) {
+) (native.MarketDataGetStatus, native.MarketDataQuote, *resolverState) {
 	state := &resolverState{info: accountInfo}
 	stateHandle := cgo.NewHandle(state)
 	status, quote := native.MarketDataServiceGet(
@@ -589,7 +624,7 @@ func (s *Service) get(
 		resolution,
 	)
 	stateHandle.Delete()
-	return status, quote, state.failure
+	return status, quote, state
 }
 
 // Get reads the latest quote for instrumentID with account-aware resolution,
@@ -598,11 +633,12 @@ func (s *Service) get(
 // quote under the given resolution, and ErrQuoteExpired when the selected quote
 // aged past TTL.
 //
-// When accountInfo cannot answer AccountGroup - it panics - the read fails with
-// ErrAccountGroupResolution (an *AccountGroupResolutionError carrying the panic
-// value). A failed resolution is never degraded into "the account has no
-// group", which would move the read onto the default-group bucket and bypass
-// every group-scoped rule.
+// When accountInfo cannot answer AccountGroup - it panics or answers with an
+// uninitialized group - the read fails with ErrAccountGroupResolution (an
+// *AccountGroupResolutionError carrying the panic value, or
+// param.ErrUninitializedAccountGroupID). A failed resolution is never degraded
+// into "the account has no group", which would move the read onto the
+// default-group bucket and bypass every group-scoped rule.
 //
 // On ErrQuoteExpired, the returned Quote is the stale quote selected by the
 // core service. Other errors return a zero Quote.
@@ -617,7 +653,7 @@ func (s *Service) Get(
 	if s.handle == nil {
 		return Quote{}, ErrServiceClosed
 	}
-	status, quote, failure := s.get(instrumentID, accountID, accountInfo, resolution)
+	status, quote, state := s.get(instrumentID, accountID, accountInfo, resolution)
 	switch status {
 	case native.MarketDataGetStatusFound:
 		return newQuoteFromHandle(quote), nil
@@ -626,7 +662,7 @@ func (s *Service) Get(
 	case native.MarketDataGetStatusQuoteExpired:
 		return newQuoteFromHandle(quote), ErrQuoteExpired
 	case native.MarketDataGetStatusAccountGroupFailed:
-		return Quote{}, newAccountGroupResolutionError(failure)
+		return Quote{}, newAccountGroupResolutionError(state.failure, state.err)
 	case native.MarketDataGetStatusError:
 		return Quote{}, ErrInvalidQuoteResolution
 	default:

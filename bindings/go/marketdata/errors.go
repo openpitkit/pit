@@ -115,24 +115,35 @@ func (*UnknownInstrumentIDError) Unwrap() error { return ErrUnknownInstrument }
 // AccountGroupResolutionError reports that the supplied AccountInfo could not
 // answer AccountGroup, so the reading account's group stayed unknown and the
 // read failed as a whole. Panic carries the recovered value when the failure
-// came from a panicking AccountGroup implementation.
+// came from a panicking AccountGroup implementation. Err carries
+// param.ErrUninitializedAccountGroupID when AccountGroup answered with an
+// uninitialized group.
 //
 // The group is never assumed absent on failure: that would silently move the
 // read onto the default-group bucket and bypass every group-scoped rule.
 type AccountGroupResolutionError struct {
 	Panic any
+	Err   error
 }
 
-func newAccountGroupResolutionError(recovered any) error {
-	return &AccountGroupResolutionError{Panic: recovered}
+func newAccountGroupResolutionError(recovered any, err error) error {
+	return &AccountGroupResolutionError{Panic: recovered, Err: err}
 }
 
 func (e *AccountGroupResolutionError) Error() string {
+	if e.Err != nil {
+		return "account group resolution failed: " + e.Err.Error()
+	}
 	if e.Panic == nil {
 		return "account group resolution failed"
 	}
 	return fmt.Sprintf("account group resolution failed: panic: %v", e.Panic)
 }
 
-// Unwrap preserves compatibility with ErrAccountGroupResolution and errors.Is.
-func (*AccountGroupResolutionError) Unwrap() error { return ErrAccountGroupResolution }
+// Unwrap exposes ErrAccountGroupResolution and, when set, Err to errors.Is.
+func (e *AccountGroupResolutionError) Unwrap() []error {
+	if e.Err != nil {
+		return []error{ErrAccountGroupResolution, e.Err}
+	}
+	return []error{ErrAccountGroupResolution}
+}

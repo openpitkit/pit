@@ -145,10 +145,22 @@ class GroupId final {
 /// Default policy-group identifier.
 inline constexpr std::uint16_t DefaultPolicyGroupId = 0;
 
+class AccountGroupId;
+
+namespace detail {
+[[nodiscard]] constexpr AccountGroupId MakeDefaultAccountGroup() noexcept;
+}  // namespace detail
+
 /// Stable account-group identifier used for shared market-data resolution.
+///
+/// There is no default constructor. Value `0` is `DefaultAccountGroup`, a legal
+/// target that selects the global default tier, so an identifier left unset
+/// could not be told apart from it and would silently write to that tier. A
+/// group is built with `FromUint32` or `FromString`, or named as
+/// `DefaultAccountGroup`.
 class AccountGroupId final {
  public:
-  constexpr AccountGroupId() noexcept = default;
+  AccountGroupId() = delete;
 
   [[nodiscard]] static AccountGroupId FromUint32(std::uint32_t value) {
     detail::RawAccountGroupId native{};
@@ -214,6 +226,7 @@ class AccountGroupId final {
 
  private:
   friend class ::openpit::detail::NativeAccess;
+  friend constexpr AccountGroupId detail::MakeDefaultAccountGroup() noexcept;
 
   explicit constexpr AccountGroupId(detail::RawAccountGroupId native) noexcept
       : m_value(native) {}
@@ -222,10 +235,18 @@ class AccountGroupId final {
     return m_value;
   }
 
-  detail::RawAccountGroupId m_value = 0;
+  detail::RawAccountGroupId m_value;
 };
 
-/// Default account group.
-inline constexpr AccountGroupId DefaultAccountGroup{};
+namespace detail {
+[[nodiscard]] constexpr AccountGroupId MakeDefaultAccountGroup() noexcept {
+  return AccountGroupId(RawAccountGroupId{0});
+}
+}  // namespace detail
+
+/// Default account group: the global default tier every account belongs to
+/// until it is assigned to another group. It is the only way to name value `0`.
+inline constexpr AccountGroupId DefaultAccountGroup =
+    detail::MakeDefaultAccountGroup();
 
 }  // namespace openpit::param

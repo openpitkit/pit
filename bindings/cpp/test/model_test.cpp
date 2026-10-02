@@ -427,4 +427,9 @@ TEST(ParamAccountGroupId, DefaultAccountGroupIsReservedZero) {
   EXPECT_EQ(openpit::param::DefaultAccountGroup.ToString(), "0");
 }
 
+// Value 0 is DefaultAccountGroup, a legal target that selects the global
+// default tier, so an unset identifier must not exist at all: it would be
+// indistinguishable from that tier.
+static_assert(!std::is_default_constructible_v<AccountGroupId>);
+
 }  // namespace

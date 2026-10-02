@@ -18,6 +18,7 @@
 package param
 
 import (
+	"errors"
 	"strconv"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -32,6 +33,18 @@ type AccountGroupID struct {
 	native      native.ParamAccountGroupID
 	initialized bool
 }
+
+// ErrUninitializedAccountGroupID is returned when an uninitialized
+// AccountGroupID reaches an operation that accepts [DefaultAccountGroup] as a
+// target - account-group currency, market-data TTL, quote publishing, and
+// market-data group resolution - or the asynchronous engine's account-group
+// routing. Its handle 0 is [DefaultAccountGroup], so the engine cannot tell the
+// unset value from a deliberate one there; the SDK rejects it before the call
+// reaches the engine. Operations that never accept the default group leave the
+// unset value to the engine, which rejects it as the reserved default group.
+var ErrUninitializedAccountGroupID = errors.New(
+	"param: account group ID is uninitialized",
+)
 
 // DefaultAccountGroup is the reserved account group that every account belongs
 // to until it is assigned to another group. It is the only account-group

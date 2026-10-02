@@ -37,6 +37,7 @@ import (
 	"unsafe"
 
 	"go.openpit.dev/openpit/internal/callback"
+	"go.openpit.dev/openpit/param"
 )
 
 // accountGroupResolverFnAddr returns the address of the static C variable
@@ -49,11 +50,12 @@ func accountGroupResolverFnAddr() unsafe.Pointer {
 
 // resolverState carries the caller's AccountInfo into the native resolver and
 // carries a resolution failure back out. The C answer only says "failed", so
-// the panic value has to survive the C frame in Go-owned memory for Service.Get
-// to report the real cause.
+// the panic value or the rejected answer has to survive the C frame in
+// Go-owned memory for Service.Get to report the real cause.
 type resolverState struct {
 	info    AccountInfo
 	failure any
+	err     error
 }
 
 //export pitMarketDataAccountGroupResolver
@@ -88,6 +90,12 @@ func pitMarketDataAccountGroupResolver(
 		group, hasGroup := state.info.AccountGroup().Get()
 		if !hasGroup {
 			resolution = C.OpenPitMarketDataAccountGroupResolution_NoGroup
+			return
+		}
+		// An uninitialized group would read as the default group; fail the
+		// read instead, as for a panic.
+		if !group.IsInitialized() {
+			state.err = param.ErrUninitializedAccountGroupID
 			return
 		}
 		*outAccountGroupID = C.OpenPitParamAccountGroupId(group.Handle())
