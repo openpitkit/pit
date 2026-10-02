@@ -24,6 +24,14 @@ import (
 
 // AccountInfo supplies the reading account's group on demand. The engine's
 // pretrade.Context already satisfies it.
+//
+// AccountGroup runs inside the Service read that asked for it, while that read
+// holds the service's locks. It must not call into the same market-data
+// service, directly or indirectly: no method of the Service being read or of
+// any other handle to the same service, such as one returned by Clone - Close
+// included - and no engine operation whose policies read that service. Such a
+// call is not detected and is not reported as an error; it can block the
+// calling goroutine forever.
 type AccountInfo interface {
 	AccountGroup() optional.Option[param.AccountGroupID]
 }
