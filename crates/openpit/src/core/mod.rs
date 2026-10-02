@@ -21,6 +21,7 @@ pub(crate) mod account_control;
 pub(crate) mod account_groups;
 pub(crate) mod account_key;
 pub(crate) mod account_outcome;
+pub(crate) mod account_retirement;
 pub(crate) mod accounts;
 pub(crate) mod configure;
 pub(crate) mod engine;
@@ -54,6 +55,9 @@ pub use account_key::{AccountKey, AccountKeyConstraint};
 pub use account_outcome::{
     AccountAdjustmentBatchResult, AccountAdjustmentOutcome, AccountOutcomeEntry, AccountPnlOutcome,
     OutcomeAmount, PnlHaltReason, PnlOutcome, PnlOutcomeAmount, PnlState,
+};
+pub use account_retirement::{
+    AccountRetirementError, AccountRetirementPolicyRefusal, AccountRetirementRefusal,
 };
 pub(crate) use accounts::AccountCurrencies;
 pub use accounts::Accounts;

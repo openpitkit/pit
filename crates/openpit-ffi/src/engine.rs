@@ -1755,6 +1755,300 @@ pub extern "C" fn openpit_engine_apply_account_adjustment(
 
 //--------------------------------------------------------------------------------------------------
 
+/// Discriminant for the variant carried by an account-retirement error.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenPitAccountRetirementErrorKind {
+    /// One or more policies refused retirement; nothing was removed.
+    Refused = 0,
+    /// A commit finalizer failed and policy state may be partly removed. The
+    /// account id must never be reused, even if a later retirement succeeds.
+    FinalizerFailed = 1,
+}
+
+/// Machine-readable reason one policy refused account retirement.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenPitAccountRetirementRefusalKind {
+    /// The policy's configuration still names the account.
+    ConfigurationReferencesAccount = 1,
+    /// The policy holds non-zero state for the account.
+    NonZeroState = 2,
+    /// The policy holds state of an operation that is still in flight.
+    OperationInProgress = 3,
+    /// The policy could not determine whether its state may be retired.
+    EvaluationFailed = 4,
+}
+
+struct AccountRetirementPolicyRefusal {
+    policy: String,
+    refusal: OpenPitAccountRetirementRefusalKind,
+}
+
+/// Structured error returned by account retirement.
+///
+/// Ownership:
+/// - created by `openpit_engine_retire_account` on a domain failure;
+/// - owned by the caller;
+/// - released with `openpit_destroy_account_retirement_error`.
+pub struct OpenPitAccountRetirementError {
+    /// Refusals in policy registration order; empty for finalizer failure.
+    refusals: Vec<AccountRetirementPolicyRefusal>,
+    /// Human-readable error message.
+    message: String,
+    /// Machine-readable failure category.
+    kind: OpenPitAccountRetirementErrorKind,
+}
+
+impl OpenPitAccountRetirementError {
+    fn new(err: openpit::AccountRetirementError) -> Result<Self, String> {
+        let message = err.to_string();
+        let (kind, refusals) = match err {
+            openpit::AccountRetirementError::Refused { refusals } => {
+                let refusals = refusals
+                    .into_iter()
+                    .map(|refusal| {
+                        let kind = export_account_retirement_refusal_kind(refusal.refusal)?;
+                        Ok(AccountRetirementPolicyRefusal {
+                            policy: refusal.policy,
+                            refusal: kind,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                (OpenPitAccountRetirementErrorKind::Refused, refusals)
+            }
+            openpit::AccountRetirementError::FinalizerFailed => (
+                OpenPitAccountRetirementErrorKind::FinalizerFailed,
+                Vec::new(),
+            ),
+            unsupported => {
+                return Err(format!(
+                    "unsupported account retirement error variant: {unsupported:?}"
+                ));
+            }
+        };
+        Ok(Self {
+            refusals,
+            message,
+            kind,
+        })
+    }
+}
+
+fn export_account_retirement_refusal_kind(
+    refusal: openpit::AccountRetirementRefusal,
+) -> Result<OpenPitAccountRetirementRefusalKind, String> {
+    let kind = match refusal {
+        openpit::AccountRetirementRefusal::ConfigurationReferencesAccount => {
+            OpenPitAccountRetirementRefusalKind::ConfigurationReferencesAccount
+        }
+        openpit::AccountRetirementRefusal::NonZeroState => {
+            OpenPitAccountRetirementRefusalKind::NonZeroState
+        }
+        openpit::AccountRetirementRefusal::OperationInProgress => {
+            OpenPitAccountRetirementRefusalKind::OperationInProgress
+        }
+        openpit::AccountRetirementRefusal::EvaluationFailed => {
+            OpenPitAccountRetirementRefusalKind::EvaluationFailed
+        }
+        unsupported => {
+            return Err(format!(
+                "unsupported account retirement refusal variant: {unsupported:?}"
+            ));
+        }
+    };
+    Ok(kind)
+}
+
+#[no_mangle]
+/// Releases a caller-owned account-retirement error.
+///
+/// Contract:
+/// - call exactly once per pointer returned by
+///   `openpit_engine_retire_account`;
+/// - passing null is allowed and has no effect.
+pub extern "C" fn openpit_destroy_account_retirement_error(
+    err: *mut OpenPitAccountRetirementError,
+) {
+    if err.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(err)) };
+}
+
+#[no_mangle]
+/// Returns the variant kind of an account-retirement error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_retirement_error_get_kind(
+    err: *const OpenPitAccountRetirementError,
+) -> OpenPitAccountRetirementErrorKind {
+    assert!(!err.is_null(), "account retirement error pointer is null");
+    unsafe { &*err }.kind
+}
+
+#[no_mangle]
+/// Returns the human-readable message from an account-retirement error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - the returned view borrows from the error and remains valid while the
+///   error is alive;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_retirement_error_get_message(
+    err: *const OpenPitAccountRetirementError,
+) -> OpenPitStringView {
+    assert!(!err.is_null(), "account retirement error pointer is null");
+    OpenPitStringView::from_utf8(unsafe { &(*err).message })
+}
+
+#[no_mangle]
+/// Returns the number of policy refusals in an account-retirement error.
+///
+/// The count is zero for `FinalizerFailed`.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_retirement_error_get_refusal_count(
+    err: *const OpenPitAccountRetirementError,
+) -> usize {
+    assert!(!err.is_null(), "account retirement error pointer is null");
+    unsafe { &*err }.refusals.len()
+}
+
+#[no_mangle]
+/// Copies a borrowed policy-name view for the refusal at `index`.
+///
+/// Contract:
+/// - `err` and `out_policy_name` must be valid non-null pointers;
+/// - returns `true` and writes the view when a refusal exists;
+/// - returns `false` when `index` is out of bounds and leaves
+///   `out_policy_name` untouched;
+/// - the view remains valid while the error is alive;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_retirement_error_get_refusal_policy_name(
+    err: *const OpenPitAccountRetirementError,
+    index: usize,
+    out_policy_name: *mut OpenPitStringView,
+) -> bool {
+    assert!(!err.is_null(), "account retirement error pointer is null");
+    assert!(
+        !out_policy_name.is_null(),
+        "account retirement policy name output pointer is null"
+    );
+    let Some(refusal) = unsafe { &*err }.refusals.get(index) else {
+        return false;
+    };
+    unsafe {
+        *out_policy_name = OpenPitStringView::from_utf8(refusal.policy.as_str());
+    }
+    true
+}
+
+#[no_mangle]
+/// Copies the refusal kind at `index` into `out_refusal_kind`.
+///
+/// Contract:
+/// - `err` and `out_refusal_kind` must be valid non-null pointers;
+/// - returns `true` and writes the kind when a refusal exists;
+/// - returns `false` when `index` is out of bounds and leaves
+///   `out_refusal_kind` untouched;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_retirement_error_get_refusal_kind(
+    err: *const OpenPitAccountRetirementError,
+    index: usize,
+    out_refusal_kind: *mut OpenPitAccountRetirementRefusalKind,
+) -> bool {
+    assert!(!err.is_null(), "account retirement error pointer is null");
+    assert!(
+        !out_refusal_kind.is_null(),
+        "account retirement refusal kind output pointer is null"
+    );
+    let Some(refusal) = unsafe { &*err }.refusals.get(index) else {
+        return false;
+    };
+    unsafe {
+        *out_refusal_kind = refusal.refusal;
+    }
+    true
+}
+
+#[no_mangle]
+/// Atomically forgets all runtime state held for one account when it is zero
+/// and not in use.
+///
+/// On success, every policy's account-scoped state is removed together with
+/// the account's explicit currency, group membership, and account block.
+/// Retirement is refused without removing anything when policy configuration
+/// still names the account, policy state is non-zero, an account operation is
+/// in progress, or a policy cannot evaluate retirement. A finalizer failure
+/// can leave policy state partly removed; the engine arms its kill switch and
+/// retains the account's currency, membership, and block.
+///
+/// Caller contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - before this call, finalize or destroy every pre-trade request,
+///   reservation, and drop-copy handle for `account_id`;
+/// - do not run operations, configuration, or administration for that account
+///   concurrently with this call;
+/// - a pending request that has not been executed and holds no policy state is
+///   invisible to retirement. Executing it later acts on the account as new
+///   and, after id reuse, may act on someone else's account;
+/// - do not reuse `account_id` before this function returns `true`;
+/// - after `FinalizerFailed`, never reuse `account_id`, even if a later
+///   retirement attempt succeeds.
+///
+/// Success:
+/// - returns `true`; every policy removal committed;
+/// - both output pointers are left untouched.
+///
+/// Error:
+/// - returns `false` for both transport and domain failures;
+/// - if `engine` is null and `out_error` is not null, writes a caller-owned
+///   `OpenPitSharedString` that MUST be released with
+///   `openpit_destroy_shared_string`; `out_retirement_error` is untouched;
+/// - if the core returns a future variant the C model cannot represent, returns
+///   `false`, writes no domain error, and writes a transport error naming the
+///   unsupported variant through non-null `out_error`;
+/// - for a domain failure, if `out_retirement_error` is not null, writes a
+///   caller-owned `OpenPitAccountRetirementError` that MUST be released with
+///   `openpit_destroy_account_retirement_error`; `out_error` is untouched;
+/// - either output pointer may be null.
+pub extern "C" fn openpit_engine_retire_account(
+    engine: *mut OpenPitEngine,
+    account_id: OpenPitParamAccountId,
+    out_retirement_error: *mut *mut OpenPitAccountRetirementError,
+    out_error: OpenPitOutError,
+) -> bool {
+    let Some(engine) = engine_ref_or_error(engine, out_error) else {
+        return false;
+    };
+    let account_id = AccountId::from_u64(account_id);
+    match engine.inner.retire_account(account_id) {
+        Ok(()) => true,
+        Err(err) => {
+            let retirement_error = match OpenPitAccountRetirementError::new(err) {
+                Ok(error) => error,
+                Err(error) => {
+                    write_error(out_error, &error);
+                    return false;
+                }
+            };
+            if !out_retirement_error.is_null() {
+                unsafe {
+                    *out_retirement_error = Box::into_raw(Box::new(retirement_error));
+                }
+            }
+            false
+        }
+    }
+}
+
 /// Structured error returned by account-group registry operations.
 ///
 /// Ownership:
@@ -3254,6 +3548,7 @@ mod tests {
                 Some(push_counting_mutation),
                 None,
                 None,
+                None,
                 noop_free_user_data,
                 counters.as_user_data(),
                 std::ptr::null_mut(),
@@ -3548,6 +3843,7 @@ mod tests {
                 Some(perform_pre_trade_check_fn),
                 None,
                 None,
+                None,
                 noop_free_user_data,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -3709,6 +4005,7 @@ mod tests {
                 None,
                 Some(apply_execution_report_fn),
                 None,
+                None,
                 free_user_data_fn,
                 user_data,
                 out_error,
@@ -3731,6 +4028,7 @@ mod tests {
                 None,
                 None,
                 Some(apply_fn),
+                None,
                 free_user_data_fn,
                 user_data,
                 out_error,
@@ -3773,6 +4071,7 @@ mod tests {
                 Some(always_reject_pre_trade),
                 Some(null_apply_report),
                 None,
+                None,
                 noop_free_user_data,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -3803,6 +4102,7 @@ mod tests {
                 None,
                 Some(always_reject_missing_pre_trade),
                 Some(null_apply_report),
+                None,
                 None,
                 noop_free_user_data,
                 std::ptr::null_mut(),
@@ -5025,6 +5325,7 @@ mod tests {
                 None,
                 Some(record_fill_lock_apply),
                 None,
+                None,
                 noop_free_user_data,
                 (&mut observed as *mut ObservedFillLock).cast::<c_void>(),
                 std::ptr::null_mut(),
@@ -5088,6 +5389,56 @@ mod tests {
         openpit_destroy_engine(engine);
         // Release the caller-owned input lock built for this test.
         crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(input_lock);
+    }
+
+    #[test]
+    fn retire_account_succeeds_repeatedly_and_accepts_null_outputs() {
+        let engine = build_passthrough_engine();
+        let retirement_error_sentinel =
+            core::ptr::NonNull::<super::OpenPitAccountRetirementError>::dangling().as_ptr();
+        let transport_error_sentinel =
+            core::ptr::NonNull::<crate::string::OpenPitSharedString>::dangling().as_ptr();
+        let mut retirement_error = retirement_error_sentinel;
+        let mut transport_error = transport_error_sentinel;
+
+        assert!(super::openpit_engine_retire_account(
+            engine,
+            7,
+            &mut retirement_error,
+            &mut transport_error,
+        ));
+        assert_eq!(retirement_error, retirement_error_sentinel);
+        assert_eq!(transport_error, transport_error_sentinel);
+
+        assert!(super::openpit_engine_retire_account(
+            engine,
+            7,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ));
+
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn retire_account_null_engine_uses_only_transport_error() {
+        let retirement_error_sentinel =
+            core::ptr::NonNull::<super::OpenPitAccountRetirementError>::dangling().as_ptr();
+        let transport_error_sentinel =
+            core::ptr::NonNull::<crate::string::OpenPitSharedString>::dangling().as_ptr();
+        let mut retirement_error = retirement_error_sentinel;
+        let mut transport_error = transport_error_sentinel;
+
+        assert!(!super::openpit_engine_retire_account(
+            std::ptr::null_mut(),
+            7,
+            &mut retirement_error,
+            &mut transport_error,
+        ));
+        assert_eq!(retirement_error, retirement_error_sentinel);
+        assert_ne!(transport_error, transport_error_sentinel);
+        assert_eq!(shared_string_to_owned(transport_error), "engine is null");
+        crate::string::openpit_destroy_shared_string(transport_error);
     }
 
     #[test]

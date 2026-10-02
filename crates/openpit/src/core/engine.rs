@@ -20,6 +20,7 @@ use std::fmt::{Display, Formatter};
 use super::account_control::{AccountBlockHandle, AccountControl};
 use super::account_groups::AccountGroupsHandle;
 use super::account_outcome::{AccountAdjustmentBatchResult, AccountAdjustmentOutcome};
+use super::account_retirement::{AccountRetirementError, AccountRetirementPolicyRefusal};
 use super::accounts::Accounts;
 use super::engine_builder::EngineBuilder;
 use super::engine_trait::{EngineTrait, EngineTraitOf};
@@ -791,6 +792,77 @@ impl<Trait: EngineTrait> Engine<Trait> {
         Ok(AccountAdjustmentBatchResult {
             outcomes,
             account_blocks,
+        })
+    }
+
+    /// Forgets an account's zero, unused runtime state.
+    ///
+    /// Policies remove their account state through
+    /// [`PreTradePolicy::retire_account`]. The engine clears the account's
+    /// explicit currency, group membership, and own block of any origin.
+    /// Per-account policy configuration remains: a policy refuses while its
+    /// configuration names the account. Group-level and engine-wide blocks,
+    /// group currency, and settings of the separate market-data service remain.
+    /// An unknown or already-retired account is accepted as a no-op.
+    ///
+    /// A refusal removes nothing; only a failing rollback finalizer still arms
+    /// the kill switch, per the finalizer contract on
+    /// [`Mutation`](crate::Mutation). The check and removal run under the
+    /// engine's exclusive account-state transition, pausing writers for every
+    /// account, so retirement never erases non-zero financial state or a
+    /// tracked operation still in flight. Custom policy state is covered only
+    /// when that policy implements [`PreTradePolicy::retire_account`].
+    ///
+    /// # Caller contract
+    ///
+    /// Before retiring, finalize (commit or roll back) or drop every pre-trade
+    /// request, reservation, and drop-copy operation of the account. Do not run
+    /// operations, configuration, or account administration for the same
+    /// account concurrently with this call. The engine cannot see a request
+    /// that holds no policy state, such as a [`PreTradeRequest`] returned by
+    /// [`Self::start_pre_trade`] but not yet executed. Executing such a handle
+    /// after retirement acts on the account as if it were new and, after the
+    /// `AccountId` is reused, on someone else's account. Do not reuse the
+    /// `AccountId` until this method returns `Ok(())`.
+    /// `Ok(())` means every policy's removal committed.
+    ///
+    /// # Errors
+    ///
+    /// [`AccountRetirementError::Refused`] contains every refusing policy in
+    /// registration order; nothing was removed.
+    /// [`AccountRetirementError::FinalizerFailed`] means a commit finalizer
+    /// failed: policy state may be partly removed, the kill switch is armed,
+    /// and currency, membership, and the account block remain.
+    pub fn retire_account(&self, account_id: AccountId) -> Result<(), AccountRetirementError> {
+        let inner = &self.inner;
+        inner.account_currencies.with_state_transition(|| {
+            let mut mutations = Mutations::new();
+            let mut refusals = Vec::new();
+            for policy in &inner.pre_trade_policies {
+                if let Err(refusal) = policy.retire_account(account_id, &mut mutations) {
+                    refusals.push(AccountRetirementPolicyRefusal {
+                        policy: policy.name().to_owned(),
+                        refusal,
+                    });
+                }
+            }
+
+            if !refusals.is_empty() {
+                let rollback = mutations.rollback_all();
+                self.record_mutation_failure(Some(account_id), rollback.failure());
+                return Err(AccountRetirementError::Refused { refusals });
+            }
+
+            let commit = mutations.commit_all();
+            if commit.failed() {
+                self.record_mutation_failure(Some(account_id), &commit);
+                return Err(AccountRetirementError::FinalizerFailed);
+            }
+            inner.account_currencies.clear_account_currency(account_id);
+            inner.account_groups.retire_account(account_id);
+            inner.blocked_accounts.unblock_account(account_id);
+            // Retired looks new; sweeps skip; each request checks its barrier.
+            Ok(())
         })
     }
 }
@@ -3405,6 +3477,226 @@ mod tests {
         finalizer: FailingFinalizer,
     ) -> impl Fn(&mut Mutations) + 'static {
         move |mutations: &mut Mutations| mutations.push(failing_mutation(owner, finalizer))
+    }
+
+    struct RetirementFinalizerPolicy {
+        owner: MutationOwner,
+        finalizer: FailingFinalizer,
+        refusal: Option<crate::AccountRetirementRefusal>,
+    }
+
+    impl<Order, ExecutionReport, AccountAdjustment, Sync: crate::SyncMode>
+        PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
+        for RetirementFinalizerPolicy
+    {
+        fn name(&self) -> &str {
+            "retirement_finalizer"
+        }
+
+        fn retire_account(
+            &self,
+            _account: AccountId,
+            mutations: &mut Mutations,
+        ) -> Result<(), crate::AccountRetirementRefusal> {
+            mutations.push(failing_mutation(self.owner, self.finalizer));
+            self.refusal.map_or(Ok(()), Err)
+        }
+    }
+
+    #[test]
+    fn retire_success_clears_account_controls_and_currency() {
+        let account = AccountId::from_u64(PIPELINE_ACCOUNT);
+        let group = AccountGroupId::from_u32(42).expect("valid group");
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("noop"))
+            .build()
+            .expect("engine builds");
+        engine
+            .accounts()
+            .set_currency(account, Asset::new("USD").expect("valid asset"));
+        engine
+            .accounts()
+            .register_group(&[account], group)
+            .expect("register group");
+        engine.accounts().block(account, "admin block".to_owned());
+
+        assert_eq!(engine.retire_account(account), Ok(()));
+        assert_eq!(engine.accounts().currency_of(account), None);
+        assert_eq!(engine.accounts().group_of(account), None);
+        assert!(engine
+            .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+            .is_ok());
+    }
+
+    #[test]
+    fn retire_success_keeps_group_and_engine_wide_blocks() {
+        let account = AccountId::from_u64(PIPELINE_ACCOUNT);
+        let member = AccountId::from_u64(OTHER_ACCOUNT);
+        let group = AccountGroupId::from_u32(42).expect("valid group");
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("noop"))
+            .build()
+            .expect("engine builds");
+        engine
+            .accounts()
+            .register_group(&[account, member], group)
+            .expect("register group");
+        engine
+            .accounts()
+            .block_group(group, "group block".to_owned())
+            .expect("block group");
+        let mut mutations = Mutations::new();
+        mutations.push(failing_mutation(
+            MutationOwner::CustomPolicy,
+            FailingFinalizer::Commit,
+        ));
+        let failure = mutations.commit_all();
+        assert!(failure.failed());
+        engine.record_mutation_failure(None, &failure);
+
+        assert_eq!(engine.retire_account(account), Ok(()));
+        let unrelated = 88776655;
+        let rejects = match engine.start_pre_trade(order_for_account(unrelated)) {
+            Ok(_) => panic!("engine-wide block must survive retirement"),
+            Err(rejects) => rejects,
+        };
+        assert_mutation_failure_reject(&rejects[0]);
+
+        engine.accounts().unblock_all();
+        let rejects = match engine.start_pre_trade(order_for_account(OTHER_ACCOUNT)) {
+            Ok(_) => panic!("group block must survive retirement"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(rejects[0].reason, "group block");
+    }
+
+    #[test]
+    fn retire_engine_owned_commit_failure_keeps_account_controls_and_blocks_it() {
+        let account = AccountId::from_u64(PIPELINE_ACCOUNT);
+        let group = AccountGroupId::from_u32(42).expect("valid group");
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(RetirementFinalizerPolicy {
+                owner: MutationOwner::EngineOwned,
+                finalizer: FailingFinalizer::Commit,
+                refusal: None,
+            })
+            .build()
+            .expect("engine builds");
+        engine
+            .accounts()
+            .set_currency(account, Asset::new("USD").expect("valid asset"));
+        engine
+            .accounts()
+            .register_group(&[account], group)
+            .expect("register group");
+        assert_eq!(
+            engine.retire_account(account),
+            Err(crate::AccountRetirementError::FinalizerFailed)
+        );
+        assert_eq!(
+            engine.accounts().group_of(account),
+            Some(group),
+            "failed finalizer must keep membership"
+        );
+        assert_eq!(
+            engine.accounts().currency_of(account),
+            Some(Asset::new("USD").expect("valid asset"))
+        );
+        let rejects = match engine.start_pre_trade(order_for_account(PIPELINE_ACCOUNT)) {
+            Ok(_) => panic!("failed finalizer must keep account block"),
+            Err(rejects) => rejects,
+        };
+        assert_mutation_failure_reject(&rejects[0]);
+        assert!(engine
+            .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+            .is_ok());
+    }
+
+    #[test]
+    fn retire_failed_commit_keeps_a_preexisting_account_block() {
+        let account = AccountId::from_u64(PIPELINE_ACCOUNT);
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(RetirementFinalizerPolicy {
+                owner: MutationOwner::EngineOwned,
+                finalizer: FailingFinalizer::Commit,
+                refusal: None,
+            })
+            .build()
+            .expect("engine builds");
+        engine.accounts().block(account, "admin block".to_owned());
+        assert_eq!(
+            engine.retire_account(account),
+            Err(crate::AccountRetirementError::FinalizerFailed)
+        );
+        let rejects = match engine.start_pre_trade(order_for_account(PIPELINE_ACCOUNT)) {
+            Ok(_) => panic!("failed retirement must keep the original block"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(
+            rejects[0].reason, "admin block",
+            "failed finalizer must not forget the existing block"
+        );
+    }
+
+    #[test]
+    fn retire_custom_commit_failure_blocks_every_account() {
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(RetirementFinalizerPolicy {
+                owner: MutationOwner::CustomPolicy,
+                finalizer: FailingFinalizer::Commit,
+                refusal: None,
+            })
+            .build()
+            .expect("engine builds");
+        assert_eq!(
+            engine.retire_account(AccountId::from_u64(PIPELINE_ACCOUNT)),
+            Err(crate::AccountRetirementError::FinalizerFailed)
+        );
+        assert_kill_switch(
+            MutationOwner::CustomPolicy,
+            engine
+                .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                .err(),
+            engine
+                .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                .err(),
+        );
+    }
+
+    #[test]
+    fn retire_refusal_with_failed_rollback_keeps_refusal_and_arms_kill_switch() {
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(RetirementFinalizerPolicy {
+                owner: MutationOwner::CustomPolicy,
+                finalizer: FailingFinalizer::Rollback,
+                refusal: Some(crate::AccountRetirementRefusal::NonZeroState),
+            })
+            .build()
+            .expect("engine builds");
+        assert_eq!(
+            engine.retire_account(AccountId::from_u64(PIPELINE_ACCOUNT)),
+            Err(crate::AccountRetirementError::Refused {
+                refusals: vec![crate::AccountRetirementPolicyRefusal {
+                    policy: "retirement_finalizer".to_owned(),
+                    refusal: crate::AccountRetirementRefusal::NonZeroState,
+                }],
+            })
+        );
+        assert_kill_switch(
+            MutationOwner::CustomPolicy,
+            engine
+                .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                .err(),
+            engine
+                .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                .err(),
+        );
     }
 
     /// Asserts that the kill switch fired with the reach `owner` implies.

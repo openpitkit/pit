@@ -44,6 +44,7 @@ type fakeDriver struct {
 	executeCount        int64
 	reportCount         int64
 	adjustmentCount     int64
+	retireCount         int64
 	concurrentByAccount map[uint64]int64
 	maxConcurrent       map[uint64]int64
 	startDelay          time.Duration
@@ -135,6 +136,13 @@ func (d *fakeDriver) ApplyAccountAdjustment(
 	defer done()
 	atomic.AddInt64(&d.adjustmentCount, 1)
 	return accountadjustment.BatchResult{}, nil
+}
+
+func (d *fakeDriver) RetireAccount(accountID param.AccountID) error {
+	done := d.recordStart(accountID)
+	defer done()
+	atomic.AddInt64(&d.retireCount, 1)
+	return nil
 }
 
 func (*fakeDriver) Accounts() accounts.Accounts {

@@ -439,8 +439,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ///
     /// Unlike the settings retune, this does not take the configuration
     /// re-entrancy guard and does not touch the settings writer mutex: it writes
-    /// only the realized-P&L storage (its own lock) and runs no user closure, so
-    /// it can neither deadlock nor re-enter configuration.
+    /// the realized-P&L storage under the shared account-state writer lease and
+    /// runs no user closure.
     ///
     /// # Errors
     ///
@@ -457,11 +457,13 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ) -> Result<(), ConfigureError> {
         match self.registry().entry(name)? {
             ConfigEntry::PnlBoundsKillSwitch { realized, .. } => {
-                realized.with_mut(
-                    (account, settlement_asset),
-                    || Pnl::ZERO,
-                    |entry, _is_new| *entry = pnl,
-                );
+                self.inner.account_currencies.with_state_writer(|| {
+                    realized.with_mut(
+                        (account, settlement_asset),
+                        || Pnl::ZERO,
+                        |entry, _is_new| *entry = pnl,
+                    );
+                });
                 Ok(())
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<

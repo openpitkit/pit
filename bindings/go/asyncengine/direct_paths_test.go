@@ -43,6 +43,7 @@ type acceptingDriver struct {
 	executeCount int64
 	reportCount  int64
 	adjustCount  int64
+	retireCount  int64
 	startHook    func()
 	rejectStart  bool
 
@@ -205,6 +206,13 @@ func (d *acceptingDriver) ApplyAccountAdjustment(
 	defer done()
 	atomic.AddInt64(&d.adjustCount, 1)
 	return accountadjustment.BatchResult{}, nil
+}
+
+func (d *acceptingDriver) RetireAccount(accountID param.AccountID) error {
+	done := d.recordStart(accountID)
+	defer done()
+	atomic.AddInt64(&d.retireCount, 1)
+	return nil
 }
 
 func (*acceptingDriver) Accounts() accounts.Accounts {
@@ -582,6 +590,44 @@ func TestAsyncEngineApplyAccountAdjustmentHappyPath(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&driver.adjustmentCount); got != 1 {
 		t.Errorf("adjustmentCount = %d, want 1", got)
+	}
+}
+
+func TestAsyncEngineRetireAccountUsesAccountLane(t *testing.T) {
+	driver := newFakeDriver()
+	async, err := NewBuilder(driver).Dynamic().Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	accountID := param.NewAccountIDFromUint64(890)
+	entered := make(chan struct{})
+	releaseCh := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseCh) })
+	defer release()
+	blocking := async.Submit(context.Background(), accountID, func() error {
+		close(entered)
+		<-releaseCh
+		return nil
+	})
+	<-entered
+	retirement := async.RetireAccount(context.Background(), accountID)
+	if retirement.Done() || atomic.LoadInt64(&driver.retireCount) != 0 {
+		t.Fatal("retirement ran before preceding task left the account lane")
+	}
+	release()
+	if _, err := blocking.Await(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retirement.Await(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt64(&driver.retireCount) != 1 {
+		t.Fatalf("retirement calls = %d, want 1", driver.retireCount)
 	}
 }
 

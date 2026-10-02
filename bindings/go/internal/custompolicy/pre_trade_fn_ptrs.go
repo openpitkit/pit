@@ -48,6 +48,11 @@ extern OpenPitPretradeRejectList* pitPretradePreTradePolicyApplyAccountAdjustmen
     OpenPitPretradeAccountAdjustmentResult* out_result,
     void* user_data);
 
+extern uint8_t pitPretradePreTradePolicyRetireAccount(
+    OpenPitParamAccountId account_id,
+    OpenPitMutations* mutations,
+    void* user_data);
+
 extern void pitPretradePreTradePolicyClose(void* user_data);
 
 extern OpenPitPretradeRejectList* pitPretradePreTradePolicyCheckPreTradeStartDryRun(
@@ -74,6 +79,9 @@ static OpenPitPretradePreTradePolicyApplyExecutionReportFn
 static OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn
     openpit_pretrade_pre_trade_policy_apply_account_adjustment_fn = pitPretradePreTradePolicyApplyAccountAdjustment;
 
+static OpenPitPretradePreTradePolicyRetireAccountFn
+    openpit_pretrade_pre_trade_policy_retire_account_fn = pitPretradePreTradePolicyRetireAccount;
+
 static OpenPitPretradePreTradePolicyFreeUserDataFn
     openpit_pretrade_pre_trade_policy_free_user_data_fn = pitPretradePreTradePolicyClose;
 
@@ -99,6 +107,10 @@ static void* pitPretradePreTradePolicyApplyReportFnAddr(void) {
 
 static void* pitPretradePreTradePolicyApplyAccountAdjustmentFnAddr(void) {
     return &openpit_pretrade_pre_trade_policy_apply_account_adjustment_fn;
+}
+
+static void* pitPretradePreTradePolicyRetireAccountFnAddr(void) {
+    return &openpit_pretrade_pre_trade_policy_retire_account_fn;
 }
 
 static void* pitPretradePreTradePolicyFreeUserDataFnAddr(void) {
@@ -146,6 +158,12 @@ func PreTradePolicyApplyReportFnAddr() unsafe.Pointer {
 // Pass the result to native.CreatePretradeCustomPreTradePolicy.
 func PreTradePolicyApplyAccountAdjustmentFnAddr() unsafe.Pointer {
 	return C.pitPretradePreTradePolicyApplyAccountAdjustmentFnAddr()
+}
+
+// PreTradePolicyRetireAccountFnAddr returns the address of the account
+// retirement callback function pointer for native policy construction.
+func PreTradePolicyRetireAccountFnAddr() unsafe.Pointer {
+	return C.pitPretradePreTradePolicyRetireAccountFnAddr()
 }
 
 // PreTradePolicyFreeUserDataFnAddr returns the address of a

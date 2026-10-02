@@ -167,6 +167,56 @@ func EngineAccountGroup(engine Engine, account ParamAccountID) (ParamAccountGrou
 	return out, ok
 }
 
+// EngineRetireAccount forgets zero, unused state for one account. A domain
+// failure returns a caller-owned retirement error; a transport failure returns
+// an ordinary Go error.
+func EngineRetireAccount(engine Engine, account ParamAccountID) (AccountRetirementError, error) {
+	var retirementError AccountRetirementError
+	var outError SharedString
+	if !C.openpit_engine_retire_account(
+		engine, account, &retirementError,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		if retirementError != nil {
+			return retirementError, nil
+		}
+		return nil, consumeSharedStringAsError(outError, "openpit_engine_retire_account failed")
+	}
+	return nil, nil //nolint:nilnil // both nil signals success
+}
+
+func DestroyAccountRetirementError(err AccountRetirementError) {
+	C.openpit_destroy_account_retirement_error(err)
+}
+
+func AccountRetirementErrorGetKind(err AccountRetirementError) AccountRetirementErrorKind {
+	return C.openpit_account_retirement_error_get_kind(err)
+}
+
+func AccountRetirementErrorGetMessage(err AccountRetirementError) string {
+	return newStringView(C.openpit_account_retirement_error_get_message(err)).Safe()
+}
+
+func AccountRetirementErrorGetRefusalCount(err AccountRetirementError) int {
+	return int(C.openpit_account_retirement_error_get_refusal_count(err))
+}
+
+func AccountRetirementErrorGetRefusalPolicyName(err AccountRetirementError, index int) (string, bool) {
+	var view C.OpenPitStringView
+	if !C.openpit_account_retirement_error_get_refusal_policy_name(err, C.size_t(index), &view) { //nolint:gocritic // cgo accessor call is not a duplicated expression
+		return "", false
+	}
+	return newStringView(view).Safe(), true
+}
+
+func AccountRetirementErrorGetRefusalKind(err AccountRetirementError, index int) (AccountRetirementRefusalKind, bool) {
+	var kind AccountRetirementRefusalKind
+	if !C.openpit_account_retirement_error_get_refusal_kind(err, C.size_t(index), &kind) {
+		return 0, false
+	}
+	return kind, true
+}
+
 //------------------------------------------------------------------------------
 // Context group accessors
 

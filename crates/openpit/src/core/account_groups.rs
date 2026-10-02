@@ -230,6 +230,12 @@ where
         Ok(())
     }
 
+    /// Removes one account's explicit membership, if present.
+    pub(crate) fn retire_account(&self, account: AccountId) {
+        let _guard = self.guard.write_index();
+        self.memberships.remove(&account);
+    }
+
     /// Returns the group of `account`, or `None` when it is not registered.
     pub(crate) fn group_of(&self, account: AccountId) -> Option<AccountGroupId> {
         // Shared whole-map section: reads observe a consistent snapshot with

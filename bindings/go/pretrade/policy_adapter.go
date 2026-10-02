@@ -84,7 +84,9 @@ func NewSafeClientPreTradePolicy[
 ](
 	policy ClientPreTradePolicy[Order, Report],
 ) Policy {
-	return &safeClientPreTradePolicy[Order, Report]{policy: policy}
+	return withAccountRetirementPolicy(
+		&safeClientPreTradePolicy[Order, Report]{policy: policy}, policy,
+	)
 }
 
 // NewUnsafeFastClientPreTradePolicy adapts a client typed pre-trade policy
@@ -99,7 +101,21 @@ func NewUnsafeFastClientPreTradePolicy[
 ](
 	policy ClientPreTradePolicy[Order, Report],
 ) Policy {
-	return &unsafeFastClientPreTradePolicy[Order, Report]{policy: policy}
+	return withAccountRetirementPolicy(
+		&unsafeFastClientPreTradePolicy[Order, Report]{policy: policy}, policy,
+	)
+}
+
+type clientRetirementPolicy struct {
+	Policy
+	AccountRetirementPolicy
+}
+
+func withAccountRetirementPolicy(base Policy, client any) Policy {
+	if retirement, ok := client.(AccountRetirementPolicy); ok {
+		return &clientRetirementPolicy{base, retirement}
+	}
+	return base
 }
 
 type safeClientPreTradePolicy[

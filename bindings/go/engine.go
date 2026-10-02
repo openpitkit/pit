@@ -324,6 +324,38 @@ func (e *Engine) ApplyAccountAdjustment(
 	}, nil
 }
 
+// RetireAccount forgets an account's zero, unused policy state, explicit
+// currency, group membership, and own block. An unknown or already retired
+// account succeeds without a change. Per-account policy configuration remains;
+// a policy refuses while configuration names the account, state is non-zero,
+// an operation is in progress, or evaluation fails. A refusal removes nothing;
+// only a failing rollback callback still arms the engine kill switch, and the
+// refusal is still the returned error.
+//
+// Finalize or close every request, reservation, and drop-copy operation for
+// this account first. Do not run operations, configuration, or administration
+// for it concurrently. A pending unexecuted request can be invisible to this
+// call; executing it later acts on the account as new and, after ID reuse, on
+// someone else's account. Do not reuse the ID before this method succeeds.
+// After a finalizer failure, never reuse it, even after a later success.
+//
+// A domain failure is a *reject.AccountRetirementError. A finalizer failure
+// may leave policy state partly removed and arms the engine kill switch.
+func (e *Engine) RetireAccount(accountID param.AccountID) error {
+	retirementError, err := native.EngineRetireAccount(e.handle, accountID.Handle())
+	if err != nil {
+		return err
+	}
+	if retirementError != nil {
+		returnErr, conversionErr := reject.NewAccountRetirementErrorFromHandle(retirementError)
+		if conversionErr != nil {
+			return conversionErr
+		}
+		return returnErr
+	}
+	return nil
+}
+
 // Accounts returns an accessor for account-group management bound to this
 // engine. The returned value is a thin handle; it is valid for as long as the
 // engine is.

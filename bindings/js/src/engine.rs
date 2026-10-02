@@ -509,6 +509,8 @@ impl BuilderState {
 ///
 /// Built from [`JsEngineBuilder`] via `Engine.builder()`. The handle drives the
 /// two-stage pre-trade flow plus the post-trade and account-adjustment paths.
+/// Account retirement is not exposed in JavaScript. JavaScript custom policies
+/// are treated as holding no account-scoped state during retirement.
 ///
 /// The WASM binding is no-sync and every policy callback runs synchronously on
 /// the calling thread. While one of this engine's callbacks is running, this

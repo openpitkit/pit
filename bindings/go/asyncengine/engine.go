@@ -402,6 +402,51 @@ func (t *applyAdjustmentTask) abort(err error) {
 	t.f.Resolve(accountadjustment.BatchResult{}, err)
 }
 
+// RetireAccount enqueues retirement in accountID's lane. It forgets the
+// account's zero, unused policy state, explicit currency, group membership,
+// and own block. An unknown or already retired account succeeds unchanged.
+// A policy can refuse while configuration names the account, state is non-zero,
+// an operation is in progress, or evaluation fails. A refusal removes nothing;
+// only a failing rollback callback still arms the engine kill switch, and the
+// refusal is still the returned error.
+//
+// Finalize or close every request, reservation, and drop-copy operation for
+// this account before submission. Do not run operations, configuration, or
+// administration for it concurrently. The account lane does not serialize
+// administration routed through another account's lane, a group lane, or the
+// engine-wide lane, nor work submitted directly to the underlying engine or
+// driver.
+// A pending unexecuted request can be invisible to retirement; executing it
+// later acts on the account as new and, after ID reuse, on someone else's
+// account. Do not reuse the ID before the future succeeds.
+//
+// A domain failure is a *reject.AccountRetirementError. A finalizer failure
+// may leave policy state partly removed and arms the engine kill switch.
+// Never reuse the ID after a finalizer failure, even after a later success.
+func (e *AsyncEngine) RetireAccount(
+	ctx context.Context,
+	accountID param.AccountID,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &retireAccountTask{f: f, engine: e, accountID: accountID}
+	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+type retireAccountTask struct {
+	f         *future.Future[struct{}]
+	engine    *AsyncEngine
+	accountID param.AccountID
+}
+
+func (t *retireAccountTask) run() {
+	t.f.Resolve(struct{}{}, t.engine.driver.RetireAccount(t.accountID))
+}
+
+func (t *retireAccountTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
 // Submit enqueues an arbitrary caller-supplied function into the queue
 // for accountID. Use it to run client-side work atomically with respect
 // to engine calls on the same account (for example, "execute this start,

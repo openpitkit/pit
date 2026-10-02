@@ -85,6 +85,8 @@ func (*rejectDriver) ApplyAccountAdjustment(
 	return accountadjustment.BatchResult{}, nil
 }
 
+func (*rejectDriver) RetireAccount(param.AccountID) error { return nil }
+
 func (*rejectDriver) Accounts() accounts.Accounts {
 	return accounts.Accounts{}
 }
@@ -143,6 +145,8 @@ func (*transportErrorDriver) ApplyAccountAdjustment(
 ) (accountadjustment.BatchResult, error) {
 	return accountadjustment.BatchResult{}, nil
 }
+
+func (*transportErrorDriver) RetireAccount(param.AccountID) error { return nil }
 
 func (*transportErrorDriver) Accounts() accounts.Accounts {
 	return accounts.Accounts{}

@@ -25,7 +25,8 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 )
 
-// Mutations is a collection of commit/rollback callbacks registered during a pre-trade check.
+// Mutations is a collection of commit/rollback callbacks registered during a
+// pre-trade check or an account-retirement check.
 type Mutations struct{ handle native.Mutations }
 
 // NewMutationsFromHandle creates a Mutations from a native handle.
@@ -42,20 +43,26 @@ func NewMutationsFromHandle(handle native.Mutations) Mutations {
 // A rollback also runs for mutations whose commit was never reached, because
 // their tentative state was already applied.
 //
+// In RetireAccount, the hook only verifies the account state and registers
+// removals. Commit applies each removal for the first time; rollback has
+// nothing to undo. The engine finalizes these mutations inside RetireAccount,
+// which returns no mutation handle.
+//
 // Neither callback has the right to fail: by the time a finalizer runs the
-// decision is already made and the state it finalizes was applied eagerly, so
-// there is nothing left to compensate. A callback panic is recovered at the SDK
-// boundary and reported to the core as exactly such a failure. That failure
-// never fails the void Commit or Rollback call that ran the callback, and is
-// never discarded either: it arms the engine kill switch. A mutation registered
-// from Go belongs to a custom policy whose state reach the engine cannot bound,
-// so EVERY account is blocked, not only the order's own. Nothing reports the
-// block to the finalizing caller; it surfaces when the next pre-trade call is
-// rejected with SystemUnavailable, and an operator lifts it with UnblockAll on
-// the engine's Accounts accessor, which leaves accounts and groups blocked
-// individually untouched. A failure reported while the engine compensates a
-// fatal drop-copy evaluation exit additionally appends SystemUnavailable to
-// that call's rejects.
+// decision is already made and there is nothing left to compensate. A callback
+// panic is recovered at the SDK boundary and reported to the core as exactly
+// such a failure. It arms the engine kill switch. A mutation registered from
+// Go belongs to a custom policy whose state reach the engine cannot bound,
+// so EVERY account is blocked, not only the order's own.
+//
+// Ordinary void Commit and Rollback calls do not report this failure; the
+// next pre-trade call is rejected with SystemUnavailable. RetireAccount instead
+// returns a FinalizerFailed domain error after a commit callback failure, with
+// no policy refusals. An operator lifts the kill switch with UnblockAll on the
+// engine's Accounts accessor, which leaves individual account and group blocks
+// untouched. A failure reported while the engine compensates a fatal drop-copy
+// evaluation exit additionally appends SystemUnavailable to that call's
+// rejects.
 func (m Mutations) Push(commit, rollback func()) error {
 	if commit == nil {
 		return errors.New("mutation commit callback is nil")

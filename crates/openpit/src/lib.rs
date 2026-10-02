@@ -84,7 +84,8 @@ pub use core::{
     WithOrderPosition,
 };
 pub use core::{
-    AccountBlockError, AccountBlockHandle, AccountControl, AccountGroupError, AccountSync,
+    AccountBlockError, AccountBlockHandle, AccountControl, AccountGroupError,
+    AccountRetirementError, AccountRetirementPolicyRefusal, AccountRetirementRefusal, AccountSync,
     AccountSyncHandle, AccountSyncHandleWeak, Accounts, Configurator, ConfigureError, EngineTrait,
     EngineTraitOf, FullSync, LocalSync, SyncMode,
 };

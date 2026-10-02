@@ -198,6 +198,18 @@ pub struct SpotFundsSettings {
 }
 
 impl SpotFundsSettings {
+    pub(crate) fn references_account(&self, account_id: AccountId) -> bool {
+        self.account_overrides
+            .keys()
+            .any(|(_, account)| *account == account_id)
+            || self.account_limit_modes.contains_key(&account_id)
+            || self
+                .position_limits
+                .keys()
+                .any(|(account, _)| *account == account_id)
+            || self.pnl_account_barriers.contains_key(&account_id)
+    }
+
     /// Builds the cascade from the full set of configuration parameters.
     ///
     /// Pass `SpotFundsPricingSource::Mark` for the default source and `[]` (or

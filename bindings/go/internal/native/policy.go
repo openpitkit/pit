@@ -302,9 +302,14 @@ func CreatePretradeCustomPreTradePolicy(
 	performPreTradeCheckFnAddr unsafe.Pointer,
 	applyExecutionReportFnAddr unsafe.Pointer,
 	applyAccountAdjustmentFnAddr unsafe.Pointer,
+	retireAccountFnAddr unsafe.Pointer,
 	freeUserDataFnAddr unsafe.Pointer,
 	userData unsafe.Pointer,
 ) (PretradePreTradePolicy, error) {
+	var retireAccountFn C.OpenPitPretradePreTradePolicyRetireAccountFn
+	if retireAccountFnAddr != nil {
+		retireAccountFn = *(*C.OpenPitPretradePreTradePolicyRetireAccountFn)(retireAccountFnAddr)
+	}
 	var outError SharedString
 	p := C.openpit_create_pretrade_custom_pre_trade_policy(
 		importString(name),
@@ -313,6 +318,7 @@ func CreatePretradeCustomPreTradePolicy(
 		*(*C.OpenPitPretradePreTradePolicyPerformPreTradeCheckFn)(performPreTradeCheckFnAddr),
 		*(*C.OpenPitPretradePreTradePolicyApplyExecutionReportFn)(applyExecutionReportFnAddr),
 		*(*C.OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn)(applyAccountAdjustmentFnAddr),
+		retireAccountFn,
 		*(*C.OpenPitPretradePreTradePolicyFreeUserDataFn)(freeUserDataFnAddr),
 		userData,
 		C.OpenPitOutError(&outError), //nolint:gocritic
@@ -339,6 +345,7 @@ func CreatePretradeCustomPreTradePolicyWithDryRun(
 	performPreTradeCheckDryRunFnAddr unsafe.Pointer,
 	applyExecutionReportFnAddr unsafe.Pointer,
 	applyAccountAdjustmentFnAddr unsafe.Pointer,
+	retireAccountFnAddr unsafe.Pointer,
 	freeUserDataFnAddr unsafe.Pointer,
 	userData unsafe.Pointer,
 ) (PretradePreTradePolicy, error) {
@@ -354,6 +361,10 @@ func CreatePretradeCustomPreTradePolicyWithDryRun(
 			performPreTradeCheckDryRunFnAddr,
 		)
 	}
+	var retireAccountFn C.OpenPitPretradePreTradePolicyRetireAccountFn
+	if retireAccountFnAddr != nil {
+		retireAccountFn = *(*C.OpenPitPretradePreTradePolicyRetireAccountFn)(retireAccountFnAddr)
+	}
 
 	var outError SharedString
 	p := C.openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
@@ -365,6 +376,7 @@ func CreatePretradeCustomPreTradePolicyWithDryRun(
 		performDryRun,
 		*(*C.OpenPitPretradePreTradePolicyApplyExecutionReportFn)(applyExecutionReportFnAddr),
 		*(*C.OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn)(applyAccountAdjustmentFnAddr),
+		retireAccountFn,
 		*(*C.OpenPitPretradePreTradePolicyFreeUserDataFn)(freeUserDataFnAddr),
 		userData,
 		C.OpenPitOutError(&outError), //nolint:gocritic

@@ -52,6 +52,7 @@ mod pnl;
 mod position_limit;
 mod pre_trade;
 mod rejects;
+mod retirement;
 mod rollback;
 mod views;
 
@@ -429,6 +430,19 @@ fn release_account_pnl_lease<StorageFactory>(
 /// fixed for the policy's lifetime. Without it, market orders (those with
 /// `price=None`) are rejected with
 /// [`crate::pretrade::RejectCode::UnsupportedOrderType`].
+///
+/// # Account retirement
+///
+/// Account overrides, limit modes, position limits, or P&L barriers refuse
+/// with `ConfigurationReferencesAccount`. Active holdings mutations, P&L
+/// leases, or assertions refuse with `OperationInProgress`. Nonzero holdings,
+/// a cost basis, or nonzero or halted account or position P&L refuse with
+/// `NonZeroState`. Use `Configurator::set_spot_funds_account_pnl` to zero
+/// account P&L and `Engine::apply_account_adjustment` to zero holdings and
+/// position P&L; flatten positions to clear their cost basis. On success,
+/// the policy forgets zero holdings, zero account P&L, and P&L leases. See
+/// [`Engine::retire_account`](crate::Engine::retire_account) for the
+/// engine-wide contract.
 pub struct SpotFundsPolicy<Sync, MarketDataSyncMode>
 where
     Sync: SyncMode,
@@ -821,6 +835,14 @@ where
 
     fn policy_group_id(&self) -> PolicyGroupId {
         self.group_id()
+    }
+
+    fn retire_account(
+        &self,
+        account_id: AccountId,
+        mutations: &mut Mutations,
+    ) -> Result<(), crate::core::AccountRetirementRefusal> {
+        self.retire_account_state(account_id, mutations)
     }
 
     #[allow(private_interfaces)]

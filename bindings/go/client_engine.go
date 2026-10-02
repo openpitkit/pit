@@ -159,6 +159,12 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyAccountAdjustment(
 	return result, err
 }
 
+// RetireAccount forgets zero, unused state for accountID. It follows the
+// same caller contract and returns the same errors as Engine.RetireAccount.
+func (e *ClientEngine[Order, Report, Adjustment]) RetireAccount(accountID param.AccountID) error {
+	return e.engine.RetireAccount(accountID)
+}
+
 // Accounts returns an accessor for account-group management bound to this
 // engine. Account-group membership is keyed by account id and is independent of
 // the client payload types, so the accessor is the same one the standard Engine

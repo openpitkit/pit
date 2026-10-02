@@ -45,6 +45,8 @@ pub use policy::{
     OpenPitPretradePreTradePolicyApplyExecutionReportFn,
     OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyFreeUserDataFn,
     OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,
+    OpenPitPretradePreTradePolicyRetireAccountDecision,
+    OpenPitPretradePreTradePolicyRetireAccountFn,
 };
 
 use string::OpenPitStringView;

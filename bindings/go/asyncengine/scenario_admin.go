@@ -40,6 +40,12 @@ type UnblockHooks[State any] struct {
 	OnUnblocked func(context.Context, State) error
 }
 
+// RetireAccountHooks handles successful retirement of the source account.
+type RetireAccountHooks[State any] struct {
+	// OnRetired runs after the driver has retired the account.
+	OnRetired func(context.Context, State) error
+}
+
 // RegisterAccountGroupHooks handles account-group registration.
 // A successful membership change can invalidate stored P&L and cost basis and
 // can latch account blocks before OnRegistered runs.
@@ -145,6 +151,51 @@ func (c *ChainBuilder[State]) UnblockAccount(
 		_ *pendingFinalizer,
 	) (bool, error) {
 		return false, task.unblockAccount(ctx, state, hooks)
+	}
+	c.steps = append(c.steps, newChainStep(validate, execute))
+	return c
+}
+
+// RetireAccount retires the source account and runs its result hook. It forgets
+// zero, unused policy state, explicit currency, group membership, and the own
+// block. An unknown or already retired account succeeds unchanged. A policy
+// can refuse for configuration, non-zero state, an operation in progress, or
+// failed evaluation. A refusal removes nothing; only a failing rollback
+// callback still arms the engine kill switch, and the refusal is still the
+// returned error.
+//
+// Finalize or close every request, reservation, and drop-copy operation for
+// this account before running the chain. Do not run operations, configuration,
+// or administration for it concurrently. The source account lane does not
+// serialize administration routed through another account's lane, a group
+// lane, or the engine-wide lane, nor work submitted directly to the underlying
+// engine or driver. A pending unexecuted request may be invisible to retirement
+// and can act on a newly reused ID. Do not reuse the ID before the chain
+// succeeds.
+//
+// A domain failure wraps *reject.AccountRetirementError. A finalizer failure
+// may leave policy state partly removed and arms the engine kill switch. Never
+// reuse the ID after a finalizer failure, even after a later success. An
+// OnRetired error fails the chain after the account has already been retired.
+func (c *ChainBuilder[State]) RetireAccount(
+	hooks RetireAccountHooks[State],
+) *ChainBuilder[State] {
+	validate := func(sourceKind chainSourceKind) error {
+		if err := requireAccountSource(sourceKind); err != nil {
+			return err
+		}
+		if hooks.OnRetired == nil {
+			return incompleteAdministrativeHook("RetireAccount.OnRetired")
+		}
+		return nil
+	}
+	execute := func(
+		ctx context.Context,
+		task *chainTask[State],
+		state State,
+		_ *pendingFinalizer,
+	) (bool, error) {
+		return false, task.retireAccount(ctx, state, hooks)
 	}
 	c.steps = append(c.steps, newChainStep(validate, execute))
 	return c
@@ -492,6 +543,21 @@ func (t *chainTask[State]) unblockAccount(
 	t.engine.driver.Accounts().Unblock(t.plan.accountID)
 	if err := hooks.OnUnblocked(ctx, state); err != nil {
 		return fmt.Errorf("async chain account unblocked hook: %w", err)
+	}
+	return nil
+}
+
+func (t *chainTask[State]) retireAccount(
+	ctx context.Context,
+	state State,
+	hooks RetireAccountHooks[State],
+) error {
+	t.retryUnsafe = true
+	if err := t.engine.driver.RetireAccount(t.plan.accountID); err != nil {
+		return fmt.Errorf("async chain retire account: %w", err)
+	}
+	if err := hooks.OnRetired(ctx, state); err != nil {
+		return fmt.Errorf("async chain account retired hook: %w", err)
 	}
 	return nil
 }

@@ -22,7 +22,7 @@ use super::{
     PolicyRuntimeConfiguration, PostTradeContext, PostTradeResult, PreTradeContext, Reject,
     RejectCode, RejectScope, Rejects,
 };
-use crate::core::SyncMode;
+use crate::core::{AccountRetirementRefusal, SyncMode};
 use crate::param::AccountId;
 use crate::{AccountAdjustmentContext, Mutations};
 
@@ -264,6 +264,38 @@ where
         _mutations: &mut Mutations,
     ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         Ok(PolicyAccountAdjustmentResult::default())
+    }
+
+    /// Checks whether this policy can forget all state of `account_id`.
+    ///
+    /// [`Engine::retire_account`](crate::Engine::retire_account) calls the hook
+    /// for every registered policy in registration order. The policy verifies
+    /// that its account-scoped state is zero and not in use, then registers its
+    /// removal through `mutations` as commit callbacks. The engine commits the
+    /// collected mutations only if every policy accepts; on refusal it rolls
+    /// them back and removes nothing. This hook must not remove state directly.
+    ///
+    /// The default accepts and registers nothing. It declares that the policy
+    /// holds no account-scoped state. A policy that keeps any state keyed by
+    /// account MUST implement this hook; otherwise that state silently survives
+    /// retirement and a reused `AccountId` inherits it.
+    ///
+    /// The engine holds its exclusive account-state transition while this hook
+    /// and its registered callbacks run, pausing every account-state writer.
+    /// Keep both quick. Neither may call engine state-changing operations
+    /// (pre-trade, execution reports, account adjustments, account
+    /// administration, or configuration): that would deadlock.
+    ///
+    /// # Errors
+    ///
+    /// Return `Err(refusal)` with the most specific
+    /// [`AccountRetirementRefusal`] kind.
+    fn retire_account(
+        &self,
+        _account_id: AccountId,
+        _mutations: &mut Mutations,
+    ) -> Result<(), AccountRetirementRefusal> {
+        Ok(())
     }
 }
 

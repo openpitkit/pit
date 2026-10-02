@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::{HasAccountId, HasInstrument};
+use crate::core::{AccountRetirementRefusal, HasAccountId, HasInstrument};
 use crate::param::{AccountId, Asset};
 use crate::pretrade::policy::{missing_required_field_reject, PolicyGroupId, PolicyName};
 use crate::pretrade::start_pre_trade_time::start_pre_trade_now;
@@ -30,6 +30,7 @@ use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 use crate::storage::{ConfigCell, Storage, StorageBuilder};
 use crate::time::Instant;
+use crate::{Mutation, Mutations};
 
 type StoragePolicy<LPF> = <LPF as crate::storage::LockingPolicyFactory>::Policy;
 type TimestampStorage<K, LPF> = Storage<K, VecDeque<Instant>, StoragePolicy<LPF>>;
@@ -146,8 +147,10 @@ struct RateLimitSlot {
 /// policy keyed per account rather than in these settings. Clearing an account
 /// or account+asset barrier leaves that key's log in storage, including when
 /// the last barrier is cleared. Re-adding the key resumes counting the orders
-/// still inside its configured window. A re-added broker or asset barrier
-/// starts a fresh window.
+/// still inside its configured window unless the account was retired:
+/// [`Engine::retire_account`](crate::Engine::retire_account) deletes its logs
+/// once no barrier names it, so re-added barriers start with empty logs.
+/// A re-added broker or asset barrier starts a fresh window.
 ///
 /// All axes may be empty; the policy then admits every order. Barriers can
 /// be added later through [`Engine::configure`](crate::Engine::configure).
@@ -448,6 +451,14 @@ impl AtomicWindowCounter {
 ///   [`Engine::configure`](crate::Engine::configure);
 /// - duplicate keys within an axis: last-write-wins (no error).
 ///
+/// # Account retirement
+///
+/// Account or account+asset barriers refuse with
+/// `ConfigurationReferencesAccount`. On success, the policy forgets the
+/// account's sliding-window logs on both axes. See
+/// [`Engine::retire_account`](crate::Engine::retire_account) for the
+/// engine-wide contract.
+///
 /// # Examples
 ///
 /// ```rust
@@ -499,8 +510,13 @@ where
     epoch: Instant,
     settings:
         <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<RateLimitSettings>,
-    per_account_timestamps: TimestampStorage<AccountId, LockingPolicyFactory>,
-    per_account_asset_timestamps: TimestampStorage<(AccountId, Asset), LockingPolicyFactory>,
+    per_account_timestamps: <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        TimestampStorage<AccountId, LockingPolicyFactory>,
+    >,
+    per_account_asset_timestamps:
+        <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+            TimestampStorage<(AccountId, Asset), LockingPolicyFactory>,
+        >,
 }
 
 impl<LockingPolicyFactory> RateLimitPolicy<LockingPolicyFactory>
@@ -533,8 +549,10 @@ where
         // counters tied to its own epoch.
         settings.rearm();
 
-        let per_account_timestamps = storage_builder.create_for_bound_key();
-        let per_account_asset_timestamps = storage_builder.create_for_bound_key();
+        let per_account_timestamps =
+            LockingPolicyFactory::new_shared(storage_builder.create_for_bound_key());
+        let per_account_asset_timestamps =
+            LockingPolicyFactory::new_shared(storage_builder.create_for_bound_key());
 
         Self {
             group_id: DEFAULT_POLICY_GROUP_ID,
@@ -588,6 +606,12 @@ where
     LockingPolicyFactory:
         crate::storage::LockingPolicyFactory + crate::storage::CreateStorageFor<AccountId>,
     Sync: crate::core::SyncMode<StorageLockingPolicyFactory = LockingPolicyFactory>,
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        TimestampStorage<AccountId, LockingPolicyFactory>,
+    >: 'static,
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        TimestampStorage<(AccountId, Asset), LockingPolicyFactory>,
+    >: 'static,
 {
     fn name(&self) -> &str {
         Self::NAME
@@ -595,6 +619,41 @@ where
 
     fn policy_group_id(&self) -> PolicyGroupId {
         self.group_id
+    }
+
+    fn retire_account(
+        &self,
+        account_id: AccountId,
+        mutations: &mut Mutations,
+    ) -> Result<(), AccountRetirementRefusal> {
+        if self.settings.with(|settings| {
+            settings.account_limits.contains_key(&account_id)
+                || settings
+                    .account_asset_limits
+                    .keys()
+                    .any(|(account, _)| *account == account_id)
+        }) {
+            return Err(AccountRetirementRefusal::ConfigurationReferencesAccount);
+        }
+
+        let keys: Vec<_> = self
+            .per_account_asset_timestamps
+            .keys()
+            .into_iter()
+            .filter(|(account, _)| *account == account_id)
+            .collect();
+        let per_account_timestamps = self.per_account_timestamps.clone();
+        let per_account_asset_timestamps = self.per_account_asset_timestamps.clone();
+        mutations.push(Mutation::new(
+            move || {
+                per_account_timestamps.remove(&account_id);
+                for key in keys {
+                    per_account_asset_timestamps.remove(&key);
+                }
+            },
+            || {},
+        ));
+        Ok(())
     }
 
     #[allow(private_interfaces)]
@@ -2058,6 +2117,173 @@ mod tests {
         policy_from(account_asset_settings(
             account_id, settlement, max_orders, window,
         ))
+    }
+
+    #[test]
+    fn retire_account_window_log_is_kept_on_rollback_and_removed_on_commit() {
+        let target = account(99224416);
+        let other = account(11223344);
+        let policy = policy_from(
+            RateLimitSettings::new(
+                None,
+                [],
+                [target, other].map(|account_id| RateLimitAccountBarrier {
+                    limit: RateLimit {
+                        max_orders: 10,
+                        window: Duration::from_secs(3600),
+                    },
+                    account_id,
+                }),
+                [],
+            )
+            .expect("valid barriers"),
+        );
+        let now = Instant::now();
+        for id in [target, other] {
+            check_at(&policy, &order(id), now).expect("order passes");
+        }
+        assert!(policy
+            .per_account_timestamps
+            .with(&target, |_| ())
+            .is_some());
+        let mut mutations = crate::Mutations::new();
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        policy
+            .settings
+            .update(|settings| settings.set_account_barriers([]))
+            .expect("clear account barriers");
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Ok(())
+        );
+        let _ = mutations.rollback_all();
+        assert!(policy
+            .per_account_timestamps
+            .with(&target, |_| ())
+            .is_some());
+
+        let mut mutations = crate::Mutations::new();
+        <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+            &policy,
+            target,
+            &mut mutations,
+        )
+        .expect("unconfigured account retires");
+        assert!(!mutations.commit_all().failed());
+        assert!(policy
+            .per_account_timestamps
+            .with(&target, |_| ())
+            .is_none());
+        assert!(policy.per_account_timestamps.with(&other, |_| ()).is_some());
+    }
+
+    #[test]
+    fn retire_account_asset_window_log_is_kept_on_rollback_and_removed_on_commit() {
+        let target = account(99224416);
+        let other = account(11223344);
+        let usd = Asset::new("USD").expect("valid asset");
+        let eur = Asset::new("EUR").expect("valid asset");
+        let policy = policy_from(
+            RateLimitSettings::new(
+                None,
+                [],
+                [],
+                [
+                    (target, usd.clone()),
+                    (target, eur.clone()),
+                    (other, usd.clone()),
+                ]
+                .map(|(account_id, settlement_asset)| {
+                    RateLimitAccountAssetBarrier {
+                        limit: RateLimit {
+                            max_orders: 10,
+                            window: Duration::from_secs(3600),
+                        },
+                        account_id,
+                        settlement_asset,
+                    }
+                }),
+            )
+            .expect("valid barriers"),
+        );
+        let now = Instant::now();
+        for id in [target, other] {
+            check_at(&policy, &order(id), now).expect("order passes");
+        }
+        let mut eur_order = order(target);
+        eur_order.instrument =
+            Instrument::new(Asset::new("AAPL").expect("valid asset"), eur.clone());
+        check_at(&policy, &eur_order, now).expect("EUR order passes");
+        let target_keys = [(target, usd.clone()), (target, eur)];
+        let other_key = (other, usd);
+        for key in &target_keys {
+            assert!(policy
+                .per_account_asset_timestamps
+                .with(key, |_| ())
+                .is_some());
+        }
+        let mut mutations = crate::Mutations::new();
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        policy
+            .settings
+            .update(|settings| settings.set_account_asset_barriers([]))
+            .expect("clear account asset barriers");
+        <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+            &policy,
+            target,
+            &mut mutations,
+        )
+        .expect("unconfigured account retires");
+        let _ = mutations.rollback_all();
+        for key in &target_keys {
+            assert!(policy
+                .per_account_asset_timestamps
+                .with(key, |_| ())
+                .is_some());
+        }
+
+        let mut mutations = crate::Mutations::new();
+        <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+            &policy,
+            target,
+            &mut mutations,
+        )
+        .expect("unconfigured account retires");
+        assert!(!mutations.commit_all().failed());
+        for key in &target_keys {
+            assert!(policy
+                .per_account_asset_timestamps
+                .with(key, |_| ())
+                .is_none());
+        }
+        assert!(policy
+            .per_account_asset_timestamps
+            .with(&other_key, |_| ())
+            .is_some());
     }
 
     /// The account axis takes the operation's account from the context, so the

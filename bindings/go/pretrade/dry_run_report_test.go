@@ -23,6 +23,7 @@ import (
 
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/reject"
 	"go.openpit.dev/openpit/tx"
 )
@@ -304,6 +305,40 @@ func TestCustomPolicyWithDryRunImplementsDryRunPolicy(t *testing.T) {
 	wrapped := NewSafeClientPreTradePolicy(policy)
 	if _, ok := any(wrapped).(DryRunPolicy); ok {
 		t.Fatal("adapter unexpectedly satisfies DryRunPolicy")
+	}
+}
+
+type retirementClientPayloadTestPolicy struct{ *clientPayloadTestPolicy }
+
+func (*retirementClientPayloadTestPolicy) RetireAccount(
+	param.AccountID, tx.Mutations,
+) AccountRetirementDecision {
+	return AccountRetirementAccept
+}
+
+func TestClientPolicyAdaptersExposeRetirementOnlyWhenImplemented(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wrap func(ClientPreTradePolicy[clientPayloadTestOrder, clientPayloadTestReport]) Policy
+	}{
+		{"safe", NewSafeClientPreTradePolicy[clientPayloadTestOrder, clientPayloadTestReport]},
+		{"unsafe", NewUnsafeFastClientPreTradePolicy[clientPayloadTestOrder, clientPayloadTestReport]},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			without := test.wrap(&clientPayloadTestPolicy{})
+			if _, ok := without.(AccountRetirementPolicy); ok {
+				t.Fatal("adapter without retirement hook exposes AccountRetirementPolicy")
+			}
+			with := test.wrap(&retirementClientPayloadTestPolicy{
+				clientPayloadTestPolicy: &clientPayloadTestPolicy{},
+			})
+			if _, ok := with.(AccountRetirementPolicy); !ok {
+				t.Fatal("adapter with retirement hook hides AccountRetirementPolicy")
+			}
+			if _, ok := with.(DryRunPolicy); ok {
+				t.Fatal("retirement adapter unexpectedly exposes DryRunPolicy")
+			}
+		})
 	}
 }
 

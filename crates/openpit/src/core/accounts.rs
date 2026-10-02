@@ -271,7 +271,7 @@ where
             .with_mut(account, || initial_currency, |slot, _| *slot = currency);
     }
 
-    fn clear_account_currency(&self, account: AccountId) {
+    pub(crate) fn clear_account_currency(&self, account: AccountId) {
         self.accounts.remove(&account);
     }
 

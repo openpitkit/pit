@@ -32,7 +32,10 @@ use openpit::pretrade::{
     Rejects,
 };
 use openpit::storage::StorageBuilder;
-use openpit::{AccountAdjustmentContext, Mutation, Mutations, PolicyAccountAdjustmentResult};
+use openpit::{
+    AccountAdjustmentContext, AccountRetirementRefusal, Mutation, Mutations,
+    PolicyAccountAdjustmentResult,
+};
 
 use crate::OpenPitStringView;
 use crate::{AccountAdjustment, ExecutionReport, Order};
@@ -63,6 +66,8 @@ pub use custom::{
     OpenPitPretradePreTradePolicyApplyExecutionReportFn,
     OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyFreeUserDataFn,
     OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,
+    OpenPitPretradePreTradePolicyRetireAccountDecision,
+    OpenPitPretradePreTradePolicyRetireAccountFn,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -496,6 +501,14 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         self.inner
             .apply_account_adjustment(ctx, account_id, adjustment, mutations)
     }
+
+    fn retire_account(
+        &self,
+        account_id: openpit::param::AccountId,
+        mutations: &mut Mutations,
+    ) -> Result<(), AccountRetirementRefusal> {
+        self.inner.retire_account(account_id, mutations)
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -607,11 +620,16 @@ pub extern "C" fn openpit_engine_builder_add_pre_trade_policy(
 /// - `commit_fn` and `rollback_fn` must remain callable until one of them is
 ///   executed.
 /// - `user_data` is passed to both callbacks.
-/// - Apply tentative state before registration. Pre-trade and drop-copy
-///   finalization each run exactly one callback per mutation, when the caller
-///   commits or rolls back the returned handle. A fatal drop-copy evaluation
-///   reject runs every collected `rollback_fn` instead, including mutations
-///   whose `commit_fn` was not reached.
+/// - Except during account retirement, apply tentative state before
+///   registration. Pre-trade and drop-copy finalization each run exactly one
+///   callback per mutation, when the caller commits or rolls back the returned
+///   handle. A fatal drop-copy evaluation reject runs every collected
+///   `rollback_fn` instead, including mutations whose `commit_fn` was not
+///   reached.
+/// - For account retirement, do not remove state before registration. Inside
+///   `openpit_engine_retire_account`, `commit_fn` applies the removal for the
+///   first time and `rollback_fn` has nothing to undo. That call finalizes the
+///   mutations itself and returns no handle.
 /// - Neither callback may fail. A failure reported by either one never fails the
 ///   void commit or rollback call; it arms the engine kill switch. A mutation
 ///   registered here is a custom-policy mutation, so that kill switch blocks
@@ -765,6 +783,7 @@ mod tests {
                 perform_pre_trade_check_dry_run_fn: None,
                 apply_execution_report_fn: Some(custom_apply_report_fn),
                 apply_account_adjustment_fn: None,
+                retire_account_fn: None,
                 free_user_data_fn: custom_free_user_data_fn,
                 user_data,
             })
@@ -868,6 +887,7 @@ mod tests {
                 perform_pre_trade_check_dry_run_fn: None,
                 apply_execution_report_fn: Some(custom_apply_report_fn),
                 apply_account_adjustment_fn: None,
+                retire_account_fn: None,
                 free_user_data_fn: custom_free_user_data_fn,
                 user_data,
             })
@@ -1143,6 +1163,7 @@ mod tests {
                 perform_pre_trade_check_dry_run_fn: None,
                 apply_execution_report_fn: Some(custom_apply_report_fn),
                 apply_account_adjustment_fn: None,
+                retire_account_fn: None,
                 free_user_data_fn: custom_free_user_data_fn,
                 user_data,
             }

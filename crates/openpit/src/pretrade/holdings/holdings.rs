@@ -934,6 +934,19 @@ impl Holdings {
             && self.avg_entry_price.is_none()
     }
 
+    /// Retirement may forget a published exact zero that `is_zero` preserves.
+    pub(crate) fn is_retirable(&self) -> bool {
+        self.available.is_zero()
+            && self.held.is_zero()
+            && self.incoming.is_zero()
+            && self.avg_entry_price.is_none()
+            && match self.realized_pnl {
+                None => true,
+                Some(PositionPnlState::Pnl(pnl)) => pnl == Pnl::ZERO,
+                Some(PositionPnlState::Halted(_)) => false,
+            }
+    }
+
     /// Returns `true` if `available` is within the given inclusive bounds.
     ///
     /// `None` on either side means that bound is unconstrained.
@@ -2256,6 +2269,34 @@ mod tests {
         // A residual average entry price alone keeps the slot alive.
         let with_avg = Holdings::zero().with_avg_entry_price(Some(px("100")));
         assert!(!with_avg.is_zero());
+    }
+
+    #[test]
+    fn retire_predicate_accepts_only_empty_or_published_zero_slots() {
+        assert!(Holdings::zero().is_retirable());
+
+        let published_zero = Holdings::zero().with_realized_pnl(Pnl::ZERO);
+        assert!(published_zero.is_retirable());
+        assert!(!published_zero.is_zero());
+        assert!(!Holdings::zero().with_realized_pnl(pnl("5")).is_retirable());
+        assert!(!Holdings::zero().with_realized_pnl(pnl("-5")).is_retirable());
+
+        let halted = Holdings::zero()
+            .halt_realized_pnl(PnlHaltReason::MissingFx)
+            .holdings();
+        assert!(
+            !halted.is_retirable(),
+            "halted position PnL must refuse retirement"
+        );
+        assert!(!holdings("1", "0").is_retirable());
+        assert!(!holdings("0", "1").is_retirable());
+        assert!(!Holdings::zero()
+            .reserve_incoming(ps("1"))
+            .expect("valid incoming")
+            .is_retirable());
+        assert!(!Holdings::zero()
+            .with_avg_entry_price(Some(px("100")))
+            .is_retirable());
     }
 
     #[test]

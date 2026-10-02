@@ -19,7 +19,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-use crate::core::HasAccountId;
+use crate::core::{AccountRetirementRefusal, HasAccountId};
 use crate::param::{AccountId, Asset, Price, Quantity, TradeAmount, Volume};
 use crate::pretrade::policy::{missing_required_field_reject, PolicyGroupId, PolicyName};
 use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
@@ -28,6 +28,7 @@ use crate::pretrade::{
 };
 use crate::storage::ConfigCell;
 use crate::HasInstrument;
+use crate::Mutations;
 use crate::{HasOrderPrice, HasTradeAmount};
 
 /// Optional order quantity and notional caps for a single order.
@@ -312,6 +313,13 @@ impl OrderSizeLimitSettings {
 ///   [`OrderSizeLimitPolicyError::NoCapsConfigured`];
 /// - duplicate keys within an axis return the corresponding duplicate-key error.
 ///
+/// # Account retirement
+///
+/// An account+asset barrier refuses with `ConfigurationReferencesAccount`.
+/// The policy has no per-account runtime state to forget on success. See
+/// [`Engine::retire_account`](crate::Engine::retire_account) for the
+/// engine-wide contract.
+///
 /// # Examples
 ///
 /// ```rust
@@ -422,6 +430,22 @@ where
 
     fn policy_group_id(&self) -> PolicyGroupId {
         self.group_id
+    }
+
+    fn retire_account(
+        &self,
+        account_id: AccountId,
+        _mutations: &mut Mutations,
+    ) -> Result<(), AccountRetirementRefusal> {
+        if self.settings.with(|settings| {
+            settings
+                .account_asset_limits
+                .keys()
+                .any(|(account, _)| *account == account_id)
+        }) {
+            return Err(AccountRetirementRefusal::ConfigurationReferencesAccount);
+        }
+        Ok(())
     }
 
     #[allow(private_interfaces)]
@@ -999,6 +1023,39 @@ mod tests {
             &PreTradeContext::<NoLocking>::new(None, order),
             order,
         )
+    }
+
+    #[test]
+    fn retire_account_asset_limit_refuses_only_named_account() {
+        let named = AccountId::from_u64(99224416);
+        let other = AccountId::from_u64(11223344);
+        let original = settings(
+            None,
+            [],
+            [OrderSizeAccountAssetBarrier {
+                limit: quantity_limit("10"),
+                account_id: named,
+                asset: Asset::new("AAPL").expect("valid asset"),
+            }],
+        );
+        let policy = TestPolicy::new(original.clone());
+        let mut mutations = crate::Mutations::new();
+        let retire = |account_id, mutations: &mut crate::Mutations| {
+            <TestPolicy as PreTradePolicy<TestOrder, (), (), crate::LocalSync>>::retire_account(
+                &policy, account_id, mutations,
+            )
+        };
+        assert_eq!(
+            retire(named, &mut mutations),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        assert_eq!(
+            retire(named, &mut mutations),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        assert_eq!(retire(other, &mut mutations), Ok(()));
+        // The refusal must leave the stored configuration exactly as built.
+        assert_eq!(policy.settings.with(Clone::clone), original);
     }
 
     // ── settings validation ────────────────────────────────────────────────

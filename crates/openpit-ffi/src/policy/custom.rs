@@ -30,7 +30,10 @@ use openpit::pretrade::{
     PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
     RejectScope, Rejects,
 };
-use openpit::{AccountAdjustmentContext, Mutations, PolicyAccountAdjustmentResult, PolicyGroupId};
+use openpit::{
+    AccountAdjustmentContext, AccountRetirementRefusal, Mutations, PolicyAccountAdjustmentResult,
+    PolicyGroupId,
+};
 
 use crate::account_adjustment::{export_account_adjustment, OpenPitAccountAdjustment};
 use crate::account_outcome::{
@@ -238,6 +241,50 @@ pub type OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn =
         user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList;
 
+/// Decision returned by a custom policy's account-retirement callback.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenPitPretradePreTradePolicyRetireAccountDecision {
+    /// The policy accepts retirement.
+    Accept = 0,
+    /// The policy's configuration still names the account.
+    ConfigurationReferencesAccount = 1,
+    /// The policy holds non-zero state for the account.
+    NonZeroState = 2,
+    /// The policy holds state of an operation that is still in flight.
+    OperationInProgress = 3,
+    /// The policy could not determine whether its state may be retired.
+    EvaluationFailed = 4,
+}
+
+/// Callback used by a custom pre-trade policy to retire one account.
+///
+/// Contract:
+/// - `account_id` identifies the account being retired.
+/// - `mutations` is a callback-scoped non-owning pointer that allows the
+///   callback to register commit/rollback mutations. The callback must not
+///   store or use it after return.
+/// - Return one of the values from
+///   `OpenPitPretradePreTradePolicyRetireAccountDecision`.
+/// - An invalid return byte is handled as `EvaluationFailed`: retirement is
+///   refused and nothing is removed.
+/// - The callback only verifies that its policy's account state is zero and
+///   not in use. On `Accept`, it registers every removal as a commit callback
+///   through `openpit_mutations_push` and removes nothing itself.
+/// - The engine commits every registered removal only if every policy accepts.
+///   If any policy refuses, it runs every rollback and removes nothing. A
+///   callback that removes state directly breaks the guarantee that a refusal
+///   changes nothing.
+/// - `user_data` is passed through unchanged from policy creation.
+/// - The callback and the mutations it registers run under the engine's
+///   exclusive account-state lease and must not call back into state-changing
+///   engine operations.
+pub type OpenPitPretradePreTradePolicyRetireAccountFn = unsafe extern "C" fn(
+    account_id: OpenPitParamAccountId,
+    mutations: *mut OpenPitMutations,
+    user_data: *mut c_void,
+) -> u8;
+
 /// Callback invoked when the last reference to a custom pre-trade policy is
 /// released and the policy object is about to be destroyed.
 ///
@@ -267,6 +314,7 @@ pub(super) struct CustomPreTradePolicy {
         Option<OpenPitPretradePreTradePolicyApplyExecutionReportFn>,
     pub(super) apply_account_adjustment_fn:
         Option<OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn>,
+    pub(super) retire_account_fn: Option<OpenPitPretradePreTradePolicyRetireAccountFn>,
     pub(super) free_user_data_fn: OpenPitPretradePreTradePolicyFreeUserDataFn,
     pub(super) user_data: *mut c_void,
 }
@@ -500,6 +548,50 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
             account_blocks: out_result.account_blocks.items,
         })
     }
+
+    fn retire_account(
+        &self,
+        account_id: openpit::param::AccountId,
+        mutations: &mut Mutations,
+    ) -> Result<(), AccountRetirementRefusal> {
+        let Some(retire_fn) = self.retire_account_fn else {
+            return Ok(());
+        };
+        let mut mutations_handle = OpenPitMutations {
+            mutations: mutations as *mut Mutations,
+        };
+        let decision =
+            unsafe { retire_fn(account_id.as_u64(), &mut mutations_handle, self.user_data) };
+        match decision {
+            value
+                if value
+                    == OpenPitPretradePreTradePolicyRetireAccountDecision::Accept as u8 =>
+            {
+                Ok(())
+            }
+            value
+                if value
+                    == OpenPitPretradePreTradePolicyRetireAccountDecision::ConfigurationReferencesAccount
+                        as u8 =>
+            {
+                Err(AccountRetirementRefusal::ConfigurationReferencesAccount)
+            }
+            value
+                if value
+                    == OpenPitPretradePreTradePolicyRetireAccountDecision::NonZeroState as u8 =>
+            {
+                Err(AccountRetirementRefusal::NonZeroState)
+            }
+            value
+                if value
+                    == OpenPitPretradePreTradePolicyRetireAccountDecision::OperationInProgress
+                        as u8 =>
+            {
+                Err(AccountRetirementRefusal::OperationInProgress)
+            }
+            _ => Err(AccountRetirementRefusal::EvaluationFailed),
+        }
+    }
 }
 
 impl Drop for CustomPreTradePolicy {
@@ -565,15 +657,29 @@ pub(super) fn import_reject_list_result(
 ///   account adjustment outcome this policy produces. Use `0` for the default
 ///   group.
 /// - `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`,
-///   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be null.
+///   `apply_execution_report_fn`, `apply_account_adjustment_fn`, and
+///   `retire_account_fn` may be null.
 /// - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
 ///   `apply_account_adjustment_fn` means that hook accepts by default.
 /// - A null `apply_execution_report_fn` means that hook returns no post-trade
 ///   result.
+/// - A null `retire_account_fn` means this custom policy holds no
+///   account-scoped state. A custom policy that keeps account-scoped state MUST
+///   provide it; otherwise that state silently survives retirement and a
+///   reused account id inherits it.
 /// - Non-null callbacks and `free_user_data_fn` must remain callable for as long
 ///   as the policy may still be used by either the caller pointer or the engine.
 /// - Custom main-stage and account-adjustment callbacks can register
 ///   commit/rollback mutations through their `mutations` pointer.
+/// - The retirement callback and the mutations it registers run under the
+///   engine's exclusive account-state lease and must not call back into the
+///   engine.
+/// - The retirement callback only verifies that its policy's account state is
+///   zero and not in use. On `Accept`, it registers every removal as a commit
+///   callback through `openpit_mutations_push` and removes nothing itself. The
+///   engine commits all registered removals only if every policy accepts;
+///   otherwise it runs every rollback and removes nothing. Deleting state
+///   directly breaks the guarantee that a refusal changes nothing.
 /// - `free_user_data_fn` will be called exactly once, when the last reference
 ///   to the policy is released.
 /// - `user_data` is opaque to the SDK: the engine never inspects, dereferences,
@@ -610,6 +716,7 @@ pub unsafe extern "C" fn openpit_create_pretrade_custom_pre_trade_policy(
     perform_pre_trade_check_fn: Option<OpenPitPretradePreTradePolicyPerformPreTradeCheckFn>,
     apply_execution_report_fn: Option<OpenPitPretradePreTradePolicyApplyExecutionReportFn>,
     apply_account_adjustment_fn: Option<OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn>,
+    retire_account_fn: Option<OpenPitPretradePreTradePolicyRetireAccountFn>,
     free_user_data_fn: OpenPitPretradePreTradePolicyFreeUserDataFn,
     user_data: *mut c_void,
     out_error: OpenPitOutError,
@@ -628,6 +735,7 @@ pub unsafe extern "C" fn openpit_create_pretrade_custom_pre_trade_policy(
                 perform_pre_trade_check_dry_run_fn: None,
                 apply_execution_report_fn,
                 apply_account_adjustment_fn,
+                retire_account_fn,
             },
             free_user_data_fn,
             user_data,
@@ -655,6 +763,7 @@ struct CustomPreTradeCallbacks {
     perform_pre_trade_check_dry_run_fn: Option<OpenPitPretradePreTradePolicyPerformPreTradeCheckFn>,
     apply_execution_report_fn: Option<OpenPitPretradePreTradePolicyApplyExecutionReportFn>,
     apply_account_adjustment_fn: Option<OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn>,
+    retire_account_fn: Option<OpenPitPretradePreTradePolicyRetireAccountFn>,
 }
 
 unsafe fn build_custom_pre_trade_policy(
@@ -679,6 +788,7 @@ unsafe fn build_custom_pre_trade_policy(
         perform_pre_trade_check_dry_run_fn: callbacks.perform_pre_trade_check_dry_run_fn,
         apply_execution_report_fn: callbacks.apply_execution_report_fn,
         apply_account_adjustment_fn: callbacks.apply_account_adjustment_fn,
+        retire_account_fn: callbacks.retire_account_fn,
         free_user_data_fn,
         user_data,
     };
@@ -705,6 +815,10 @@ unsafe fn build_custom_pre_trade_policy(
 ///   group.
 /// - Every callback except `free_user_data_fn` may be null; the null behavior of
 ///   the normal callbacks matches `openpit_create_pretrade_custom_pre_trade_policy`.
+/// - A null `retire_account_fn` means this custom policy holds no
+///   account-scoped state. A custom policy that keeps account-scoped state MUST
+///   provide it; otherwise that state silently survives retirement and a
+///   reused account id inherits it.
 /// - A null `check_pre_trade_start_dry_run_fn` or
 ///   `perform_pre_trade_check_dry_run_fn` leaves that dry-run hook delegating to
 ///   its normal counterpart (`check_pre_trade_start_fn` /
@@ -714,6 +828,15 @@ unsafe fn build_custom_pre_trade_policy(
 ///   as the policy may still be used by either the caller pointer or the engine.
 /// - Custom main-stage and account-adjustment callbacks can register
 ///   commit/rollback mutations through their `mutations` pointer.
+/// - The retirement callback and the mutations it registers run under the
+///   engine's exclusive account-state lease and must not call back into the
+///   engine.
+/// - The retirement callback only verifies that its policy's account state is
+///   zero and not in use. On `Accept`, it registers every removal as a commit
+///   callback through `openpit_mutations_push` and removes nothing itself. The
+///   engine commits all registered removals only if every policy accepts;
+///   otherwise it runs every rollback and removes nothing. Deleting state
+///   directly breaks the guarantee that a refusal changes nothing.
 /// - `free_user_data_fn` will be called exactly once, when the last reference
 ///   to the policy is released.
 /// - `user_data` is opaque to the SDK: the engine never inspects, dereferences,
@@ -757,6 +880,7 @@ pub unsafe extern "C" fn openpit_create_pretrade_custom_pre_trade_policy_with_dr
     perform_pre_trade_check_dry_run_fn: Option<OpenPitPretradePreTradePolicyPerformPreTradeCheckFn>,
     apply_execution_report_fn: Option<OpenPitPretradePreTradePolicyApplyExecutionReportFn>,
     apply_account_adjustment_fn: Option<OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn>,
+    retire_account_fn: Option<OpenPitPretradePreTradePolicyRetireAccountFn>,
     free_user_data_fn: OpenPitPretradePreTradePolicyFreeUserDataFn,
     user_data: *mut c_void,
     out_error: OpenPitOutError,
@@ -772,6 +896,7 @@ pub unsafe extern "C" fn openpit_create_pretrade_custom_pre_trade_policy_with_dr
                 perform_pre_trade_check_dry_run_fn,
                 apply_execution_report_fn,
                 apply_account_adjustment_fn,
+                retire_account_fn,
             },
             free_user_data_fn,
             user_data,
@@ -894,6 +1019,7 @@ mod tests {
                 None,
                 Some(apply_execution_report_fn),
                 None,
+                None,
                 free_user_data_fn,
                 user_data,
                 out_error,
@@ -916,6 +1042,7 @@ mod tests {
                 None,
                 None,
                 Some(apply_fn),
+                None,
                 free_user_data_fn,
                 user_data,
                 out_error,
@@ -949,6 +1076,7 @@ mod tests {
     #[derive(Default)]
     struct MutationState {
         commit_calls: usize,
+        rollback_calls: usize,
         free_calls: usize,
     }
 
@@ -961,6 +1089,12 @@ mod tests {
     struct MutationPushContext {
         entries: Vec<*mut c_void>,
         free_fn: Option<OpenPitMutationFreeFn>,
+    }
+
+    struct RetirementMutationContext {
+        entry: *mut c_void,
+        commit_fn: OpenPitMutationFn,
+        decision: u8,
     }
 
     fn sample_order() -> Order {
@@ -1002,6 +1136,7 @@ mod tests {
                 perform_pre_trade_check_dry_run_fn: None,
                 apply_execution_report_fn: Some(custom_apply_report_fn),
                 apply_account_adjustment_fn: None,
+                retire_account_fn: None,
                 free_user_data_fn: custom_free_user_data_fn,
                 user_data,
             })
@@ -1024,10 +1159,21 @@ mod tests {
     }
 
     unsafe extern "C" fn tracked_mutation_rollback(
-        _user_data: *mut c_void,
+        user_data: *mut c_void,
         _out_error: crate::last_error::OpenPitOutError,
     ) -> bool {
+        let data = unsafe { &*(user_data as *const MutationUserData) };
+        data.state.borrow_mut().rollback_calls += 1;
         true
+    }
+
+    unsafe extern "C" fn failing_mutation_commit(
+        user_data: *mut c_void,
+        _out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        let data = unsafe { &*(user_data as *const MutationUserData) };
+        data.state.borrow_mut().commit_calls += 1;
+        false
     }
 
     unsafe extern "C" fn tracked_mutation_free(user_data: *mut c_void) {
@@ -1193,6 +1339,7 @@ mod tests {
                 Some(custom_pre_trade_check_fn),
                 Some(custom_apply_report_fn),
                 None,
+                None,
                 custom_free_user_data_fn,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1333,6 +1480,7 @@ mod tests {
                 Some(custom_pre_trade_check_fn),
                 Some(custom_apply_report_fn),
                 None,
+                None,
                 custom_free_user_data_fn,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1471,6 +1619,7 @@ mod tests {
                 Some(custom_pre_trade_check_fn),
                 Some(custom_apply_report_fn),
                 None,
+                None,
                 custom_free_user_data_fn,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1605,19 +1754,21 @@ mod tests {
         accepted_rejects()
     }
 
-    fn build_engine_with_custom_policy(
-        policy: *mut OpenPitPretradePreTradePolicy,
+    fn build_engine_with_custom_policies(
+        policies: &[*mut OpenPitPretradePreTradePolicy],
     ) -> *mut crate::engine::OpenPitEngine {
         let builder = crate::engine::openpit_create_engine_builder(
             crate::engine::OpenPitSyncPolicy::Full as u8,
             std::ptr::null_mut(),
         );
-        assert!(openpit_engine_builder_add_pre_trade_policy(
-            builder,
-            policy,
-            std::ptr::null_mut()
-        ));
-        openpit_destroy_pretrade_pre_trade_policy(policy);
+        for &policy in policies {
+            assert!(openpit_engine_builder_add_pre_trade_policy(
+                builder,
+                policy,
+                std::ptr::null_mut()
+            ));
+            openpit_destroy_pretrade_pre_trade_policy(policy);
+        }
         let engine = crate::engine::openpit_engine_builder_build(
             builder,
             std::ptr::null_mut(),
@@ -1626,6 +1777,601 @@ mod tests {
         assert!(!engine.is_null());
         crate::engine::openpit_destroy_engine_builder(builder);
         engine
+    }
+
+    fn build_engine_with_custom_policy(
+        policy: *mut OpenPitPretradePreTradePolicy,
+    ) -> *mut crate::engine::OpenPitEngine {
+        build_engine_with_custom_policies(&[policy])
+    }
+
+    fn build_engine_with_account_rate_limit(
+        account_id: OpenPitParamAccountId,
+    ) -> *mut crate::engine::OpenPitEngine {
+        let builder = crate::engine::openpit_create_engine_builder(
+            crate::engine::OpenPitSyncPolicy::Full as u8,
+            std::ptr::null_mut(),
+        );
+        let barrier = crate::policy::rate_limit::OpenPitPretradePoliciesRateLimitAccountBarrier {
+            account_id,
+            max_orders: 1,
+            window_nanoseconds: 1_000_000_000,
+        };
+        assert!(unsafe {
+            crate::policy::rate_limit::openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                &barrier,
+                1,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        let engine = crate::engine::openpit_engine_builder_build(
+            builder,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        crate::engine::openpit_destroy_engine_builder(builder);
+        assert!(!engine.is_null());
+        engine
+    }
+
+    fn create_policy_with_retire_callback(
+        name: &str,
+        retire_account_fn: Option<OpenPitPretradePreTradePolicyRetireAccountFn>,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradePreTradePolicy {
+        let policy = unsafe {
+            openpit_create_pretrade_custom_pre_trade_policy(
+                OpenPitStringView::from_utf8(name),
+                0,
+                None,
+                None,
+                None,
+                None,
+                retire_account_fn,
+                custom_free_user_data_fn,
+                user_data,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!policy.is_null());
+        policy
+    }
+
+    unsafe extern "C" fn refuse_retirement(
+        _account_id: OpenPitParamAccountId,
+        _mutations: *mut OpenPitMutations,
+        _user_data: *mut c_void,
+    ) -> u8 {
+        OpenPitPretradePreTradePolicyRetireAccountDecision::NonZeroState as u8
+    }
+
+    unsafe extern "C" fn accept_retirement_with_mutation(
+        _account_id: OpenPitParamAccountId,
+        mutations: *mut OpenPitMutations,
+        user_data: *mut c_void,
+    ) -> u8 {
+        let ctx = unsafe { &*(user_data as *const MutationPushContext) };
+        for entry in &ctx.entries {
+            if !unsafe {
+                openpit_mutations_push(
+                    mutations,
+                    tracked_mutation_commit,
+                    tracked_mutation_rollback,
+                    *entry,
+                    ctx.free_fn,
+                    std::ptr::null_mut(),
+                )
+            } {
+                return OpenPitPretradePreTradePolicyRetireAccountDecision::EvaluationFailed as u8;
+            }
+        }
+        OpenPitPretradePreTradePolicyRetireAccountDecision::Accept as u8
+    }
+
+    unsafe extern "C" fn retire_with_tracked_mutation(
+        _account_id: OpenPitParamAccountId,
+        mutations: *mut OpenPitMutations,
+        user_data: *mut c_void,
+    ) -> u8 {
+        let ctx = unsafe { &*(user_data as *const RetirementMutationContext) };
+        if !unsafe {
+            openpit_mutations_push(
+                mutations,
+                ctx.commit_fn,
+                tracked_mutation_rollback,
+                ctx.entry,
+                Some(tracked_mutation_free),
+                std::ptr::null_mut(),
+            )
+        } {
+            return OpenPitPretradePreTradePolicyRetireAccountDecision::EvaluationFailed as u8;
+        }
+        ctx.decision
+    }
+
+    unsafe extern "C" fn return_retirement_decision(
+        _account_id: OpenPitParamAccountId,
+        _mutations: *mut OpenPitMutations,
+        user_data: *mut c_void,
+    ) -> u8 {
+        unsafe { *(user_data as *const u8) }
+    }
+
+    fn retirement_mutation_context(
+        decision: u8,
+        commit_fn: OpenPitMutationFn,
+    ) -> (Rc<RefCell<MutationState>>, RetirementMutationContext) {
+        let state = Rc::new(RefCell::new(MutationState::default()));
+        let entry = Box::into_raw(Box::new(MutationUserData {
+            state: Rc::clone(&state),
+            marker: 42,
+        }))
+        .cast();
+        (
+            state,
+            RetirementMutationContext {
+                entry,
+                commit_fn,
+                decision,
+            },
+        )
+    }
+
+    unsafe extern "C" fn invalid_retirement_decision(
+        _account_id: OpenPitParamAccountId,
+        _mutations: *mut OpenPitMutations,
+        _user_data: *mut c_void,
+    ) -> u8 {
+        u8::MAX
+    }
+
+    #[test]
+    fn custom_policy_retire_refusal_reaches_engine() {
+        let policy = create_policy_with_retire_callback(
+            "retire.refuse",
+            Some(refuse_retirement),
+            std::ptr::null_mut(),
+        );
+        let engine = build_engine_with_custom_policy(policy);
+        let mut error = std::ptr::null_mut();
+
+        assert!(!crate::engine::openpit_engine_retire_account(
+            engine,
+            41,
+            &mut error,
+            std::ptr::null_mut(),
+        ));
+        assert!(!error.is_null());
+        assert_eq!(
+            crate::engine::openpit_account_retirement_error_get_refusal_count(error),
+            1
+        );
+        let mut policy_name = OpenPitStringView::default();
+        assert!(
+            crate::engine::openpit_account_retirement_error_get_refusal_policy_name(
+                error,
+                0,
+                &mut policy_name,
+            )
+        );
+        assert_eq!(string_view_to_string(policy_name), "retire.refuse");
+        let mut refusal_kind = crate::engine::OpenPitAccountRetirementRefusalKind::EvaluationFailed;
+        assert!(
+            crate::engine::openpit_account_retirement_error_get_refusal_kind(
+                error,
+                0,
+                &mut refusal_kind,
+            )
+        );
+        assert_eq!(
+            refusal_kind,
+            crate::engine::OpenPitAccountRetirementRefusalKind::NonZeroState
+        );
+
+        crate::engine::openpit_destroy_account_retirement_error(error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn custom_policy_retire_accept_commits_registered_mutation() {
+        let state = Rc::new(RefCell::new(MutationState::default()));
+        let entry = Box::into_raw(Box::new(MutationUserData {
+            state: Rc::clone(&state),
+            marker: 42,
+        }))
+        .cast();
+        let mut ctx = MutationPushContext {
+            entries: vec![entry],
+            free_fn: Some(tracked_mutation_free),
+        };
+        let policy = create_policy_with_retire_callback(
+            "retire.accept",
+            Some(accept_retirement_with_mutation),
+            (&mut ctx as *mut MutationPushContext).cast(),
+        );
+        let engine = build_engine_with_custom_policy(policy);
+
+        assert!(crate::engine::openpit_engine_retire_account(
+            engine,
+            42,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ));
+        crate::engine::openpit_destroy_engine(engine);
+
+        let state = state.borrow();
+        assert_eq!(state.commit_calls, 1);
+        assert_eq!(state.rollback_calls, 0);
+        assert_eq!(state.free_calls, 1);
+    }
+
+    #[test]
+    fn custom_policy_retire_refusal_rolls_back_registered_mutation() {
+        let cases = [
+            (
+                "own refusal",
+                OpenPitPretradePreTradePolicyRetireAccountDecision::NonZeroState as u8,
+                false,
+            ),
+            ("invalid byte", u8::MAX, false),
+            (
+                "later refusal",
+                OpenPitPretradePreTradePolicyRetireAccountDecision::Accept as u8,
+                true,
+            ),
+        ];
+
+        for (case, decision, add_refusing_policy) in cases {
+            let (state, mut ctx) = retirement_mutation_context(decision, tracked_mutation_commit);
+            let tracked_policy = create_policy_with_retire_callback(
+                "retire.tracked",
+                Some(retire_with_tracked_mutation),
+                (&mut ctx as *mut RetirementMutationContext).cast(),
+            );
+            let engine = if add_refusing_policy {
+                let refusing_policy = create_policy_with_retire_callback(
+                    "retire.second-refusal",
+                    Some(refuse_retirement),
+                    std::ptr::null_mut(),
+                );
+                build_engine_with_custom_policies(&[tracked_policy, refusing_policy])
+            } else {
+                build_engine_with_custom_policy(tracked_policy)
+            };
+            let mut error = std::ptr::null_mut();
+
+            assert!(
+                !crate::engine::openpit_engine_retire_account(
+                    engine,
+                    45,
+                    &mut error,
+                    std::ptr::null_mut(),
+                ),
+                "{case}"
+            );
+            assert!(!error.is_null(), "{case}");
+            crate::engine::openpit_destroy_account_retirement_error(error);
+
+            {
+                let state = state.borrow();
+                assert_eq!(state.commit_calls, 0, "{case}");
+                assert_eq!(state.rollback_calls, 1, "{case}");
+                assert_eq!(state.free_calls, 1, "{case}");
+            }
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn custom_policy_retire_commit_failure_exports_finalizer_failed() {
+        let (state, mut ctx) = retirement_mutation_context(
+            OpenPitPretradePreTradePolicyRetireAccountDecision::Accept as u8,
+            failing_mutation_commit,
+        );
+        let policy = create_policy_with_retire_callback(
+            "retire.commit-failure",
+            Some(retire_with_tracked_mutation),
+            (&mut ctx as *mut RetirementMutationContext).cast(),
+        );
+        let engine = build_engine_with_custom_policy(policy);
+        let mut error = std::ptr::null_mut();
+
+        assert!(!crate::engine::openpit_engine_retire_account(
+            engine,
+            46,
+            &mut error,
+            std::ptr::null_mut(),
+        ));
+        assert!(!error.is_null());
+        assert_eq!(
+            crate::engine::openpit_account_retirement_error_get_kind(error),
+            crate::engine::OpenPitAccountRetirementErrorKind::FinalizerFailed
+        );
+        assert_eq!(
+            string_view_to_string(crate::engine::openpit_account_retirement_error_get_message(
+                error
+            )),
+            "account retirement finalizer failed"
+        );
+        assert_eq!(
+            crate::engine::openpit_account_retirement_error_get_refusal_count(error),
+            0
+        );
+        let mut policy_name = OpenPitStringView::default();
+        assert!(
+            !crate::engine::openpit_account_retirement_error_get_refusal_policy_name(
+                error,
+                0,
+                &mut policy_name,
+            )
+        );
+        let mut refusal_kind = crate::engine::OpenPitAccountRetirementRefusalKind::EvaluationFailed;
+        assert!(
+            !crate::engine::openpit_account_retirement_error_get_refusal_kind(
+                error,
+                0,
+                &mut refusal_kind,
+            )
+        );
+
+        crate::engine::openpit_destroy_account_retirement_error(error);
+
+        {
+            let state = state.borrow();
+            assert_eq!(state.commit_calls, 1);
+            assert_eq!(state.rollback_calls, 0);
+            assert_eq!(state.free_calls, 1);
+        }
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn custom_policy_retire_null_callback_uses_default() {
+        let policy =
+            create_policy_with_retire_callback("retire.default", None, std::ptr::null_mut());
+        let engine = build_engine_with_custom_policy(policy);
+
+        assert!(crate::engine::openpit_engine_retire_account(
+            engine,
+            43,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ));
+
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn custom_policy_retire_invalid_decision_is_evaluation_failed() {
+        let policy = create_policy_with_retire_callback(
+            "retire.invalid",
+            Some(invalid_retirement_decision),
+            std::ptr::null_mut(),
+        );
+        let engine = build_engine_with_custom_policy(policy);
+        let mut error = std::ptr::null_mut();
+
+        assert!(!crate::engine::openpit_engine_retire_account(
+            engine,
+            44,
+            &mut error,
+            std::ptr::null_mut(),
+        ));
+        let mut refusal_kind = crate::engine::OpenPitAccountRetirementRefusalKind::NonZeroState;
+        assert!(
+            crate::engine::openpit_account_retirement_error_get_refusal_kind(
+                error,
+                0,
+                &mut refusal_kind,
+            )
+        );
+        assert_eq!(
+            refusal_kind,
+            crate::engine::OpenPitAccountRetirementRefusalKind::EvaluationFailed
+        );
+
+        crate::engine::openpit_destroy_account_retirement_error(error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn custom_policy_retire_decision_bytes_round_trip() {
+        let cases = [
+            (
+                OpenPitPretradePreTradePolicyRetireAccountDecision::Accept as u8,
+                None,
+            ),
+            (
+                OpenPitPretradePreTradePolicyRetireAccountDecision::ConfigurationReferencesAccount
+                    as u8,
+                Some(
+                    crate::engine::OpenPitAccountRetirementRefusalKind::ConfigurationReferencesAccount,
+                ),
+            ),
+            (
+                OpenPitPretradePreTradePolicyRetireAccountDecision::NonZeroState as u8,
+                Some(crate::engine::OpenPitAccountRetirementRefusalKind::NonZeroState),
+            ),
+            (
+                OpenPitPretradePreTradePolicyRetireAccountDecision::OperationInProgress as u8,
+                Some(
+                    crate::engine::OpenPitAccountRetirementRefusalKind::OperationInProgress,
+                ),
+            ),
+            (
+                OpenPitPretradePreTradePolicyRetireAccountDecision::EvaluationFailed as u8,
+                Some(crate::engine::OpenPitAccountRetirementRefusalKind::EvaluationFailed),
+            ),
+            (
+                u8::MAX,
+                Some(crate::engine::OpenPitAccountRetirementRefusalKind::EvaluationFailed),
+            ),
+        ];
+
+        for (mut decision, expected_refusal) in cases {
+            let policy = create_policy_with_retire_callback(
+                "retire.decision",
+                Some(return_retirement_decision),
+                (&mut decision as *mut u8).cast(),
+            );
+            let engine = build_engine_with_custom_policy(policy);
+            let mut error = std::ptr::null_mut();
+            let succeeded = crate::engine::openpit_engine_retire_account(
+                engine,
+                47,
+                &mut error,
+                std::ptr::null_mut(),
+            );
+
+            let Some(expected_refusal) = expected_refusal else {
+                assert!(succeeded, "decision {decision}");
+                assert!(error.is_null(), "decision {decision}");
+                crate::engine::openpit_destroy_engine(engine);
+                continue;
+            };
+
+            assert!(!succeeded, "decision {decision}");
+            assert!(!error.is_null(), "decision {decision}");
+            assert_eq!(
+                crate::engine::openpit_account_retirement_error_get_kind(error),
+                crate::engine::OpenPitAccountRetirementErrorKind::Refused,
+                "decision {decision}"
+            );
+            assert_eq!(
+                crate::engine::openpit_account_retirement_error_get_refusal_count(error),
+                1,
+                "decision {decision}"
+            );
+            let mut policy_name = OpenPitStringView::default();
+            assert!(
+                crate::engine::openpit_account_retirement_error_get_refusal_policy_name(
+                    error,
+                    0,
+                    &mut policy_name,
+                )
+            );
+            assert_eq!(
+                string_view_to_string(policy_name),
+                "retire.decision",
+                "decision {decision}"
+            );
+            let mut refusal_kind =
+                crate::engine::OpenPitAccountRetirementRefusalKind::EvaluationFailed;
+            assert!(
+                crate::engine::openpit_account_retirement_error_get_refusal_kind(
+                    error,
+                    0,
+                    &mut refusal_kind,
+                )
+            );
+            assert_eq!(refusal_kind, expected_refusal, "decision {decision}");
+            let expected_wire = if decision == u8::MAX {
+                OpenPitPretradePreTradePolicyRetireAccountDecision::EvaluationFailed as u32
+            } else {
+                u32::from(decision)
+            };
+            assert_eq!(refusal_kind as u32, expected_wire, "decision {decision}");
+
+            crate::engine::openpit_destroy_account_retirement_error(error);
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn builtin_policy_retire_refusal_exposes_structured_error() {
+        let account_id = 17;
+        let engine = build_engine_with_account_rate_limit(account_id);
+        let transport_error_sentinel =
+            core::ptr::NonNull::<crate::string::OpenPitSharedString>::dangling().as_ptr();
+        let mut retirement_error = std::ptr::null_mut();
+        let mut transport_error = transport_error_sentinel;
+
+        assert!(!crate::engine::openpit_engine_retire_account(
+            engine,
+            account_id,
+            &mut retirement_error,
+            &mut transport_error,
+        ));
+        assert!(!retirement_error.is_null());
+        assert_eq!(transport_error, transport_error_sentinel);
+        assert_eq!(
+            crate::engine::openpit_account_retirement_error_get_kind(retirement_error),
+            crate::engine::OpenPitAccountRetirementErrorKind::Refused
+        );
+        assert_eq!(
+            string_view_to_string(crate::engine::openpit_account_retirement_error_get_message(
+                retirement_error
+            )),
+            "account retirement refused by one or more policies"
+        );
+        assert_eq!(
+            crate::engine::openpit_account_retirement_error_get_refusal_count(retirement_error),
+            1
+        );
+
+        let mut policy_name = OpenPitStringView::default();
+        assert!(
+            crate::engine::openpit_account_retirement_error_get_refusal_policy_name(
+                retirement_error,
+                0,
+                &mut policy_name,
+            )
+        );
+        assert_eq!(string_view_to_string(policy_name), "RateLimitPolicy");
+
+        let mut refusal_kind = crate::engine::OpenPitAccountRetirementRefusalKind::EvaluationFailed;
+        assert!(
+            crate::engine::openpit_account_retirement_error_get_refusal_kind(
+                retirement_error,
+                0,
+                &mut refusal_kind,
+            )
+        );
+        assert_eq!(
+            refusal_kind,
+            crate::engine::OpenPitAccountRetirementRefusalKind::ConfigurationReferencesAccount
+        );
+
+        let policy_name_sentinel = OpenPitStringView::from_utf8("sentinel");
+        policy_name = policy_name_sentinel;
+        assert!(
+            !crate::engine::openpit_account_retirement_error_get_refusal_policy_name(
+                retirement_error,
+                1,
+                &mut policy_name,
+            )
+        );
+        assert_eq!(policy_name.ptr, policy_name_sentinel.ptr);
+        assert_eq!(policy_name.len, policy_name_sentinel.len);
+
+        refusal_kind = crate::engine::OpenPitAccountRetirementRefusalKind::OperationInProgress;
+        assert!(
+            !crate::engine::openpit_account_retirement_error_get_refusal_kind(
+                retirement_error,
+                1,
+                &mut refusal_kind,
+            )
+        );
+        assert_eq!(
+            refusal_kind,
+            crate::engine::OpenPitAccountRetirementRefusalKind::OperationInProgress
+        );
+
+        crate::engine::openpit_destroy_account_retirement_error(retirement_error);
+        assert!(!crate::engine::openpit_engine_retire_account(
+            engine,
+            account_id,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ));
+        crate::engine::openpit_destroy_engine(engine);
     }
 
     #[test]
@@ -1640,6 +2386,7 @@ mod tests {
                 None,
                 Some(reject_main_stage_check_fn),
                 Some(custom_apply_report_fn),
+                None,
                 None,
                 custom_free_user_data_fn,
                 std::ptr::null_mut(),
@@ -1688,6 +2435,7 @@ mod tests {
                 Some(reject_main_stage_check_fn),
                 Some(pass_main_stage_dry_run_check_fn),
                 Some(custom_apply_report_fn),
+                None,
                 None,
                 custom_free_user_data_fn,
                 std::ptr::null_mut(),

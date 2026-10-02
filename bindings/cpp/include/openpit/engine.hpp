@@ -219,6 +219,8 @@ struct AdjustmentResult {
 
 // RAII engine handle. Move-only; destruction releases the engine and any state
 // and policies it retained.
+// Account retirement is not exposed in C++. C++ custom policies are treated
+// as holding no account-scoped state during retirement.
 class Engine {
  public:
   Engine() = default;

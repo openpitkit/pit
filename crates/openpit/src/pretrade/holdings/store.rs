@@ -124,6 +124,14 @@ where
         self.inner.remove(key)
     }
 
+    pub(crate) fn remove_if(
+        &self,
+        key: &(AccountId, Asset),
+        predicate: impl FnOnce(&Holdings) -> bool,
+    ) -> bool {
+        self.inner.remove_if(key, predicate)
+    }
+
     pub fn remove_if_zero(&self, key: &(AccountId, Asset)) -> bool {
         self.inner.remove_if(key, Holdings::is_zero)
     }

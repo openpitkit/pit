@@ -85,6 +85,21 @@ func (*administrativeChainDriver) ApplyAccountAdjustment(
 	return accountadjustment.BatchResult{}, errAdministrativeChainDriverCall
 }
 
+func (d *administrativeChainDriver) RetireAccount(accountID param.AccountID) error {
+	handle, err := native.EngineRetireAccount(d.engine, accountID.Handle())
+	if err != nil {
+		return err
+	}
+	if handle != nil {
+		retirementErr, conversionErr := reject.NewAccountRetirementErrorFromHandle(handle)
+		if conversionErr != nil {
+			return conversionErr
+		}
+		return retirementErr
+	}
+	return nil
+}
+
 func (d *administrativeChainDriver) Accounts() accounts.Accounts {
 	return accounts.NewFromHandle(d.engine)
 }
@@ -563,6 +578,37 @@ func TestAdministrativeChainStepsReturnResultsAndSerializeTheirLane(t *testing.T
 				test.verify(t, driver, state)
 			}
 		})
+	}
+}
+
+func TestRetireAccountChainStep(t *testing.T) {
+	driver := &administrativeChainDriver{engine: newChainNativeEngine(t)}
+	engine := newChainEngine(t, driver)
+	accountID := administrativeChainAccount()
+	group := administrativeChainGroup()
+	if err := driver.Accounts().RegisterGroup([]param.AccountID{accountID}, group); err != nil {
+		t.Fatal(err)
+	}
+	hookCalled := false
+	begin := func(context.Context) (struct{}, error) { return struct{}{}, nil }
+	hooks := RetireAccountHooks[struct{}]{
+		OnRetired: func(context.Context, struct{}) error {
+			hookCalled = true
+			return nil
+		},
+	}
+	outcome, err := Chain(accountID, begin).RetireAccount(hooks).
+		Run(context.Background(), engine).Await(context.Background())
+	if err != nil || outcome.Status != ChainOutcomeCompleted || !outcome.RetryUnsafe {
+		t.Fatalf("RetireAccount chain = (%+v, %v)", outcome, err)
+	}
+	if !hookCalled || driver.Accounts().GroupOf(accountID).IsSet() {
+		t.Fatal("retirement hook did not run or account membership survived")
+	}
+	_, err = Chain(group, begin).RetireAccount(hooks).
+		Run(context.Background(), engine).Await(context.Background())
+	if !errors.Is(err, ErrChainAccountRequired) {
+		t.Fatalf("group-sourced RetireAccount error = %v, want ErrChainAccountRequired", err)
 	}
 }
 

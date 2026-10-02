@@ -371,11 +371,11 @@ class CustomPolicy {
       raw = openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
           ::openpit::detail::MakeStringView(name), policyGroupId, StartHook(),
           StartDryRunHook(), MainHook(), MainDryRunHook(), ReportHook(),
-          AdjustmentHook(), &FreeTrampoline, m_handler.get(), &error);
+          AdjustmentHook(), nullptr, &FreeTrampoline, m_handler.get(), &error);
     } else {
       raw = openpit_create_pretrade_custom_pre_trade_policy(
           ::openpit::detail::MakeStringView(name), policyGroupId, StartHook(),
-          MainHook(), ReportHook(), AdjustmentHook(), &FreeTrampoline,
+          MainHook(), ReportHook(), AdjustmentHook(), nullptr, &FreeTrampoline,
           m_handler.get(), &error);
     }
     if (raw == nullptr) {

@@ -143,6 +143,10 @@ type PostTradeContext = *C.OpenPitPostTradeContext
 type AccountGroupError = *C.OpenPitAccountGroupError
 type AccountBlockError = *C.OpenPitAccountBlockError
 type AccountBlockErrorKind = C.OpenPitAccountBlockErrorKind
+type AccountRetirementError = *C.OpenPitAccountRetirementError
+type AccountRetirementErrorKind = C.OpenPitAccountRetirementErrorKind
+type AccountRetirementRefusalKind = C.OpenPitAccountRetirementRefusalKind
+type PretradePreTradePolicyRetireAccountDecision = C.OpenPitPretradePreTradePolicyRetireAccountDecision
 
 type ConfigureError = *C.OpenPitConfigureError
 type ConfigureErrorKind = C.OpenPitConfigureErrorKind
@@ -212,6 +216,20 @@ const (
 	AccountBlockErrorKindReservedGroup     = C.OpenPitAccountBlockErrorKind_ReservedGroup
 	AccountBlockErrorKindAccountNotBlocked = C.OpenPitAccountBlockErrorKind_AccountNotBlocked
 	AccountBlockErrorKindGroupNotBlocked   = C.OpenPitAccountBlockErrorKind_GroupNotBlocked
+)
+
+const (
+	AccountRetirementErrorKindRefused                          AccountRetirementErrorKind                  = C.OpenPitAccountRetirementErrorKind_Refused
+	AccountRetirementErrorKindFinalizerFailed                  AccountRetirementErrorKind                  = C.OpenPitAccountRetirementErrorKind_FinalizerFailed
+	AccountRetirementRefusalKindConfigurationReferencesAccount AccountRetirementRefusalKind                = C.OpenPitAccountRetirementRefusalKind_ConfigurationReferencesAccount
+	AccountRetirementRefusalKindNonZeroState                   AccountRetirementRefusalKind                = C.OpenPitAccountRetirementRefusalKind_NonZeroState
+	AccountRetirementRefusalKindOperationInProgress            AccountRetirementRefusalKind                = C.OpenPitAccountRetirementRefusalKind_OperationInProgress
+	AccountRetirementRefusalKindEvaluationFailed               AccountRetirementRefusalKind                = C.OpenPitAccountRetirementRefusalKind_EvaluationFailed
+	PretradeRetireAccountAccept                                PretradePreTradePolicyRetireAccountDecision = C.OpenPitPretradePreTradePolicyRetireAccountDecision_Accept
+	PretradeRetireAccountConfigurationReferencesAccount        PretradePreTradePolicyRetireAccountDecision = C.OpenPitPretradePreTradePolicyRetireAccountDecision_ConfigurationReferencesAccount
+	PretradeRetireAccountNonZeroState                          PretradePreTradePolicyRetireAccountDecision = C.OpenPitPretradePreTradePolicyRetireAccountDecision_NonZeroState
+	PretradeRetireAccountOperationInProgress                   PretradePreTradePolicyRetireAccountDecision = C.OpenPitPretradePreTradePolicyRetireAccountDecision_OperationInProgress
+	PretradeRetireAccountEvaluationFailed                      PretradePreTradePolicyRetireAccountDecision = C.OpenPitPretradePreTradePolicyRetireAccountDecision_EvaluationFailed
 )
 
 const (

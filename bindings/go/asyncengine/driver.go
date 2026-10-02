@@ -38,8 +38,9 @@ import (
 // result is the canonical pretrade.PostTradeResult.
 //
 // Entering StartPreTrade, ExecutePreTrade, ApplyDropCopy,
-// ApplyExecutionReport, ApplyAccountAdjustment, an Accounts mutation, or a
-// Configure mutation is potentially state-changing regardless of the result:
+// ApplyExecutionReport, ApplyAccountAdjustment, RetireAccount, an Accounts
+// mutation, or a Configure mutation is potentially state-changing regardless
+// of the result:
 // the implementation can consume budget or alter account state before it
 // returns.
 //
@@ -68,6 +69,7 @@ type Driver interface {
 		param.AccountID,
 		[]model.AccountAdjustment,
 	) (accountadjustment.BatchResult, error)
+	RetireAccount(param.AccountID) error
 	// Accounts returns the driver's account-administration surface.
 	Accounts() accounts.Accounts
 	// Configure returns the driver's runtime-configuration surface.

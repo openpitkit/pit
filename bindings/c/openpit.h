@@ -58,6 +58,7 @@ typedef struct OpenPitAccountGroupError OpenPitAccountGroupError;
 typedef struct OpenPitAccountOutcomeEntry OpenPitAccountOutcomeEntry;
 typedef struct OpenPitAccountPnlOutcome OpenPitAccountPnlOutcome;
 typedef struct OpenPitAccountPnlOutcomeList OpenPitAccountPnlOutcomeList;
+typedef struct OpenPitAccountRetirementError OpenPitAccountRetirementError;
 typedef struct OpenPitBytesView OpenPitBytesView;
 typedef struct OpenPitConfigureError OpenPitConfigureError;
 typedef struct OpenPitEngine OpenPitEngine;
@@ -1213,6 +1214,47 @@ typedef uint8_t OpenPitEngineBuildErrorCode;
 #define OpenPitEngineBuildErrorCode_Other ((OpenPitEngineBuildErrorCode) 2)
 
 /**
+ * Discriminant for the variant carried by an account-retirement error.
+ */
+typedef uint32_t OpenPitAccountRetirementErrorKind;
+/**
+ * One or more policies refused retirement; nothing was removed.
+ */
+#define OpenPitAccountRetirementErrorKind_Refused \
+    ((OpenPitAccountRetirementErrorKind) 0)
+/**
+ * A commit finalizer failed and policy state may be partly removed. The
+ * account id must never be reused, even if a later retirement succeeds.
+ */
+#define OpenPitAccountRetirementErrorKind_FinalizerFailed \
+    ((OpenPitAccountRetirementErrorKind) 1)
+
+/**
+ * Machine-readable reason one policy refused account retirement.
+ */
+typedef uint32_t OpenPitAccountRetirementRefusalKind;
+/**
+ * The policy's configuration still names the account.
+ */
+#define OpenPitAccountRetirementRefusalKind_ConfigurationReferencesAccount \
+    ((OpenPitAccountRetirementRefusalKind) 1)
+/**
+ * The policy holds non-zero state for the account.
+ */
+#define OpenPitAccountRetirementRefusalKind_NonZeroState \
+    ((OpenPitAccountRetirementRefusalKind) 2)
+/**
+ * The policy holds state of an operation that is still in flight.
+ */
+#define OpenPitAccountRetirementRefusalKind_OperationInProgress \
+    ((OpenPitAccountRetirementRefusalKind) 3)
+/**
+ * The policy could not determine whether its state may be retired.
+ */
+#define OpenPitAccountRetirementRefusalKind_EvaluationFailed \
+    ((OpenPitAccountRetirementRefusalKind) 4)
+
+/**
  * Discriminant for the variant carried by an [`OpenPitAccountBlockError`].
  */
 typedef uint32_t OpenPitAccountBlockErrorKind;
@@ -1255,6 +1297,36 @@ typedef uint32_t OpenPitConfigureErrorKind;
  */
 #define OpenPitConfigureErrorKind_NestedConfiguration \
     ((OpenPitConfigureErrorKind) 3)
+
+/**
+ * Decision returned by a custom policy's account-retirement callback.
+ */
+typedef uint8_t OpenPitPretradePreTradePolicyRetireAccountDecision;
+/**
+ * The policy accepts retirement.
+ */
+#define OpenPitPretradePreTradePolicyRetireAccountDecision_Accept \
+    ((OpenPitPretradePreTradePolicyRetireAccountDecision) 0)
+/**
+ * The policy's configuration still names the account.
+ */
+#define OpenPitPretradePreTradePolicyRetireAccountDecision_ConfigurationReferencesAccount \
+    ((OpenPitPretradePreTradePolicyRetireAccountDecision) 1)
+/**
+ * The policy holds non-zero state for the account.
+ */
+#define OpenPitPretradePreTradePolicyRetireAccountDecision_NonZeroState \
+    ((OpenPitPretradePreTradePolicyRetireAccountDecision) 2)
+/**
+ * The policy holds state of an operation that is still in flight.
+ */
+#define OpenPitPretradePreTradePolicyRetireAccountDecision_OperationInProgress \
+    ((OpenPitPretradePreTradePolicyRetireAccountDecision) 3)
+/**
+ * The policy could not determine whether its state may be retired.
+ */
+#define OpenPitPretradePreTradePolicyRetireAccountDecision_EvaluationFailed \
+    ((OpenPitPretradePreTradePolicyRetireAccountDecision) 4)
 
 /**
  * Result of a market-data read.
@@ -3041,6 +3113,36 @@ typedef OpenPitPretradeRejectList *
     const OpenPitAccountAdjustment * adjustment,
     OpenPitMutations * mutations,
     OpenPitPretradeAccountAdjustmentResult * out_result,
+    void * user_data
+);
+
+/**
+ * Callback used by a custom pre-trade policy to retire one account.
+ *
+ * Contract:
+ * - `account_id` identifies the account being retired.
+ * - `mutations` is a callback-scoped non-owning pointer that allows the
+ *   callback to register commit/rollback mutations. The callback must not
+ *   store or use it after return.
+ * - Return one of the values from
+ *   `OpenPitPretradePreTradePolicyRetireAccountDecision`.
+ * - An invalid return byte is handled as `EvaluationFailed`: retirement is
+ *   refused and nothing is removed.
+ * - The callback only verifies that its policy's account state is zero and
+ *   not in use. On `Accept`, it registers every removal as a commit callback
+ *   through `openpit_mutations_push` and removes nothing itself.
+ * - The engine commits every registered removal only if every policy
+ *   accepts. If any policy refuses, it runs every rollback and removes
+ *   nothing. A callback that removes state directly breaks the guarantee
+ *   that a refusal changes nothing.
+ * - `user_data` is passed through unchanged from policy creation.
+ * - The callback and the mutations it registers run under the engine's
+ *   exclusive account-state lease and must not call back into state-changing
+ *   engine operations.
+ */
+typedef uint8_t (*OpenPitPretradePreTradePolicyRetireAccountFn)(
+    OpenPitParamAccountId account_id,
+    OpenPitMutations * mutations,
     void * user_data
 );
 
@@ -6115,6 +6217,139 @@ OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
 );
 
 /**
+ * Releases a caller-owned account-retirement error.
+ *
+ * Contract:
+ * - call exactly once per pointer returned by
+ *   `openpit_engine_retire_account`;
+ * - passing null is allowed and has no effect.
+ */
+void openpit_destroy_account_retirement_error(
+    OpenPitAccountRetirementError * err
+);
+
+/**
+ * Returns the variant kind of an account-retirement error.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitAccountRetirementErrorKind openpit_account_retirement_error_get_kind(
+    const OpenPitAccountRetirementError * err
+);
+
+/**
+ * Returns the human-readable message from an account-retirement error.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - the returned view borrows from the error and remains valid while the
+ *   error is alive;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitStringView openpit_account_retirement_error_get_message(
+    const OpenPitAccountRetirementError * err
+);
+
+/**
+ * Returns the number of policy refusals in an account-retirement error.
+ *
+ * The count is zero for `FinalizerFailed`.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+size_t openpit_account_retirement_error_get_refusal_count(
+    const OpenPitAccountRetirementError * err
+);
+
+/**
+ * Copies a borrowed policy-name view for the refusal at `index`.
+ *
+ * Contract:
+ * - `err` and `out_policy_name` must be valid non-null pointers;
+ * - returns `true` and writes the view when a refusal exists;
+ * - returns `false` when `index` is out of bounds and leaves
+ *   `out_policy_name` untouched;
+ * - the view remains valid while the error is alive;
+ * - violating the pointer contract aborts the call.
+ */
+bool openpit_account_retirement_error_get_refusal_policy_name(
+    const OpenPitAccountRetirementError * err,
+    size_t index,
+    OpenPitStringView * out_policy_name
+);
+
+/**
+ * Copies the refusal kind at `index` into `out_refusal_kind`.
+ *
+ * Contract:
+ * - `err` and `out_refusal_kind` must be valid non-null pointers;
+ * - returns `true` and writes the kind when a refusal exists;
+ * - returns `false` when `index` is out of bounds and leaves
+ *   `out_refusal_kind` untouched;
+ * - violating the pointer contract aborts the call.
+ */
+bool openpit_account_retirement_error_get_refusal_kind(
+    const OpenPitAccountRetirementError * err,
+    size_t index,
+    OpenPitAccountRetirementRefusalKind * out_refusal_kind
+);
+
+/**
+ * Atomically forgets all runtime state held for one account when it is zero
+ * and not in use.
+ *
+ * On success, every policy's account-scoped state is removed together with the
+ * account's explicit currency, group membership, and account block. Retirement
+ * is refused without removing anything when policy configuration still names
+ * the account, policy state is non-zero, an account operation is in progress,
+ * or a policy cannot evaluate retirement. A finalizer failure can leave policy
+ * state partly removed; the engine arms its kill switch and retains the
+ * account's currency, membership, and block.
+ *
+ * Caller contract:
+ * - `engine` must be a valid non-null engine pointer;
+ * - before this call, finalize or destroy every pre-trade request,
+ *   reservation, and drop-copy handle for `account_id`;
+ * - do not run operations, configuration, or administration for that account
+ *   concurrently with this call;
+ * - a pending request that has not been executed and holds no policy state
+ *   is invisible to retirement. Executing it later acts on the account as
+ *   new and, after id reuse, may act on someone else's account;
+ * - do not reuse `account_id` before this function returns `true`;
+ * - after `FinalizerFailed`, never reuse `account_id`, even if a later
+ *   retirement attempt succeeds.
+ *
+ * Success:
+ * - returns `true`; every policy removal committed;
+ * - both output pointers are left untouched.
+ *
+ * Error:
+ * - returns `false` for both transport and domain failures;
+ * - if `engine` is null and `out_error` is not null, writes a caller-owned
+ *   `OpenPitSharedString` that MUST be released with
+ *   `openpit_destroy_shared_string`; `out_retirement_error` is untouched;
+ * - if the core returns a future variant the C model cannot represent,
+ *   returns `false`, writes no domain error, and writes a transport error
+ *   naming the unsupported variant through non-null `out_error`;
+ * - for a domain failure, if `out_retirement_error` is not null, writes a
+ *   caller-owned `OpenPitAccountRetirementError` that MUST be released with
+ *   `openpit_destroy_account_retirement_error`; `out_error` is untouched;
+ * - either output pointer may be null.
+ */
+bool openpit_engine_retire_account(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id,
+    OpenPitAccountRetirementError ** out_retirement_error,
+    OpenPitOutError out_error
+);
+
+/**
  * Releases a caller-owned account-group error.
  *
  * Contract:
@@ -6735,17 +6970,30 @@ bool openpit_engine_replace_account_group_block_reason(
  *   account adjustment outcome this policy produces. Use `0` for the default
  *   group.
  * - `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`,
- *   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be
- *   null.
+ *   `apply_execution_report_fn`, `apply_account_adjustment_fn`, and
+ *   `retire_account_fn` may be null.
  * - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
  *   `apply_account_adjustment_fn` means that hook accepts by default.
  * - A null `apply_execution_report_fn` means that hook returns no post-trade
  *   result.
+ * - A null `retire_account_fn` means this custom policy holds no
+ *   account-scoped state. A custom policy that keeps account-scoped state
+ *   MUST provide it; otherwise that state silently survives retirement and a
+ *   reused account id inherits it.
  * - Non-null callbacks and `free_user_data_fn` must remain callable for as
  *   long as the policy may still be used by either the caller pointer or the
  *   engine.
  * - Custom main-stage and account-adjustment callbacks can register
  *   commit/rollback mutations through their `mutations` pointer.
+ * - The retirement callback and the mutations it registers run under the
+ *   engine's exclusive account-state lease and must not call back into the
+ *   engine.
+ * - The retirement callback only verifies that its policy's account state is
+ *   zero and not in use. On `Accept`, it registers every removal as a commit
+ *   callback through `openpit_mutations_push` and removes nothing itself.
+ *   The engine commits all registered removals only if every policy accepts;
+ *   otherwise it runs every rollback and removes nothing. Deleting state
+ *   directly breaks the guarantee that a refusal changes nothing.
  * - `free_user_data_fn` will be called exactly once, when the last reference
  *   to the policy is released.
  * - `user_data` is opaque to the SDK: the engine never inspects,
@@ -6783,6 +7031,7 @@ OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(
     OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn,
     OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn,
     OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn,
+    OpenPitPretradePreTradePolicyRetireAccountFn retire_account_fn,
     OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn,
     void * user_data,
     OpenPitOutError out_error
@@ -6809,6 +7058,10 @@ OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(
  * - Every callback except `free_user_data_fn` may be null; the null behavior
  *   of the normal callbacks matches
  *   `openpit_create_pretrade_custom_pre_trade_policy`.
+ * - A null `retire_account_fn` means this custom policy holds no
+ *   account-scoped state. A custom policy that keeps account-scoped state
+ *   MUST provide it; otherwise that state silently survives retirement and a
+ *   reused account id inherits it.
  * - A null `check_pre_trade_start_dry_run_fn` or
  *   `perform_pre_trade_check_dry_run_fn` leaves that dry-run hook delegating
  *   to its normal counterpart (`check_pre_trade_start_fn` /
@@ -6819,6 +7072,15 @@ OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(
  *   engine.
  * - Custom main-stage and account-adjustment callbacks can register
  *   commit/rollback mutations through their `mutations` pointer.
+ * - The retirement callback and the mutations it registers run under the
+ *   engine's exclusive account-state lease and must not call back into the
+ *   engine.
+ * - The retirement callback only verifies that its policy's account state is
+ *   zero and not in use. On `Accept`, it registers every removal as a commit
+ *   callback through `openpit_mutations_push` and removes nothing itself.
+ *   The engine commits all registered removals only if every policy accepts;
+ *   otherwise it runs every rollback and removes nothing. Deleting state
+ *   directly breaks the guarantee that a refusal changes nothing.
  * - `free_user_data_fn` will be called exactly once, when the last reference
  *   to the policy is released.
  * - `user_data` is opaque to the SDK: the engine never inspects,
@@ -6865,6 +7127,7 @@ openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
     OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_dry_run_fn,
     OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn,
     OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn,
+    OpenPitPretradePreTradePolicyRetireAccountFn retire_account_fn,
     OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn,
     void * user_data,
     OpenPitOutError out_error
@@ -6938,11 +7201,16 @@ bool openpit_engine_builder_add_pre_trade_policy(
  * - `commit_fn` and `rollback_fn` must remain callable until one of them is
  *   executed.
  * - `user_data` is passed to both callbacks.
- * - Apply tentative state before registration. Pre-trade and drop-copy
- *   finalization each run exactly one callback per mutation, when the caller
- *   commits or rolls back the returned handle. A fatal drop-copy evaluation
- *   reject runs every collected `rollback_fn` instead, including mutations
- *   whose `commit_fn` was not reached.
+ * - Except during account retirement, apply tentative state before
+ *   registration. Pre-trade and drop-copy finalization each run exactly one
+ *   callback per mutation, when the caller commits or rolls back the
+ *   returned handle. A fatal drop-copy evaluation reject runs every
+ *   collected `rollback_fn` instead, including mutations whose `commit_fn`
+ *   was not reached.
+ * - For account retirement, do not remove state before registration. Inside
+ *   `openpit_engine_retire_account`, `commit_fn` applies the removal for the
+ *   first time and `rollback_fn` has nothing to undo. That call finalizes
+ *   the mutations itself and returns no handle.
  * - Neither callback may fail. A failure reported by either one never fails
  *   the void commit or rollback call; it arms the engine kill switch. A
  *   mutation registered here is a custom-policy mutation, so that kill

@@ -233,11 +233,12 @@ pub(crate) fn next_mutation_owner_id() -> u64 {
 /// Commit/rollback action pair registered by a policy during checks.
 ///
 /// The engine applies commit actions in registration order on success and
-/// rollback actions in reverse registration order on failure. Policies apply
-/// their tentative state before registration, so a rollback also runs for
-/// mutations whose commit callback was never reached. Commit callbacks
-/// finalize that already-applied state; they are not the place to apply it for
-/// the first time.
+/// rollback actions in reverse registration order on failure. On other
+/// pipelines, policies apply tentative state before registration, so rollback
+/// also runs for mutations whose commit was never reached. Commit finalizes
+/// that state rather than applying it for the first time. Account retirement
+/// reverses the order: its hook only verifies, commit removes state for the
+/// first time, and rollback has nothing to undo.
 ///
 /// # Rollback safety by pipeline
 ///
@@ -255,9 +256,10 @@ pub(crate) fn next_mutation_owner_id() -> u64 {
 /// # Finalizer contract
 ///
 /// A finalizer - the commit or the rollback callback - has **no right to
-/// fail**. By the time it runs, the decision is already made and the state it
-/// finalizes was applied eagerly, so there is nothing left to compensate and no
-/// caller left to answer: `commit` and `rollback` are void on every surface.
+/// fail**. It runs after the policy decision is made; `commit` and `rollback`
+/// are void on every surface. Except on account retirement, state was applied
+/// eagerly before the finalizer. A failing callback can leave policy state
+/// partially finalized.
 ///
 /// A finalizer that fails anyway leaves the engine's own bookkeeping in an
 /// unknown state, so the engine never ignores it. It raises a kill switch with
@@ -280,7 +282,8 @@ pub(crate) fn next_mutation_owner_id() -> u64 {
 ///
 /// This holds on every pipeline: pre-trade reservation finalization, drop-copy
 /// operation finalization (explicit and on drop), compensation of a fatal
-/// drop-copy evaluation exit, and the account-adjustment batch.
+/// drop-copy evaluation exit, the account-adjustment batch, and account
+/// retirement.
 ///
 /// # Examples
 ///
@@ -312,13 +315,13 @@ pub struct Mutation {
 impl Mutation {
     /// Creates a mutation from commit and rollback closures.
     ///
-    /// `commit` runs when the pipeline succeeds (reservation commit or
-    /// account-adjustment batch acceptance).
+    /// `commit` runs when the pipeline succeeds (reservation commit,
+    /// account-adjustment batch acceptance, or account retirement).
     ///
     /// `rollback` runs when the pipeline fails (policy reject) and when the
     /// caller-owned handle is rolled back or dropped without explicit
-    /// finalization. Policies must therefore apply tentative state before
-    /// registering the pair and make `rollback` reverse that tentative state.
+    /// finalization. Except on account retirement, policies must apply
+    /// tentative state before registration and make `rollback` reverse it.
     ///
     /// Neither callback may fail; see the finalizer contract on [`Mutation`].
     pub fn new(commit: impl FnOnce() + 'static, rollback: impl FnOnce() + 'static) -> Self {

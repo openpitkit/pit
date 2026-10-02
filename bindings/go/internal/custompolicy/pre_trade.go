@@ -41,10 +41,11 @@ import (
 )
 
 type PreTrade struct {
-	impl   pretrade.Policy
-	dryRun pretrade.DryRunPolicy
-	name   string
-	handle cgo.Handle
+	impl       pretrade.Policy
+	dryRun     pretrade.DryRunPolicy
+	retirement pretrade.AccountRetirementPolicy
+	name       string
+	handle     cgo.Handle
 }
 
 // StartPreTrade registers impl as a native custom pre-trade policy.
@@ -56,6 +57,9 @@ func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) 
 	if dryRun, ok := impl.(pretrade.DryRunPolicy); ok {
 		implHandle.dryRun = dryRun
 	}
+	if retirement, ok := impl.(pretrade.AccountRetirementPolicy); ok {
+		implHandle.retirement = retirement
+	}
 	implHandle.handle = cgo.NewHandle(implHandle)
 
 	userData := callback.NewUserDataFromHandle(implHandle.handle)
@@ -64,6 +68,10 @@ func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) 
 
 	var policyHandle native.PretradePreTradePolicy
 	var err error
+	var retireAccountFnAddr unsafe.Pointer
+	if implHandle.retirement != nil {
+		retireAccountFnAddr = PreTradePolicyRetireAccountFnAddr()
+	}
 
 	if implHandle.dryRun != nil {
 		policyHandle, err = native.CreatePretradeCustomPreTradePolicyWithDryRun(
@@ -75,6 +83,7 @@ func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) 
 			PreTradePolicyPerformPreTradeCheckDryRunFnAddr(),
 			PreTradePolicyApplyReportFnAddr(),
 			PreTradePolicyApplyAccountAdjustmentFnAddr(),
+			retireAccountFnAddr,
 			PreTradePolicyFreeUserDataFnAddr(),
 			userData,
 		)
@@ -86,6 +95,7 @@ func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) 
 			PreTradePolicyPerformPreTradeCheckFnAddr(),
 			PreTradePolicyApplyReportFnAddr(),
 			PreTradePolicyApplyAccountAdjustmentFnAddr(),
+			retireAccountFnAddr,
 			PreTradePolicyFreeUserDataFnAddr(),
 			userData,
 		)
@@ -253,6 +263,32 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 		)
 	}
 	return newNativeRejectList(rejects)
+}
+
+//export pitPretradePreTradePolicyRetireAccount
+func pitPretradePreTradePolicyRetireAccount(
+	accountID C.OpenPitParamAccountId,
+	mutations *C.OpenPitMutations,
+	userData unsafe.Pointer,
+) (decision C.uint8_t) {
+	// A recovered panic returns this preset: the zero decision means Accept,
+	// and recover() yields nil for panic(nil) under GODEBUG=panicnil=1, so
+	// the check below alone could turn a crashing hook into an acceptance.
+	decision = C.uint8_t(pretrade.AccountRetirementEvaluationFailed)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			// A panicking hook refuses with EvaluationFailed. Per the
+			// AccountRetirementPolicy contract the panic value is not
+			// propagated: the retirement result carries only the policy name
+			// and the refusal kind.
+			decision = C.uint8_t(pretrade.AccountRetirementEvaluationFailed)
+		}
+	}()
+	policy := getPreTrade(userData)
+	return C.uint8_t(policy.retirement.RetireAccount(
+		param.NewAccountIDFromHandle(native.ParamAccountID(accountID)),
+		tx.NewMutationsFromHandle(native.Mutations(mutations)),
+	))
 }
 
 //export pitPretradePreTradePolicyClose

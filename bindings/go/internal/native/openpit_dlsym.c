@@ -331,6 +331,13 @@ static void (*_fn_openpit_destroy_account_adjustment_batch_error)(OpenPitAccount
 static size_t (*_fn_openpit_account_adjustment_batch_error_get_failed_adjustment_index)(const OpenPitAccountAdjustmentBatchError *) = NULL;
 static const OpenPitPretradeRejectList * (*_fn_openpit_account_adjustment_batch_error_get_rejects)(const OpenPitAccountAdjustmentBatchError *) = NULL;
 static OpenPitAccountAdjustmentApplyStatus (*_fn_openpit_engine_apply_account_adjustment)(OpenPitEngine *, OpenPitParamAccountId, const OpenPitAccountAdjustment *, size_t, OpenPitAccountAdjustmentBatchError **, OpenPitAccountAdjustmentOutcomeList **, OpenPitPretradeAccountBlockList **, OpenPitOutError) = NULL;
+static void (*_fn_openpit_destroy_account_retirement_error)(OpenPitAccountRetirementError *) = NULL;
+static OpenPitAccountRetirementErrorKind (*_fn_openpit_account_retirement_error_get_kind)(const OpenPitAccountRetirementError *) = NULL;
+static OpenPitStringView (*_fn_openpit_account_retirement_error_get_message)(const OpenPitAccountRetirementError *) = NULL;
+static size_t (*_fn_openpit_account_retirement_error_get_refusal_count)(const OpenPitAccountRetirementError *) = NULL;
+static bool (*_fn_openpit_account_retirement_error_get_refusal_policy_name)(const OpenPitAccountRetirementError *, size_t, OpenPitStringView *) = NULL;
+static bool (*_fn_openpit_account_retirement_error_get_refusal_kind)(const OpenPitAccountRetirementError *, size_t, OpenPitAccountRetirementRefusalKind *) = NULL;
+static bool (*_fn_openpit_engine_retire_account)(OpenPitEngine *, OpenPitParamAccountId, OpenPitAccountRetirementError **, OpenPitOutError) = NULL;
 static void (*_fn_openpit_destroy_account_group_error)(OpenPitAccountGroupError *) = NULL;
 static OpenPitStringView (*_fn_openpit_account_group_error_get_message)(const OpenPitAccountGroupError *) = NULL;
 static OpenPitParamAccountId (*_fn_openpit_account_group_error_get_account)(const OpenPitAccountGroupError *) = NULL;
@@ -358,8 +365,8 @@ static bool (*_fn_openpit_engine_replace_account_block_reason)(OpenPitEngine *, 
 static bool (*_fn_openpit_engine_block_account_group)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
 static bool (*_fn_openpit_engine_unblock_account_group)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitAccountBlockError **) = NULL;
 static bool (*_fn_openpit_engine_replace_account_group_block_reason)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
-static OpenPitPretradePreTradePolicy * (*_fn_openpit_create_pretrade_custom_pre_trade_policy)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError) = NULL;
-static OpenPitPretradePreTradePolicy * (*_fn_openpit_create_pretrade_custom_pre_trade_policy_with_dry_run)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError) = NULL;
+static OpenPitPretradePreTradePolicy * (*_fn_openpit_create_pretrade_custom_pre_trade_policy)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyRetireAccountFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError) = NULL;
+static OpenPitPretradePreTradePolicy * (*_fn_openpit_create_pretrade_custom_pre_trade_policy_with_dry_run)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyRetireAccountFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError) = NULL;
 static void (*_fn_openpit_destroy_pretrade_pre_trade_policy)(OpenPitPretradePreTradePolicy *) = NULL;
 static OpenPitStringView (*_fn_openpit_pretrade_pre_trade_policy_get_name)(const OpenPitPretradePreTradePolicy *) = NULL;
 static bool (*_fn_openpit_engine_builder_add_pre_trade_policy)(OpenPitEngineBuilder *, OpenPitPretradePreTradePolicy *, OpenPitOutError) = NULL;
@@ -1070,6 +1077,20 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_account_adjustment_batch_error_get_rejects == NULL) return "openpit_account_adjustment_batch_error_get_rejects";
     _fn_openpit_engine_apply_account_adjustment = (OpenPitAccountAdjustmentApplyStatus (*)(OpenPitEngine *, OpenPitParamAccountId, const OpenPitAccountAdjustment *, size_t, OpenPitAccountAdjustmentBatchError **, OpenPitAccountAdjustmentOutcomeList **, OpenPitPretradeAccountBlockList **, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_apply_account_adjustment");
     if (_fn_openpit_engine_apply_account_adjustment == NULL) return "openpit_engine_apply_account_adjustment";
+    _fn_openpit_destroy_account_retirement_error = (void (*)(OpenPitAccountRetirementError *))openpit_dlsym(handle, "openpit_destroy_account_retirement_error");
+    if (_fn_openpit_destroy_account_retirement_error == NULL) return "openpit_destroy_account_retirement_error";
+    _fn_openpit_account_retirement_error_get_kind = (OpenPitAccountRetirementErrorKind (*)(const OpenPitAccountRetirementError *))openpit_dlsym(handle, "openpit_account_retirement_error_get_kind");
+    if (_fn_openpit_account_retirement_error_get_kind == NULL) return "openpit_account_retirement_error_get_kind";
+    _fn_openpit_account_retirement_error_get_message = (OpenPitStringView (*)(const OpenPitAccountRetirementError *))openpit_dlsym(handle, "openpit_account_retirement_error_get_message");
+    if (_fn_openpit_account_retirement_error_get_message == NULL) return "openpit_account_retirement_error_get_message";
+    _fn_openpit_account_retirement_error_get_refusal_count = (size_t (*)(const OpenPitAccountRetirementError *))openpit_dlsym(handle, "openpit_account_retirement_error_get_refusal_count");
+    if (_fn_openpit_account_retirement_error_get_refusal_count == NULL) return "openpit_account_retirement_error_get_refusal_count";
+    _fn_openpit_account_retirement_error_get_refusal_policy_name = (bool (*)(const OpenPitAccountRetirementError *, size_t, OpenPitStringView *))openpit_dlsym(handle, "openpit_account_retirement_error_get_refusal_policy_name");
+    if (_fn_openpit_account_retirement_error_get_refusal_policy_name == NULL) return "openpit_account_retirement_error_get_refusal_policy_name";
+    _fn_openpit_account_retirement_error_get_refusal_kind = (bool (*)(const OpenPitAccountRetirementError *, size_t, OpenPitAccountRetirementRefusalKind *))openpit_dlsym(handle, "openpit_account_retirement_error_get_refusal_kind");
+    if (_fn_openpit_account_retirement_error_get_refusal_kind == NULL) return "openpit_account_retirement_error_get_refusal_kind";
+    _fn_openpit_engine_retire_account = (bool (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitAccountRetirementError **, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_retire_account");
+    if (_fn_openpit_engine_retire_account == NULL) return "openpit_engine_retire_account";
     _fn_openpit_destroy_account_group_error = (void (*)(OpenPitAccountGroupError *))openpit_dlsym(handle, "openpit_destroy_account_group_error");
     if (_fn_openpit_destroy_account_group_error == NULL) return "openpit_destroy_account_group_error";
     _fn_openpit_account_group_error_get_message = (OpenPitStringView (*)(const OpenPitAccountGroupError *))openpit_dlsym(handle, "openpit_account_group_error_get_message");
@@ -1124,9 +1145,9 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_unblock_account_group == NULL) return "openpit_engine_unblock_account_group";
     _fn_openpit_engine_replace_account_group_block_reason = (bool (*)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **))openpit_dlsym(handle, "openpit_engine_replace_account_group_block_reason");
     if (_fn_openpit_engine_replace_account_group_block_reason == NULL) return "openpit_engine_replace_account_group_block_reason";
-    _fn_openpit_create_pretrade_custom_pre_trade_policy = (OpenPitPretradePreTradePolicy * (*)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError))openpit_dlsym(handle, "openpit_create_pretrade_custom_pre_trade_policy");
+    _fn_openpit_create_pretrade_custom_pre_trade_policy = (OpenPitPretradePreTradePolicy * (*)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyRetireAccountFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError))openpit_dlsym(handle, "openpit_create_pretrade_custom_pre_trade_policy");
     if (_fn_openpit_create_pretrade_custom_pre_trade_policy == NULL) return "openpit_create_pretrade_custom_pre_trade_policy";
-    _fn_openpit_create_pretrade_custom_pre_trade_policy_with_dry_run = (OpenPitPretradePreTradePolicy * (*)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError))openpit_dlsym(handle, "openpit_create_pretrade_custom_pre_trade_policy_with_dry_run");
+    _fn_openpit_create_pretrade_custom_pre_trade_policy_with_dry_run = (OpenPitPretradePreTradePolicy * (*)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyRetireAccountFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError))openpit_dlsym(handle, "openpit_create_pretrade_custom_pre_trade_policy_with_dry_run");
     if (_fn_openpit_create_pretrade_custom_pre_trade_policy_with_dry_run == NULL) return "openpit_create_pretrade_custom_pre_trade_policy_with_dry_run";
     _fn_openpit_destroy_pretrade_pre_trade_policy = (void (*)(OpenPitPretradePreTradePolicy *))openpit_dlsym(handle, "openpit_destroy_pretrade_pre_trade_policy");
     if (_fn_openpit_destroy_pretrade_pre_trade_policy == NULL) return "openpit_destroy_pretrade_pre_trade_policy";
@@ -2535,6 +2556,34 @@ OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(Open
     return _fn_openpit_engine_apply_account_adjustment(engine, account_id, adjustments, adjustments_len, out_reject, out_outcomes, out_blocks, out_error);
 }
 
+void openpit_destroy_account_retirement_error(OpenPitAccountRetirementError * err) {
+    _fn_openpit_destroy_account_retirement_error(err);
+}
+
+OpenPitAccountRetirementErrorKind openpit_account_retirement_error_get_kind(const OpenPitAccountRetirementError * err) {
+    return _fn_openpit_account_retirement_error_get_kind(err);
+}
+
+OpenPitStringView openpit_account_retirement_error_get_message(const OpenPitAccountRetirementError * err) {
+    return _fn_openpit_account_retirement_error_get_message(err);
+}
+
+size_t openpit_account_retirement_error_get_refusal_count(const OpenPitAccountRetirementError * err) {
+    return _fn_openpit_account_retirement_error_get_refusal_count(err);
+}
+
+bool openpit_account_retirement_error_get_refusal_policy_name(const OpenPitAccountRetirementError * err, size_t index, OpenPitStringView * out_policy_name) {
+    return _fn_openpit_account_retirement_error_get_refusal_policy_name(err, index, out_policy_name);
+}
+
+bool openpit_account_retirement_error_get_refusal_kind(const OpenPitAccountRetirementError * err, size_t index, OpenPitAccountRetirementRefusalKind * out_refusal_kind) {
+    return _fn_openpit_account_retirement_error_get_refusal_kind(err, index, out_refusal_kind);
+}
+
+bool openpit_engine_retire_account(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitAccountRetirementError ** out_retirement_error, OpenPitOutError out_error) {
+    return _fn_openpit_engine_retire_account(engine, account_id, out_retirement_error, out_error);
+}
+
 void openpit_destroy_account_group_error(OpenPitAccountGroupError * err) {
     _fn_openpit_destroy_account_group_error(err);
 }
@@ -2643,12 +2692,12 @@ bool openpit_engine_replace_account_group_block_reason(OpenPitEngine * engine, O
     return _fn_openpit_engine_replace_account_group_block_reason(engine, group, reason, out_error);
 }
 
-OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(OpenPitStringView name, uint16_t policy_group_id, OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_fn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn, OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn, OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn, void * user_data, OpenPitOutError out_error) {
-    return _fn_openpit_create_pretrade_custom_pre_trade_policy(name, policy_group_id, check_pre_trade_start_fn, perform_pre_trade_check_fn, apply_execution_report_fn, apply_account_adjustment_fn, free_user_data_fn, user_data, out_error);
+OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(OpenPitStringView name, uint16_t policy_group_id, OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_fn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn, OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn, OpenPitPretradePreTradePolicyRetireAccountFn retire_account_fn, OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn, void * user_data, OpenPitOutError out_error) {
+    return _fn_openpit_create_pretrade_custom_pre_trade_policy(name, policy_group_id, check_pre_trade_start_fn, perform_pre_trade_check_fn, apply_execution_report_fn, apply_account_adjustment_fn, retire_account_fn, free_user_data_fn, user_data, out_error);
 }
 
-OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(OpenPitStringView name, uint16_t policy_group_id, OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_fn, OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_dry_run_fn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_dry_run_fn, OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn, OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn, void * user_data, OpenPitOutError out_error) {
-    return _fn_openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(name, policy_group_id, check_pre_trade_start_fn, check_pre_trade_start_dry_run_fn, perform_pre_trade_check_fn, perform_pre_trade_check_dry_run_fn, apply_execution_report_fn, apply_account_adjustment_fn, free_user_data_fn, user_data, out_error);
+OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(OpenPitStringView name, uint16_t policy_group_id, OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_fn, OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_dry_run_fn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_dry_run_fn, OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn, OpenPitPretradePreTradePolicyRetireAccountFn retire_account_fn, OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn, void * user_data, OpenPitOutError out_error) {
+    return _fn_openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(name, policy_group_id, check_pre_trade_start_fn, check_pre_trade_start_dry_run_fn, perform_pre_trade_check_fn, perform_pre_trade_check_dry_run_fn, apply_execution_report_fn, apply_account_adjustment_fn, retire_account_fn, free_user_data_fn, user_data, out_error);
 }
 
 void openpit_destroy_pretrade_pre_trade_policy(OpenPitPretradePreTradePolicy * policy) {

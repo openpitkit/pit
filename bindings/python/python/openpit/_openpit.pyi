@@ -2219,7 +2219,11 @@ class ReadyEngineBuilder:
         """Build an engine instance."""
 
 class Engine:
-    """Pre-trade risk engine."""
+    """Pre-trade risk engine.
+
+    Account retirement is not exposed in Python. Python custom policies are
+    treated as holding no account-scoped state during retirement.
+    """
 
     @staticmethod
     def builder() -> EngineBuilder:

@@ -32,6 +32,7 @@ use crate::pretrade::{
     holdings::Holdings, PolicyPreTradeResult, PreTradeContext, PreTradeLock, PreTradePolicy,
     Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
 };
+use crate::storage::ConfigCell;
 use crate::{
     FullSync, HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
     HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
@@ -15748,6 +15749,178 @@ fn active_account_marker_refcount_lives_through_each_rollback_finalizer() {
             .with(&account_id, |count| *count),
         None
     );
+}
+
+#[test]
+fn retire_spot_funds_refusal_priority_and_in_flight_states() {
+    let policy = build_policy(None, None);
+    let account_id = account(99300025);
+    policy
+        .settings
+        .update::<std::convert::Infallible>(|settings| {
+            settings.set_account_limit_mode(account_id, Some(SpotFundsLimitMode::TrackOnly));
+            Ok(())
+        })
+        .expect("valid settings");
+    policy
+        .pnl
+        .with_mut(account_id, AccountPnlEntry::zero, |entry, _| {
+            entry.state = crate::PnlState::Value(pnl_value("3"));
+        });
+    let mut mutations = Mutations::new();
+    let active = policy.begin_holdings_mutation(account_id);
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Err(crate::AccountRetirementRefusal::OperationInProgress)
+    );
+    drop(active);
+
+    let lease = policy.acquire_account_pnl_lease(account_id, 7);
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Err(crate::AccountRetirementRefusal::OperationInProgress)
+    );
+    drop(lease);
+
+    let (_, _, assertion_lease) =
+        policy.acquire_account_pnl_assertion(account_id, 8, crate::PnlState::Value(pnl_value("3")));
+    drop(assertion_lease);
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Err(crate::AccountRetirementRefusal::OperationInProgress),
+        "assertion token must refuse even after its lease is released"
+    );
+    policy
+        .pnl
+        .with_mut(account_id, AccountPnlEntry::zero, |entry, _| {
+            entry.assertion_token = None;
+        });
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Err(crate::AccountRetirementRefusal::NonZeroState)
+    );
+    policy
+        .pnl
+        .with_mut(account_id, AccountPnlEntry::zero, |entry, _| {
+            entry.state = crate::PnlState::Halted(crate::PnlHaltReason::MissingFx);
+        });
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Err(crate::AccountRetirementRefusal::NonZeroState),
+        "halted account PnL must refuse retirement"
+    );
+    policy
+        .pnl
+        .with_mut(account_id, AccountPnlEntry::zero, |entry, _| {
+            entry.state = crate::PnlState::Value(Pnl::ZERO);
+        });
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+    );
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+    );
+}
+
+#[test]
+fn retire_spot_funds_refuses_while_position_limit_names_account() {
+    let policy = build_policy(None, None);
+    let target = account(99300029);
+    let other = account(99300030);
+    let usd = asset("USD");
+    policy
+        .settings
+        .update::<std::convert::Infallible>(|settings| {
+            settings.set_position_limit(target, usd.clone(), Some(qty("10")));
+            settings.set_position_limit(other, usd.clone(), Some(qty("10")));
+            Ok(())
+        })
+        .expect("valid settings");
+    let mut mutations = Mutations::new();
+    assert_eq!(
+        policy.retire_account_state(target, &mut mutations),
+        Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount),
+        "a position limit pinned to the account must refuse retirement"
+    );
+    assert!(mutations.is_empty());
+
+    policy
+        .settings
+        .update::<std::convert::Infallible>(|settings| {
+            settings.set_position_limit(target, usd.clone(), None);
+            Ok(())
+        })
+        .expect("valid settings");
+    assert_eq!(
+        policy.retire_account_state(target, &mut mutations),
+        Ok(()),
+        "a position limit of another account must not refuse retirement"
+    );
+    assert!(!mutations.commit_all().failed());
+    assert_eq!(
+        policy
+            .settings
+            .with(|settings| settings.position_limit_for(other, &usd)),
+        Some(qty("10"))
+    );
+}
+
+#[test]
+fn retire_spot_funds_commit_removes_only_target_zero_state() {
+    let policy = build_policy(None, None);
+    let target = account(99300026);
+    let other = account(99300027);
+    let usd = asset("USD");
+    let eur = asset("EUR");
+    let holdings = policy.holdings.clone();
+    for account_id in [target, other] {
+        holdings.with_mut((account_id, usd.clone()), Holdings::zero, |slot, _| {
+            *slot = Holdings::zero().with_realized_pnl(Pnl::ZERO);
+        });
+        policy
+            .pnl
+            .with_mut(account_id, AccountPnlEntry::zero, |_, _| {});
+        let lease = policy.acquire_account_pnl_lease(account_id, 7);
+        drop(lease);
+    }
+    holdings.with_mut((target, eur.clone()), Holdings::zero, |slot, _| {
+        *slot = Holdings::zero().with_realized_pnl(Pnl::ZERO);
+    });
+    assert!(policy.pnl_leases.keys().contains(&target));
+    let mut mutations = Mutations::new();
+    assert_eq!(policy.retire_account_state(target, &mut mutations), Ok(()));
+    assert!(!mutations.commit_all().failed());
+    assert_eq!(holdings.get(&(target, usd.clone())), None);
+    assert_eq!(holdings.get(&(target, eur)), None);
+    assert_eq!(policy.pnl.with(&target, |_| ()), None);
+    assert!(!policy.pnl_leases.keys().contains(&target));
+    assert!(holdings.get(&(other, usd)).is_some());
+    assert!(policy.pnl.with(&other, |_| ()).is_some());
+    assert!(policy.pnl_leases.keys().contains(&other));
+}
+
+#[test]
+fn retire_spot_funds_check_and_remove_reports_intervening_nonzero_state() {
+    let policy = build_policy(None, None);
+    let account_id = account(99300028);
+    let usd = asset("USD");
+    let holdings = policy.holdings.clone();
+    holdings.with_mut((account_id, usd.clone()), Holdings::zero, |_, _| {});
+    let mut mutations = Mutations::new();
+    assert_eq!(
+        policy.retire_account_state(account_id, &mut mutations),
+        Ok(())
+    );
+    holdings.with_mut((account_id, usd.clone()), Holdings::zero, |slot, _| {
+        *slot = Holdings::new(ps("1"), PositionSize::ZERO);
+    });
+    assert!(
+        mutations.commit_all().failed(),
+        "changed holdings must fail finalization"
+    );
+    assert!(holdings.get(&(account_id, usd)).is_some());
 }
 
 #[test]

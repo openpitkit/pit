@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl};
+use crate::core::{AccountRetirementRefusal, HasAccountId, HasFee, HasInstrument, HasPnl};
 use crate::param::{AccountId, Asset, Pnl};
 use crate::pretrade::policy::{
     missing_required_field_account_block, missing_required_field_reject, PolicyGroupId, PolicyName,
@@ -26,6 +26,7 @@ use crate::pretrade::policy::{
 use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{AccountBlock, PostTradeResult, PreTradeContext, PreTradePolicy, Rejects};
 use crate::storage::{ConfigCell, Storage, StorageBuilder};
+use crate::{Mutation, Mutations};
 
 use super::pnl_bounds;
 
@@ -126,7 +127,8 @@ impl std::error::Error for PnlBoundsKillSwitchPolicyError {}
 /// exists for that pair at the time of the report. When a barrier is added at
 /// runtime, the live accumulator is already authoritative. The deliberate
 /// trade-off is that the accumulator retains an entry for every pair ever
-/// traded.
+/// traded until [`Engine::retire_account`](crate::Engine::retire_account)
+/// removes a retired account's zero entries.
 ///
 /// # `initial_pnl` is construction-only
 ///
@@ -296,6 +298,15 @@ pub(crate) type RealizedPnlStorage<LockingPolicyFactory> =
 ///   each barrier;
 /// - constructor does not validate signs of bounds;
 /// - constructor does not validate ordering (`lower_bound <= upper_bound`).
+///
+/// # Account retirement
+///
+/// Nonzero realized P&L for any settlement asset refuses with `NonZeroState`;
+/// use `Configurator::set_account_pnl` to set each entry to zero. An
+/// account+asset barrier refuses with `ConfigurationReferencesAccount`.
+/// On success, the policy forgets the account's zero realized-P&L entries.
+/// See [`Engine::retire_account`](crate::Engine::retire_account) for the
+/// engine-wide contract.
 pub struct PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
@@ -420,6 +431,40 @@ where
 
     fn policy_group_id(&self) -> PolicyGroupId {
         self.settings.with(|s| s.group_id)
+    }
+
+    fn retire_account(
+        &self,
+        account_id: AccountId,
+        mutations: &mut Mutations,
+    ) -> Result<(), AccountRetirementRefusal> {
+        let keys: Vec<_> = self
+            .realized
+            .keys()
+            .into_iter()
+            .filter(|(account, _)| *account == account_id)
+            .collect();
+        if keys
+            .iter()
+            .any(|key| matches!(self.realized.with(key, |pnl| *pnl), Some(pnl) if pnl != Pnl::ZERO))
+        {
+            return Err(AccountRetirementRefusal::NonZeroState);
+        }
+        if self
+            .settings
+            .with(|settings| settings.account_barriers.contains_key(&account_id))
+        {
+            return Err(AccountRetirementRefusal::ConfigurationReferencesAccount);
+        }
+
+        for key in keys {
+            let realized = self.realized.clone();
+            mutations.push(Mutation::new_reporting(
+                move || realized.remove_if(&key, |pnl| *pnl == Pnl::ZERO),
+                Default::default,
+            ));
+        }
+        Ok(())
     }
 
     #[allow(private_interfaces)]
@@ -549,7 +594,7 @@ where
     /// when no barrier covers the pair and no overflow occurs.
     fn apply_execution_report(
         &self,
-        _ctx: &crate::pretrade::PostTradeContext<
+        ctx: &crate::pretrade::PostTradeContext<
             <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
         >,
         report: &ExecutionReport,
@@ -605,49 +650,51 @@ where
             }
         };
 
-        let block: Option<AccountBlock> = self.realized.with_mut(
-            (account_id, settlement.clone()),
-            || Pnl::ZERO,
-            |entry, _is_new| {
-                let previous = *entry;
-                let updated = match previous.checked_add(pnl_with_fee) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        return Some(pnl_bounds::pnl_calculation_failed_block(
-                            self,
-                            "pnl accumulation overflow",
-                            format!(
-                                "realized pnl + pnl_with_fee overflow: \
+        let block: Option<AccountBlock> = ctx.with_state_writer(|| {
+            self.realized.with_mut(
+                (account_id, settlement.clone()),
+                || Pnl::ZERO,
+                |entry, _is_new| {
+                    let previous = *entry;
+                    let updated = match previous.checked_add(pnl_with_fee) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            return Some(pnl_bounds::pnl_calculation_failed_block(
+                                self,
+                                "pnl accumulation overflow",
+                                format!(
+                                    "realized pnl + pnl_with_fee overflow: \
                                  previous {previous}, increment {pnl_with_fee}, \
                                  settlement asset {settlement}"
-                            ),
-                        ));
+                                ),
+                            ));
+                        }
+                    };
+                    *entry = updated;
+
+                    // Read barriers from the cell to determine if the new total
+                    // breaches a boundary.
+                    let outside = self.settings.with(|s| {
+                        is_outside_bounds(
+                            &s.broker_barriers,
+                            &s.account_barriers,
+                            updated,
+                            settlement,
+                            account_id,
+                        )
+                    });
+
+                    if outside {
+                        Some(pnl_bounds::pnl_breach_account_block(
+                            Self::NAME,
+                            format!("realized pnl {updated}, settlement asset {settlement}"),
+                        ))
+                    } else {
+                        None
                     }
-                };
-                *entry = updated;
-
-                // Read barriers from the cell to determine if the new total
-                // breaches a boundary.
-                let outside = self.settings.with(|s| {
-                    is_outside_bounds(
-                        &s.broker_barriers,
-                        &s.account_barriers,
-                        updated,
-                        settlement,
-                        account_id,
-                    )
-                });
-
-                if outside {
-                    Some(pnl_bounds::pnl_breach_account_block(
-                        Self::NAME,
-                        format!("realized pnl {updated}, settlement asset {settlement}"),
-                    ))
-                } else {
-                    None
-                }
-            },
-        );
+                },
+            )
+        });
 
         block.map(|b| PostTradeResult::blocks_only(vec![b]))
     }
@@ -693,12 +740,14 @@ fn validate_bounds(
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
+    use std::sync::{mpsc, Arc, Barrier};
+    use std::time::Duration;
 
     use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
     use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope};
-    use crate::storage::{ConfigCell, NoLocking};
+    use crate::storage::{ConfigCell, FullLocking, NoLocking};
     use crate::RequestFieldAccessError;
 
     use super::{
@@ -767,6 +816,216 @@ mod tests {
         assert!(triggered); // 40+15=55 > upper bound 50
         assert!(check_start(&policy, &order("USD", account(1))).is_err());
         assert!(check_start(&policy, &order("USD", account(2))).is_ok());
+    }
+
+    #[test]
+    fn retire_kill_switch_nonzero_ledger_refuses_and_zero_commit_removes_only_target() {
+        let policy = policy_usd(Some(pnl("-100")), None);
+        let target = account(1);
+        let other = account(2);
+        let usd = Asset::new("USD").expect("valid asset");
+        let eur = Asset::new("EUR").expect("valid asset");
+        apply_report(&policy, &report("USD", target, pnl("5")));
+        apply_report(&policy, &report("EUR", target, pnl("3")));
+        apply_report(&policy, &report("USD", other, pnl("7")));
+        let mut mutations = crate::Mutations::new();
+        let retire = |account_id, mutations: &mut crate::Mutations| {
+            <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::LocalSync>>::retire_account(
+                &policy, account_id, mutations,
+            )
+        };
+        assert_eq!(
+            retire(target, &mut mutations),
+            Err(crate::AccountRetirementRefusal::NonZeroState)
+        );
+        policy.realized.with_mut(
+            (target, usd.clone()),
+            || Pnl::ZERO,
+            |entry, _| *entry = Pnl::ZERO,
+        );
+        policy.realized.with_mut(
+            (target, eur.clone()),
+            || Pnl::ZERO,
+            |entry, _| *entry = Pnl::ZERO,
+        );
+        assert_eq!(retire(target, &mut mutations), Ok(()));
+        assert!(!mutations.commit_all().failed());
+        assert_eq!(
+            policy.realized.with(&(target, usd.clone()), |entry| *entry),
+            None
+        );
+        assert_eq!(policy.realized.with(&(target, eur), |entry| *entry), None);
+        assert_eq!(
+            policy.realized.with(&(other, usd), |entry| *entry),
+            Some(pnl("7"))
+        );
+    }
+
+    #[test]
+    fn retire_kill_switch_account_configuration_refuses_until_removed() {
+        let target = account(1);
+        let policy = TestPolicy::new(
+            PnlBoundsKillSwitchSettings::new(
+                [barrier("USD", Some(pnl("-100")), None)],
+                [PnlBoundsAccountAssetBarrier {
+                    barrier: barrier("USD", Some(pnl("-50")), None),
+                    account_id: target,
+                    initial_pnl: Pnl::ZERO,
+                }],
+            )
+            .expect("valid barriers"),
+            test_builder().storage_builder(),
+        );
+        let mut mutations = crate::Mutations::new();
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+        );
+        policy
+            .settings
+            .update(|settings| settings.set_account_barriers([]))
+            .expect("clear barrier");
+        assert_eq!(
+            <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::LocalSync>>::retire_account(
+                &policy, target, &mut mutations,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn retire_exclusive_lease_pauses_kill_switch_report_and_configuration_writers() {
+        struct ParkedRetirementPolicy {
+            entered: Arc<Barrier>,
+            release: Arc<Barrier>,
+        }
+
+        impl<Order, ExecutionReport, AccountAdjustment, Sync: crate::SyncMode>
+            PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
+            for ParkedRetirementPolicy
+        {
+            fn name(&self) -> &str {
+                "parked_retirement"
+            }
+
+            fn retire_account(
+                &self,
+                _account: AccountId,
+                _mutations: &mut crate::Mutations,
+            ) -> Result<(), crate::AccountRetirementRefusal> {
+                self.entered.wait();
+                self.release.wait();
+                Ok(())
+            }
+        }
+
+        let builder = crate::Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
+        let kill = PnlBoundsKillSwitchPolicy::<FullLocking>::new(
+            PnlBoundsKillSwitchSettings::new([barrier("USD", Some(pnl("-100")), None)], [])
+                .expect("valid barrier"),
+            builder.storage_builder(),
+        );
+        let realized = kill.realized.clone();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let engine = Arc::new(
+            builder
+                .pre_trade(kill)
+                .pre_trade(ParkedRetirementPolicy {
+                    entered: Arc::clone(&entered),
+                    release: Arc::clone(&release),
+                })
+                .build()
+                .expect("engine builds"),
+        );
+        let target = account(1);
+        let retirement = {
+            let engine = Arc::clone(&engine);
+            std::thread::spawn(move || engine.retire_account(target))
+        };
+        entered.wait();
+
+        let (report_started_tx, report_started_rx) = mpsc::sync_channel(0);
+        let (report_done_tx, report_done_rx) = mpsc::sync_channel(1);
+        let execution = {
+            let engine = Arc::clone(&engine);
+            std::thread::spawn(move || {
+                report_started_tx.send(()).expect("report starts");
+                let result = engine.apply_execution_report(&report("USD", target, pnl("5")));
+                report_done_tx.send(()).expect("report completion observed");
+                result
+            })
+        };
+        report_started_rx.recv().expect("report thread starts");
+
+        let (config_started_tx, config_started_rx) = mpsc::sync_channel(0);
+        let (config_done_tx, config_done_rx) = mpsc::sync_channel(1);
+        let configuration = {
+            let engine = Arc::clone(&engine);
+            std::thread::spawn(move || {
+                config_started_tx.send(()).expect("configuration starts");
+                let result = engine.configure().set_account_pnl(
+                    PnlBoundsKillSwitchPolicy::<FullLocking>::NAME,
+                    target,
+                    Asset::new("EUR").expect("valid asset"),
+                    pnl("7"),
+                );
+                config_done_tx
+                    .send(())
+                    .expect("configuration completion observed");
+                result
+            })
+        };
+        config_started_rx
+            .recv()
+            .expect("configuration thread starts");
+
+        let timeout = Duration::from_millis(50);
+        let report_wait = report_done_rx.recv_timeout(timeout);
+        let config_wait = config_done_rx.recv_timeout(timeout);
+        release.wait();
+        assert_eq!(retirement.join().expect("retirement thread joins"), Ok(()));
+        assert!(execution
+            .join()
+            .expect("report thread joins")
+            .account_blocks
+            .is_empty());
+        assert_eq!(
+            configuration.join().expect("configuration thread joins"),
+            Ok(())
+        );
+        assert_eq!(
+            report_wait,
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "execution report must wait for retirement's exclusive lease"
+        );
+        assert_eq!(
+            config_wait,
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "configuration write must wait for retirement's exclusive lease"
+        );
+        assert_eq!(
+            realized.with(
+                &(target, Asset::new("USD").expect("valid asset")),
+                |entry| *entry
+            ),
+            Some(pnl("5"))
+        );
+        assert_eq!(
+            realized.with(
+                &(target, Asset::new("EUR").expect("valid asset")),
+                |entry| *entry
+            ),
+            Some(pnl("7"))
+        );
     }
 
     // ── global bound breaches ───────────────────────────────────────────────
