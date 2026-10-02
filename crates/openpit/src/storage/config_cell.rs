@@ -122,8 +122,14 @@ impl<T: Clone + 'static> ConfigCell<T> for LocalConfigCell<T> {
 
     fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E> {
         // Mutate a private clone so a failing closure cannot leave a
-        // half-updated value visible. The borrow is taken only after the
-        // closure succeeds, keeping `with` re-entrant during the call.
+        // half-updated value visible. No borrow is held while `f` runs, so
+        // `f` may read this cell through `with` or `with_snapshot`.
+        //
+        // The reverse does not hold: publishing takes `borrow_mut`, which
+        // panics when this `update` is called from inside a `with` closure on
+        // the same cell. That is why the `with` contract forbids updating the
+        // cell from its closure; code that may reach an update reads through
+        // `with_snapshot`, which holds no borrow while its closure runs.
         let current = Rc::clone(&self.0.borrow());
         let mut next = (*current).clone();
         f(&mut next)?;
@@ -169,6 +175,11 @@ impl<T: Clone + 'static> ConfigCell<T> for ArcSwapConfigCell<T> {
         // `load` (not `load_full`) avoids bumping the inner `Arc`'s
         // refcount on the hot read path; the guard keeps the pointee
         // alive for the duration of the call.
+        //
+        // The guard does not block publication, so an `update` issued from
+        // the closure would not panic here as it does on `LocalConfigCell`.
+        // The `with` contract forbids it regardless: callers are generic
+        // over the cell and must behave the same under every locking mode.
         let guard = self.0.value.load();
         f(&guard)
     }
