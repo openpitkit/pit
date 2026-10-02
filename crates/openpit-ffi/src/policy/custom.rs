@@ -1262,6 +1262,184 @@ mod tests {
         crate::engine::openpit_destroy_engine(engine);
     }
 
+    struct DropCopyGatedPolicyState {
+        start_modes: Vec<bool>,
+        main_modes: Vec<bool>,
+        mutation_state: Rc<RefCell<MutationState>>,
+    }
+
+    unsafe extern "C" fn record_drop_copy_start_fn(
+        ctx: *const OpenPitPretradeContext,
+        _order: *const OpenPitOrder,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let state = unsafe { &mut *user_data.cast::<DropCopyGatedPolicyState>() };
+        state
+            .start_modes
+            .push(unsafe { crate::account_control::openpit_pretrade_context_is_drop_copy(ctx) });
+        accepted_rejects()
+    }
+
+    // Registers the mutation and the account adjustment only in drop copy, and
+    // returns the same business reject in both modes.
+    unsafe extern "C" fn drop_copy_gated_reject_check_fn(
+        ctx: *const OpenPitPretradeContext,
+        _order: *const OpenPitOrder,
+        mutations: *mut OpenPitMutations,
+        out_result: *mut OpenPitPretradePreTradeResult,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let state = unsafe { &mut *user_data.cast::<DropCopyGatedPolicyState>() };
+        let is_drop_copy =
+            unsafe { crate::account_control::openpit_pretrade_context_is_drop_copy(ctx) };
+        state.main_modes.push(is_drop_copy);
+        if is_drop_copy {
+            let entry = Box::into_raw(Box::new(MutationUserData {
+                state: Rc::clone(&state.mutation_state),
+                marker: 42,
+            }))
+            .cast();
+            assert!(unsafe {
+                openpit_mutations_push(
+                    mutations,
+                    tracked_mutation_commit,
+                    tracked_mutation_rollback,
+                    entry,
+                    Some(tracked_mutation_free),
+                    std::ptr::null_mut(),
+                )
+            });
+            assert!(unsafe {
+                crate::account_outcome::openpit_pretrade_pre_trade_result_push_account_adjustment(
+                    out_result,
+                    crate::account_outcome::OpenPitAccountOutcomeEntry {
+                        asset: OpenPitStringView::from_utf8("EUR"),
+                        ..Default::default()
+                    },
+                    std::ptr::null_mut(),
+                )
+            });
+        }
+        let rejects = crate::reject::openpit_create_pretrade_reject_list(1);
+        assert!(crate::reject::openpit_pretrade_reject_list_push(
+            rejects,
+            crate::reject::OpenPitPretradeReject {
+                policy: OpenPitStringView::from_utf8("drop.copy.gated"),
+                reason: OpenPitStringView::from_utf8("blocked"),
+                details: OpenPitStringView::from_utf8("business reject in both modes"),
+                user_data: 0,
+                code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            },
+        ));
+        rejects
+    }
+
+    #[test]
+    fn drop_copy_keeps_gated_bookkeeping_under_business_reject() {
+        let mutation_state = Rc::new(RefCell::new(MutationState::default()));
+        let mut policy_state = DropCopyGatedPolicyState {
+            start_modes: Vec::new(),
+            main_modes: Vec::new(),
+            mutation_state: Rc::clone(&mutation_state),
+        };
+        let policy = unsafe {
+            openpit_create_pretrade_custom_pre_trade_policy(
+                OpenPitStringView::from_utf8("drop.copy.gated"),
+                0,
+                Some(record_drop_copy_start_fn),
+                Some(drop_copy_gated_reject_check_fn),
+                None,
+                None,
+                None,
+                custom_free_user_data_fn,
+                std::ptr::addr_of_mut!(policy_state).cast(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!policy.is_null());
+        let engine = build_engine_with_custom_policy(policy);
+        let sample = sample_order();
+        let order = export_order(&sample);
+
+        let mut rejects = std::ptr::null_mut();
+        let status = crate::engine::openpit_engine_execute_pre_trade(
+            engine,
+            &order,
+            std::ptr::null_mut(),
+            &mut rejects,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Rejected);
+        assert_eq!(crate::reject::openpit_pretrade_reject_list_len(rejects), 1);
+        let mut reject = crate::reject::OpenPitPretradeReject {
+            policy: OpenPitStringView::not_set(),
+            reason: OpenPitStringView::not_set(),
+            details: OpenPitStringView::not_set(),
+            user_data: 0,
+            code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+            scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+        };
+        assert!(crate::reject::openpit_pretrade_reject_list_get(
+            rejects,
+            0,
+            &mut reject
+        ));
+        assert_eq!(
+            reject.code,
+            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER
+        );
+        crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+        assert_eq!(policy_state.start_modes, [false]);
+        assert_eq!(policy_state.main_modes, [false]);
+        {
+            let state = mutation_state.borrow();
+            assert_eq!(state.commit_calls, 0);
+            assert_eq!(state.rollback_calls, 0);
+        }
+
+        let mut operation = std::ptr::null_mut();
+        let status = crate::engine::openpit_engine_apply_drop_copy(
+            engine,
+            &order,
+            &mut operation,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Passed);
+        assert!(!operation.is_null());
+        assert_eq!(policy_state.start_modes, [false, true]);
+        assert_eq!(policy_state.main_modes, [false, true]);
+        let adjustments =
+            crate::engine::openpit_pretrade_drop_copy_operation_get_account_adjustments(operation);
+        assert_eq!(
+            unsafe {
+                crate::account_outcome::openpit_account_adjustment_outcome_list_len(adjustments)
+            },
+            1
+        );
+        let mut outcome = crate::account_outcome::OpenPitAccountAdjustmentOutcome::default();
+        assert!(unsafe {
+            crate::account_outcome::openpit_account_adjustment_outcome_list_get(
+                adjustments,
+                0,
+                &mut outcome,
+            )
+        });
+        assert_eq!(string_view_to_string(outcome.entry.asset), "EUR");
+        unsafe {
+            crate::account_outcome::openpit_destroy_account_adjustment_outcome_list(adjustments)
+        };
+        crate::engine::openpit_pretrade_drop_copy_operation_commit(operation);
+        crate::engine::openpit_destroy_pretrade_drop_copy_operation(operation);
+        {
+            let state = mutation_state.borrow();
+            assert_eq!(state.commit_calls, 1);
+            assert_eq!(state.rollback_calls, 0);
+        }
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
     #[test]
     fn add_policy_reports_null_builder() {
         let name = OpenPitStringView::from_utf8("null.builder.check");

@@ -820,6 +820,48 @@ class DropCopyStartMutationPolicy {
   bool m_fatal;
 };
 
+struct DropCopyGatedState {
+  std::vector<bool> startModes;
+  std::vector<bool> mainModes;
+  int commits = 0;
+  int rollbacks = 0;
+};
+
+// Registers the main-stage mutation and account adjustment only in drop copy,
+// and returns the same business reject in both modes.
+class DropCopyGatedRejectPolicy {
+ public:
+  explicit DropCopyGatedRejectPolicy(DropCopyGatedState* state)
+      : m_state(state) {}
+
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+      const Context& context, const openpit::Order& order) const {
+    static_cast<void>(order);
+    m_state->startModes.push_back(context.IsDropCopy());
+    return std::nullopt;
+  }
+
+  void PerformPreTradeCheck(const Context& context,
+                            openpit::tx::Mutations& mutations,
+                            openpit::pretrade::Result& result,
+                            PolicyDecision& decision) const {
+    m_state->mainModes.push_back(context.IsDropCopy());
+    if (context.IsDropCopy()) {
+      mutations.Push([state = m_state] { ++state->commits; },
+                     [state = m_state] { ++state->rollbacks; });
+      result.PushAccountAdjustment(
+          ::openpit::accountadjustment::AccountOutcomeEntry(
+              ::openpit::param::Asset("EUR")));
+    }
+    PushReject(decision, Reject("DropCopyGatedRejectPolicy", RejectScope::Order,
+                                RejectCode::Other, "forced business reject",
+                                "returned in both modes"));
+  }
+
+ private:
+  DropCopyGatedState* m_state;
+};
+
 [[nodiscard]] openpit::model::Order MakeDryRunHookOrder() {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
@@ -1109,6 +1151,38 @@ TEST(CustomPolicy, DropCopyStartContextRollsBackRegisteredMutation) {
   EXPECT_FALSE(result.Passed());
   EXPECT_TRUE(sawDropCopy);
   EXPECT_EQ(value, 0);
+}
+
+TEST(CustomPolicy, DropCopyKeepsGatedBookkeepingUnderBusinessReject) {
+  DropCopyGatedState state;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyGatedRejectPolicy> policy(
+      "DropCopyGatedRejectPolicy", DropCopyGatedRejectPolicy{&state});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  const openpit::pretrade::ExecuteResult ordinary =
+      engine.ExecutePreTrade(MakeDryRunHookOrder());
+  EXPECT_FALSE(ordinary.Passed());
+  ASSERT_EQ(ordinary.rejects.size(), 1u);
+  EXPECT_EQ(ordinary.rejects.front().code, RejectCode::Other);
+  EXPECT_EQ(state.startModes, std::vector<bool>{false});
+  EXPECT_EQ(state.mainModes, std::vector<bool>{false});
+  EXPECT_EQ(state.commits, 0);
+  EXPECT_EQ(state.rollbacks, 0);
+
+  openpit::pretrade::DropCopyResult result =
+      engine.ApplyDropCopy(MakeDryRunHookOrder());
+  ASSERT_TRUE(result.Passed());
+  EXPECT_EQ(state.startModes, (std::vector<bool>{false, true}));
+  EXPECT_EQ(state.mainModes, (std::vector<bool>{false, true}));
+  const std::vector<::openpit::accountadjustment::Outcome> adjustments =
+      result.operation->AccountAdjustments();
+  ASSERT_EQ(adjustments.size(), 1u);
+  EXPECT_EQ(adjustments.front().entry.asset.View(), "EUR");
+  result.operation->Commit();
+  EXPECT_EQ(state.commits, 1);
+  EXPECT_EQ(state.rollbacks, 0);
 }
 
 //------------------------------------------------------------------------------

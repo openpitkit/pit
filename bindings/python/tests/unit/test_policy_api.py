@@ -358,6 +358,55 @@ class DropCopyStartMutationPolicy(openpit.pretrade.Policy):
         )
 
 
+class DropCopyGatedRejectPolicy(openpit.pretrade.Policy):
+    def __init__(self) -> None:
+        self.start_modes: list[bool] = []
+        self.main_modes: list[bool] = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    @property
+    def name(self) -> str:
+        return "DropCopyGatedRejectPolicy"
+
+    def check_pre_trade_start(
+        self,
+        ctx: openpit.pretrade.Context,
+        order: openpit.Order,
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+        del order
+        self.start_modes.append(ctx.is_drop_copy)
+        return ()
+
+    def perform_pre_trade_check(
+        self,
+        ctx: openpit.pretrade.Context,
+        order: openpit.Order,
+    ) -> openpit.pretrade.PolicyPreTradeResult:
+        del order
+        self.main_modes.append(ctx.is_drop_copy)
+        rejects = (
+            openpit.pretrade.PolicyReject(
+                code=openpit.pretrade.RejectCode.OTHER,
+                reason="forced business reject",
+                details="returned in both modes",
+                scope=openpit.pretrade.RejectScope.ORDER,
+            ),
+        )
+        if not ctx.is_drop_copy:
+            return openpit.pretrade.PolicyPreTradeResult.reject(rejects=rejects)
+        return openpit.pretrade.PolicyPreTradeResult.reject(
+            rejects=rejects,
+            mutations=(
+                openpit.Mutation(
+                    commit=lambda: setattr(self, "commits", self.commits + 1),
+                    rollback=lambda: setattr(self, "rollbacks", self.rollbacks + 1),
+                ),
+            ),
+            account_adjustments=(openpit.pretrade.AccountOutcomeEntry(asset="EUR"),),
+        )
+
+
 class FailingCommitMutationPolicy(openpit.pretrade.Policy):
     def __init__(self) -> None:
         self.first = False
@@ -897,6 +946,36 @@ def test_drop_copy_start_context_rolls_back_on_fatal_reject() -> None:
     assert not result.ok
     assert policy.saw_drop_copy
     assert policy.value == 0
+
+
+@pytest.mark.unit
+def test_drop_copy_keeps_gated_bookkeeping_under_business_reject() -> None:
+    policy = DropCopyGatedRejectPolicy()
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
+
+    ordinary = engine.execute_pre_trade(order=conftest.make_order())
+
+    assert not ordinary.ok
+    assert len(ordinary.rejects) == 1
+    assert ordinary.rejects[0].code == openpit.pretrade.RejectCode.OTHER
+    assert policy.start_modes == [False]
+    assert policy.main_modes == [False]
+    assert policy.commits == 0
+    assert policy.rollbacks == 0
+
+    result = engine.apply_drop_copy(order=conftest.make_order())
+
+    assert result.ok
+    operation = result.operation
+    assert operation is not None
+    assert policy.start_modes == [False, True]
+    assert policy.main_modes == [False, True]
+    adjustments = operation.account_adjustments
+    assert len(adjustments) == 1
+    assert adjustments[0].entry.asset == "EUR"
+    operation.commit()
+    assert policy.commits == 1
+    assert policy.rollbacks == 0
 
 
 @pytest.mark.unit

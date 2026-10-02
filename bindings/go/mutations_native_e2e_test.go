@@ -19,6 +19,7 @@ package openpit
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -619,6 +620,75 @@ func TestMutationsNativeE2E_DropCopyReportsAccountAdjustments(t *testing.T) {
 	}
 }
 
+// TestMutationsNativeE2E_DropCopyKeepsGatedBookkeepingUnderBusinessReject proves
+// a policy that registers its mutation and account adjustment only when
+// IsDropCopy is true keeps both under an ordinary reject in drop-copy, while
+// the same reject in ordinary pre-trade registers neither.
+func TestMutationsNativeE2E_DropCopyKeepsGatedBookkeepingUnderBusinessReject(t *testing.T) {
+	asset := mustOrderNativeAsset(t, "EUR")
+	policy := &mutationTrackingPolicy{
+		name:            "mutation-drop-copy-gated",
+		shouldReject:    true,
+		adjustmentAsset: asset,
+		hasAdjustment:   true,
+		dropCopyGated:   true,
+	}
+	engine := newEngineWithPreTradePolicyForNativeE2E(t, policy)
+	defer engine.Stop()
+
+	reservation, rejects, err := engine.ExecutePreTrade(newValidOrderForNativeE2E(t))
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if reservation != nil {
+		reservation.Close()
+		t.Fatal("ExecutePreTrade() reservation != nil, want nil")
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeOther {
+		t.Fatalf("ExecutePreTrade() rejects = %v, want one %v", rejects, reject.CodeOther)
+	}
+	if !slices.Equal(policy.startDropCopyModes, []bool{false}) ||
+		!slices.Equal(policy.mainDropCopyModes, []bool{false}) {
+		t.Fatalf(
+			"ExecutePreTrade() IsDropCopy start = %v, main = %v, want [false] and [false]",
+			policy.startDropCopyModes,
+			policy.mainDropCopyModes,
+		)
+	}
+	if policy.commitCalls != 0 || policy.rollbackCalls != 0 {
+		t.Fatalf(
+			"ExecutePreTrade() commitCalls = %d, rollbackCalls = %d, want 0 and 0",
+			policy.commitCalls,
+			policy.rollbackCalls,
+		)
+	}
+
+	operation := requireAppliedDropCopy(t, engine, newValidOrderForNativeE2E(t))
+	if !slices.Equal(policy.startDropCopyModes, []bool{false, true}) ||
+		!slices.Equal(policy.mainDropCopyModes, []bool{false, true}) {
+		t.Fatalf(
+			"ApplyDropCopy() IsDropCopy start = %v, main = %v, want [false true] and [false true]",
+			policy.startDropCopyModes,
+			policy.mainDropCopyModes,
+		)
+	}
+	adjustments, err := operation.AccountAdjustments()
+	if err != nil {
+		t.Fatalf("AccountAdjustments() error = %v", err)
+	}
+	if len(adjustments) != 1 || !adjustments[0].Entry.Asset.Equal(asset) {
+		t.Fatalf("AccountAdjustments() = %v, want one %v entry", adjustments, asset)
+	}
+	operation.CommitAndClose()
+	if policy.commitCalls != 1 || policy.rollbackCalls != 0 {
+		t.Fatalf(
+			"commitCalls = %d, rollbackCalls = %d, want 1 and 0",
+			policy.commitCalls,
+			policy.rollbackCalls,
+		)
+	}
+}
+
 func TestMutationsNativeE2E_DropCopyMarketOrderRunsPriceIndependentPolicy(t *testing.T) {
 	engine := newEngineWithPreTradePolicyForNativeE2E(
 		t,
@@ -755,11 +825,17 @@ type mutationTrackingPolicy struct {
 	registerStartMutation bool
 	startMissingField     bool
 	startSawDropCopy      bool
+	startDropCopyModes    []bool
+	mainDropCopyModes     []bool
 	startCommitCalls      int
 	startRollbackCalls    int
 	panicValue            string
 	commitPanicValue      string
 	rollbackPanicValue    string
+	// dropCopyGated registers the main-stage mutation and account adjustment
+	// only in drop-copy, and scopes the forced reject to the order, so an
+	// ordinary pre-trade leaves no state behind.
+	dropCopyGated bool
 }
 
 func (mutationTrackingPolicy) Close() {}
@@ -771,32 +847,36 @@ func (p mutationTrackingPolicy) Name() string {
 func (p mutationTrackingPolicy) PolicyGroupID() model.PolicyGroupID { return p.policyGroupID }
 
 func (p *mutationTrackingPolicy) PerformPreTradeCheck(
-	_ pretrade.Context,
+	ctx pretrade.Context,
 	_ model.Order,
 	mutations tx.Mutations,
 	result pretrade.Result,
 ) []reject.Reject {
-	if err := mutations.Push(
-		func() {
-			p.commitCalls++
-			if p.commitPanicValue != "" {
-				panic(p.commitPanicValue)
-			}
-		},
-		func() {
-			p.rollbackCalls++
-			if p.rollbackPanicValue != "" {
-				panic(p.rollbackPanicValue)
-			}
-		},
-	); err != nil {
-		return reject.NewSingleItemList(
-			reject.CodeOther,
-			p.name,
-			"mutation registration failed",
-			err.Error(),
-			reject.ScopeOrder,
-		)
+	p.mainDropCopyModes = append(p.mainDropCopyModes, ctx.IsDropCopy())
+	keepsBookkeeping := !p.dropCopyGated || ctx.IsDropCopy()
+	if keepsBookkeeping {
+		if err := mutations.Push(
+			func() {
+				p.commitCalls++
+				if p.commitPanicValue != "" {
+					panic(p.commitPanicValue)
+				}
+			},
+			func() {
+				p.rollbackCalls++
+				if p.rollbackPanicValue != "" {
+					panic(p.rollbackPanicValue)
+				}
+			},
+		); err != nil {
+			return reject.NewSingleItemList(
+				reject.CodeOther,
+				p.name,
+				"mutation registration failed",
+				err.Error(),
+				reject.ScopeOrder,
+			)
+		}
 	}
 	if p.panicValue != "" {
 		panic(p.panicValue)
@@ -812,7 +892,7 @@ func (p *mutationTrackingPolicy) PerformPreTradeCheck(
 			)
 		}
 	}
-	if p.hasAdjustment {
+	if p.hasAdjustment && keepsBookkeeping {
 		entry := accountadjustment.AccountOutcomeEntry{Asset: p.adjustmentAsset}
 		if err := result.PushAccountAdjustment(entry); err != nil {
 			return reject.NewSingleItemList(
@@ -829,12 +909,16 @@ func (p *mutationTrackingPolicy) PerformPreTradeCheck(
 		if p.missingField {
 			code = reject.CodeMissingRequiredField
 		}
+		scope := reject.ScopeAccount
+		if p.dropCopyGated {
+			scope = reject.ScopeOrder
+		}
 		return reject.NewSingleItemList(
 			code,
 			p.name,
 			"forced reject",
 			"forced in test",
-			reject.ScopeAccount,
+			scope,
 		)
 	}
 	return nil
@@ -845,6 +929,7 @@ func (p *mutationTrackingPolicy) CheckPreTradeStart(
 	_ model.Order,
 ) []reject.Reject {
 	p.startSawDropCopy = ctx.IsDropCopy()
+	p.startDropCopyModes = append(p.startDropCopyModes, ctx.IsDropCopy())
 	if p.registerStartMutation {
 		if err := ctx.RecordDropCopyStartMutation(
 			func() { p.startCommitCalls++ },

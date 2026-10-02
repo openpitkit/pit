@@ -575,10 +575,12 @@ describe("runtime custom policy", () => {
     expect(otherEngineAccepted).toBe(true);
   });
 
-  it("exposes drop-copy mode in both policy stages", () => {
+  it("exposes drop-copy mode in both stages and keeps gated bookkeeping under a business reject", () => {
     const startModes: boolean[] = [];
     const mainModes: boolean[] = [];
     let value = 0;
+    let mainCommits = 0;
+    let mainRollbacks = 0;
     const engine = Engine.builder()
       .preTrade({
         name: "drop-copy-start-mutation",
@@ -598,21 +600,62 @@ describe("runtime custom policy", () => {
           }
           return [];
         },
+        // Registers the main-stage mutation and account adjustment only in
+        // drop copy, and returns the same ordinary reject in both modes.
         performPreTradeCheck: (ctx) => {
           mainModes.push(ctx.isDropCopy);
-          return {};
+          const rejects: PolicyReject[] = [
+            {
+              code: REJECT_CODE,
+              reason: "ordinary reject",
+              details: "returned in both modes",
+              scope: "order",
+            },
+          ];
+          if (!ctx.isDropCopy) {
+            return { rejects };
+          }
+          return {
+            rejects,
+            mutations: [
+              new Mutation(
+                () => {
+                  mainCommits += 1;
+                },
+                () => {
+                  mainRollbacks += 1;
+                },
+              ),
+            ],
+            accountAdjustments: [new AccountOutcomeEntry("EUR")],
+          };
         },
       })
       .build();
 
     const ordinary = engine.executePreTrade(order("BUY"));
-    ordinary.reservation?.rollback();
-    const result = applyDropCopyAndCommit(engine, order("BUY"));
+    expect(ordinary.ok).toBe(false);
+    expect(ordinary.rejects.map((reject) => reject.code)).toEqual([
+      REJECT_CODE,
+    ]);
+    expect(startModes).toEqual([false]);
+    expect(mainModes).toEqual([false]);
+    expect([mainCommits, mainRollbacks]).toEqual([0, 0]);
 
+    const result = engine.applyDropCopy(order("BUY"));
     expect(result.ok).toBe(true);
+    const operation = result.operation!;
+    expect(
+      operation
+        .accountAdjustments()
+        .map((adjustment) => adjustment.entry.asset),
+    ).toEqual(["EUR"]);
+    operation.commit();
+
     expect(startModes).toEqual([false, true]);
     expect(mainModes).toEqual([false, true]);
     expect(value).toBe(1);
+    expect([mainCommits, mainRollbacks]).toEqual([1, 0]);
   });
 
   it("finalizes drop-copy operations exactly once", () => {
