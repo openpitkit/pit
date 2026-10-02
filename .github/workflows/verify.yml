@@ -153,9 +153,10 @@ jobs:
           - name: windows-msvc
             os: windows-2022
             cmake: "3.28"
-          # The Visual Studio 18 2026 generator first ships in CMake 4.2.
+          # windows-2025 ships Visual Studio 2026 since June 2026; the
+          # Visual Studio 18 2026 generator first ships in CMake 4.2.
           - name: windows-msvc-2026
-            os: windows-2025-vs2026
+            os: windows-2025
             cmake: "4.2"
     steps:
       - name: Checkout
