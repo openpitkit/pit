@@ -232,8 +232,8 @@ its config then exports the bundled library instead of resolving one.
 
 Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`,
 [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/),
-and [CMake](https://cmake.org/download/). Optional:
-[Just](https://just.systems/).
+and [CMake](https://cmake.org/download/) (`>=4.2` with Visual Studio 2026).
+Optional: [Just](https://just.systems/).
 
 With [Just](https://just.systems/):
 

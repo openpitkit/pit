@@ -385,8 +385,8 @@ npm test
   repository build/test recipes, generated API artifacts, and Python bindings
 - [Go `1.22`](https://go.dev/dl/) if you build or test Go bindings
 - [golangci-lint](https://golangci-lint.run/welcome/install/) if you lint Go
-- [CMake `>=3.21`](https://cmake.org/download/) if you build or test C++
-  bindings and examples
+- [CMake `>=3.21`](https://cmake.org/download/), `>=4.2` with Visual Studio
+  2026, if you build or test C++ bindings and examples
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
   with MSVC C++ tools if you build or test C++ bindings and examples
 - [LLVM](https://github.com/llvm/llvm-project/releases) if you build or test Go
