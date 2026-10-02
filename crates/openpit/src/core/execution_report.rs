@@ -181,10 +181,16 @@ pub struct ExecutionReportFillDetails {
     pub last_trade: Option<Trade>,
     /// Fee amount and currency reported for this fill.
     pub fee: Option<MonetaryAmount>,
-    /// Caller-calculated reservation remainder released by the engine on
-    /// finalization.
+    /// Caller-calculated remainder of the order's pre-trade reservation,
+    /// released by the engine when the final execution report arrives. Always a
+    /// quantity of the instrument's underlying (base) asset, also for orders
+    /// sized by volume (money), never a settlement or money amount. It is not
+    /// the venue-reported remaining order quantity (FIX `LeavesQty`): never
+    /// copy venue leaves into it, since a money-sized order's venue leaves may
+    /// be a money amount.
     ///
-    /// This is not a venue-reported remaining order quantity.
+    /// See [`HasRemainingReservedQuantity`] for what to pass on a partial fill
+    /// and on a cancel.
     pub remaining_reserved_quantity: Quantity,
     /// Order lock payload.
     pub lock: PreTradeLock,

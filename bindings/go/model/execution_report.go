@@ -670,9 +670,42 @@ type ExecutionReportFill struct {
 type ExecutionReportFillValues struct {
 	LastTrade optional.Option[ExecutionReportTrade]
 	Fee       optional.Option[param.MonetaryAmount]
-	// RemainingReservedQuantity is the caller-calculated reservation remainder
-	// that the engine releases on finalization, not a venue-reported remaining
-	// order quantity.
+	// RemainingReservedQuantity is the caller-calculated remainder of the order's
+	// pre-trade reservation.
+	//
+	// The engine releases this remainder when the order's final execution report
+	// arrives. It is not the venue-reported remaining order quantity (FIX
+	// `LeavesQty`): never copy venue leaves into it, since a money-sized order's
+	// venue leaves may be a money amount.
+	//
+	// It is always a quantity of the instrument's underlying (base) asset, even
+	// for an order sized by volume (money), never a settlement or money amount.
+	//
+	// For an order sized with [param.NewVolumeTradeAmount] (money), the reserved
+	// quantity is what the engine sized during pre-trade: volume divided by the
+	// absolute lock price, using the engine's decimal division (zero for a
+	// drop-copy order recorded at a zero price). Do not re-derive it from unspent
+	// volume at fill prices.
+	//
+	// On every execution report, pass max(0, reserved quantity - sum of all fill
+	// quantities recorded for the order so far, including this report's fill).
+	//
+	// - On a non-final report, such as a partial fill, pass the remainder after
+	//   this fill. The engine releases nothing.
+	// - On a final report cancelling a partially filled order, pass the same
+	//   remainder. The engine releases exactly that part of the reservation,
+	//   valued at the lock price, using the same side and price-sign rules as when
+	//   reserving.
+	// - On a final report of an order the venue reports fully filled, pass the
+	//   remainder too. It is zero only once the recorded fills reach or exceed the
+	//   reserved quantity; an order sized by volume can be fully filled while its
+	//   recorded fills stay below the reserved quantity, and the final report must
+	//   carry that remainder for the engine to release it.
+	//
+	// For example, a buy sized at 1000 USD by volume with lock price 100 reserves
+	// 10 units. A partial fill of 6 passes 4 and releases nothing; a later cancel
+	// passes 4 and releases the rest of the reservation (400 USD at the lock
+	// price).
 	RemainingReservedQuantity optional.Option[param.Quantity]
 	// Lock carries the raw pre-trade lock representation, or nil when no lock is
 	// set. These bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes
@@ -793,6 +826,8 @@ func (f ExecutionReportFill) RemainingReservedQuantity() optional.Option[param.Q
 
 // SetRemainingReservedQuantity sets the caller-calculated reservation remainder
 // that the engine releases on finalization.
+// See [ExecutionReportFillValues] for the unit and what to pass on a partial fill
+// and on a cancel.
 func (f *ExecutionReportFill) SetRemainingReservedQuantity(quantity param.Quantity) {
 	native.ExecutionReportFillSetRemainingReservedQuantity(&f.value, quantity.Handle())
 }
@@ -914,6 +949,8 @@ func (v ExecutionReportFillView) RemainingReservedQuantity() optional.Option[par
 
 // SetRemainingReservedQuantity sets the caller-calculated reservation remainder
 // on the view that the engine releases on finalization.
+// See [ExecutionReportFillValues] for the unit and what to pass on a partial fill
+// and on a cancel.
 func (v *ExecutionReportFillView) SetRemainingReservedQuantity(quantity param.Quantity) {
 	native.ExecutionReportFillSetRemainingReservedQuantity(v.ref, quantity.Handle())
 }
