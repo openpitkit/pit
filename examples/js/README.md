@@ -1,7 +1,7 @@
 # JS examples
 
 Runnable Node and browser examples that integrate the `@openpit/engine` SDK.
-The Node examples cover the shared engine scenarios; the browser terminal is the
+The Node examples cover the shared engine scenarios; the risk playground is the
 WASM-specific end-to-end demo.
 
 - [`rate_pnl_killswitch`](rate_pnl_killswitch) - a RateLimit + PnlBoundsKillSwitch
@@ -10,8 +10,8 @@ WASM-specific end-to-end demo.
   reject the duplicate, settle the fill.
 - [`spot_table`](spot_table) - a table-driven SpotFunds runner over the shared
   scenario tables in [`../tables/spot`](../tables/spot).
-- [`browser_terminal`](browser_terminal) - a Vite-built terminal that runs the
-  engine entirely in the browser with inlined WASM.
+- [`risk_playground`](risk_playground) - a public, visual pre-trade gate that
+  sends orders through real WebAssembly policies in the browser.
 
 ## Prerequisites
 
@@ -27,8 +27,8 @@ cd bindings/js && npm run build      # builds bindings/js/dist
 
 ## Running
 
-From this directory, a single `npm install` links the built package into all
-four examples (they are an npm workspace):
+From this directory, `npm install` links the built package into the three Node
+examples in the npm workspace:
 
 ```sh
 npm install
@@ -37,7 +37,7 @@ npx tsx rate_pnl_killswitch/main.ts
 npx tsx spot_funds/main.ts
 npx tsx spot_table/main.ts --table ../tables/spot/coverage.md
 
-npm test     # Node smoke tests plus the browser production build
+npm test     # Node smoke tests
 ```
 
 From the repository root, the `just` targets wrap the same commands:
@@ -45,8 +45,11 @@ From the repository root, the `just` targets wrap the same commands:
 ```sh
 just run-examples-js         # run all three Node examples
 just run-examples-js-table   # spot_table over the coverage table
-just test-js                 # run Node tests and build the browser demo
+just test-js                 # run the package and Node example tests
 ```
+
+The browser playground is a standalone app with its own `justfile`; see
+[`risk_playground`](risk_playground/README.md).
 
 ## Idiomatic inputs
 

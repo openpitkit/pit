@@ -1,0 +1,143 @@
+/* Copyright The Pit Project Owners. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Please see https://openpit.dev and the OWNERS file for details. */
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Pit Officer - Finance semantic tokens · TWO DESK DIALECTS
+ *
+ * The same instrument panel speaks two house dialects, chosen by the operator
+ * so the desk reads in conventions its people already trust. Set the dialect
+ * with `data-trade-style` on the root element:
+ *
+ *   data-trade-style="tape"    (default) - cash · spot · FX · portfolio desks.
+ *                              The blotter-and-tape world: GREEN buy/long,
+ *                              solid up/down triangles, chronological reading,
+ *                              notional in currency, decimal prices, a print
+ *                              FLASH on new fills.
+ *
+ *   data-trade-style="ladder"          - futures · options · DOM desks.
+ *                              The price-ladder world: BLUE buy/bid, stroked
+ *                              chevrons, price-anchored reading, size in
+ *                              lots/contracts, tick prices, a level PULSE on
+ *                              the touched price.
+ *
+ * Only the BUY/BID side changes color between dialects - SELL/ASK stays red and
+ * P&L stays green/red in both, because profit is profit on every desk. The rest
+ * of the "feel native" difference (glyph shape, lexicon, units, reading order,
+ * motion) is carried by the tokens and components below + the matching props.
+ *
+ * These finance tokens are deliberately SEPARATE from the generic ok/warn/
+ * danger status ramp, so a dialect can retune side color without touching
+ * breach coloring.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/* ── TAPE dialect (default) ── green buy ─────────────────────────────────── */
+:root,
+.dark,
+[data-trade-style="tape"],
+[data-trade-style="tape"].dark {
+  /* Order side / direction */
+  --buy: #3fb950;                 /* buy · long · bid */
+  --buy-dim: rgba(63, 185, 80, 0.14);
+  --sell: #ff5d52;                /* sell · short · ask */
+  --sell-dim: rgba(255, 93, 82, 0.14);
+  --long: var(--buy);
+  --short: var(--sell);
+
+  /* Direction glyph + reading order the components/surfaces read.
+   * --dir-shape: triangle (solid trending) · --tape-read: chrono (newest-on-top)
+   * --dir-flash: motion played on a new event */
+  --dir-shape: triangle;          /* @kind other */
+  --tape-read: chrono;            /* @kind other */
+  --dir-flash: tape-print-flash;  /* @kind other */
+  --dir-flash-dur: 0.6s;          /* @kind other */
+
+  /* P&L */
+  --pnl-pos: #4ec77a;             /* gains */
+  --pnl-neg: #ff5d52;             /* losses */
+  --pnl-flat: var(--muted-lt);    /* flat / zero */
+
+  /* Limit utilization (RAG) - alias the status ramp */
+  --util-ok: var(--ok);           /* < 75% of ceiling */
+  --util-warn: var(--warn);       /* 75-95% - approaching */
+  --util-breach: var(--danger);   /* >= 95% / breached */
+  --util-track: var(--surface-2); /* unfilled gauge track */
+}
+
+[data-trade-style="tape"].light,
+.light {
+  --buy: #1f8a4c;
+  --buy-dim: rgba(31, 138, 76, 0.12);
+  --sell: #b22a1f;
+  --sell-dim: rgba(178, 42, 31, 0.10);
+  --long: var(--buy);
+  --short: var(--sell);
+
+  --pnl-pos: #1f8a4c;
+  --pnl-neg: #b22a1f;
+  --pnl-flat: var(--muted-lt);
+
+  --util-ok: var(--ok);
+  --util-warn: var(--warn);
+  --util-breach: var(--danger);
+  --util-track: var(--surface-2);
+}
+
+/* ── LADDER dialect ── blue bid ──────────────────────────────────────────── */
+[data-trade-style="ladder"],
+[data-trade-style="ladder"].dark {
+  --buy: #4d9fff;                 /* bid · buy · long */
+  --buy-dim: rgba(77, 159, 255, 0.16);
+  --sell: #ff5d52;                /* ask · sell · short */
+  --sell-dim: rgba(255, 93, 82, 0.14);
+  --long: var(--buy);
+  --short: var(--sell);
+
+  /* ladder dialect: chevron glyph · price-anchored reading · level-pulse motion */
+  --dir-shape: chevron;           /* @kind other */
+  --tape-read: anchored;          /* @kind other */
+  --dir-flash: ladder-level-pulse; /* @kind other */
+  --dir-flash-dur: 0.9s;          /* @kind other */
+}
+
+[data-trade-style="ladder"].light {
+  --buy: #1f63c9;
+  --buy-dim: rgba(31, 99, 201, 0.12);
+  --long: var(--buy);
+  --sell: #b22a1f;
+  --sell-dim: rgba(178, 42, 31, 0.10);
+  --short: var(--sell);
+}
+
+/* ── Dialect motion ──────────────────────────────────────────────────────────
+ * Tape desks expect a fill to FLASH its side color and fade (the uptick /
+ * downtick flash on the time-and-sales tape). Ladder desks expect the touched
+ * price LEVEL to pulse a ring. Apply with the `--dir-flash` token, e.g.
+ *   animation: var(--dir-flash) var(--dir-flash-dur) ease-out;
+ * Both are gated by prefers-reduced-motion below. */
+@keyframes tape-print-flash {
+  0%   { background: var(--buy-dim); }
+  100% { background: transparent; }
+}
+@keyframes ladder-level-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--buy-dim); }
+  70%  { box-shadow: 0 0 0 6px rgba(0, 0, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes tape-print-flash { 0%, 100% { background: transparent; } }
+  @keyframes ladder-level-pulse { 0%, 100% { box-shadow: none; } }
+}

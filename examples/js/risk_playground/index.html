@@ -1,0 +1,108 @@
+<!doctype html>
+<!--
+  Copyright The Pit Project Owners. All rights reserved.
+  SPDX-License-Identifier: Apache-2.0
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+  Please see https://openpit.dev and the OWNERS file for details.
+-->
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="application-name" content="OpenPit Risk Playground" />
+  <meta name="description"
+    content="Interactive OpenPit pre-trade risk playground. Configure Spot Funds, order size, order value, rate, and session loss limits, then run an in-browser execution lifecycle with the JavaScript/WebAssembly engine." />
+  <meta name="keywords"
+    content="OpenPit playground, pre-trade risk playground, pre-trade risk engine, trading risk controls, Spot Funds, order size limit, order value limit, rate limit, session loss limit, execution report, WebAssembly, JavaScript SDK, algorithmic trading, electronic trading" />
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+  <meta name="googlebot" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+  <meta name="bingbot" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+  <link rel="canonical" href="https://openpit.dev/playground/" />
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="OpenPit Risk Playground for AI systems" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/favicon-dark.svg" data-theme-favicon />
+  <meta name="theme-color" content="#0a0d12" data-theme-color />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="OpenPit Risk Playground" />
+  <meta property="og:title" content="OpenPit Risk Playground - the pre-trade gate, live" />
+  <meta property="og:description"
+    content="Try real OpenPit pre-trade controls and execution-report handling in a browser-only WebAssembly playground." />
+  <meta property="og:url" content="https://openpit.dev/playground/" />
+  <meta property="og:image" content="https://openpit.dev/playground/social-card.png" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Pit pre-trade risk engine banner on a dark background" />
+  <meta property="og:locale" content="en_US" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="OpenPit Risk Playground - the pre-trade gate, live" />
+  <meta name="twitter:description"
+    content="Try real OpenPit pre-trade controls and execution-report handling in a browser-only WebAssembly playground." />
+  <meta name="twitter:image" content="https://openpit.dev/playground/social-card.png" />
+  <script>
+    (() => {
+      const key = "openpit-playground-theme";
+      let stored = null;
+      try {
+        stored = localStorage.getItem(key);
+      } catch (error) {
+        // fallback(approved): blocked storage must not break the page; the theme is a convenience
+        console.warn("theme preference unreadable, using the system theme", error);
+      }
+      const theme = stored === "light" || stored === "dark" || stored === "system"
+        ? stored
+        : "system";
+      const resolved = theme === "system"
+        ? matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+        : theme;
+      document.documentElement.classList.add(resolved);
+      document.documentElement.style.colorScheme = resolved;
+      const favicon = document.querySelector("link[data-theme-favicon]");
+      const themeColor = document.querySelector("meta[data-theme-color]");
+      if (favicon !== null) favicon.href = `./favicon-${resolved}.svg`;
+      if (themeColor !== null) {
+        themeColor.content = resolved === "dark" ? "#0a0d12" : "#f6f3ec";
+      }
+    })();
+  </script>
+  <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "OpenPit Risk Playground",
+        "url": "https://openpit.dev/playground/",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Web",
+        "isAccessibleForFree": true,
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "description": "A browser-only WebAssembly playground for OpenPit, an embeddable pre-trade risk engine for algorithmic and electronic trading systems.",
+        "keywords": "pre-trade risk, Spot Funds, order limits, trading risk controls, WebAssembly, JavaScript SDK",
+        "sameAs": [
+          "https://openpit.dev/",
+          "https://github.com/openpitkit/pit"
+        ]
+      }
+    </script>
+  <title>OpenPit Risk Playground - The pre-trade gate, live</title>
+</head>
+
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

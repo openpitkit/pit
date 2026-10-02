@@ -355,6 +355,9 @@ jobs:
       - name: Check JS
         run: just --justfile "$JUSTFILE" check-js-ci-debug
 
+      - name: Check Risk Playground
+        run: just --justfile examples/js/risk_playground/justfile install check
+
   invariants:
     name: Invariant checks
     runs-on: ubuntu-22.04

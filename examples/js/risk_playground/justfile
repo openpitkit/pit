@@ -1,0 +1,40 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Risk Playground shortcuts. The same recipes back local work and CI.
+
+set windows-shell := ["cmd.exe", "/c"]
+
+repo_dir := justfile_directory() / "../../.."
+node_dir := env_var_or_default("PIT_NODE_DIR", repo_dir / "target" / "node")
+node_bin_dir := if os_family() == "windows" { node_dir } else { node_dir / "bin" }
+path_separator := if os_family() == "windows" { ";" } else { ":" }
+export PATH := node_bin_dir + path_separator + env_var("PATH")
+
+# Install the locked dependencies; the engine links to the local bindings/js.
+install:
+    npm ci --no-audit --no-fund
+
+# Rebuild the local JS binding and serve the playground on a dev server.
+run:
+    just --justfile "{{ repo_dir }}/justfile" build-js
+    npm run dev
+
+# Test, type-check, and bundle against the local build of bindings/js.
+check:
+    npm test
+    npm run build

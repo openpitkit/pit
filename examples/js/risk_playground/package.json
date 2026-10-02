@@ -1,0 +1,27 @@
+{
+  "name": "@openpit/example-risk-playground",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive in-browser OpenPit pre-trade risk playground",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openpit/engine": "file:../../../bindings/js",
+    "posthog-js": "^1.331.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^4.1.0"
+  }
+}

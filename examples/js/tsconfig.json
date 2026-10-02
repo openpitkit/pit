@@ -18,5 +18,5 @@
     "types": ["node"]
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "browser_terminal"]
+  "exclude": ["node_modules", "risk_playground"]
 }

@@ -17,18 +17,13 @@
 
 import { defineConfig } from "vite";
 
-// A bundler (Vite) resolves "@openpit/engine" to its browser entry, which has
-// the wasm base64-inlined into the JS. That is the whole point of this demo:
-// the production build is a static bundle with no sidecar .wasm to fetch and no
-// server to talk to. `assetsInlineLimit: 0` is intentionally NOT set - we rely
-// on the package's own inlined-wasm browser build, not on Vite asset inlining.
 export default defineConfig({
-  // Relative base so the built dist/ can be opened from any sub-path or a CDN.
+  // Relative base: the page is served from openpit.dev/playground/, not a root.
   base: "./",
   build: {
     target: "es2022",
-    // Surface the bundle size so the inlined-wasm footprint is visible in the
-    // build summary instead of being warned about and hidden.
+    // The engine's browser entry inlines its WASM, so the bundle is large by
+    // design; show its size instead of warning about it.
     chunkSizeWarningLimit: 4096,
   },
 });

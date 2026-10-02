@@ -1,0 +1,25 @@
+# OpenPit Risk Playground
+
+> OpenPit Risk Playground is an interactive, browser-only page that runs the OpenPit pre-trade risk engine compiled to WebAssembly. Visitors set order-size, order-value, order-rate, funds, and session-loss limits, send simulated orders, and see the engine's accept or reject decision for every check.
+
+There is no backend: every decision comes from the real `@openpit/engine` JavaScript/WebAssembly package running in the page. Orders, fills, and the instrument are simulated.
+
+**What it shows**
+
+- Five pre-trade checks: P&L kill switch, Spot Funds balance, order size, order value, and order rate per minute.
+- Preset scenarios: a normal buy, a fat-finger quantity, an oversized order value, insufficient funds, a rapid-fire burst past the rate limit, and a realized loss that trips the P&L kill switch and halts the account.
+- Every accepted order is filled at once through an execution report that carries a fixed 0.25 USD venue fee; the balance and P&L on screen come from the engine's post-trade results.
+- The traded instrument is a simulated SPCX (Space Exploration Technologies Corp.) shown at a simulated mark of 162.45 USD and settled in USD; the default order buys 30 SPCX at that price, and every value is editable.
+
+## Documentation
+
+- [Policies](https://wiki.openpit.dev/Policies/): Built-in policy catalog, stage behavior, and synchronization.
+- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/): Per-account solvency checks, reservations, and the holdings lifecycle.
+- [Reject Codes](https://wiki.openpit.dev/Reject-Codes/): The reject codes the engine returns when a check refuses an order.
+- [JavaScript/TypeScript API](https://docs.openpit.dev/js-api/): Generated package and subpath reference for `@openpit/engine`.
+
+## Project
+
+- [Website](https://openpit.dev/): Landing page with installation and documentation links.
+- [Source repository](https://github.com/openpitkit/pit): The engine and its SDKs; the playground lives in `examples/js/risk_playground`.
+- [npm: @openpit/engine](https://www.npmjs.com/package/@openpit/engine): The JavaScript/TypeScript package the playground runs. `npm install @openpit/engine`.

@@ -1,0 +1,100 @@
+/* Copyright The Pit Project Owners. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Please see https://openpit.dev and the OWNERS file for details. */
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Pit Officer - Color tokens
+ *
+ * One palette, two themes. Dark is the default and is applied to both :root
+ * and .dark so a page renders correctly before any theme-init script runs;
+ * .light overrides for the warm-paper light theme. The product toggles the
+ * theme by switching the class on <html> (persisted under
+ * "openpit-playground-theme").
+ *
+ * Base values are raw hex/rgba. Semantic aliases (--text-*, --surface-*,
+ * --border-*) are what components should reference.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+:root,
+.dark {
+  color-scheme: dark;
+
+  /* ── Brand / accent ── */
+  --accent: #ff7a00;            /* Pit orange - primary action, active nav, top brand bar */
+  --accent-2: #ffb347;          /* amber - hover on solid accent, secondary highlight */
+  --accent-dim: rgba(255, 122, 0, 0.12); /* tinted wash behind active/hover surfaces */
+
+  /* ── Surfaces ── */
+  --bg: #0a0d12;                /* app background - near-black, faint blue cast */
+  --surface: #11151c;           /* cards, sidebar, top bar */
+  --surface-2: #161b24;         /* nested panels, inputs-on-card, chips */
+
+  /* ── Borders ── */
+  --border: rgba(231, 226, 213, 0.08);   /* hairline dividers + card edges */
+  --border-hover: #ff7a00;                /* border on hover/focus */
+  --card-hover-bg: rgba(255, 122, 0, 0.06);
+  --tag-border: rgba(231, 226, 213, 0.12);
+
+  /* ── Text ── */
+  --text: #e8e6df;              /* primary text - warm off-white */
+  --muted-lt: #a4a39c;          /* secondary text */
+  --muted: #6f6e68;             /* tertiary / labels / disabled */
+
+  /* ── Status ── */
+  --ok: #4ec77a;                /* accepted / healthy */
+  --warn: #ffb347;             /* stale / request-only / caution */
+  --danger: #ff5d52;            /* rejected / blocked / protective */
+
+  /* ── Elevation ── */
+  --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* ── Semantic aliases (prefer these in components) ── */
+  --text-primary: var(--text);
+  --text-secondary: var(--muted-lt);
+  --text-tertiary: var(--muted);
+  --surface-app: var(--bg);
+  --surface-card: var(--surface);
+  --surface-raised: var(--surface-2);
+  --border-default: var(--border);
+  --border-strong: var(--border-hover);
+}
+
+.light {
+  color-scheme: light;
+
+  --accent: #c25400;            /* deeper burnt orange - AA contrast on paper */
+  --accent-2: #8a3e00;
+  --accent-dim: rgba(194, 84, 0, 0.08);
+
+  --bg: #f6f3ec;                /* warm paper */
+  --surface: #fffdf8;
+  --surface-2: #f1ece0;
+
+  --border: #d8d3c4;
+  --border-hover: #c25400;
+  --card-hover-bg: #fcf6ec;
+  --tag-border: #d8d3c4;
+
+  --text: #1a1a1a;
+  --muted-lt: #4a4944;
+  --muted: #6b6a64;
+
+  --ok: #1f8a4c;
+  --warn: #8a5a00;
+  --danger: #b22a1f;
+
+  --card-shadow: 0 10px 28px rgba(40, 30, 15, 0.1);
+}

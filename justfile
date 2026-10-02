@@ -578,7 +578,7 @@ test-go-release:
 # Full Go test suite (debug and release runtime, plus race instrumentation).
 test-go-full: test-go-debug test-go-release test-go-race
 
-# Full JS suite: package Node/browser tests, Node examples, and browser build.
+# Full JS suite: package Node/browser tests and the Node examples.
 test-js-debug: build-js
     cd bindings/js && npm test
     cd examples/js && npm test

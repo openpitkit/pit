@@ -9,7 +9,7 @@ full story; this page is the index and the one-command entry points.
 - `go/` - Go examples (`rate_pnl_killswitch`, `spot_funds`, `spot_table`).
 - `python/` - the same examples for the Python binding.
 - `js/` - the same Node examples for the JS binding, plus the
-  `browser_terminal` demo.
+  `risk_playground` browser demo.
 - `cpp/` - the same examples for the C++ binding.
 - `tables/` - scenario tables consumed by the `spot_table` examples
   (see [`tables/spot/README.md`](tables/spot/README.md)).
@@ -45,3 +45,6 @@ just test-python-debug        # Python examples' tests (plus the binding tests)
 just test-js                  # JS examples' tests (plus the binding tests)
 just test-examples-cpp-debug  # build the C++ examples and run their smoke tests
 ```
+
+The JS risk playground is checked separately, with `just check` in
+[`js/risk_playground`](js/risk_playground/README.md).

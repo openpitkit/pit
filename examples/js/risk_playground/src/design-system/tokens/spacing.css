@@ -1,0 +1,111 @@
+/* Copyright The Pit Project Owners. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Please see https://openpit.dev and the OWNERS file for details. */
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Pit Officer - Spacing, radii, borders, shadow & motion tokens
+ *
+ * Spacing follows a 4px base grid (Tailwind-compatible). The UI is dense:
+ * cards pad 20px, table rows 8px vertical, nav items 8px. Radii are small and
+ * functional - 6px on cards/buttons/inputs, 3px on badges and source pills.
+ * Nothing is pill-shaped except status dots.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Spacing (4px grid) ── */
+  --space-0_5: 2px;
+  --space-1: 4px;
+  --space-1_5: 6px;
+  --space-2: 8px;
+  --space-2_5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;   /* card padding */
+  --space-6: 24px;   /* top bar / section gutter */
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* ── Radii ── */
+  --radius-pill: 9999px; /* status dots only */
+  --radius-sm: 3px;      /* badges, source pills */
+  --radius-card: 6px;    /* cards, buttons, inputs, panels - the default */
+  --radius-lg: 12px;     /* clickable dashboard tiles */
+
+  /* ── Borders ── */
+  --border-width: 1px;
+  --border-line: 1px solid var(--border);
+
+  /* ── Elevation ── */
+  --shadow-card: var(--card-shadow);
+  --shadow-none: none;
+
+  /* ── Layout ── */
+  --sidebar-width: 14rem;   /* 224px */
+  --topbar-height: 3.5rem;  /* 56px */
+  --content-max: 72rem;     /* app content column */
+  --marketing-max: 80rem;   /* marketing shell */
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1); /* @kind other */
+  --dur-fast: 0.15s;   /* @kind other */
+  --dur-base: 0.18s;   /* @kind other */ /* the house transition - borders, colors, small lifts */
+  --dur-reveal: 0.5s;  /* @kind other */ /* scroll-reveal fade+rise */
+
+  /* ── Density (default = compact) ──────────────────────────────────────────
+   * Driven by [data-density] on the root element. Components read these vars
+   * instead of hard-coding padding/size, so one switch retunes the whole UI:
+   *   comfortable - roomy, for occasional / non-specialist users
+   *   compact     - the house default
+   *   terminal    - ultra-dense, the way a pro trading terminal packs rows
+   */
+  --dens-card-pad: 20px;     /* @kind spacing */
+  --dens-cell-px: 12px;      /* @kind spacing */ /* table cell horizontal padding */
+  --dens-cell-py: 8px;       /* @kind spacing */ /* table cell vertical padding */
+  --dens-head-h: 36px;       /* @kind spacing */ /* table header row height */
+  --dens-table-fz: 0.875rem; /* @kind font */    /* table body font size */
+  --dens-nav-py: 8px;        /* @kind spacing */ /* sidebar nav item vertical padding */
+  --dens-row-gap: 16px;      /* @kind spacing */ /* gap between stacked cards */
+}
+
+[data-density="comfortable"] {
+  --dens-card-pad: 26px;
+  --dens-cell-px: 16px;
+  --dens-cell-py: 13px;
+  --dens-head-h: 42px;
+  --dens-table-fz: 0.9375rem;
+  --dens-nav-py: 11px;
+  --dens-row-gap: 20px;
+}
+
+[data-density="compact"] {
+  --dens-card-pad: 20px;
+  --dens-cell-px: 12px;
+  --dens-cell-py: 8px;
+  --dens-head-h: 36px;
+  --dens-table-fz: 0.875rem;
+  --dens-nav-py: 8px;
+  --dens-row-gap: 16px;
+}
+
+[data-density="terminal"] {
+  --dens-card-pad: 12px;
+  --dens-cell-px: 8px;
+  --dens-cell-py: 3px;
+  --dens-head-h: 26px;
+  --dens-table-fz: 0.75rem;
+  --dens-nav-py: 5px;
+  --dens-row-gap: 10px;
+}

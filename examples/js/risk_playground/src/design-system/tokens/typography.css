@@ -1,0 +1,63 @@
+/* Copyright The Pit Project Owners. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Please see https://openpit.dev and the OWNERS file for details. */
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Pit Officer - Typography tokens
+ *
+ * The system is monospace top to bottom - JetBrains Mono everywhere. This is
+ * deliberate: Pit Officer is an instrument panel for traders and agents, and
+ * the mono grid reinforces the "every value is a precise figure" feeling.
+ * Numeric columns use tabular figures (.nums).
+ * ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Families ── */
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "Fira Code", monospace;
+  --font-sans: var(--font-mono); /* there is no sans in this system - alias to mono */
+  /* Display serif - the ONLY non-mono face. Use ONLY on operator-surface
+   * mastheads (H1) and the large summary-band figures, to read as a printed
+   * ledger. Never on data, labels, codes or nav. */
+  --font-display: "Newsreader", Georgia, var(--font-mono);
+
+  /* ── Weights ── */
+  --weight-regular: 400;
+  --weight-medium: 500;   /* nav, buttons, labels */
+  --weight-bold: 700;     /* headings, brand, emphasis */
+
+  /* ── Type scale (px @ 16 base) ── */
+  --text-2xs: 0.625rem;   /* 10px - micro labels, source pills */
+  --text-xs: 0.6875rem;   /* 11px - table heads, badges, hints */
+  --text-sm: 0.8125rem;   /* 13px - secondary body */
+  --text-base: 0.875rem;  /* 14px - default UI text */
+  --text-md: 1rem;        /* 16px - lead paragraphs */
+  --text-lg: 1.25rem;     /* 20px - card stats */
+  --text-xl: 1.5rem;      /* 24px - counts */
+  --text-2xl: 2.25rem;    /* 36px - section headings */
+  --text-hero: 3.75rem;   /* 60px - marketing hero (clamps down on mobile) */
+
+  /* ── Line heights ── */
+  --leading-tight: 1.05;
+  --leading-snug: 1.2;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  /* ── Tracking ── */
+  --tracking-tight: -0.01em;  /* large headings */
+  --tracking-label: 0.07em;   /* uppercase table heads / badges */
+  --tracking-eyebrow: 0.12em; /* uppercase card titles / eyebrows */
+  --tracking-wide: 0.18em;    /* marketing eyebrows */
+}

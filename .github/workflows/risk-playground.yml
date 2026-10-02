@@ -1,0 +1,147 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+name: Risk Playground
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  JUSTFILE: ${{ github.workspace }}/pipeline.just
+
+concurrency:
+  group: risk-playground-${{ github.ref }}
+  cancel-in-progress: true
+
+# The page runs the engine built from this commit, not a published npm release,
+# so the site always matches main.
+jobs:
+  build-deploy:
+    name: Build and deploy Risk Playground
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.CI_NODE }}
+          cache: npm
+          cache-dependency-path: |
+            bindings/js/package-lock.json
+            examples/js/risk_playground/package-lock.json
+
+      - name: Resolve wasm-bindgen-cli version
+        id: wasm-bindgen
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(
+            awk '/^wasm-bindgen[[:space:]]*=/ {
+                   match($0, /[0-9]+\.[0-9]+\.[0-9]+/); print substr($0, RSTART, RLENGTH); exit
+                 }' bindings/js/Cargo.toml
+          )"
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::could not resolve the wasm-bindgen version from bindings/js/Cargo.toml"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wasm-bindgen.outputs.version }}
+
+      - name: Install pinned Binaryen
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="binaryen-version_${CI_BINARYEN}-x86_64-linux.tar.gz"
+          release="https://github.com/WebAssembly/binaryen/releases/download/version_${CI_BINARYEN}"
+          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent \
+            --show-error --output "$RUNNER_TEMP/$archive" "$release/$archive"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          binaryen_bin="$RUNNER_TEMP/binaryen-version_${CI_BINARYEN}/bin"
+          wasm_opt_version="$("$binaryen_bin/wasm-opt" --version)"
+          if [[ "$wasm_opt_version" != *"version ${CI_BINARYEN}"* ]]; then
+            echo "::error::unexpected wasm-opt version: $wasm_opt_version"
+            exit 1
+          fi
+          echo "$wasm_opt_version"
+          echo "$binaryen_bin" >> "$GITHUB_PATH"
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      - name: Build JS binding
+        shell: bash
+        env:
+          # Same optimized artifact the npm publication ships.
+          OPENPIT_WASM_OPT: require
+        run: just --justfile "$JUSTFILE" build-js-ci
+
+      - name: Test and build Risk Playground
+        run: just --justfile examples/js/risk_playground/justfile install check
+
+      - name: Check Cloudflare configuration
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          missing=0
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID secret is not configured"
+            missing=1
+          fi
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN secret is not configured"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Deploy Risk Playground to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          wranglerVersion: ${{ env.CI_WRANGLER }}
+          command: >-
+            pages deploy examples/js/risk_playground/dist
+            --project-name=openpit-demo
+            --branch=main
+            --commit-hash=${{ github.sha }}

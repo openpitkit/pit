@@ -1,3 +1,5 @@
 /node_modules/
 */node_modules/
 */package-lock.json
+# The playground is not a workspace member and locks its own dependencies.
+!/risk_playground/package-lock.json
