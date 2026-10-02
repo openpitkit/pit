@@ -7438,6 +7438,74 @@ fn fresh_fx_tracks_average_and_realized_pnl_in_account_currency() {
     );
 }
 
+// The FX quote lives only in the account group's bucket, so converting the
+// fill requires the report account's group to reach the accounting lookup: a
+// lookup without it sees no quote and halts the position on MissingFx.
+#[test]
+fn group_bucket_fx_converts_fill_into_account_currency() {
+    let acc = account(99224416);
+    let grp = group(7);
+    let aapl_usd = instr("AAPL", "USD");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc
+        .register(instr("USD", "EUR"))
+        .expect("register must succeed");
+    svc.push_for(
+        fx_id,
+        Quote::new().with_mark(px("0.9")),
+        Duration::ZERO,
+        &[],
+        &[grp],
+    )
+    .expect("group push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
+    seed(&policy, acc, asset("USD"), "10000");
+
+    let buy = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("100")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &buy, &mut mutations).expect("pretrade must succeed");
+    let _ = mutations.commit_all();
+    let fill = make_report(
+        acc,
+        aapl_usd,
+        Side::Buy,
+        Some(Trade {
+            price: px("100"),
+            quantity: qty("10"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    let result = <TestPolicy as PreTradePolicy<
+        TestOrder,
+        TestReport,
+        TestAdjustment,
+        crate::core::FullSync,
+    >>::apply_execution_report(
+        &policy,
+        &post_trade_ctx_with_currency_and_group(&fill, asset("EUR"), grp),
+        &fill,
+    )
+    .expect("grouped report must produce a result");
+    assert!(result.account_blocks.is_empty());
+
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
+    assert_eq!(aapl.avg_entry_price(), Some(px("90")));
+    assert_eq!(aapl.realized_pnl_halt_reason(), None);
+}
+
 #[test]
 fn zero_and_negative_fx_convert_third_currency_fee_in_both_directions() {
     let acc = account(99224416);
