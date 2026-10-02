@@ -502,6 +502,325 @@ fn built_in_configuration_works_in_every_sync_mode() {
 }
 
 #[test]
+fn empty_policy_lifecycle_rate_limit_axes() {
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(None, [], [], []).expect("empty settings must be valid"),
+    );
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+    engine
+        .execute_pre_trade(order(0))
+        .expect("empty policy must pass");
+    for axis in 0..4 {
+        let account_id = AccountId::from_u64(axis + 1);
+        let settlement_asset = Asset::new("USD").expect("asset code must be valid");
+        let limit = RateLimit {
+            max_orders: 1,
+            window: Duration::from_secs(3600),
+        };
+        engine
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(name, |settings| match axis {
+                0 => settings.set_broker(Some(RateLimitBrokerBarrier { limit })),
+                1 => settings.set_asset_barriers([RateLimitAssetBarrier {
+                    limit,
+                    settlement_asset,
+                }]),
+                2 => settings.set_account_barriers([RateLimitAccountBarrier { limit, account_id }]),
+                3 => settings.set_account_asset_barriers([RateLimitAccountAssetBarrier {
+                    limit,
+                    account_id,
+                    settlement_asset,
+                }]),
+                _ => unreachable!(),
+            })
+            .expect("adding one axis must publish");
+        engine
+            .execute_pre_trade(order(axis + 1))
+            .expect("first order must pass");
+        let rejects = engine
+            .execute_pre_trade(order(axis + 1))
+            .err()
+            .expect("second order must reject");
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+        engine
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(name, |settings| match axis {
+                0 => settings.set_broker(None),
+                1 => settings.set_asset_barriers([]),
+                2 => settings.set_account_barriers([]),
+                3 => settings.set_account_asset_barriers([]),
+                _ => unreachable!(),
+            })
+            .expect("clearing the last axis must publish");
+        for _ in 0..2 {
+            engine
+                .execute_pre_trade(order(axis + 1))
+                .expect("cleared axis must pass");
+        }
+    }
+}
+
+#[test]
+fn empty_policy_lifecycle_rate_limit_untouched_axis_survives_clear() {
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(None, [], [], []).expect("empty settings must be valid"),
+    );
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+    let limit = RateLimit {
+        max_orders: 1,
+        window: Duration::from_secs(3600),
+    };
+    for _ in 0..2 {
+        engine
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(name, |settings| {
+                settings.set_broker(Some(RateLimitBrokerBarrier {
+                    limit: limit.clone(),
+                }))?;
+                settings.set_asset_barriers([RateLimitAssetBarrier {
+                    limit: limit.clone(),
+                    settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                }])
+            })
+            .expect("both axes must publish");
+        engine
+            .execute_pre_trade(order(1))
+            .expect("fresh window must pass");
+        engine
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(name, |settings| settings.set_asset_barriers([]))
+            .expect("asset clear must publish");
+        let rejects = engine
+            .execute_pre_trade(order(2))
+            .err()
+            .expect("untouched broker must reject");
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+        assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
+        engine
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(name, |settings| settings.set_broker(None))
+            .expect("last-to-empty must publish");
+        engine
+            .execute_pre_trade(order(2))
+            .expect("empty policy must pass");
+    }
+}
+
+#[test]
+fn empty_policy_lifecycle_rate_limit_account_log_resumes() {
+    let limit = RateLimit {
+        max_orders: 2,
+        window: Duration::from_secs(3600),
+    };
+    let barrier = RateLimitAccountBarrier {
+        limit,
+        account_id: AccountId::from_u64(7),
+    };
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(None, [], [barrier.clone()], []).expect("settings must be valid"),
+    );
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+    for _ in 0..2 {
+        engine
+            .execute_pre_trade(order(7))
+            .expect("order must fit account window");
+    }
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_broker(None)?;
+            settings.set_asset_barriers([])?;
+            settings.set_account_asset_barriers([])?;
+            settings.set_account_barriers([])
+        })
+        .expect("clearing every axis must publish");
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_account_barriers([barrier])
+        })
+        .expect("re-adding the same account must publish");
+    let rejects = engine
+        .execute_pre_trade(order(7))
+        .err()
+        .expect("resumed account log must reject the third order");
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    assert_eq!(rejects[0].reason, "rate limit exceeded: account barrier");
+}
+
+#[test]
+fn empty_policy_lifecycle_rate_limit_account_asset_log_resumes() {
+    let limit = RateLimit {
+        max_orders: 2,
+        window: Duration::from_secs(3600),
+    };
+    let barrier = RateLimitAccountAssetBarrier {
+        limit,
+        account_id: AccountId::from_u64(8),
+        settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+    };
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(None, [], [], [barrier.clone()]).expect("settings must be valid"),
+    );
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+    for _ in 0..2 {
+        engine
+            .execute_pre_trade(order(8))
+            .expect("order must fit account+asset window");
+    }
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_broker(None)?;
+            settings.set_asset_barriers([])?;
+            settings.set_account_barriers([])?;
+            settings.set_account_asset_barriers([])
+        })
+        .expect("clearing every axis must publish");
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_account_asset_barriers([barrier])
+        })
+        .expect("re-adding the same account+asset must publish");
+    let rejects = engine
+        .execute_pre_trade(order(8))
+        .err()
+        .expect("resumed account+asset log must reject the third order");
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    assert_eq!(
+        rejects[0].reason,
+        "rate limit exceeded: account+asset barrier"
+    );
+}
+
+#[test]
+fn empty_policy_lifecycle_rate_limit_broker_restarts_window() {
+    let limit = RateLimit {
+        max_orders: 2,
+        window: Duration::from_secs(3600),
+    };
+    let engine = build_rate_limit_engine(
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: limit.clone(),
+            }),
+            [],
+            [],
+            [],
+        )
+        .expect("settings must be valid"),
+    );
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+    for _ in 0..2 {
+        engine
+            .execute_pre_trade(order(1))
+            .expect("order must fit broker window");
+    }
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| settings.set_broker(None))
+        .expect("clearing the last axis must publish");
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_broker(Some(RateLimitBrokerBarrier { limit }))
+        })
+        .expect("re-adding broker must publish");
+    engine
+        .execute_pre_trade(order(1))
+        .expect("re-added broker must start a fresh window");
+}
+
+#[test]
+fn empty_policy_lifecycle_every_sync_mode() {
+    macro_rules! check_mode {
+        ($builder:expr, $locking:ty) => {{
+            let builder = $builder;
+            let rate = RateLimitPolicy::<$locking>::new(
+                RateLimitSettings::new(None, [], [], [])
+                    .expect("empty rate settings must be valid"),
+                builder.storage_builder(),
+            );
+            let size = OrderSizeLimitPolicy::<$locking>::new(
+                OrderSizeLimitSettings::new(None, [], [])
+                    .expect("empty size settings must be valid"),
+            );
+            let engine = builder
+                .pre_trade(rate)
+                .pre_trade(size)
+                .build()
+                .expect("engine must build");
+            engine
+                .execute_pre_trade(order(1))
+                .expect("empty policies must pass");
+            let rate_name = RateLimitPolicy::<$locking>::NAME;
+            engine
+                .configure()
+                .rate_limit::<RateLimitPolicyError>(rate_name, |settings| {
+                    settings.set_broker(Some(RateLimitBrokerBarrier {
+                        limit: RateLimit {
+                            max_orders: 0,
+                            window: Duration::from_secs(3600),
+                        },
+                    }))
+                })
+                .expect("rate barrier must publish");
+            let rejects = engine
+                .execute_pre_trade(order(1))
+                .err()
+                .expect("rate barrier must reject");
+            assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+            engine
+                .configure()
+                .rate_limit::<RateLimitPolicyError>(rate_name, |settings| settings.set_broker(None))
+                .expect("rate clear must publish");
+            engine
+                .execute_pre_trade(order(1))
+                .expect("cleared rate policy must pass");
+            let size_name = OrderSizeLimitPolicy::<$locking>::NAME;
+            engine
+                .configure()
+                .order_size_limit::<OrderSizeLimitPolicyError>(size_name, |settings| {
+                    settings.set_broker(Some(OrderSizeBrokerBarrier {
+                        limit: OrderSizeLimit {
+                            max_quantity: Some(Quantity::ZERO),
+                            max_notional: None,
+                        },
+                    }))
+                })
+                .expect("size barrier must publish");
+            let rejects = engine
+                .execute_pre_trade(order(1))
+                .err()
+                .expect("size barrier must reject");
+            assert_eq!(rejects[0].reason, "order quantity exceeded");
+            engine
+                .configure()
+                .order_size_limit::<OrderSizeLimitPolicyError>(size_name, |settings| {
+                    settings.set_broker(None)
+                })
+                .expect("size clear must publish");
+            engine
+                .execute_pre_trade(order(1))
+                .expect("cleared policies must pass");
+        }};
+    }
+    check_mode!(
+        Engine::builder::<OrderOperation, (), ()>().no_sync(),
+        NoLocking
+    );
+    check_mode!(
+        Engine::builder::<OrderOperation, (), ()>().account_sync(),
+        AccountLocking
+    );
+    check_mode!(
+        Engine::builder::<OrderOperation, (), ()>().full_sync(),
+        FullLocking
+    );
+}
+
+#[test]
 fn nested_configuration_is_rejected_per_engine_without_poisoning_other_engines() {
     let engine = build_engine(5);
     let other = build_engine(5);
@@ -1174,6 +1493,107 @@ fn build_order_size_engine(account_id: u64, max_quantity: &str) -> FullSyncEngin
         .pre_trade(policy)
         .build()
         .expect("engine must build")
+}
+
+#[test]
+fn empty_policy_lifecycle_order_size_axes() {
+    let engine = Engine::builder::<OrderOperation, (), ()>()
+        .full_sync()
+        .pre_trade(OrderSizeLimitPolicy::<FullLocking>::new(
+            OrderSizeLimitSettings::new(None, [], []).expect("empty settings must be valid"),
+        ))
+        .build()
+        .expect("engine must build");
+    let name = OrderSizeLimitPolicy::<FullLocking>::NAME;
+    engine
+        .execute_pre_trade(order_with_price(0, "1000", "100"))
+        .expect("empty policy must pass any size");
+    for axis in 0..3 {
+        let limit = OrderSizeLimit {
+            max_quantity: Some(Quantity::from_str("10").expect("quantity must be valid")),
+            max_notional: None,
+        };
+        let asset = Asset::new("AAPL").expect("asset code must be valid");
+        engine
+            .configure()
+            .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| match axis {
+                0 => settings.set_broker(Some(OrderSizeBrokerBarrier { limit })),
+                1 => settings.set_asset_barriers([OrderSizeAssetBarrier { limit, asset }]),
+                2 => settings.set_account_asset_barriers([OrderSizeAccountAssetBarrier {
+                    limit,
+                    asset,
+                    account_id: AccountId::from_u64(axis + 1),
+                }]),
+                _ => unreachable!(),
+            })
+            .expect("adding one axis must publish");
+        let rejects = engine
+            .execute_pre_trade(order_with_price(axis + 1, "11", "100"))
+            .err()
+            .expect("oversized order must reject");
+        assert_eq!(rejects[0].code, RejectCode::OrderQtyExceedsLimit);
+        assert_eq!(rejects[0].reason, "order quantity exceeded");
+        engine
+            .configure()
+            .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| match axis {
+                0 => settings.set_broker(None),
+                1 => settings.set_asset_barriers([]),
+                2 => settings.set_account_asset_barriers([]),
+                _ => unreachable!(),
+            })
+            .expect("clearing the last axis must publish");
+        engine
+            .execute_pre_trade(order_with_price(axis + 1, "11", "100"))
+            .expect("cleared axis must pass");
+    }
+}
+
+#[test]
+fn empty_policy_lifecycle_order_size_untouched_axis_survives_clear() {
+    let engine = Engine::builder::<OrderOperation, (), ()>()
+        .full_sync()
+        .pre_trade(OrderSizeLimitPolicy::<FullLocking>::new(
+            OrderSizeLimitSettings::new(None, [], []).expect("empty settings must be valid"),
+        ))
+        .build()
+        .expect("engine must build");
+    let name = OrderSizeLimitPolicy::<FullLocking>::NAME;
+    let limit = OrderSizeLimit {
+        max_quantity: Some(Quantity::from_str("10").expect("quantity must be valid")),
+        max_notional: None,
+    };
+    for _ in 0..2 {
+        engine
+            .configure()
+            .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
+                settings.set_broker(Some(OrderSizeBrokerBarrier { limit }))?;
+                settings.set_asset_barriers([OrderSizeAssetBarrier {
+                    limit,
+                    asset: Asset::new("AAPL").expect("asset code must be valid"),
+                }])
+            })
+            .expect("both axes must publish");
+        engine
+            .configure()
+            .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
+                settings.set_asset_barriers([])
+            })
+            .expect("asset clear must publish");
+        let rejects = engine
+            .execute_pre_trade(order_with_price(1, "11", "100"))
+            .err()
+            .expect("untouched broker must reject");
+        assert_eq!(rejects[0].code, RejectCode::OrderQtyExceedsLimit);
+        engine
+            .configure()
+            .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
+                settings.set_broker(None)
+            })
+            .expect("last-to-empty must publish");
+        engine
+            .execute_pre_trade(order_with_price(1, "11", "100"))
+            .expect("empty policy must pass");
+    }
 }
 
 // Tighten the account+asset barrier for account 1 via configure.  An order

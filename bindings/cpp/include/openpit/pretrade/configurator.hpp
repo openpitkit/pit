@@ -29,6 +29,8 @@ class Configurator {
   explicit Configurator(const ::openpit::Engine& engine) noexcept
       : m_engine(::openpit::detail::Native(engine)) {}
 
+  /// Clearing an account or account+asset barrier keeps its sliding-window log;
+  /// re-adding the key resumes counting orders still inside its window.
   void RateLimit(
       std::string_view name,
       ::openpit::pretrade::policies::RateLimitBrokerBarrierUpdate broker =

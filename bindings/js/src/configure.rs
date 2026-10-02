@@ -52,7 +52,17 @@ use crate::result::{JsAccountBlockOutcomes, JsPolicyConfigurationResult};
 
 #[wasm_bindgen(typescript_custom_section)]
 const CONFIGURE_TS: &'static str = r#"
-/** Runtime rate-limit configuration options. */
+/**
+ * Runtime rate-limit configuration options.
+ * Omitted, `undefined` or `null` fields leave their axis unchanged. A
+ * supplied iterable replaces the whole axis, and an empty one clears it.
+ * `clearBroker: true` removes the broker barrier. Clearing every axis is
+ * valid; the policy then admits every order.
+ * Clearing an account or account-and-asset barrier keeps that key's
+ * sliding-window log; re-adding the key resumes counting orders still inside
+ * its window, rejected orders included. Re-added broker and asset barriers
+ * start fresh windows.
+ */
 export interface RateLimitConfigureOptions {
   broker?: RateLimitBrokerBarrier | null;
   clearBroker?: boolean;
@@ -74,7 +84,13 @@ export interface SetAccountPnlOptions {
   pnl: Pnl | string | number | bigint;
 }
 
-/** Runtime order-size-limit configuration options. */
+/**
+ * Runtime order-size-limit configuration options.
+ * Omitted, `undefined` or `null` fields leave their axis unchanged. A
+ * supplied iterable replaces the whole axis, and an empty one clears it.
+ * `clearBroker: true` removes the broker barrier. Clearing every axis is
+ * valid; the policy then admits every order.
+ */
 export interface OrderSizeLimitConfigureOptions {
   broker?: OrderSizeBrokerBarrier | null;
   clearBroker?: boolean;

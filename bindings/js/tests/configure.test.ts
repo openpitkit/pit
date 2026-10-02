@@ -52,6 +52,8 @@ import {
   PnlBoundsBrokerBarrier,
   PnlBoundsKillswitchBuilder,
   RateLimit,
+  RateLimitAccountAssetBarrier,
+  RateLimitAccountBarrier,
   RateLimitAssetBarrier,
   RateLimitBrokerBarrier,
   RateLimitBuilder,
@@ -135,6 +137,196 @@ function expectConfigureError(
   expect(error).toBeInstanceOf(PolicyConfigureError);
   expect((error as PolicyConfigureError).kind).toBe(kind);
 }
+
+describe("empty policy lifecycle", () => {
+  it("cycles every rate-limit axis through empty settings", () => {
+    const engine = Engine.builder()
+      .builtin(buildRateLimit().assetBarriers([]))
+      .build();
+    const configure = engine.configure();
+    const name = RateLimitBuilder.NAME;
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+
+    const axes = [
+      {
+        update: (count: number) => ({
+          broker: new RateLimitBrokerBarrier(new RateLimit(count, 60_000)),
+        }),
+        clear: { clearBroker: true },
+        account: ACCOUNT,
+        settlement: "USD",
+        resumes: false,
+      },
+      {
+        update: (count: number) => ({
+          assetBarriers: [
+            new RateLimitAssetBarrier(new RateLimit(count, 60_000), "EUR"),
+          ],
+        }),
+        clear: { assetBarriers: [] },
+        account: ACCOUNT + 1n,
+        settlement: "EUR",
+        resumes: false,
+      },
+      {
+        update: (count: number) => ({
+          accountBarriers: [
+            new RateLimitAccountBarrier(
+              new RateLimit(count, 60_000),
+              ACCOUNT + 2n,
+            ),
+          ],
+        }),
+        clear: { accountBarriers: [] },
+        account: ACCOUNT + 2n,
+        settlement: "GBP",
+        resumes: true,
+      },
+      {
+        update: (count: number) => ({
+          accountAssetBarriers: [
+            new RateLimitAccountAssetBarrier(
+              new RateLimit(count, 60_000),
+              ACCOUNT + 3n,
+              "JPY",
+            ),
+          ],
+        }),
+        clear: { accountAssetBarriers: [] },
+        account: ACCOUNT + 3n,
+        settlement: "JPY",
+        resumes: true,
+      },
+    ];
+    for (const axis of axes) {
+      const order = makeOrder("1", "100", axis.account);
+      order.operation!.settlementAsset = axis.settlement;
+      configure.rateLimit(name, axis.update(1));
+      expect(engine.startPreTrade(order).ok).toBe(true);
+      const rejected = engine.startPreTrade(order);
+      expect(rejected.ok).toBe(false);
+      expect(rejected.rejects[0]?.code).toBe("RateLimitExceeded");
+
+      configure.rateLimit(name, {
+        broker: null,
+        assetBarriers: null,
+        accountBarriers: null,
+        accountAssetBarriers: null,
+      });
+      const unchanged = engine.startPreTrade(order);
+      expect(unchanged.ok).toBe(false);
+      expect(unchanged.rejects[0]?.code).toBe("RateLimitExceeded");
+
+      configure.rateLimit(name, axis.clear);
+      for (let index = 0; index < 2; index += 1) {
+        expect(engine.startPreTrade(order).ok).toBe(true);
+      }
+
+      // Account logs retain the accepted order and both rejected orders.
+      configure.rateLimit(name, axis.update(axis.resumes ? 4 : 1));
+      expect(engine.startPreTrade(order).ok).toBe(true);
+      const reactivated = engine.startPreTrade(order);
+      expect(reactivated.ok).toBe(false);
+      expect(reactivated.rejects[0]?.code).toBe("RateLimitExceeded");
+      configure.rateLimit(name, axis.clear);
+      expect(engine.startPreTrade(order).ok).toBe(true);
+    }
+
+    configure.rateLimit(name, {
+      broker: new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
+    });
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+    const reactivated = engine.startPreTrade(makeOrder());
+    expect(reactivated.ok).toBe(false);
+    expect(reactivated.rejects[0]?.code).toBe("RateLimitExceeded");
+    configure.rateLimit(name, { clearBroker: true });
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+  });
+
+  it("cycles every order-size-limit axis through empty settings", () => {
+    const engine = Engine.builder()
+      .builtin(buildOrderSizeLimit().assetBarriers([]))
+      .build();
+    const configure = engine.configure();
+    const name = OrderSizeLimitBuilder.NAME;
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+
+    const axes = [
+      {
+        update: {
+          broker: new OrderSizeBrokerBarrier(
+            new OrderSizeLimit("1", "1000000"),
+          ),
+        },
+        clear: { clearBroker: true },
+        account: ACCOUNT,
+        underlying: "AAPL",
+        settlement: "USD",
+      },
+      {
+        update: {
+          assetBarriers: [
+            new OrderSizeAssetBarrier(
+              new OrderSizeLimit("1", "1000000"),
+              "MSFT",
+            ),
+          ],
+        },
+        clear: { assetBarriers: [] },
+        account: ACCOUNT + 1n,
+        underlying: "MSFT",
+        settlement: "EUR",
+      },
+      {
+        update: {
+          accountAssetBarriers: [
+            new OrderSizeAccountAssetBarrier(
+              new OrderSizeLimit("1", "1000000"),
+              ACCOUNT + 2n,
+              "NVDA",
+            ),
+          ],
+        },
+        clear: { accountAssetBarriers: [] },
+        account: ACCOUNT + 2n,
+        underlying: "NVDA",
+        settlement: "JPY",
+      },
+    ];
+    for (const axis of axes) {
+      const order = makeOrder("2", "100", axis.account);
+      order.operation!.underlyingAsset = axis.underlying;
+      order.operation!.settlementAsset = axis.settlement;
+      configure.orderSizeLimit(name, axis.update);
+      const rejected = engine.startPreTrade(order);
+      expect(rejected.ok).toBe(false);
+      expect(rejected.rejects[0]?.code).toBe("OrderQtyExceedsLimit");
+
+      configure.orderSizeLimit(name, {
+        broker: null,
+        assetBarriers: null,
+        accountAssetBarriers: null,
+      });
+      const unchanged = engine.startPreTrade(order);
+      expect(unchanged.ok).toBe(false);
+      expect(unchanged.rejects[0]?.code).toBe("OrderQtyExceedsLimit");
+
+      configure.orderSizeLimit(name, axis.clear);
+      for (let index = 0; index < 2; index += 1) {
+        expect(engine.startPreTrade(order).ok).toBe(true);
+      }
+    }
+
+    configure.orderSizeLimit(name, {
+      broker: new OrderSizeBrokerBarrier(new OrderSizeLimit("1", "1000000")),
+    });
+    const reactivated = engine.startPreTrade(makeOrder("2"));
+    expect(reactivated.ok).toBe(false);
+    expect(reactivated.rejects[0]?.code).toBe("OrderQtyExceedsLimit");
+    configure.orderSizeLimit(name, { clearBroker: true });
+    expect(engine.startPreTrade(makeOrder("2")).ok).toBe(true);
+  });
+});
 
 describe("runtime configurator", () => {
   it("retunes a built-in rate-limit policy", () => {

@@ -96,8 +96,9 @@ fn rate_limit_window_duration(window_nanoseconds: i64) -> Result<Duration, Strin
 /// Contract:
 /// - `builder` must be a valid engine builder pointer.
 /// - `policy_group_id` assigns the policy to a policy group (pass `0` for default).
-/// - At least one barrier axis must be configured: `broker` non-null,
-///   `asset_len > 0`, `account_len > 0`, or `account_asset_len > 0`.
+/// - Every axis may be empty (null `broker`, zero array lengths). The policy
+///   then admits every order and can be configured later through
+///   `openpit_engine_configure_rate_limit`.
 /// - When a length is greater than zero the corresponding pointer must point
 ///   to that many readable entries.
 /// - Each `settlement_asset` string view inside an array entry must be valid
@@ -107,8 +108,8 @@ fn rate_limit_window_duration(window_nanoseconds: i64) -> Result<Duration, Strin
 /// - returns `true`; the builder retains the policy.
 ///
 /// Error:
-/// - returns `false` when the builder is null or already consumed, when no
-///   barrier axis is configured, or when argument parsing fails;
+/// - returns `false` when the builder is null or already consumed, or when
+///   argument parsing fails;
 /// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
 ///   error handle that MUST be released with `openpit_destroy_shared_string`.
 pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
@@ -291,9 +292,14 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 /// `has_*` flag is `true`. A touched axis is replaced wholesale - barriers
 /// can be added and removed at runtime. A barrier key that survives the
 /// replacement keeps its live counter (no reset). An empty axis (`len` 0
-/// with `has_*` true) clears it, subject to the policy's at-least-one-
-/// barrier rule. Setting `has_broker` to `true` with a null `broker` pointer
-/// clears the broker barrier.
+/// with `has_*` true) clears it. Setting `has_broker` to `true` with a null
+/// `broker` pointer clears the broker barrier. Clearing every axis is valid;
+/// the policy then admits every order and can be configured again through
+/// this function.
+///
+/// Clearing an account or account+asset key retains its stored sliding log,
+/// even when every axis becomes empty; re-adding that key counts orders still
+/// within its window. Re-added broker and asset barriers start fresh windows.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
@@ -312,8 +318,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 ///   the pointer/length arguments.
 ///
 /// Success:
-/// - returns `true`; the new limits apply from the next order onward with no
-///   counter reset.
+/// - returns `true`; the new limits apply from the next order onward, retaining
+///   counters for surviving keys.
 ///
 /// Error:
 /// - returns `false`; if `out_error` is non-null, writes a caller-owned
@@ -554,21 +560,6 @@ mod tests {
     use crate::order::OpenPitOrder;
     use crate::param::{OpenPitParamDecimal, OpenPitParamQuantity};
 
-    fn cstr_to_string(handle: *mut crate::string::OpenPitSharedString) -> String {
-        if handle.is_null() {
-            return String::new();
-        }
-        let view = crate::string::openpit_shared_string_view(handle);
-        let result = if view.ptr.is_null() {
-            String::new()
-        } else {
-            let bytes = unsafe { std::slice::from_raw_parts(view.ptr, view.len) };
-            std::str::from_utf8(bytes).expect("utf8").to_string()
-        };
-        crate::string::openpit_destroy_shared_string(handle);
-        result
-    }
-
     fn quantity_param(mantissa: i128, scale: i32) -> OpenPitParamQuantity {
         OpenPitParamQuantity(OpenPitParamDecimal {
             mantissa_lo: mantissa as i64,
@@ -678,13 +669,9 @@ mod tests {
     }
 
     #[test]
-    fn add_builtin_rate_limit_policy_empty_config_reports_error() {
-        let builder = crate::engine::openpit_create_engine_builder(
-            crate::engine::OpenPitSyncPolicy::Full as u8,
-            std::ptr::null_mut(),
-        );
+    fn add_builtin_rate_limit_policy_empty_config_builds() {
         let mut out_error = std::ptr::null_mut();
-        let ok = unsafe {
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
             openpit_engine_builder_add_builtin_rate_limit_policy(
                 builder,
                 0,
@@ -697,15 +684,173 @@ mod tests {
                 0,
                 &mut out_error,
             )
+        });
+        assert!(out_error.is_null(), "empty registration must succeed");
+        run_start_pre_trade_passes(engine);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_rate_limit_empty_policy_lifecycle() {
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        run_start_pre_trade_passes(engine);
+        let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 1,
+            window_nanoseconds: 3_600_000_000_000,
         };
-        assert!(!ok);
-        let message = cstr_to_string(out_error);
-        assert!(
-            message.contains("rate_limit_policy creation failed")
-                && message.contains("must be configured"),
-            "expected SDK no-barrier error wrapped by FFI, got: {message}"
-        );
-        crate::engine::openpit_destroy_engine_builder(builder);
+        let asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            max_orders: 1,
+            window_nanoseconds: 3_600_000_000_000,
+        }];
+        let account = [OpenPitPretradePoliciesRateLimitAccountBarrier {
+            account_id: 7,
+            max_orders: 1,
+            window_nanoseconds: 3_600_000_000_000,
+        }];
+        let account_asset = [OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
+            account_id: 7,
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            max_orders: 1,
+            window_nanoseconds: 3_600_000_000_000,
+        }];
+        for axis in 0..4 {
+            let mut out_error = std::ptr::null_mut();
+            assert!(
+                unsafe {
+                    openpit_engine_configure_rate_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("RateLimitPolicy"),
+                        &broker,
+                        axis == 0,
+                        asset.as_ptr(),
+                        asset.len(),
+                        axis == 1,
+                        account.as_ptr(),
+                        account.len(),
+                        axis == 2,
+                        account_asset.as_ptr(),
+                        account_asset.len(),
+                        axis == 3,
+                        &mut out_error,
+                    )
+                },
+                "adding one axis must succeed"
+            );
+            assert!(out_error.is_null());
+            run_start_pre_trade_passes(engine);
+            run_start_pre_trade_rejected(engine);
+            assert!(
+                unsafe {
+                    openpit_engine_configure_rate_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("RateLimitPolicy"),
+                        std::ptr::null(),
+                        axis == 0,
+                        std::ptr::null(),
+                        0,
+                        axis == 1,
+                        std::ptr::null(),
+                        0,
+                        axis == 2,
+                        std::ptr::null(),
+                        0,
+                        axis == 3,
+                        &mut out_error,
+                    )
+                },
+                "clearing the last axis must succeed"
+            );
+            assert!(out_error.is_null());
+            run_start_pre_trade_passes(engine);
+            run_start_pre_trade_passes(engine);
+        }
+        for _ in 0..2 {
+            let mut out_error = std::ptr::null_mut();
+            assert!(
+                unsafe {
+                    openpit_engine_configure_rate_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("RateLimitPolicy"),
+                        &broker,
+                        true,
+                        asset.as_ptr(),
+                        asset.len(),
+                        true,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        &mut out_error,
+                    )
+                },
+                "re-activation must succeed"
+            );
+            assert!(out_error.is_null());
+            run_start_pre_trade_passes(engine);
+            assert!(
+                unsafe {
+                    openpit_engine_configure_rate_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("RateLimitPolicy"),
+                        std::ptr::null(),
+                        false,
+                        std::ptr::null(),
+                        0,
+                        true,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        &mut out_error,
+                    )
+                },
+                "asset clear must succeed"
+            );
+            assert!(out_error.is_null());
+            run_start_pre_trade_rejected(engine);
+            assert!(
+                unsafe {
+                    openpit_engine_configure_rate_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("RateLimitPolicy"),
+                        std::ptr::null(),
+                        true,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        &mut out_error,
+                    )
+                },
+                "last-to-empty must succeed"
+            );
+            assert!(out_error.is_null());
+            run_start_pre_trade_passes(engine);
+        }
+        crate::engine::openpit_destroy_engine(engine);
     }
 
     #[test]

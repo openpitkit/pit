@@ -383,7 +383,8 @@ impl JsOrderSizeLimitBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `EngineBuildError` when no barrier is configured.
+    /// Throws `EngineBuildError` when a barrier limit has neither cap, or when
+    /// an asset or (account, asset) key repeats.
     pub(crate) fn build_policy(
         &self,
     ) -> Result<OrderSizeLimitPolicy<crate::engine::StorageFactory>, JsValue> {

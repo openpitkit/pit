@@ -871,6 +871,82 @@ static_assert(
 //------------------------------------------------------------------------------
 // Lifecycle (real engine): start -> execute -> commit, then clean stop.
 
+TEST(TypedAsyncLifecycle, EmptyPolicyLifecycle) {
+  EngineBuilder builder(SyncPolicy::Account);
+  builder.Add(policies::RateLimitPolicy{});
+  builder.Add(policies::OrderSizeLimitPolicy{});
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+  const auto account = AccountId::FromUint64(kAccountA);
+  auto order = TestOrder(kAccountA);
+  order.operation->tradeAmount =
+      openpit::model::TradeAmount::OfQuantity(Quantity::FromString("2"));
+  const auto check = [&](std::optional<RejectCode> code) {
+    auto result = async.StartPreTrade(order).Await(kAwaitCap).value();
+    if (code) {
+      EXPECT_FALSE(result.Passed());
+      ASSERT_EQ(result.rejects.size(), 1u);
+      EXPECT_EQ(result.rejects.front().code, *code);
+    } else {
+      ASSERT_TRUE(result.Passed());
+      EXPECT_TRUE(result.rejects.empty());
+      EXPECT_TRUE(result.request->Close().Await(kAwaitCap).has_value());
+    }
+  };
+  check(std::nullopt);
+  for (int cycle = 0; cycle < 2; ++cycle) {
+    ASSERT_TRUE(
+        async
+            .Submit(account,
+                    [&] {
+                      engine.Configure().RateLimit(
+                          policies::RateLimitPolicyName,
+                          policies::RateLimitBrokerBarrierUpdate::Set(
+                              policies::RateLimitBrokerBarrier(
+                                  policies::RateLimit(0, 3'600'000'000'000))));
+                    })
+            .Await(kAwaitCap)
+            .has_value());
+    check(RejectCode::RateLimitExceeded);
+    ASSERT_TRUE(
+        async
+            .Submit(account,
+                    [&] {
+                      engine.Configure().RateLimit(
+                          policies::RateLimitPolicyName,
+                          policies::RateLimitBrokerBarrierUpdate::Clear());
+                    })
+            .Await(kAwaitCap)
+            .has_value());
+    check(std::nullopt);
+    ASSERT_TRUE(async
+                    .Submit(account,
+                            [&] {
+                              engine.Configure().OrderSizeLimit(
+                                  policies::OrderSizeLimitPolicyName,
+                                  policies::OrderSizeBrokerBarrierUpdate::Set(
+                                      policies::OrderSizeBrokerBarrier(
+                                          policies::OrderSizeLimit::Quantity(
+                                              Quantity::FromString("1")))));
+                            })
+                    .Await(kAwaitCap)
+                    .has_value());
+    check(RejectCode::OrderQtyExceedsLimit);
+    ASSERT_TRUE(
+        async
+            .Submit(account,
+                    [&] {
+                      engine.Configure().OrderSizeLimit(
+                          policies::OrderSizeLimitPolicyName,
+                          policies::OrderSizeBrokerBarrierUpdate::Clear());
+                    })
+            .Await(kAwaitCap)
+            .has_value());
+    check(std::nullopt);
+  }
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
 TEST(TypedAsyncLifecycle, RealEngineStartExecuteCommit) {
   Engine engine = SingleOrderEngine();
   auto async = ae::MakeTypedAsyncEngine(engine, 2);

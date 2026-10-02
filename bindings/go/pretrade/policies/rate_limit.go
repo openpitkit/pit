@@ -86,6 +86,9 @@ type RateLimitReadyBuilder struct {
 }
 
 // BuildRateLimit returns a new rate-limit policy builder.
+// Calling an axis method with no barriers, such as AssetBarriers(), returns a
+// ready builder for an empty policy that admits every order and can be
+// configured later through the engine's Configure() method.
 func BuildRateLimit() *RateLimitBuilder {
 	return &RateLimitBuilder{
 		builder: &RateLimitReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},

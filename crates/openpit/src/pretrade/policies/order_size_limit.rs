@@ -93,8 +93,6 @@ pub struct OrderSizeAccountAssetBarrier {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrderSizeLimitPolicyError {
-    /// No barriers were provided across all axes.
-    NoBarriersConfigured,
     /// Neither quantity nor notional was configured for a limit.
     NoCapsConfigured,
     /// An asset key was repeated on the asset axis.
@@ -112,11 +110,6 @@ pub enum OrderSizeLimitPolicyError {
 impl Display for OrderSizeLimitPolicyError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoBarriersConfigured => write!(
-                f,
-                "at least one broker, asset, or account+asset barrier \
-                 must be configured"
-            ),
             Self::NoCapsConfigured => write!(
                 f,
                 "at least one of max_quantity or max_notional \
@@ -136,9 +129,11 @@ impl std::error::Error for OrderSizeLimitPolicyError {}
 
 /// Runtime-updatable settings for [`OrderSizeLimitPolicy`].
 ///
-/// Holds the full barrier configuration across all three axes. Construction
-/// and every setter require at least one barrier across all axes and at least
-/// one cap in every limit.
+/// Holds the full barrier configuration across all three axes. Every axis
+/// may be empty; the policy then admits every order. Barriers can be added
+/// later through [`Engine::configure`](crate::Engine::configure). An empty
+/// axis passed to a setter clears it, including the last barrier. Every
+/// supplied limit must carry at least one cap.
 ///
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderSizeLimitSettings {
@@ -155,22 +150,12 @@ impl OrderSizeLimitSettings {
         Ok(())
     }
 
-    /// Validates that the barrier combination is non-empty.
-    fn validate(
-        broker: &Option<OrderSizeBrokerBarrier>,
-        asset_limits: &HashMap<Asset, OrderSizeLimit>,
-        account_asset_limits: &HashMap<(AccountId, Asset), OrderSizeLimit>,
-    ) -> Result<(), OrderSizeLimitPolicyError> {
-        if broker.is_none() && asset_limits.is_empty() && account_asset_limits.is_empty() {
-            return Err(OrderSizeLimitPolicyError::NoBarriersConfigured);
-        }
-        Ok(())
-    }
-
     /// Creates settings from explicit barrier iterables.
     ///
-    /// Returns [`OrderSizeLimitPolicyError::NoBarriersConfigured`] if all axes
-    /// are empty, or [`OrderSizeLimitPolicyError::NoCapsConfigured`] if any
+    /// All axes may be empty; the policy then admits every order. Barriers
+    /// can be added later through
+    /// [`Engine::configure`](crate::Engine::configure).
+    /// Returns [`OrderSizeLimitPolicyError::NoCapsConfigured`] if any
     /// supplied limit has neither cap. A duplicate key within either collection
     /// is rejected.
     pub fn new(
@@ -212,8 +197,6 @@ impl OrderSizeLimitSettings {
             }
         }
 
-        Self::validate(&broker, &asset_limits, &account_asset_limits)?;
-
         Ok(Self {
             account_asset_limits,
             asset_limits,
@@ -223,10 +206,9 @@ impl OrderSizeLimitSettings {
 
     /// Replaces the broker barrier.
     ///
-    /// Returns [`OrderSizeLimitPolicyError::NoBarriersConfigured`] if the new
-    /// value would leave all axes empty, or
-    /// [`OrderSizeLimitPolicyError::NoCapsConfigured`] if the supplied limit
-    /// has neither cap.
+    /// Passing `None` clears the axis, including the last barrier.
+    /// Returns [`OrderSizeLimitPolicyError::NoCapsConfigured`] if the supplied
+    /// limit has neither cap.
     pub fn set_broker(
         &mut self,
         broker: Option<OrderSizeBrokerBarrier>,
@@ -234,17 +216,15 @@ impl OrderSizeLimitSettings {
         if let Some(barrier) = &broker {
             Self::validate_limit(&barrier.limit)?;
         }
-        Self::validate(&broker, &self.asset_limits, &self.account_asset_limits)?;
         self.broker = broker;
         Ok(())
     }
 
     /// Replaces the full set of per-asset barriers.
     ///
-    /// Returns [`OrderSizeLimitPolicyError::NoBarriersConfigured`] if the new
-    /// set would leave all axes empty, or
-    /// [`OrderSizeLimitPolicyError::NoCapsConfigured`] if any supplied limit
-    /// has neither cap. A duplicate asset key is rejected.
+    /// Passing an empty set clears the axis, including the last barrier.
+    /// Returns [`OrderSizeLimitPolicyError::NoCapsConfigured`] if any supplied
+    /// limit has neither cap. A duplicate asset key is rejected.
     pub fn set_asset_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = OrderSizeAssetBarrier>,
@@ -263,17 +243,15 @@ impl OrderSizeLimitSettings {
                 }
             }
         }
-        Self::validate(&self.broker, &asset_limits, &self.account_asset_limits)?;
         self.asset_limits = asset_limits;
         Ok(())
     }
 
     /// Replaces the full set of per-(account, asset) barriers.
     ///
-    /// Returns [`OrderSizeLimitPolicyError::NoBarriersConfigured`] if the new
-    /// set would leave all axes empty, or
-    /// [`OrderSizeLimitPolicyError::NoCapsConfigured`] if any supplied limit
-    /// has neither cap. A duplicate (account, asset) key is rejected.
+    /// Passing an empty set clears the axis, including the last barrier.
+    /// Returns [`OrderSizeLimitPolicyError::NoCapsConfigured`] if any supplied
+    /// limit has neither cap. A duplicate (account, asset) key is rejected.
     pub fn set_account_asset_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = OrderSizeAccountAssetBarrier>,
@@ -292,7 +270,6 @@ impl OrderSizeLimitSettings {
                 }
             }
         }
-        Self::validate(&self.broker, &self.asset_limits, &account_asset_limits)?;
         self.account_asset_limits = account_asset_limits;
         Ok(())
     }
@@ -327,9 +304,9 @@ impl OrderSizeLimitSettings {
 /// when an applicable quantity or notional cap was selected.
 ///
 /// Constructor rules:
-/// - at least one barrier across all three axes must be configured;
-/// - if all are omitted, the constructor returns
-///   [`OrderSizeLimitPolicyError::NoBarriersConfigured`];
+/// - every axis may be empty; the policy then admits every order;
+/// - barriers can be added later through
+///   [`Engine::configure`](crate::Engine::configure);
 /// - every limit must carry `max_quantity`, `max_notional`, or both;
 /// - a limit carrying neither returns
 ///   [`OrderSizeLimitPolicyError::NoCapsConfigured`];
@@ -1027,14 +1004,8 @@ mod tests {
     // ── settings validation ────────────────────────────────────────────────
 
     #[test]
-    fn no_barriers_configured_rejected_by_settings_constructor() {
-        let err = OrderSizeLimitSettings::new(None, [], []).expect_err("must fail");
-        assert_eq!(err, OrderSizeLimitPolicyError::NoBarriersConfigured);
-        assert_eq!(
-            err.to_string(),
-            "at least one broker, asset, or account+asset barrier \
-             must be configured"
-        );
+    fn empty_settings_are_accepted() {
+        assert!(OrderSizeLimitSettings::new(None, [], []).is_ok());
     }
 
     #[test]
@@ -1235,27 +1206,68 @@ mod tests {
     }
 
     #[test]
-    fn set_broker_to_none_rejected_when_other_axes_empty() {
+    fn set_broker_can_clear_last_axis() {
         let mut s = settings(Some(broker_barrier("5", "500")), [], []);
-        let err = s.set_broker(None).expect_err("must fail");
-        assert_eq!(err, OrderSizeLimitPolicyError::NoBarriersConfigured);
-        // Original broker is still present after failed mutation.
-        assert!(s.broker.is_some());
+        assert!(s.set_broker(None).is_ok());
+        assert_eq!(s, settings(None, [], []));
     }
 
     #[test]
-    fn set_asset_barriers_to_empty_rejected_when_other_axes_empty() {
+    fn set_asset_barriers_can_clear_last_axis() {
         let mut s = settings(None, [asset_barrier("USD", "10", "1000")], []);
-        let err = s.set_asset_barriers([]).expect_err("must fail");
-        assert_eq!(err, OrderSizeLimitPolicyError::NoBarriersConfigured);
+        assert!(s.set_asset_barriers([]).is_ok());
+        assert_eq!(s, settings(None, [], []));
     }
 
-    // ── constructor validation (no_barriers) ──────────────────────────────
+    #[test]
+    fn set_account_asset_barriers_can_clear_last_axis() {
+        let mut s = settings(
+            None,
+            [],
+            [OrderSizeAccountAssetBarrier {
+                account_id: AccountId::from_u64(1),
+                asset: Asset::new("AAPL").expect("asset code must be valid"),
+                limit: quantity_limit("10"),
+            }],
+        );
+        assert!(s.set_account_asset_barriers([]).is_ok());
+        assert_eq!(s, settings(None, [], []));
+    }
 
     #[test]
-    fn no_barriers_configured_rejected_by_constructor() {
-        let err = OrderSizeLimitSettings::new(None, [], []).expect_err("must fail");
-        assert_eq!(err, OrderSizeLimitPolicyError::NoBarriersConfigured);
+    fn empty_policy_does_not_access_order_fields() {
+        let p = policy(None, [], []);
+        let order_val = AccountAccessCountingOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            account_id: AccountId::from_u64(1),
+            instrument_access_count: Rc::new(Cell::new(0)),
+            account_id_access_count: Rc::new(Cell::new(0)),
+            trade_amount_access_count: Rc::new(Cell::new(0)),
+            price_access_count: Rc::new(Cell::new(0)),
+        };
+        let ctx = PreTradeContext::<NoLocking>::new(None, &order_val);
+        order_val.account_id_access_count.set(0);
+        assert!(<TestPolicy as PreTradePolicy<
+            AccountAccessCountingOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(&p, &ctx, &order_val,)
+        .is_ok());
+        assert!(<TestPolicy as PreTradePolicy<
+            AccountAccessCountingOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start_dry_run(&p, &ctx, &order_val,)
+        .is_ok());
+        assert_eq!(order_val.instrument_access_count.get(), 0);
+        assert_eq!(order_val.account_id_access_count.get(), 0);
+        assert_eq!(order_val.trade_amount_access_count.get(), 0);
+        assert_eq!(order_val.price_access_count.get(), 0);
     }
 
     // ── asset barrier ──────────────────────────────────────────────────────

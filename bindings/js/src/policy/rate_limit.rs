@@ -461,8 +461,7 @@ impl JsRateLimitBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `EngineBuildError` when no barrier is configured or a limit is
-    /// invalid.
+    /// Throws `EngineBuildError` when a limit is invalid.
     pub(crate) fn build_policy(
         &self,
         storage_builder: &crate::engine::StorageBuilderRef,

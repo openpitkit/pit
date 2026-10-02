@@ -2435,13 +2435,18 @@ class Configurator:
 
         *name* must match the name given to the policy at registration time.
 
-        An axis passed as ``None`` is left unchanged.  A supplied list REPLACES
-        that axis wholesale: an empty list clears it (subject to the
-        at-least-one-barrier rule enforced by the core).  Barriers may be added
-        and removed at runtime; a barrier key that survives a replacement keeps
-        its live counter (no reset).  *broker* replaces the broker barrier when
-        provided and leaves it unchanged when ``None``. Pass
+        Axes passed as ``None`` are left unchanged. A supplied list REPLACES
+        that axis wholesale: an empty list clears it. Clearing every axis is
+        valid; the policy then admits every order without reading order fields.
+        Barriers may be added and removed at runtime; a barrier key that
+        survives a replacement keeps its live counter (no reset).
+        *broker* replaces the broker barrier when provided and leaves it
+        unchanged when ``None``. Pass
         ``clear_broker=True`` to remove it.
+        Clearing an account or account-and-asset barrier keeps its
+        sliding-window log; re-adding the key resumes counting orders still in
+        its window, including rejected orders. Re-added broker and asset
+        barriers start fresh windows.
 
         Policy settings use the named rate-limit entities from
         ``openpit.pretrade.policies``.
@@ -2527,8 +2532,8 @@ class Configurator:
 
         ``broker=None`` and axis arguments passed as ``None`` are left
         unchanged; ``clear_broker=True`` removes the broker barrier. An empty
-        list replaces that axis with an empty set (subject to the
-        at-least-one-barrier rule).
+        list replaces that axis with an empty set. Clearing every axis is valid;
+        the policy then admits every order without reading order fields.
 
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong

@@ -401,6 +401,124 @@ func TestConfigureRateLimitUpdateClearsBrokerBarrier(t *testing.T) {
 	request.Close()
 }
 
+func TestEmptyPolicyLifecycleRateLimit(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildRateLimit().AssetBarriers()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	check := func(t *testing.T, order model.Order, wantReject bool) {
+		t.Helper()
+		request, rejects, err := engine.StartPreTrade(order)
+		if err != nil {
+			t.Fatalf("StartPreTrade() error = %v", err)
+		}
+		if request != nil {
+			request.Close()
+		}
+		if wantReject {
+			if len(rejects) != 1 || rejects[0].Code != reject.CodeRateLimitExceeded || request != nil {
+				t.Fatalf("StartPreTrade() rejects = %v, want rate-limit reject", rejects)
+			}
+		} else if len(rejects) != 0 || request == nil {
+			t.Fatalf("StartPreTrade() request = %v, rejects = %v, want accepted", request, rejects)
+		}
+	}
+	check(t, model.NewOrder(), false)
+	limit := policies.RateLimit{MaxOrders: 1, Window: time.Hour}
+	for _, test := range []struct {
+		name          string
+		accountID     uint64
+		settlement    string
+		broker        *policies.RateLimitBrokerBarrier
+		assets        []policies.RateLimitAssetBarrier
+		accounts      []policies.RateLimitAccountBarrier
+		accountAssets []policies.RateLimitAccountAssetBarrier
+	}{
+		{name: "broker", accountID: 1001, settlement: "USD",
+			broker: &policies.RateLimitBrokerBarrier{Limit: limit}},
+		{name: "asset", accountID: 1002, settlement: "EUR",
+			assets: []policies.RateLimitAssetBarrier{{Limit: limit, SettlementAsset: builtinTestAsset(t, "EUR")}}},
+		{name: "account", accountID: 1003, settlement: "GBP",
+			accounts: []policies.RateLimitAccountBarrier{{Limit: limit, AccountID: param.NewAccountIDFromUint64(1003)}}},
+		{name: "account-asset", accountID: 1004, settlement: "JPY",
+			accountAssets: []policies.RateLimitAccountAssetBarrier{{Limit: limit, AccountID: param.NewAccountIDFromUint64(1004), SettlementAsset: builtinTestAsset(t, "JPY")}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			order := orderSizeTestOrder(t, test.accountID, test.settlement, "1")
+			set := func() {
+				t.Helper()
+				if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
+					optional.From(test.broker, test.broker != nil), test.assets, test.accounts, test.accountAssets); err != nil {
+					t.Fatalf("Configure().RateLimitUpdate(set) error = %v", err)
+				}
+			}
+			clearAxis := func() {
+				t.Helper()
+				broker := optional.None[*policies.RateLimitBrokerBarrier]()
+				var assets []policies.RateLimitAssetBarrier
+				var accounts []policies.RateLimitAccountBarrier
+				var accountAssets []policies.RateLimitAccountAssetBarrier
+				if test.broker != nil {
+					broker = optional.Some[*policies.RateLimitBrokerBarrier](nil)
+				}
+				if test.assets != nil {
+					assets = []policies.RateLimitAssetBarrier{}
+				}
+				if test.accounts != nil {
+					accounts = []policies.RateLimitAccountBarrier{}
+				}
+				if test.accountAssets != nil {
+					accountAssets = []policies.RateLimitAccountAssetBarrier{}
+				}
+				if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
+					broker, assets, accounts, accountAssets); err != nil {
+					t.Fatalf("Configure().RateLimitUpdate(clear) error = %v", err)
+				}
+			}
+			set()
+			check(t, order, false)
+			check(t, order, true)
+			if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, nil, nil, nil, nil); err != nil {
+				t.Fatalf("Configure().RateLimit(untouched) error = %v", err)
+			}
+			check(t, order, true)
+			clearAxis()
+			check(t, order, false)
+			check(t, order, false)
+			set()
+			if test.accounts == nil && test.accountAssets == nil {
+				check(t, order, false)
+			}
+			check(t, order, true)
+			clearAxis()
+			check(t, model.NewOrder(), false)
+		})
+	}
+
+	order := orderSizeTestOrder(t, 1005, "CHF", "1")
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+		&policies.RateLimitBrokerBarrier{Limit: limit},
+		[]policies.RateLimitAssetBarrier{{Limit: limit, SettlementAsset: builtinTestAsset(t, "CHF")}}, nil, nil); err != nil {
+		t.Fatalf("Configure().RateLimit(two axes) error = %v", err)
+	}
+	check(t, order, false)
+	check(t, order, true)
+	if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
+		optional.Some[*policies.RateLimitBrokerBarrier](nil), nil, nil, nil); err != nil {
+		t.Fatalf("Configure().RateLimitUpdate(clear broker) error = %v", err)
+	}
+	check(t, order, true)
+	if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
+		optional.None[*policies.RateLimitBrokerBarrier](), []policies.RateLimitAssetBarrier{}, nil, nil); err != nil {
+		t.Fatalf("Configure().RateLimitUpdate(clear asset) error = %v", err)
+	}
+	check(t, order, false)
+	check(t, order, false)
+}
+
 // hugeOrderSizeLimit is a broker barrier large enough not to restrict any
 // order in tests that focus on asset- or account-level barriers.
 func hugeOrderSizeLimit(t *testing.T) policies.OrderSizeBrokerBarrier {
@@ -460,6 +578,114 @@ func TestConfigureOrderSizeLimitUpdateClearsBrokerBarrier(t *testing.T) {
 		t.Fatalf("second StartPreTrade() rejects = %v, want none", rejects)
 	}
 	request.Close()
+}
+
+func TestEmptyPolicyLifecycleOrderSizeLimit(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().AssetBarriers()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	check := func(t *testing.T, order model.Order, wantCode reject.Code) {
+		t.Helper()
+		request, rejects, err := engine.StartPreTrade(order)
+		if err != nil {
+			t.Fatalf("StartPreTrade() error = %v", err)
+		}
+		if request != nil {
+			request.Close()
+		}
+		if wantCode != 0 {
+			if len(rejects) != 1 || rejects[0].Code != wantCode || request != nil {
+				t.Fatalf("StartPreTrade() rejects = %v, want code %v", rejects, wantCode)
+			}
+		} else if len(rejects) != 0 || request == nil {
+			t.Fatalf("StartPreTrade() request = %v, rejects = %v, want accepted", request, rejects)
+		}
+	}
+	check(t, model.NewOrder(), 0)
+	qtyLimit := policies.OrderSizeLimit{MaxQuantity: optional.Some(orderSizeTestQty(t, "1"))}
+	notionalLimit := policies.OrderSizeLimit{MaxNotional: optional.Some(orderSizeTestVol(t, "1"))}
+	for _, test := range []struct {
+		name          string
+		accountID     uint64
+		settlement    string
+		code          reject.Code
+		broker        *policies.OrderSizeBrokerBarrier
+		assets        []policies.OrderSizeAssetBarrier
+		accountAssets []policies.OrderSizeAccountAssetBarrier
+	}{
+		{name: "broker", accountID: 2001, settlement: "USD", code: reject.CodeOrderQtyExceedsLimit,
+			broker: &policies.OrderSizeBrokerBarrier{Limit: qtyLimit}},
+		{name: "asset", accountID: 2002, settlement: "EUR", code: reject.CodeOrderNotionalExceedsLimit,
+			assets: []policies.OrderSizeAssetBarrier{{Limit: notionalLimit, Asset: builtinTestAsset(t, "EUR")}}},
+		{name: "account-asset", accountID: 2003, settlement: "GBP", code: reject.CodeOrderNotionalExceedsLimit,
+			accountAssets: []policies.OrderSizeAccountAssetBarrier{{Limit: notionalLimit, AccountID: param.NewAccountIDFromUint64(2003), Asset: builtinTestAsset(t, "GBP")}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			order := orderSizeTestOrder(t, test.accountID, test.settlement, "2")
+			set := func() {
+				t.Helper()
+				if err := engine.Configure().OrderSizeLimitUpdate(policies.OrderSizeLimitPolicyName,
+					optional.From(test.broker, test.broker != nil), test.assets, test.accountAssets); err != nil {
+					t.Fatalf("Configure().OrderSizeLimitUpdate(set) error = %v", err)
+				}
+			}
+			clearAxis := func() {
+				t.Helper()
+				broker := optional.None[*policies.OrderSizeBrokerBarrier]()
+				var assets []policies.OrderSizeAssetBarrier
+				var accountAssets []policies.OrderSizeAccountAssetBarrier
+				if test.broker != nil {
+					broker = optional.Some[*policies.OrderSizeBrokerBarrier](nil)
+				}
+				if test.assets != nil {
+					assets = []policies.OrderSizeAssetBarrier{}
+				}
+				if test.accountAssets != nil {
+					accountAssets = []policies.OrderSizeAccountAssetBarrier{}
+				}
+				if err := engine.Configure().OrderSizeLimitUpdate(policies.OrderSizeLimitPolicyName,
+					broker, assets, accountAssets); err != nil {
+					t.Fatalf("Configure().OrderSizeLimitUpdate(clear) error = %v", err)
+				}
+			}
+			set()
+			check(t, order, test.code)
+			if err := engine.Configure().OrderSizeLimit(policies.OrderSizeLimitPolicyName, nil, nil, nil); err != nil {
+				t.Fatalf("Configure().OrderSizeLimit(untouched) error = %v", err)
+			}
+			check(t, order, test.code)
+			clearAxis()
+			check(t, order, 0)
+			check(t, order, 0)
+			set()
+			check(t, order, test.code)
+			clearAxis()
+			check(t, model.NewOrder(), 0)
+		})
+	}
+
+	order := orderSizeTestOrder(t, 2004, "CHF", "2")
+	if err := engine.Configure().OrderSizeLimit(policies.OrderSizeLimitPolicyName,
+		&policies.OrderSizeBrokerBarrier{Limit: qtyLimit},
+		[]policies.OrderSizeAssetBarrier{{Limit: notionalLimit, Asset: builtinTestAsset(t, "CHF")}}, nil); err != nil {
+		t.Fatalf("Configure().OrderSizeLimit(two axes) error = %v", err)
+	}
+	check(t, order, reject.CodeOrderNotionalExceedsLimit)
+	if err := engine.Configure().OrderSizeLimitUpdate(policies.OrderSizeLimitPolicyName,
+		optional.Some[*policies.OrderSizeBrokerBarrier](nil), nil, nil); err != nil {
+		t.Fatalf("Configure().OrderSizeLimitUpdate(clear broker) error = %v", err)
+	}
+	check(t, order, reject.CodeOrderNotionalExceedsLimit)
+	if err := engine.Configure().OrderSizeLimitUpdate(policies.OrderSizeLimitPolicyName,
+		optional.None[*policies.OrderSizeBrokerBarrier](), []policies.OrderSizeAssetBarrier{}, nil); err != nil {
+		t.Fatalf("Configure().OrderSizeLimitUpdate(clear asset) error = %v", err)
+	}
+	check(t, order, 0)
+	check(t, order, 0)
 }
 
 func TestConfigureOrderSizeLimitPreservesOptionalNotionalCap(t *testing.T) {

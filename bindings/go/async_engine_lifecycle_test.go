@@ -23,11 +23,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
@@ -46,6 +48,69 @@ func buildOrderValidationAccountSyncEngine(t *testing.T) *Engine {
 		t.Fatalf("Build() error = %v", err)
 	}
 	return engine
+}
+
+func TestAsyncEngineEmptyPolicyLifecycle(t *testing.T) {
+	engine, err := NewEngineBuilder().AccountSync().
+		Builtin(policies.BuildRateLimit().AssetBarriers()).
+		Builtin(policies.BuildOrderSizeLimit().AssetBarriers()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+	asyncEngine, err := asyncengine.NewBuilder(engine).Sharded(1).Build()
+	if err != nil {
+		t.Fatalf("Sharded.Build() error = %v", err)
+	}
+	ctx := context.Background()
+	defer func() {
+		if err := asyncEngine.StopGraceful(ctx); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+	order := orderSizeTestOrder(t, 3001, "USD", "2")
+	check := func(wantCode reject.Code) {
+		t.Helper()
+		request, rejects, err := asyncEngine.StartPreTrade(ctx, order).Await(ctx)
+		if err != nil {
+			t.Fatalf("StartPreTrade Await() error = %v", err)
+		}
+		if request != nil {
+			if _, err := request.Close(ctx).Await(ctx); err != nil {
+				t.Fatalf("Close Await() error = %v", err)
+			}
+		}
+		if wantCode != 0 {
+			if len(rejects) != 1 || rejects[0].Code != wantCode || request != nil {
+				t.Fatalf("StartPreTrade Await() rejects = %v, want code %v", rejects, wantCode)
+			}
+		} else if len(rejects) != 0 || request == nil {
+			t.Fatalf("StartPreTrade Await() request = %v, rejects = %v, want accepted", request, rejects)
+		}
+	}
+	check(0)
+	for cycle := 0; cycle < 2; cycle++ {
+		if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+			&policies.RateLimitBrokerBarrier{Limit: policies.RateLimit{MaxOrders: 0, Window: time.Hour}}, nil, nil, nil); err != nil {
+			t.Fatalf("Configure().RateLimit() error = %v", err)
+		}
+		check(reject.CodeRateLimitExceeded)
+		if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
+			optional.Some[*policies.RateLimitBrokerBarrier](nil), nil, nil, nil); err != nil {
+			t.Fatalf("Configure().RateLimitUpdate(clear) error = %v", err)
+		}
+		check(0)
+		if err := engine.Configure().OrderSizeLimit(policies.OrderSizeLimitPolicyName,
+			&policies.OrderSizeBrokerBarrier{Limit: policies.OrderSizeLimit{MaxQuantity: optional.Some(orderSizeTestQty(t, "1"))}}, nil, nil); err != nil {
+			t.Fatalf("Configure().OrderSizeLimit() error = %v", err)
+		}
+		check(reject.CodeOrderQtyExceedsLimit)
+		if err := engine.Configure().OrderSizeLimitUpdate(policies.OrderSizeLimitPolicyName,
+			optional.Some[*policies.OrderSizeBrokerBarrier](nil), nil, nil); err != nil {
+			t.Fatalf("Configure().OrderSizeLimitUpdate(clear) error = %v", err)
+		}
+		check(0)
+	}
 }
 
 // TestAsyncEngineRequestExecuteCommitLifecycle exercises the full

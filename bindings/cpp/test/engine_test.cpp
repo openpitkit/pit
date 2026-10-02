@@ -996,6 +996,235 @@ TEST(EngineAccountCurrency, SetAndClearAccountAndGroupCurrency) {
   EXPECT_NO_THROW(engine.Accounts().ClearGroupCurrency(group));
 }
 
+TEST(EngineConfigure, EmptyPolicyLifecycleRateLimit) {
+  EngineBuilder builder(SyncPolicy::None);
+  builder.Add(policies::RateLimitPolicy{});
+  Engine engine = builder.Build();
+  const policies::RateLimit limit(1, 3'600'000'000'000);
+  const auto check = [&](const openpit::model::Order& order, bool rejected) {
+    const auto result = engine.StartPreTrade(order);
+    if (rejected) {
+      EXPECT_FALSE(result.Passed());
+      ASSERT_EQ(result.rejects.size(), 1u);
+      EXPECT_EQ(result.rejects.front().code, RejectCode::RateLimitExceeded);
+    } else {
+      EXPECT_TRUE(result.Passed());
+      EXPECT_TRUE(result.rejects.empty());
+    }
+  };
+  check(openpit::model::Order{}, false);
+
+  struct AxisCase {
+    const char* name;
+    std::uint64_t account;
+    const char* settlement;
+    policies::RateLimitBrokerBarrierUpdate broker;
+    std::optional<std::vector<policies::RateLimitAssetBarrier>> assets;
+    std::optional<std::vector<policies::RateLimitAccountBarrier>> accounts;
+    std::optional<std::vector<policies::RateLimitAccountAssetBarrier>>
+        accountAssets;
+  };
+  const std::array<AxisCase, 4> cases{{
+      {"broker", 1001, "USD",
+       policies::RateLimitBrokerBarrierUpdate::Set(
+           policies::RateLimitBrokerBarrier(limit)),
+       std::nullopt, std::nullopt, std::nullopt},
+      {"asset", 1002, "EUR",
+       policies::RateLimitBrokerBarrierUpdate::Unchanged(),
+       std::vector<policies::RateLimitAssetBarrier>{
+           policies::RateLimitAssetBarrier(limit,
+                                           openpit::param::Asset("EUR"))},
+       std::nullopt, std::nullopt},
+      {"account", 1003, "GBP",
+       policies::RateLimitBrokerBarrierUpdate::Unchanged(), std::nullopt,
+       std::vector<policies::RateLimitAccountBarrier>{
+           policies::RateLimitAccountBarrier(limit,
+                                             AccountId::FromUint64(1003))},
+       std::nullopt},
+      {"account-asset", 1004, "JPY",
+       policies::RateLimitBrokerBarrierUpdate::Unchanged(), std::nullopt,
+       std::nullopt,
+       std::vector<policies::RateLimitAccountAssetBarrier>{
+           policies::RateLimitAccountAssetBarrier(
+               limit, AccountId::FromUint64(1004),
+               openpit::param::Asset("JPY"))}},
+  }};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.name);
+    auto order = TestOrder(test.account);
+    order.operation->instrument = openpit::model::Instrument(
+        openpit::param::Asset("AAPL"), openpit::param::Asset(test.settlement));
+    const auto set = [&] {
+      engine.Configure().RateLimit(policies::RateLimitPolicyName, test.broker,
+                                   test.assets, test.accounts,
+                                   test.accountAssets);
+    };
+    const auto clear = [&] {
+      auto assets = test.assets;
+      auto accounts = test.accounts;
+      auto accountAssets = test.accountAssets;
+      if (assets) assets->clear();
+      if (accounts) accounts->clear();
+      if (accountAssets) accountAssets->clear();
+      engine.Configure().RateLimit(
+          policies::RateLimitPolicyName,
+          test.broker.HasUpdate()
+              ? policies::RateLimitBrokerBarrierUpdate::Clear()
+              : policies::RateLimitBrokerBarrierUpdate::Unchanged(),
+          assets, accounts, accountAssets);
+    };
+    set();
+    check(order, false);
+    check(order, true);
+    ASSERT_NO_THROW(
+        engine.Configure().RateLimit(policies::RateLimitPolicyName));
+    check(order, true);
+    ASSERT_NO_THROW(clear());
+    check(order, false);
+    check(order, false);
+    set();
+    if (!test.accounts && !test.accountAssets) check(order, false);
+    check(order, true);
+    ASSERT_NO_THROW(clear());
+    check(openpit::model::Order{}, false);
+  }
+
+  auto order = TestOrder(1005);
+  order.operation->instrument = openpit::model::Instrument(
+      openpit::param::Asset("AAPL"), openpit::param::Asset("CHF"));
+  engine.Configure().RateLimit(
+      policies::RateLimitPolicyName,
+      policies::RateLimitBrokerBarrierUpdate::Set(
+          policies::RateLimitBrokerBarrier(limit)),
+      std::vector<policies::RateLimitAssetBarrier>{
+          policies::RateLimitAssetBarrier(limit, openpit::param::Asset("CHF"))},
+      std::nullopt, std::nullopt);
+  check(order, false);
+  check(order, true);
+  ASSERT_NO_THROW(engine.Configure().RateLimit(
+      policies::RateLimitPolicyName,
+      policies::RateLimitBrokerBarrierUpdate::Clear(), std::nullopt,
+      std::nullopt, std::nullopt));
+  check(order, true);
+  engine.Configure().RateLimit(
+      policies::RateLimitPolicyName,
+      policies::RateLimitBrokerBarrierUpdate::Unchanged(),
+      std::vector<policies::RateLimitAssetBarrier>{}, std::nullopt,
+      std::nullopt);
+  check(order, false);
+  check(order, false);
+}
+
+TEST(EngineConfigure, EmptyPolicyLifecycleOrderSizeLimit) {
+  EngineBuilder builder(SyncPolicy::None);
+  builder.Add(policies::OrderSizeLimitPolicy{});
+  Engine engine = builder.Build();
+  const auto qtyLimit =
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("1"));
+  const auto notionalLimit = policies::OrderSizeLimit::Notional(
+      openpit::param::Volume::FromString("1"));
+  const auto check = [&](const openpit::model::Order& order,
+                         std::optional<RejectCode> code) {
+    const auto result = engine.StartPreTrade(order);
+    if (code) {
+      EXPECT_FALSE(result.Passed());
+      ASSERT_EQ(result.rejects.size(), 1u);
+      EXPECT_EQ(result.rejects.front().code, *code);
+    } else {
+      EXPECT_TRUE(result.Passed());
+      EXPECT_TRUE(result.rejects.empty());
+    }
+  };
+  check(openpit::model::Order{}, std::nullopt);
+
+  struct AxisCase {
+    const char* name;
+    std::uint64_t account;
+    const char* settlement;
+    RejectCode code;
+    policies::OrderSizeBrokerBarrierUpdate broker;
+    std::optional<std::vector<policies::OrderSizeAssetBarrier>> assets;
+    std::optional<std::vector<policies::OrderSizeAccountAssetBarrier>>
+        accountAssets;
+  };
+  const std::array<AxisCase, 3> cases{{
+      {"broker", 2001, "USD", RejectCode::OrderQtyExceedsLimit,
+       policies::OrderSizeBrokerBarrierUpdate::Set(
+           policies::OrderSizeBrokerBarrier(qtyLimit)),
+       std::nullopt, std::nullopt},
+      {"asset", 2002, "EUR", RejectCode::OrderNotionalExceedsLimit,
+       policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
+       std::vector<policies::OrderSizeAssetBarrier>{
+           policies::OrderSizeAssetBarrier(notionalLimit,
+                                           openpit::param::Asset("EUR"))},
+       std::nullopt},
+      {"account-asset", 2003, "GBP", RejectCode::OrderNotionalExceedsLimit,
+       policies::OrderSizeBrokerBarrierUpdate::Unchanged(), std::nullopt,
+       std::vector<policies::OrderSizeAccountAssetBarrier>{
+           policies::OrderSizeAccountAssetBarrier(
+               notionalLimit, AccountId::FromUint64(2003),
+               openpit::param::Asset("GBP"))}},
+  }};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.name);
+    auto order = SizedOrder("2", "100", test.account);
+    order.operation->instrument = openpit::model::Instrument(
+        openpit::param::Asset("AAPL"), openpit::param::Asset(test.settlement));
+    const auto set = [&] {
+      engine.Configure().OrderSizeLimit(policies::OrderSizeLimitPolicyName,
+                                        test.broker, test.assets,
+                                        test.accountAssets);
+    };
+    const auto clear = [&] {
+      auto assets = test.assets;
+      auto accountAssets = test.accountAssets;
+      if (assets) assets->clear();
+      if (accountAssets) accountAssets->clear();
+      engine.Configure().OrderSizeLimit(
+          policies::OrderSizeLimitPolicyName,
+          test.broker.HasUpdate()
+              ? policies::OrderSizeBrokerBarrierUpdate::Clear()
+              : policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
+          assets, accountAssets);
+    };
+    set();
+    check(order, test.code);
+    engine.Configure().OrderSizeLimit(policies::OrderSizeLimitPolicyName);
+    check(order, test.code);
+    clear();
+    check(order, std::nullopt);
+    check(order, std::nullopt);
+    set();
+    check(order, test.code);
+    clear();
+    check(openpit::model::Order{}, std::nullopt);
+  }
+
+  auto order = SizedOrder("2", "100", 2004);
+  order.operation->instrument = openpit::model::Instrument(
+      openpit::param::Asset("AAPL"), openpit::param::Asset("CHF"));
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Set(
+          policies::OrderSizeBrokerBarrier(qtyLimit)),
+      std::vector<policies::OrderSizeAssetBarrier>{
+          policies::OrderSizeAssetBarrier(notionalLimit,
+                                          openpit::param::Asset("CHF"))},
+      std::nullopt);
+  check(order, RejectCode::OrderNotionalExceedsLimit);
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Clear(), std::nullopt,
+      std::nullopt);
+  check(order, RejectCode::OrderNotionalExceedsLimit);
+  engine.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Unchanged(),
+      std::vector<policies::OrderSizeAssetBarrier>{}, std::nullopt);
+  check(order, std::nullopt);
+  check(order, std::nullopt);
+}
+
 TEST(EngineConfigure, RateLimitUpdateChangesRuntimeBudget) {
   Engine engine = SingleOrderEngine();
 

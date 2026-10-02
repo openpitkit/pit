@@ -312,6 +312,213 @@ def test_order_size_configuration_reports_core_validation_errors() -> None:
 
 
 @pytest.mark.unit
+def test_empty_policy_lifecycle_rate_limit() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(policies.build_rate_limit().asset_barriers())
+        .build()
+    )
+    configure = engine.configure()
+    name = policies.RateLimitBuilder.NAME
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+
+    account_id = openpit.param.AccountId.from_int(99224418)
+    account_asset_id = openpit.param.AccountId.from_int(99224419)
+    axes = [
+        (
+            lambda count: {
+                "broker": policies.RateLimitBrokerBarrier(limit=_rate_limit(count))
+            },
+            {"clear_broker": True},
+            conftest.make_order(),
+            False,
+        ),
+        (
+            lambda count: {
+                "asset_barriers": [
+                    policies.RateLimitAssetBarrier(
+                        limit=_rate_limit(count),
+                        settlement_asset=openpit.param.Asset("EUR"),
+                    )
+                ]
+            },
+            {"asset_barriers": []},
+            conftest.make_order(instrument=openpit.Instrument("AAPL", "EUR")),
+            False,
+        ),
+        (
+            lambda count: {
+                "account_barriers": [
+                    policies.RateLimitAccountBarrier(
+                        limit=_rate_limit(count), account_id=account_id
+                    )
+                ]
+            },
+            {"account_barriers": []},
+            conftest.make_order(account_id=account_id),
+            True,
+        ),
+        (
+            lambda count: {
+                "account_asset_barriers": [
+                    policies.RateLimitAccountAssetBarrier(
+                        limit=_rate_limit(count),
+                        account_id=account_asset_id,
+                        settlement_asset=openpit.param.Asset("JPY"),
+                    )
+                ]
+            },
+            {"account_asset_barriers": []},
+            conftest.make_order(
+                account_id=account_asset_id,
+                instrument=openpit.Instrument("AAPL", "JPY"),
+            ),
+            True,
+        ),
+    ]
+    for update, clear, order, resumes in axes:
+        configure.rate_limit(name, **update(1))
+        assert engine.start_pre_trade(order=order).ok
+        rejected = engine.start_pre_trade(order=order)
+        assert not rejected.ok
+        assert (
+            rejected.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+        )
+
+        configure.rate_limit(
+            name,
+            broker=None,
+            asset_barriers=None,
+            account_barriers=None,
+            account_asset_barriers=None,
+        )
+        unchanged = engine.start_pre_trade(order=order)
+        assert not unchanged.ok
+        assert (
+            unchanged.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+        )
+
+        configure.rate_limit(name, **clear)
+        for _ in range(2):
+            assert engine.start_pre_trade(order=order).ok
+
+        # Account logs retain the accepted order and both rejected orders.
+        configure.rate_limit(name, **update(4 if resumes else 1))
+        assert engine.start_pre_trade(order=order).ok
+        reactivated = engine.start_pre_trade(order=order)
+        assert not reactivated.ok
+        assert (
+            reactivated.rejects[0].code
+            == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+        )
+        configure.rate_limit(name, **clear)
+        assert engine.start_pre_trade(order=order).ok
+
+    configure.rate_limit(
+        name, broker=policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
+    )
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+    reactivated = engine.start_pre_trade(order=conftest.make_order())
+    assert not reactivated.ok
+    assert (
+        reactivated.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+    )
+    configure.rate_limit(name, clear_broker=True)
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+
+
+@pytest.mark.unit
+def test_empty_policy_lifecycle_order_size_limit() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(policies.build_order_size_limit().asset_barriers())
+        .build()
+    )
+    configure = engine.configure()
+    name = policies.OrderSizeLimitBuilder.NAME
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+
+    account_id = openpit.param.AccountId.from_int(99224420)
+    axes = [
+        (
+            {"broker": policies.OrderSizeBrokerBarrier(limit=_order_size_limit("1"))},
+            {"clear_broker": True},
+            conftest.make_order(trade_amount=openpit.param.TradeAmount.quantity("2")),
+        ),
+        (
+            {
+                "asset_barriers": [
+                    policies.OrderSizeAssetBarrier(
+                        limit=_order_size_limit("1"), asset=openpit.param.Asset("MSFT")
+                    )
+                ]
+            },
+            {"asset_barriers": []},
+            conftest.make_order(
+                instrument=openpit.Instrument("MSFT", "EUR"),
+                trade_amount=openpit.param.TradeAmount.quantity("2"),
+            ),
+        ),
+        (
+            {
+                "account_asset_barriers": [
+                    policies.OrderSizeAccountAssetBarrier(
+                        limit=_order_size_limit("1"),
+                        account_id=account_id,
+                        asset=openpit.param.Asset("NVDA"),
+                    )
+                ]
+            },
+            {"account_asset_barriers": []},
+            conftest.make_order(
+                account_id=account_id,
+                instrument=openpit.Instrument("NVDA", "JPY"),
+                trade_amount=openpit.param.TradeAmount.quantity("2"),
+            ),
+        ),
+    ]
+    for update, clear, order in axes:
+        configure.order_size_limit(name, **update)
+        rejected = engine.start_pre_trade(order=order)
+        assert not rejected.ok
+        assert (
+            rejected.rejects[0].code
+            == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+        )
+
+        configure.order_size_limit(
+            name, broker=None, asset_barriers=None, account_asset_barriers=None
+        )
+        unchanged = engine.start_pre_trade(order=order)
+        assert not unchanged.ok
+        assert (
+            unchanged.rejects[0].code
+            == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+        )
+
+        configure.order_size_limit(name, **clear)
+        for _ in range(2):
+            assert engine.start_pre_trade(order=order).ok
+
+    order = conftest.make_order(trade_amount=openpit.param.TradeAmount.quantity("2"))
+    configure.order_size_limit(
+        name, broker=policies.OrderSizeBrokerBarrier(limit=_order_size_limit("1"))
+    )
+    reactivated = engine.start_pre_trade(order=order)
+    assert not reactivated.ok
+    assert (
+        reactivated.rejects[0].code
+        == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+    )
+    configure.order_size_limit(name, clear_broker=True)
+    assert engine.start_pre_trade(order=order).ok
+
+
+@pytest.mark.unit
 def test_rate_limit_configuration_can_clear_broker_barrier() -> None:
     policies = openpit.pretrade.policies
     account_id = openpit.param.AccountId.from_int(99224416)

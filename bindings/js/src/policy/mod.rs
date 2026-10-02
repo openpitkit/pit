@@ -292,7 +292,11 @@ export interface OrderValidationReadyBuilder extends OrderValidationBuilder {
   clone(): OrderValidationReadyBuilder;
 }
 
-/** Order-size-limit builder with at least one barrier configuration call. */
+/**
+ * Order-size-limit builder ready after at least one axis call.
+ * The call may pass no barriers to register an empty policy that admits every
+ * order without reading order fields.
+ */
 export interface OrderSizeLimitReadyBuilder extends OrderSizeLimitBuilder {
   readonly [builtinReadyBuilderBrand]: true;
   brokerBarrier(
@@ -310,7 +314,11 @@ export interface OrderSizeLimitReadyBuilder extends OrderSizeLimitBuilder {
   clone(): OrderSizeLimitReadyBuilder;
 }
 
-/** Rate-limit builder with at least one barrier configuration call. */
+/**
+ * Rate-limit builder ready after at least one axis call.
+ * The call may pass no barriers to register an empty policy that admits every
+ * order without reading order fields.
+ */
 export interface RateLimitReadyBuilder extends RateLimitBuilder {
   readonly [builtinReadyBuilderBrand]: true;
   brokerBarrier(

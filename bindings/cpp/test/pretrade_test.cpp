@@ -1300,10 +1300,11 @@ TEST(BuiltinPolicy, DuplicateOrderSizeAssetSurfacesCoreError) {
   }
 }
 
-TEST(BuiltinPolicy, OrderSizeLimitWithoutBarrierThrows) {
+TEST(BuiltinPolicy, OrderSizeLimitWithoutBarrierBuilds) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   const policies::OrderSizeLimitPolicy config;
-  EXPECT_THROW(config.AddTo(builder), openpit::Error);
+  EXPECT_NO_THROW(config.AddTo(builder));
+  EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
 }
 
 TEST(BuiltinPolicy, RateLimitAccountBarrierBuilds) {

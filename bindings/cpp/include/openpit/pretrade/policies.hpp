@@ -232,8 +232,9 @@ struct OrderSizeAccountAssetBarrier {
       : limit(barrierLimit), accountId(account), asset(std::move(asset)) {}
 };
 
-// Built-in order-size-limit policy. At least one barrier axis must be
-// configured before registration.
+// Built-in order-size-limit policy. Every axis is optional. A policy registered
+// with no barrier admits every order and can be configured later through
+// Engine::Configure().
 class OrderSizeLimitPolicy {
  public:
   OrderSizeLimitPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -538,7 +539,9 @@ struct RateLimitAccountAssetBarrier {
         settlementAsset(std::move(asset)) {}
 };
 
-// Built-in rate-limit policy. At least one barrier axis must be configured.
+// Built-in rate-limit policy. Every axis is optional. A policy registered with
+// no barrier admits every order and can be configured later through
+// Engine::Configure().
 class RateLimitPolicy {
  public:
   RateLimitPolicy& PolicyGroupId(std::uint16_t policyGroupId) {

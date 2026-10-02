@@ -90,6 +90,9 @@ type OrderSizeLimitReadyBuilder struct {
 }
 
 // BuildOrderSizeLimit returns a new order-size-limit policy builder.
+// Calling an axis method with no barriers, such as AssetBarriers(), returns a
+// ready builder for an empty policy that admits every order and can be
+// configured later through the engine's Configure() method.
 func BuildOrderSizeLimit() *OrderSizeLimitBuilder {
 	return &OrderSizeLimitBuilder{
 		builder: &OrderSizeLimitReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},

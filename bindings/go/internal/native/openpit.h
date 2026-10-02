@@ -6974,8 +6974,9 @@ bool openpit_mutations_push(
  * - A null or already-consumed `builder` is a handled error.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for the
  *   default group).
- * - At least one barrier axis must be configured: `broker` non-null,
- *   `asset_len > 0`, or `account_asset_len > 0`.
+ * - Every axis may be empty (null `broker`, zero array lengths). The policy
+ *   then admits every order and can be configured later through
+ *   `openpit_engine_configure_order_size_limit`.
  * - A pointer may be null when its array length is zero.
  * - Each non-null `asset` string view must contain UTF-8 and a valid asset
  *   for the call to succeed.
@@ -7003,10 +7004,9 @@ bool openpit_mutations_push(
  * - returns `true`; the builder retains the policy.
  *
  * Error:
- * - returns `false` when the builder is null or already consumed, when no
- *   barrier axis is configured, when any limit has no cap, when an asset or
- *   `(account_id, asset)` key is duplicated within its axis, or when
- *   argument parsing fails;
+ * - returns `false` when the builder is null or already consumed, when any
+ *   limit has no cap, when an asset or `(account_id, asset)` key is
+ *   duplicated within its axis, or when argument parsing fails;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
  */
@@ -7026,7 +7026,9 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(
  *
  * This is a partial update (PATCH) at the axis level: each axis is replaced
  * wholesale only when its `has_*` flag is `true`, mirroring the replace-shaped
- * settings setters.
+ * settings setters. Every axis may be empty (null `broker`, zero array
+ * lengths). Clearing every axis is valid; the policy then admits every order
+ * and can be configured again through this function.
  *
  * Contract:
  * - A null `engine` is a handled error.
@@ -7041,8 +7043,8 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(
  * - When `has_account_asset` is `true`, the per-(account, asset) axis is
  *   replaced by the `account_asset_len` entries at `account_asset`.
  * - A `has_*` flag set to `false` leaves that axis untouched and ignores the
- *   corresponding pointer and length. The policy's "at least one barrier"
- *   rule still applies to the resulting configuration.
+ *   corresponding pointer and length. A zero array length clears a touched
+ *   axis; its pointer may be null.
  * - Each non-null `asset` view must contain UTF-8 and a valid asset for the
  *   call to succeed.
  * - Each optional cap with `is_set == true` must contain a valid value. When
@@ -7248,8 +7250,9 @@ bool openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
  * - `builder` must be a valid engine builder pointer.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for
  *   default).
- * - At least one barrier axis must be configured: `broker` non-null,
- *   `asset_len > 0`, `account_len > 0`, or `account_asset_len > 0`.
+ * - Every axis may be empty (null `broker`, zero array lengths). The policy
+ *   then admits every order and can be configured later through
+ *   `openpit_engine_configure_rate_limit`.
  * - When a length is greater than zero the corresponding pointer must point
  *   to that many readable entries.
  * - Each `settlement_asset` string view inside an array entry must be valid
@@ -7259,8 +7262,8 @@ bool openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
  * - returns `true`; the builder retains the policy.
  *
  * Error:
- * - returns `false` when the builder is null or already consumed, when no
- *   barrier axis is configured, or when argument parsing fails;
+ * - returns `false` when the builder is null or already consumed, or when
+ *   argument parsing fails;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
  */
@@ -7284,9 +7287,13 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
  * flag is `true`. A touched axis is replaced wholesale - barriers can be added
  * and removed at runtime. A barrier key that survives the replacement keeps
  * its live counter (no reset). An empty axis (`len` 0 with `has_*` true)
- * clears it, subject to the policy's at-least-one- barrier rule. Setting
- * `has_broker` to `true` with a null `broker` pointer clears the broker
- * barrier.
+ * clears it. Setting `has_broker` to `true` with a null `broker` pointer
+ * clears the broker barrier. Clearing every axis is valid; the policy then
+ * admits every order and can be configured again through this function.
+ *
+ * Clearing an account or account+asset key retains its stored sliding log,
+ * even when every axis becomes empty; re-adding that key counts orders still
+ * within its window. Re-added broker and asset barriers start fresh windows.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
@@ -7305,8 +7312,8 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
  *   the pointer/length arguments.
  *
  * Success:
- * - returns `true`; the new limits apply from the next order onward with no
- *   counter reset.
+ * - returns `true`; the new limits apply from the next order onward,
+ *   retaining counters for surviving keys.
  *
  * Error:
  * - returns `false`; if `out_error` is non-null, writes a caller-owned

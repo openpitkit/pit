@@ -1460,13 +1460,18 @@ impl PyConfigurator {
     /// Policy settings use the named entities from
     /// ``openpit.pretrade.policies``.
     ///
-    /// Axes passed as ``None`` are left unchanged.  A supplied list REPLACES
-    /// that axis wholesale: an empty list clears it (subject to the
-    /// at-least-one-barrier rule enforced by the core).  Barriers may be added
-    /// and removed at runtime; a barrier key that survives a replacement keeps
-    /// its live counter (no reset).  ``broker`` replaces the broker barrier
-    /// when provided and leaves it unchanged when ``None``. Set
+    /// Axes passed as ``None`` are left unchanged. A supplied list REPLACES
+    /// that axis wholesale: an empty list clears it. Clearing every axis is
+    /// valid; the policy then admits every order without reading order fields.
+    /// Barriers may be added and removed at runtime; a barrier key that
+    /// survives a replacement keeps its live counter (no reset).
+    /// ``broker`` replaces the broker barrier when provided and leaves it
+    /// unchanged when ``None``. Set
     /// ``clear_broker=True`` to remove the broker barrier.
+    /// Clearing an account or account-and-asset barrier keeps its
+    /// sliding-window log; re-adding the key resumes counting orders still in
+    /// its window, including rejected orders. Re-added broker and asset
+    /// barriers start fresh windows.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (name, *, broker = None, clear_broker = false, asset_barriers = None, account_barriers = None, account_asset_barriers = None))]
     fn rate_limit(
@@ -1614,9 +1619,10 @@ impl PyConfigurator {
     /// :meth:`~ReadyEngineBuilder._add_builtin_order_size_limit`.
     ///
     /// ``broker=None`` and axis arguments passed as ``None`` are left
-    /// unchanged; an empty list replaces that axis with an empty set (subject
-    /// to the at-least-one-barrier rule). Set ``clear_broker=True`` to remove
-    /// the broker barrier. Quantity caps resolve by underlying asset and
+    /// unchanged; ``clear_broker=True`` removes the broker barrier. An empty
+    /// list replaces that axis with an empty set. Clearing every axis is valid;
+    /// the policy then admits every order without reading order fields.
+    /// Quantity caps resolve by underlying asset and
     /// notional caps by settlement asset. An absent cap constrains nothing and
     /// a matching barrier without that metric is skipped during lookup; a cap
     /// explicitly set to zero rejects positive metric values and admits a value

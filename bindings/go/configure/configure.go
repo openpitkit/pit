@@ -102,7 +102,9 @@ func rateLimitWindowNanoseconds(limit policies.RateLimit) int64 {
 // [policies.RateLimitReadyBuilder]. A non-nil axis replaces that axis
 // wholesale; barriers can be added and removed at runtime. A barrier key that
 // survives the replacement keeps its live counter (no reset). An empty non-nil
-// slice clears the axis, subject to the policy's at-least-one-barrier rule.
+// slice clears the axis. Clearing every axis is valid and admits every order.
+// Clearing an account or account+asset barrier keeps its sliding-window log;
+// re-adding the key resumes counting orders still inside its window.
 // Nil axes and nil broker are left unchanged.
 //
 // Returns a *ConfigureError on a domain error (kind TypeMismatch when the name
@@ -310,8 +312,8 @@ func (c Configurator) SetAccountPnl(
 //
 // broker, assets, and accountAssets mirror the axis types accepted by
 // [policies.OrderSizeLimitReadyBuilder]. An axis passed as nil is left
-// unchanged; an empty non-nil slice replaces the axis with an empty set
-// (subject to the policy's at-least-one-barrier rule). A nil broker leaves
+// unchanged; an empty non-nil slice clears the axis. Clearing every axis is
+// valid and admits every order. A nil broker leaves
 // the broker barrier unchanged. Quantity caps resolve by underlying asset and
 // notional caps by settlement asset. An absent cap constrains nothing. Within
 // the account+asset then asset chain for a metric, a matching barrier without

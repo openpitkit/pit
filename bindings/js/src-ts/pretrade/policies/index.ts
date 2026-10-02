@@ -23,6 +23,8 @@
  * plus their `build*` factories. Order validation and limit-only spot funds are
  * ready immediately; barrier-driven builders become tokens accepted by
  * `EngineBuilder.builtin` after a barrier configuration call.
+ * Rate-limit and order-size-limit axis calls may pass no barriers to register
+ * an empty policy that admits every order.
  *
  * Order-size quantity caps resolve by underlying asset and notional caps by
  * settlement asset. Either cap may be absent and then constrains nothing; its

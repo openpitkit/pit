@@ -101,8 +101,6 @@ pub struct RateLimitAccountAssetBarrier {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RateLimitPolicyError {
-    /// No barriers were provided across all four axes.
-    NoBarriersConfigured,
     /// A barrier window is zero or exceeds the maximum representable
     /// nanoseconds.
     InvalidWindow { window: Duration },
@@ -111,10 +109,6 @@ pub enum RateLimitPolicyError {
 impl Display for RateLimitPolicyError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoBarriersConfigured => write!(
-                f,
-                "at least one broker, asset, account, or account+asset barrier must be configured"
-            ),
             Self::InvalidWindow { window } => write!(
                 f,
                 "rate limit window must be positive and fit in u64 nanoseconds, got {window:?}"
@@ -149,9 +143,14 @@ struct RateLimitSlot {
 /// replacement keeps its live counter (`Arc::clone`), so a retune never resets
 /// the window and flood protection persists across it. The account-axis
 /// sliding logs survive replacements by construction, since they live in the
-/// policy keyed per account rather than in these settings; a removed account
-/// key leaves its idle log behind (bounded by its window content) and the log
-/// resumes if the key is re-added.
+/// policy keyed per account rather than in these settings. Clearing an account
+/// or account+asset barrier leaves that key's log in storage, including when
+/// the last barrier is cleared. Re-adding the key resumes counting the orders
+/// still inside its configured window. A re-added broker or asset barrier
+/// starts a fresh window.
+///
+/// All axes may be empty; the policy then admits every order. Barriers can
+/// be added later through [`Engine::configure`](crate::Engine::configure).
 ///
 /// # Dynamic limits (no counter rebuild)
 ///
@@ -175,10 +174,10 @@ pub struct RateLimitSettings {
 impl RateLimitSettings {
     /// Builds a validated rate-limit configuration.
     ///
-    /// At least one barrier must be provided across all four axes. If all
-    /// are `None` or empty, returns
-    /// [`RateLimitPolicyError::NoBarriersConfigured`]. Each window is
-    /// validated; a zero or oversized window returns
+    /// All axes may be empty; the policy then admits every order. Barriers
+    /// can be added later through
+    /// [`Engine::configure`](crate::Engine::configure).
+    /// Each window is validated; a zero or oversized window returns
     /// [`RateLimitPolicyError::InvalidWindow`]. Duplicate keys within an
     /// axis: last-write-wins (no error).
     ///
@@ -209,14 +208,6 @@ impl RateLimitSettings {
             })
             .collect::<Result<_, _>>()?;
 
-        if broker.is_none()
-            && asset_limits.is_empty()
-            && account_limits.is_empty()
-            && account_asset_limits.is_empty()
-        {
-            return Err(RateLimitPolicyError::NoBarriersConfigured);
-        }
-
         Ok(Self {
             asset_limits,
             account_limits,
@@ -228,13 +219,12 @@ impl RateLimitSettings {
     /// Replaces the broker barrier (add, remove, or retune).
     ///
     /// A surviving broker keeps its live counter, so a retune never resets the
-    /// window. Passing `None` removes the barrier.
+    /// window. Passing `None` clears the axis, including the last barrier.
     ///
     /// # Errors
     ///
     /// [`RateLimitPolicyError::InvalidWindow`] if `limit.window` is zero or
-    /// oversized; [`RateLimitPolicyError::NoBarriersConfigured`] if the change
-    /// would leave all axes empty. On error `self` is left untouched.
+    /// oversized. On error `self` is left untouched.
     pub fn set_broker(
         &mut self,
         broker: Option<RateLimitBrokerBarrier>,
@@ -252,14 +242,6 @@ impl RateLimitSettings {
             None => None,
         };
 
-        if next.is_none()
-            && self.asset_limits.is_empty()
-            && self.account_limits.is_empty()
-            && self.account_asset_limits.is_empty()
-        {
-            return Err(RateLimitPolicyError::NoBarriersConfigured);
-        }
-
         self.broker = next;
         Ok(())
     }
@@ -268,13 +250,13 @@ impl RateLimitSettings {
     ///
     /// Each surviving asset keeps its live counter, so a retune never resets
     /// the window; new keys start a fresh window. Duplicate keys within one
-    /// call: last-write-wins.
+    /// call: last-write-wins. An empty set clears the axis, including the
+    /// last barrier.
     ///
     /// # Errors
     ///
     /// [`RateLimitPolicyError::InvalidWindow`] if any `limit.window` is zero or
-    /// oversized; [`RateLimitPolicyError::NoBarriersConfigured`] if the change
-    /// would leave all axes empty. On error `self` is left untouched.
+    /// oversized. On error `self` is left untouched.
     pub fn set_asset_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = RateLimitAssetBarrier>,
@@ -291,14 +273,6 @@ impl RateLimitSettings {
             asset_limits.insert(barrier.settlement_asset, RateLimitSlot { counter, limit });
         }
 
-        if self.broker.is_none()
-            && asset_limits.is_empty()
-            && self.account_limits.is_empty()
-            && self.account_asset_limits.is_empty()
-        {
-            return Err(RateLimitPolicyError::NoBarriersConfigured);
-        }
-
         self.asset_limits = asset_limits;
         Ok(())
     }
@@ -307,13 +281,13 @@ impl RateLimitSettings {
     ///
     /// The sliding-window logs live in the policy keyed per account, so they
     /// survive a replacement; a surviving account keeps counting without a
-    /// reset. Duplicate keys within one call: last-write-wins.
+    /// reset. Duplicate keys within one call: last-write-wins. An empty set
+    /// clears the axis, including the last barrier.
     ///
     /// # Errors
     ///
     /// [`RateLimitPolicyError::InvalidWindow`] if any `limit.window` is zero or
-    /// oversized; [`RateLimitPolicyError::NoBarriersConfigured`] if the change
-    /// would leave all axes empty. On error `self` is left untouched.
+    /// oversized. On error `self` is left untouched.
     pub fn set_account_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = RateLimitAccountBarrier>,
@@ -321,14 +295,6 @@ impl RateLimitSettings {
         let mut account_limits: HashMap<AccountId, RateLimit> = HashMap::new();
         for barrier in barriers {
             account_limits.insert(barrier.account_id, validate_limit(barrier.limit)?);
-        }
-
-        if self.broker.is_none()
-            && self.asset_limits.is_empty()
-            && account_limits.is_empty()
-            && self.account_asset_limits.is_empty()
-        {
-            return Err(RateLimitPolicyError::NoBarriersConfigured);
         }
 
         self.account_limits = account_limits;
@@ -340,13 +306,13 @@ impl RateLimitSettings {
     ///
     /// The sliding-window logs live in the policy keyed per pair, so they
     /// survive a replacement; a surviving pair keeps counting without a reset.
-    /// Duplicate keys within one call: last-write-wins.
+    /// Duplicate keys within one call: last-write-wins. An empty set clears
+    /// the axis, including the last barrier.
     ///
     /// # Errors
     ///
     /// [`RateLimitPolicyError::InvalidWindow`] if any `limit.window` is zero or
-    /// oversized; [`RateLimitPolicyError::NoBarriersConfigured`] if the change
-    /// would leave all axes empty. On error `self` is left untouched.
+    /// oversized. On error `self` is left untouched.
     pub fn set_account_asset_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = RateLimitAccountAssetBarrier>,
@@ -357,14 +323,6 @@ impl RateLimitSettings {
                 (barrier.account_id, barrier.settlement_asset),
                 validate_limit(barrier.limit)?,
             );
-        }
-
-        if self.broker.is_none()
-            && self.asset_limits.is_empty()
-            && self.account_limits.is_empty()
-            && account_asset_limits.is_empty()
-        {
-            return Err(RateLimitPolicyError::NoBarriersConfigured);
         }
 
         self.account_asset_limits = account_asset_limits;
@@ -485,9 +443,9 @@ impl AtomicWindowCounter {
 /// sliding-window logs live in the policy's storages, keyed lazily per account.
 ///
 /// Constructor rules:
-/// - at least one barrier across all four axes must be configured;
-/// - if all are omitted, [`RateLimitSettings::new`] returns
-///   [`RateLimitPolicyError::NoBarriersConfigured`];
+/// - every axis may be empty; the policy then admits every order;
+/// - barriers can be added later through
+///   [`Engine::configure`](crate::Engine::configure);
 /// - duplicate keys within an axis: last-write-wins (no error).
 ///
 /// # Examples
@@ -1029,13 +987,8 @@ mod tests {
     }
 
     #[test]
-    fn no_barriers_configured_rejected_by_settings() {
-        let err = RateLimitSettings::new(None, [], [], []).expect_err("must fail");
-        assert_eq!(err, RateLimitPolicyError::NoBarriersConfigured);
-        assert_eq!(
-            err.to_string(),
-            "at least one broker, asset, account, or account+asset barrier must be configured"
-        );
+    fn empty_settings_are_accepted() {
+        assert!(RateLimitSettings::new(None, [], [], []).is_ok());
     }
 
     // ── runtime setters ──────────────────────────────────────────────────────
@@ -1124,20 +1077,71 @@ mod tests {
     }
 
     #[test]
-    fn set_broker_none_clearing_last_axis_fails_and_keeps_config() {
-        // Broker is the only axis; removing it would leave all axes empty, so
-        // the setter rejects and the prior broker barrier stays live.
-        let policy = broker_policy(1, Duration::from_secs(10));
-        let err = policy
-            .settings_cell()
-            .update::<RateLimitPolicyError>(|s| s.set_broker(None))
-            .expect_err("clearing the last axis must fail");
-        assert_eq!(err, RateLimitPolicyError::NoBarriersConfigured);
+    fn setters_can_clear_last_axis() {
+        // Each settings value holds a single barrier of one order per window
+        // that matches the order below. After the setter clears it, both
+        // orders must pass; the removed barrier would have rejected the
+        // second one.
+        let window = Duration::from_secs(60);
+        let o = order(account(1));
 
-        // The retained broker limit of 1 still applies.
+        let mut settings = broker_settings(1, window);
+        assert!(settings.set_broker(None).is_ok());
+        let cleared_broker = policy_from(settings);
+
+        let mut settings = asset_settings("USD", 1, window);
+        assert!(settings.set_asset_barriers([]).is_ok());
+        let cleared_asset = policy_from(settings);
+
+        let mut settings = account_settings(account(1), 1, window);
+        assert!(settings.set_account_barriers([]).is_ok());
+        let cleared_account = policy_from(settings);
+
+        let mut settings = account_asset_settings(account(1), "USD", 1, window);
+        assert!(settings.set_account_asset_barriers([]).is_ok());
+        let cleared_account_asset = policy_from(settings);
+
         let base = Instant::now();
-        assert!(check_at(&policy, &order(account(1)), base).is_ok());
-        assert!(check_at(&policy, &order(account(1)), base + Duration::from_secs(1)).is_err());
+        for policy in [
+            &cleared_broker,
+            &cleared_asset,
+            &cleared_account,
+            &cleared_account_asset,
+        ] {
+            assert!(check_at(policy, &o, base).is_ok());
+            assert!(check_at(policy, &o, base + Duration::from_secs(1)).is_ok());
+        }
+    }
+
+    #[test]
+    fn empty_policy_does_not_access_order_fields() {
+        struct EmptyOrder(std::cell::Cell<usize>);
+        impl crate::HasAccountId for EmptyOrder {
+            fn account_id(&self) -> Result<AccountId, crate::RequestFieldAccessError> {
+                self.0.set(self.0.get() + 1);
+                Err(crate::RequestFieldAccessError::new("account ID"))
+            }
+        }
+        impl crate::HasInstrument for EmptyOrder {
+            fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
+                panic!("empty policy must not read instrument");
+            }
+        }
+        let policy = policy_from(RateLimitSettings::new(None, [], [], []).expect("empty is valid"));
+        let order = EmptyOrder(std::cell::Cell::new(0));
+        let ctx = PreTradeContext::<NoLocking>::new(None, &order);
+        order.0.set(0);
+        assert!(<TestPolicy as PreTradePolicy<
+            EmptyOrder, (), (), crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &ctx, &order,
+        ).is_ok());
+        assert!(<TestPolicy as PreTradePolicy<
+            EmptyOrder, (), (), crate::core::LocalSync,
+        >>::check_pre_trade_start_dry_run(
+            &policy, &ctx, &order,
+        ).is_ok());
+        assert_eq!(order.0.get(), 0);
     }
 
     #[test]

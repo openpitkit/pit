@@ -254,7 +254,13 @@ class RateLimitBuilder:
 
 
 def build_rate_limit() -> RateLimitBuilder:
-    """Return a new rate-limit policy builder."""
+    """Return a new rate-limit policy builder.
+
+    Calling an axis method with no barriers, such as ``asset_barriers()``,
+    returns a ready builder for registering an empty policy. It admits every
+    order without reading order fields and can be configured later through
+    the engine's configurator.
+    """
     return RateLimitBuilder()
 
 
@@ -438,7 +444,13 @@ class OrderSizeLimitBuilder:
 
 
 def build_order_size_limit() -> OrderSizeLimitBuilder:
-    """Return a new order-size-limit policy builder."""
+    """Return a new order-size-limit policy builder.
+
+    Calling an axis method with no barriers, such as ``asset_barriers()``,
+    returns a ready builder for registering an empty policy. It admits every
+    order without reading order fields and can be configured later through
+    the engine's configurator.
+    """
     return OrderSizeLimitBuilder()
 
 

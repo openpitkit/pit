@@ -124,8 +124,9 @@ pub struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
 /// - A null or already-consumed `builder` is a handled error.
 /// - `policy_group_id` assigns the policy to a policy group (pass `0` for the
 ///   default group).
-/// - At least one barrier axis must be configured: `broker` non-null,
-///   `asset_len > 0`, or `account_asset_len > 0`.
+/// - Every axis may be empty (null `broker`, zero array lengths). The policy
+///   then admits every order and can be configured later through
+///   `openpit_engine_configure_order_size_limit`.
 /// - A pointer may be null when its array length is zero.
 /// - Each non-null `asset` string view must contain UTF-8 and a valid asset for
 ///   the call to succeed.
@@ -153,10 +154,9 @@ pub struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
 /// - returns `true`; the builder retains the policy.
 ///
 /// Error:
-/// - returns `false` when the builder is null or already consumed, when no
-///   barrier axis is configured, when any limit has no cap, when an asset or
-///   `(account_id, asset)` key is duplicated within its axis, or when argument
-///   parsing fails;
+/// - returns `false` when the builder is null or already consumed, when any
+///   limit has no cap, when an asset or `(account_id, asset)` key is duplicated
+///   within its axis, or when argument parsing fails;
 /// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
 ///   error handle that MUST be released with `openpit_destroy_shared_string`.
 pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_policy(
@@ -320,6 +320,9 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 /// This is a partial update (PATCH) at the axis level: each axis is replaced
 /// wholesale only when its `has_*` flag is `true`, mirroring the
 /// replace-shaped settings setters.
+/// Every axis may be empty (null `broker`, zero array lengths). Clearing every
+/// axis is valid; the policy then admits every order and can be configured
+/// again through this function.
 ///
 /// Contract:
 /// - A null `engine` is a handled error.
@@ -334,8 +337,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 /// - When `has_account_asset` is `true`, the per-(account, asset) axis is
 ///   replaced by the `account_asset_len` entries at `account_asset`.
 /// - A `has_*` flag set to `false` leaves that axis untouched and ignores the
-///   corresponding pointer and length. The policy's "at least one barrier"
-///   rule still applies to the resulting configuration.
+///   corresponding pointer and length. A zero array length clears a touched
+///   axis; its pointer may be null.
 /// - Each non-null `asset` view must contain UTF-8 and a valid asset for the
 ///   call to succeed.
 /// - Each optional cap with `is_set == true` must contain a valid value. When
@@ -876,13 +879,9 @@ mod tests {
     }
 
     #[test]
-    fn add_builtin_order_size_limit_policy_empty_config_reports_error() {
-        let builder = crate::engine::openpit_create_engine_builder(
-            crate::engine::OpenPitSyncPolicy::Full as u8,
-            std::ptr::null_mut(),
-        );
+    fn add_builtin_order_size_limit_policy_empty_config_builds() {
         let mut out_error = std::ptr::null_mut();
-        let ok = unsafe {
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
             openpit_engine_builder_add_builtin_order_size_limit_policy(
                 builder,
                 0,
@@ -893,19 +892,165 @@ mod tests {
                 0,
                 &mut out_error,
             )
+        });
+        assert!(out_error.is_null(), "empty registration must succeed");
+        assert_eq!(
+            run_start_pre_trade(engine, pit_order_with_quantity(1000)),
+            crate::engine::OpenPitPretradeStatus::Passed
+        );
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_order_size_limit_empty_policy_lifecycle() {
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                builder,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        assert_eq!(
+            run_start_pre_trade(engine, pit_order_with_quantity(11)),
+            crate::engine::OpenPitPretradeStatus::Passed
+        );
+        let limit = OpenPitPretradePoliciesOrderSizeLimit {
+            max_quantity: quantity_cap(10, 0),
+            max_notional: OpenPitParamVolumeOptional::default(),
         };
-        assert!(!ok);
-        assert!(!out_error.is_null());
-        let error = cstr_to_string(out_error);
-        assert!(
-            error.contains("order_size_limit_policy creation failed"),
-            "unexpected error: {error}"
-        );
-        assert!(
-            error.contains("must be configured"),
-            "unexpected error: {error}"
-        );
-        crate::engine::openpit_destroy_engine_builder(builder);
+        let broker = OpenPitPretradePoliciesOrderSizeBrokerBarrier { limit };
+        let asset = [OpenPitPretradePoliciesOrderSizeAssetBarrier {
+            limit,
+            asset: OpenPitStringView::from_utf8("SPX"),
+        }];
+        let account_asset = [OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
+            limit,
+            account_id: 7,
+            asset: OpenPitStringView::from_utf8("SPX"),
+        }];
+        for axis in 0..3 {
+            let mut out_error = std::ptr::null_mut();
+            assert!(
+                unsafe {
+                    openpit_engine_configure_order_size_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("OrderSizeLimitPolicy"),
+                        &broker,
+                        axis == 0,
+                        asset.as_ptr(),
+                        asset.len(),
+                        axis == 1,
+                        account_asset.as_ptr(),
+                        account_asset.len(),
+                        axis == 2,
+                        &mut out_error,
+                    )
+                },
+                "adding one axis must succeed"
+            );
+            assert!(out_error.is_null());
+            assert_eq!(
+                run_start_pre_trade(engine, pit_order_with_quantity(11)),
+                crate::engine::OpenPitPretradeStatus::Rejected
+            );
+            assert!(
+                unsafe {
+                    openpit_engine_configure_order_size_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("OrderSizeLimitPolicy"),
+                        std::ptr::null(),
+                        axis == 0,
+                        std::ptr::null(),
+                        0,
+                        axis == 1,
+                        std::ptr::null(),
+                        0,
+                        axis == 2,
+                        &mut out_error,
+                    )
+                },
+                "clearing the last axis must succeed"
+            );
+            assert!(out_error.is_null());
+            assert_eq!(
+                run_start_pre_trade(engine, pit_order_with_quantity(11)),
+                crate::engine::OpenPitPretradeStatus::Passed
+            );
+        }
+        for _ in 0..2 {
+            let mut out_error = std::ptr::null_mut();
+            assert!(
+                unsafe {
+                    openpit_engine_configure_order_size_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("OrderSizeLimitPolicy"),
+                        &broker,
+                        true,
+                        asset.as_ptr(),
+                        asset.len(),
+                        true,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        &mut out_error,
+                    )
+                },
+                "re-activation must succeed"
+            );
+            assert!(out_error.is_null());
+            assert!(
+                unsafe {
+                    openpit_engine_configure_order_size_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("OrderSizeLimitPolicy"),
+                        std::ptr::null(),
+                        false,
+                        std::ptr::null(),
+                        0,
+                        true,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        &mut out_error,
+                    )
+                },
+                "asset clear must succeed"
+            );
+            assert!(out_error.is_null());
+            assert_eq!(
+                run_start_pre_trade(engine, pit_order_with_quantity(11)),
+                crate::engine::OpenPitPretradeStatus::Rejected
+            );
+            assert!(
+                unsafe {
+                    openpit_engine_configure_order_size_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("OrderSizeLimitPolicy"),
+                        std::ptr::null(),
+                        true,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        std::ptr::null(),
+                        0,
+                        false,
+                        &mut out_error,
+                    )
+                },
+                "last-to-empty must succeed"
+            );
+            assert!(out_error.is_null());
+            assert_eq!(
+                run_start_pre_trade(engine, pit_order_with_quantity(11)),
+                crate::engine::OpenPitPretradeStatus::Passed
+            );
+        }
+        crate::engine::openpit_destroy_engine(engine);
     }
 
     #[test]
