@@ -30,7 +30,8 @@ use crate::core::{
 };
 use crate::marketdata::{MarketDataError, MarketDataSync, Quote, QuoteResolution};
 use crate::param::{
-    AccountId, Asset, MonetaryAmount, Pnl, PositionSize, Price, Quantity, Side, Trade,
+    AccountGroupId, AccountId, Asset, MonetaryAmount, Pnl, PositionSize, Price, Quantity, Side,
+    Trade,
 };
 use crate::pretrade::holdings::{AdjustmentOverflowError, Holdings, PositionPnlOperation};
 use crate::pretrade::policy::{missing_required_field_account_block, PolicyGroupId};
@@ -90,15 +91,11 @@ where
     fn accounting_quote(
         &self,
         account_id: AccountId,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_group: Option<AccountGroupId>,
         instrument: &Instrument,
-    ) -> Option<Quote>
-    where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
+    ) -> Option<Quote> {
         let market_orders = self.market_orders.as_ref()?;
         let instrument_id = market_orders.resolve(instrument)?;
-        let account_group = ctx.state_account_group();
         match market_orders.market_data.get(
             instrument_id,
             account_id,
@@ -113,20 +110,17 @@ where
     fn account_currency_factor(
         &self,
         account_id: AccountId,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_group: Option<AccountGroupId>,
         source_asset: &Asset,
         account_currency: &Asset,
-    ) -> Option<Decimal>
-    where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
+    ) -> Option<Decimal> {
         if source_asset == account_currency {
             return Some(Decimal::ONE);
         }
 
         let direct = Instrument::new(source_asset.clone(), account_currency.clone());
         if let Some(mark) = self
-            .accounting_quote(account_id, ctx, &direct)
+            .accounting_quote(account_id, account_group, &direct)
             .and_then(|quote| quote.mark)
         {
             return Some(mark.to_decimal());
@@ -134,7 +128,7 @@ where
 
         let inverse = Instrument::new(account_currency.clone(), source_asset.clone());
         if let Some(mark) = self
-            .accounting_quote(account_id, ctx, &inverse)
+            .accounting_quote(account_id, account_group, &inverse)
             .and_then(|quote| quote.mark)
         {
             // A zero reverse quote denotes a zero converted value, not missing FX.
@@ -151,16 +145,13 @@ where
     fn account_currency_price(
         &self,
         account_id: AccountId,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_group: Option<AccountGroupId>,
         quote_asset: &Asset,
         account_currency: &Asset,
         trade_price: Price,
-    ) -> Result<Option<Price>, PnlHaltReason>
-    where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
+    ) -> Result<Option<Price>, PnlHaltReason> {
         let Some(factor) =
-            self.account_currency_factor(account_id, ctx, quote_asset, account_currency)
+            self.account_currency_factor(account_id, account_group, quote_asset, account_currency)
         else {
             return Ok(None);
         };
@@ -183,16 +174,16 @@ where
     fn fee_pnl_delta(
         &self,
         account_id: AccountId,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_group: Option<AccountGroupId>,
         fee: &MonetaryAmount,
         account_currency: &Asset,
-    ) -> Result<Option<Pnl>, PnlHaltReason>
-    where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
-        let Some(factor) =
-            self.account_currency_factor(account_id, ctx, &fee.currency, account_currency)
-        else {
+    ) -> Result<Option<Pnl>, PnlHaltReason> {
+        let Some(factor) = self.account_currency_factor(
+            account_id,
+            account_group,
+            &fee.currency,
+            account_currency,
+        ) else {
             return Ok(None);
         };
         let Some(value) = fee.amount.to_pnl().to_decimal().checked_mul(factor) else {
@@ -204,17 +195,14 @@ where
     fn fee_account_pnl_delta(
         &self,
         account_id: AccountId,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_group: Option<AccountGroupId>,
         fee: &MonetaryAmount,
         account_currency: &Asset,
-    ) -> Result<Pnl, PnlHaltReason>
-    where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
+    ) -> Result<Pnl, PnlHaltReason> {
         if fee.amount.is_zero() {
             return Ok(Pnl::ZERO);
         }
-        match self.fee_pnl_delta(account_id, ctx, fee, account_currency)? {
+        match self.fee_pnl_delta(account_id, account_group, fee, account_currency)? {
             Some(delta) => Ok(delta),
             None => Err(PnlHaltReason::MissingFx),
         }
@@ -494,7 +482,7 @@ where
         let mut account_pnl_halt_reason = None;
         let fee_pnl_delta = match account_currency.as_ref() {
             Some(account_currency) => {
-                match self.fee_account_pnl_delta(account_id, ctx, fee, account_currency) {
+                match self.fee_account_pnl_delta(account_id, account_group, fee, account_currency) {
                     Ok(delta) => Some(delta),
                     Err(reason) => {
                         position_pnl_halt = true;
@@ -892,7 +880,7 @@ where
             match account_currency.as_ref() {
                 Some(account_currency) => match self.account_currency_price(
                     account_id,
-                    ctx,
+                    account_group,
                     settlement_asset,
                     account_currency,
                     trade.price,
@@ -942,7 +930,7 @@ where
 
         let fee_pnl_delta = match (account_currency.as_ref(), nonzero_fee) {
             (Some(account_currency), Some(fee)) => {
-                match self.fee_account_pnl_delta(account_id, ctx, fee, account_currency) {
+                match self.fee_account_pnl_delta(account_id, account_group, fee, account_currency) {
                     Ok(delta) => Some(delta),
                     Err(reason) => {
                         position_pnl_halt = true;

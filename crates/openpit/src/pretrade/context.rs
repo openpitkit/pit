@@ -258,6 +258,13 @@ where
         self.group_lookup.group()
     }
 
+    /// Returns the order account's group in the current state-writer scope.
+    /// With an account registry, reads it directly instead of the
+    /// context-lifetime cache behind `account_group()`: that cache may have
+    /// been filled before the shared lease was taken, with a membership
+    /// transition since. The shared lease pins the group for the scope, so
+    /// callers resolve it once at scope entry and pass it down instead of
+    /// calling this again.
     pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
         match (self.accounts.as_ref(), self.known_account()) {
             (Some(accounts), Some(account)) => accounts.group_of(account),
@@ -276,6 +283,7 @@ where
     /// The caller supplies `account_group`; this method resolves only the
     /// account -> group -> default currency cascade. Standalone contexts have
     /// no account registry, so they return `None`.
+    /// Callers resolve it once per state-writer scope and pass the value down.
     pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
         self.known_account().and_then(|account| {
             self.accounts

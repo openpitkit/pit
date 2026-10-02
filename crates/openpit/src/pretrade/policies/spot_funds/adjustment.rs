@@ -198,7 +198,7 @@ where
         }
 
         let operation = || {
-            let state_snapshot = ctx.state_snapshot();
+            let state_snapshot = ctx.state_snapshot(ctx.state_account_group());
             let active_mutation = self.begin_holdings_mutation(account_id);
 
             let key = (account_id, request.asset.clone());
@@ -484,8 +484,8 @@ where
         let owner_id = mutations.owner_id();
         self.with_adjustment_state_writer(ctx, account_id, owner_id, || {
             let lease = self.acquire_account_pnl_lease(account_id, owner_id);
-            let state_snapshot = ctx.state_snapshot();
             let account_group = ctx.state_account_group();
+            let state_snapshot = ctx.state_snapshot(account_group);
             let account_currency = ctx.account_currency(account_group);
             let barrier =
                 self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());

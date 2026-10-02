@@ -26,7 +26,7 @@ use crate::core::{
 use crate::marketdata::{AccountInfo, MarketDataSync};
 
 use super::market_data::SpotFundsPriceError;
-use super::SpotFundsLimitMode;
+use super::{SpotFundsLimitMode, SpotFundsSettings};
 use crate::param::{AccountId, Asset, PositionSize, Price, Quantity, Side, TradeAmount};
 use crate::pretrade::holdings::{HoldError, Holdings};
 use crate::pretrade::policy::missing_required_field_reject;
@@ -51,21 +51,17 @@ where
     pub(super) fn reject_halted_account_pnl(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        settings: &SpotFundsSettings,
         account_id: AccountId,
         account_group_id: Option<crate::param::AccountGroupId>,
     ) -> Result<(), Rejects> {
-        let has_barrier = self
-            .settings
-            .with(|settings| settings.has_pnl_barrier_scope(account_id, account_group_id));
+        let has_barrier = settings.has_pnl_barrier_scope(account_id, account_group_id);
         if !has_barrier {
             return Ok(());
         }
         let account_currency = ctx.account_currency(account_group_id);
-        let barrier = self.settings.with(|settings| {
-            settings
-                .pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
-                .cloned()
-        });
+        let barrier =
+            settings.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref());
         let Some(barrier) = barrier else {
             return Ok(());
         };
@@ -73,7 +69,7 @@ where
         if let Some(block) = super::rejects::account_pnl_block_for_state(
             account_currency.as_ref(),
             state,
-            &barrier,
+            barrier,
             None,
         ) {
             Err(Rejects::from(Reject::from(block)))
@@ -116,8 +112,8 @@ where
     /// Resolves the effective buy price for a market order.
     ///
     /// The instrument is resolved and the quote fetched through the
-    /// market-data service handle, then the slippage cascade is applied by
-    /// reading the settings cell on the hot path - allocation-free and
+    /// market-data service handle, then the slippage cascade is applied from
+    /// the scope's settings snapshot - allocation-free and
     /// without acquiring a per-order lock.
     ///
     /// `account_id` and `account_info` select the per-account / per-group /
@@ -126,6 +122,7 @@ where
     /// [`QuoteResolution`]: crate::marketdata::QuoteResolution
     pub(super) fn compute_buy_with_md(
         &self,
+        settings: &SpotFundsSettings,
         instrument: &Instrument,
         account_id: AccountId,
         account_info: &impl AccountInfo,
@@ -140,16 +137,16 @@ where
         let quote = bundle
             .quote(instrument_id, account_id, account_info)
             .ok_or_else(|| Self::reject_from_price_err(SpotFundsPriceError::QuoteUnavailable))?;
-        self.settings
-            .with(|s| s.effective_buy_price(&quote, instrument_id, account_id, account_info))
+        settings
+            .effective_buy_price(&quote, instrument_id, account_id, account_info)
             .map_err(Self::reject_from_price_err)
     }
 
     /// Resolves the effective sell price for a market order.
     ///
     /// The instrument is resolved and the quote fetched through the
-    /// market-data service handle, then the slippage cascade is applied by
-    /// reading the settings cell on the hot path - allocation-free and
+    /// market-data service handle, then the slippage cascade is applied from
+    /// the scope's settings snapshot - allocation-free and
     /// without acquiring a per-order lock.
     ///
     /// `account_id` and `account_info` select the per-account / per-group /
@@ -158,6 +155,7 @@ where
     /// [`QuoteResolution`]: crate::marketdata::QuoteResolution
     pub(super) fn compute_sell_with_md(
         &self,
+        settings: &SpotFundsSettings,
         instrument: &Instrument,
         account_id: AccountId,
         account_info: &impl AccountInfo,
@@ -172,8 +170,8 @@ where
         let quote = bundle
             .quote(instrument_id, account_id, account_info)
             .ok_or_else(|| Self::reject_from_price_err(SpotFundsPriceError::QuoteUnavailable))?;
-        self.settings
-            .with(|s| s.effective_sell_price(&quote, instrument_id, account_id, account_info))
+        settings
+            .effective_sell_price(&quote, instrument_id, account_id, account_info)
             .map_err(Self::reject_from_price_err)
     }
 
@@ -242,12 +240,14 @@ where
         request: &OrderRequestView<'_>,
         account_info: &impl AccountInfo,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        settings: &SpotFundsSettings,
     ) -> Result<ReservationLegs, Reject> {
         match request.side {
             Side::Buy => {
                 let buy_price = match request.price {
                     Some(p) => p,
                     None => self.compute_buy_with_md(
+                        settings,
                         request.instrument,
                         request.account_id,
                         account_info,
@@ -309,6 +309,7 @@ where
                 let sell_price = match request.price {
                     Some(p) => p,
                     None => self.compute_sell_with_md(
+                        settings,
                         request.instrument,
                         request.account_id,
                         account_info,
@@ -377,12 +378,17 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let request = self.read_order_request(ctx, order)?;
-        ctx.with_state_writer(|| self.perform_pre_trade_request_impl(ctx, request, mutations))
+        ctx.with_state_writer(|| {
+            self.settings.with_snapshot(|settings| {
+                self.perform_pre_trade_request_impl(ctx, settings, request, mutations)
+            })
+        })
     }
 
     fn perform_pre_trade_request_impl(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        settings: &SpotFundsSettings,
         request: OrderRequestView<'_>,
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects>
@@ -400,7 +406,8 @@ where
             )
             .into());
         }
-        let pnl_rejects = self.reject_halted_account_pnl(ctx, request.account_id, account_group);
+        let pnl_rejects =
+            self.reject_halted_account_pnl(ctx, settings, request.account_id, account_group);
         if ctx.is_drop_copy() {
             if let Err(rejects) = &pnl_rejects {
                 if let Some(reject) = rejects
@@ -417,7 +424,7 @@ where
         }
 
         let legs = self
-            .compute_reservation_legs(&request, &account_group, ctx)
+            .compute_reservation_legs(&request, &account_group, ctx, settings)
             .map_err(Rejects::from)?;
 
         let underlying_asset = request.instrument.underlying_asset().clone();
@@ -429,6 +436,7 @@ where
         // legs below; `incoming`, position, average-entry and realized-PnL
         // bookkeeping are mode-independent.
         let (limit_mode, position_limits) = self.reservation_controls(
+            settings,
             request.account_id,
             &account_group,
             ctx.is_drop_copy(),
@@ -483,19 +491,24 @@ where
         Order: HasInstrument + HasSide + HasTradeAmount + HasOrderPrice,
     {
         let request = self.read_order_request(ctx, order)?;
-        ctx.with_state_writer(|| self.perform_pre_trade_request_dry_run_impl(ctx, request))
+        ctx.with_state_writer(|| {
+            self.settings.with_snapshot(|settings| {
+                self.perform_pre_trade_request_dry_run_impl(ctx, settings, request)
+            })
+        })
     }
 
     fn perform_pre_trade_request_dry_run_impl(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        settings: &SpotFundsSettings,
         request: OrderRequestView<'_>,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         let account_group = ctx.state_account_group();
-        self.reject_halted_account_pnl(ctx, request.account_id, account_group)?;
+        self.reject_halted_account_pnl(ctx, settings, request.account_id, account_group)?;
 
         let legs = self
-            .compute_reservation_legs(&request, &account_group, ctx)
+            .compute_reservation_legs(&request, &account_group, ctx, settings)
             .map_err(Rejects::from)?;
 
         let underlying_asset = request.instrument.underlying_asset().clone();
@@ -505,6 +518,7 @@ where
         // Resolve the funds limit mode once, exactly as the mutating path does,
         // so a track-only dry-run mirrors a track-only reservation byte for byte.
         let (limit_mode, position_limits) = self.reservation_controls(
+            settings,
             request.account_id,
             &account_group,
             ctx.is_drop_copy(),
@@ -555,6 +569,7 @@ where
 
     fn reservation_controls(
         &self,
+        settings: &SpotFundsSettings,
         account_id: AccountId,
         account_info: &impl AccountInfo,
         is_drop_copy: bool,
@@ -567,12 +582,10 @@ where
             return (SpotFundsLimitMode::TrackOnly, [None, None]);
         }
 
-        self.settings.with(|settings| {
-            (
-                settings.limit_mode_for(account_id, account_info),
-                super::position_limit::plan(settings, account_id, steps),
-            )
-        })
+        (
+            settings.limit_mode_for(account_id, account_info),
+            super::position_limit::plan(settings, account_id, steps),
+        )
     }
 
     /// Read-only twin of [`Self::reserve_asset`].

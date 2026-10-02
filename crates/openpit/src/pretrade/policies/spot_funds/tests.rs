@@ -481,7 +481,8 @@ fn build_policy_with_pnl_global_barrier(barrier: SpotFundsPnlBoundsBarrier) -> T
 /// it carries no account registry, so the rollback resolves no group and no
 /// effective currency.
 fn test_state_snapshot() -> crate::core::AccountStateSnapshot<crate::storage::FullLocking> {
-    AccountAdjustmentContext::new_test(dummy_control(account(0))).state_snapshot()
+    let ctx = AccountAdjustmentContext::new_test(dummy_control(account(0)));
+    ctx.state_snapshot(ctx.state_account_group())
 }
 
 fn build_account_pnl_test_engine(settings: SpotFundsSettings) -> AccountPnlTestEngine {
