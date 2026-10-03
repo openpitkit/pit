@@ -85,11 +85,14 @@ other column below is read when present.
   `AccountAdjustmentBoundsExceeded`, `OrderValueCalculationFailed`,
   `InvalidFieldFormat`, `InvalidFieldValue`, `InsufficientPosition`,
   `InsufficientMargin`, `MissingRequiredField`.
-- `FILL`  - applies a final execution report. `qty` is the filled quantity
-  (fills are always quantity-based; `volume` is not used), and `price` is the
-  lock / reservation price (the limit price for limit orders, the mark price for
-  market orders). When `price` is omitted the most recent quote pushed for the
-  instrument is reused. `fee` and `pnl` are the financial impact.
+- `FILL`  - settles one earlier `ORDER` in full with a final execution report.
+  Its `qty` must reach that `ORDER`'s reserved quantity: the `ORDER`'s `qty`, or
+  for a volume `ORDER`, volume / |price| as sized by the engine at the lock price.
+  `qty` is the filled quantity (fills are always quantity-based; `volume` is not
+  used), and `price` is the lock / reservation price (the limit price for limit
+  orders, the mark price for market orders). When `price` is omitted the most
+  recent quote pushed for the instrument is reused. `fee` and `pnl` are the
+  financial impact.
 
 ### TICK determinism
 
@@ -113,7 +116,12 @@ market-data service - there is no load-time pre-aggregation.
 - `FILL` rows always emit final (`IsFinal = true`) execution reports with
   `RemainingReservedQuantity = 0`. This caller-calculated value tells the
   engine that no reservation remains to release; it is not a venue-reported
-  remaining order quantity. Partial fills and cancel-with-leftover scenarios
+  remaining order quantity. Zero is correct only when the `FILL` quantity reaches
+  the reserved quantity of the `ORDER` it settles. A `FILL` that falls short - a
+  partial fill, or a volume `ORDER` whose engine-sized quantity the `FILL` does
+  not reach, even if the venue calls it fully filled - leaves the rest reserved.
+  The runner does not release it, and the row still passes because `FILL` is
+  judged only on account blocks. Partial fills and cancel-with-leftover scenarios
   are not modelled.
 - Account IDs are derived from the table label via `param.NewAccountIDFromString`,
   and account-group IDs via `param.NewAccountGroupIDFromString`; both FNV-1a hash

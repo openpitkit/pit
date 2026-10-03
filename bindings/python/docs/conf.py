@@ -119,12 +119,14 @@ nitpick_ignore = [
 def _normalize_python_docstrings(_app, _what, _name, _obj, _options, lines) -> None:
     in_markdown_fence = False
     in_google_section = False
+    in_bullet_item = False
     normalized: list[str] = []
 
     for line in lines:
         stripped = line.strip()
 
         if stripped.startswith("```"):
+            in_bullet_item = False
             if not in_markdown_fence:
                 normalized.extend(["::", ""])
             in_markdown_fence = not in_markdown_fence
@@ -135,6 +137,7 @@ def _normalize_python_docstrings(_app, _what, _name, _obj, _options, lines) -> N
             continue
 
         if stripped in {"Args:", "Attributes:", "Returns:"}:
+            in_bullet_item = False
             in_google_section = True
             normalized.extend([stripped, ""])
             continue
@@ -154,9 +157,10 @@ def _normalize_python_docstrings(_app, _what, _name, _obj, _options, lines) -> N
 
         if (
             normalized
-            and normalized[-1].startswith("- ")
+            and (in_bullet_item or normalized[-1].startswith("- "))
             and stripped
             and not stripped.startswith("- ")
+            and (not in_bullet_item or not line[:1].isspace())
         ):
             normalized.append("")
 
@@ -164,6 +168,8 @@ def _normalize_python_docstrings(_app, _what, _name, _obj, _options, lines) -> N
             normalized.append("")
 
         normalized.append(line)
+        if not stripped or not line[:1].isspace():
+            in_bullet_item = line.startswith("- ")
 
     lines[:] = normalized
 
