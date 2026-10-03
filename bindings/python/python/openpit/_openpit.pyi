@@ -514,7 +514,12 @@ class Quantity:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> Quantity: ...
+    ) -> Quantity:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @property
     def decimal(self) -> decimal.Decimal: ...
     def to_json_value(self) -> str: ...
@@ -559,7 +564,12 @@ class Price:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> Price: ...
+    ) -> Price:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @property
     def decimal(self) -> decimal.Decimal: ...
     def to_json_value(self) -> str: ...
@@ -605,7 +615,12 @@ class Pnl:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> Pnl: ...
+    ) -> Pnl:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @staticmethod
     def from_fee(fee: Fee) -> Pnl: ...
     @property
@@ -653,7 +668,12 @@ class Fee:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> Fee: ...
+    ) -> Fee:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @property
     def decimal(self) -> decimal.Decimal: ...
     def to_json_value(self) -> str: ...
@@ -700,7 +720,12 @@ class Volume:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> Volume: ...
+    ) -> Volume:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @property
     def decimal(self) -> decimal.Decimal: ...
     def to_json_value(self) -> str: ...
@@ -757,7 +782,12 @@ class Notional:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> Notional: ...
+    ) -> Notional:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @staticmethod
     def from_volume(volume: Volume) -> Notional: ...
     @staticmethod
@@ -809,7 +839,12 @@ class CashFlow:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> CashFlow: ...
+    ) -> CashFlow:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @staticmethod
     def from_pnl(pnl: Pnl) -> CashFlow: ...
     @staticmethod
@@ -861,7 +896,12 @@ class PositionSize:
         value: decimal.Decimal,
         scale: int,
         strategy: str,
-    ) -> PositionSize: ...
+    ) -> PositionSize:
+        """The Decimal must fit the core decimal exactly: at most 28 fractional
+        digits and a mantissa within 96 bits; otherwise ParamError is raised.
+        Quantize a wider Decimal first, for example a default-context division
+        result such as ``Decimal(1) / Decimal(365)``."""
+
     @staticmethod
     def from_quantity_and_side(quantity: Quantity, side: str) -> PositionSize: ...
     @staticmethod

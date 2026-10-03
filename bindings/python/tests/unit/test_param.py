@@ -1,4 +1,5 @@
-from decimal import Decimal
+from decimal import Decimal, localcontext
+from time import monotonic
 
 import openpit
 import pytest
@@ -140,8 +141,270 @@ def test_param_exact_constructors_reject_precision_loss(value: str) -> None:
     for constructor in (openpit.param.PositionSize, openpit.param.Quantity):
         with pytest.raises(ValueError, match="invalid format"):
             constructor(value)
-        with pytest.raises(ValueError, match="invalid format"):
+        with pytest.raises(ValueError, match="exceeds the core decimal range"):
             constructor(Decimal(value))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "entry_point", ["constructor", "from_decimal", "from_decimal_rounded"]
+)
+@pytest.mark.parametrize(
+    "type_name,value,expected",
+    [
+        ("Quantity", "1E+3", "1000"),
+        ("Quantity", "1.5E+3", "1500"),
+        ("Quantity", "0.0000001", "0.0000001"),
+        ("Quantity", "0E+5", "0"),
+        ("Quantity", "0E+1000000000", "0"),
+        ("Quantity", "0E+999999999999999999", "0"),
+        ("Pnl", "-7E+2", "-700"),
+    ],
+)
+def test_param_decimal_exponents_are_exact(
+    entry_point: str, type_name: str, value: str, expected: str
+) -> None:
+    constructor = getattr(openpit.param, type_name)
+    decimal = Decimal(value)
+    started = monotonic()
+    if entry_point == "constructor":
+        result = constructor(decimal)
+    elif entry_point == "from_decimal":
+        result = constructor.from_decimal(decimal)
+    else:
+        result = constructor.from_decimal_rounded(decimal, 7, "down")
+    assert str(result) == expected
+    if value in ("0E+1000000000", "0E+999999999999999999"):
+        assert monotonic() - started < 1
+
+
+@pytest.mark.unit
+def test_param_decimal_lowercase_exponent_is_exact() -> None:
+    with localcontext() as context:
+        context.capitals = 0
+        assert str(openpit.param.Quantity(Decimal("1.5E+3"))) == "1500"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "entry_point", ["constructor", "from_decimal", "from_decimal_rounded"]
+)
+def test_param_decimal_subclass_preserves_stored_value(entry_point: str) -> None:
+    class Money(Decimal):
+        def __str__(self) -> str:
+            return f"{self:.2f}"
+
+    class WrongFiniteness(Decimal):
+        def is_finite(self) -> bool:
+            return False
+
+    for decimal_type in (Money, WrongFiniteness):
+        decimal = decimal_type("1.005")
+        if entry_point == "constructor":
+            result = openpit.param.Quantity(decimal)
+        elif entry_point == "from_decimal":
+            result = openpit.param.Quantity.from_decimal(decimal)
+        else:
+            result = openpit.param.Quantity.from_decimal_rounded(
+                decimal, 3, "MidpointNearestEven"
+            )
+        assert str(result) == "1.005"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "entry_point", ["constructor", "from_decimal", "from_decimal_rounded"]
+)
+def test_param_decimal_subclass_cannot_hide_wider_scale(entry_point: str) -> None:
+    class NormalizedDecimal(Decimal):
+        def __str__(self) -> str:
+            return str(self.normalize())
+
+    decimal = NormalizedDecimal("1." + "0" * 29)
+    with pytest.raises(openpit.param.ParamError, match="core decimal range"):
+        if entry_point == "constructor":
+            openpit.param.Quantity(decimal)
+        elif entry_point == "from_decimal":
+            openpit.param.Quantity.from_decimal(decimal)
+        else:
+            openpit.param.Quantity.from_decimal_rounded(
+                decimal, 3, "MidpointNearestEven"
+            )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "entry_point", ["constructor", "from_decimal", "from_decimal_rounded"]
+)
+@pytest.mark.parametrize(
+    "value,message",
+    [
+        ("0." + "0" * 28 + "1", "(?i)scale"),
+        ("1." + "0" * 29, "(?i)scale"),
+        ("79228162514264337593543950336", "exceeds the core decimal range"),
+        ("1E+29", "exceeds the core decimal range"),
+        ("1E+1000000000", "exceeds the core decimal range"),
+        ("1" + "0" * 39, "exceeds the core decimal range"),
+        ("1E-4294967296", "exceeds the core decimal range"),
+        ("NaN", "is not finite"),
+        ("sNaN", "is not finite"),
+        ("Infinity", "is not finite"),
+    ],
+)
+def test_param_decimal_inputs_reject_invalid_representation(
+    entry_point: str, value: str, message: str
+) -> None:
+    decimal = Decimal(value)
+    started = monotonic()
+    with pytest.raises(openpit.param.ParamError, match=message) as error:
+        if entry_point == "constructor":
+            openpit.param.Quantity(decimal)
+        elif entry_point == "from_decimal":
+            openpit.param.Quantity.from_decimal(decimal)
+        else:
+            openpit.param.Quantity.from_decimal_rounded(decimal, 2, "down")
+    assert str(decimal) in str(error.value)
+    if value == "1E+1000000000":
+        assert monotonic() - started < 1
+
+
+@pytest.mark.unit
+def test_param_decimal_rounded_rejects_pre_rounding_carry() -> None:
+    value = Decimal("0.0099999999999999999999999999999")
+    with pytest.raises(openpit.param.ParamError, match="(?i)scale"):
+        openpit.param.Quantity.from_decimal_rounded(value, 2, "down")
+
+
+@pytest.mark.unit
+def test_param_decimal_rounded_requires_quantizing_wider_scale() -> None:
+    value = Decimal(1) / Decimal(365)
+    with pytest.raises(openpit.param.ParamError, match="(?i)scale"):
+        openpit.param.Fee.from_decimal_rounded(value, 2, "MidpointNearestEven")
+    quantized = value.quantize(Decimal("1E-28"))
+    assert (
+        str(openpit.param.Fee.from_decimal_rounded(quantized, 2, "MidpointNearestEven"))
+        == "0.00"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    ["1." + "0" * 5_000_000, "9" * 5_000_000],
+    ids=["wide-scale", "wide-mantissa"],
+)
+def test_param_huge_decimal_rejection_is_bounded(value: str) -> None:
+    decimal = Decimal(value)
+    started = monotonic()
+    with pytest.raises(openpit.param.ParamError, match="core decimal range") as error:
+        openpit.param.Quantity(decimal)
+    assert len(str(error.value)) < 200
+    assert value[:64] + "..." in str(error.value)
+    assert monotonic() - started < 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "type_name,value",
+    [
+        ("Quantity", 2**64),
+        ("Quantity", 2**70 + 1),
+        ("Pnl", -(2**70 + 1)),
+        ("Quantity", 2**96 - 1),
+    ],
+)
+def test_param_integer_constructors_are_exact(type_name: str, value: int) -> None:
+    constructor = getattr(openpit.param, type_name)
+    assert str(constructor(value)) == str(value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("entry_point", ["constructor", "from_int"])
+@pytest.mark.parametrize("type_name", ["Quantity", "Pnl"])
+@pytest.mark.parametrize(
+    "value,message",
+    [
+        (2**96, "invalid format"),
+        (2**127, "{type_name} integer is outside the core decimal range"),
+        (2**200, "{type_name} integer is outside the core decimal range"),
+    ],
+)
+def test_param_integer_constructors_reject_out_of_range(
+    entry_point: str, type_name: str, value: int, message: str
+) -> None:
+    constructor = getattr(openpit.param, type_name)
+    if entry_point == "from_int":
+        constructor = constructor.from_int
+    with pytest.raises(
+        openpit.param.ParamError, match=message.format(type_name=type_name)
+    ):
+        constructor(value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("entry_point", ["constructor", "from_int"])
+@pytest.mark.parametrize("type_name", ["Quantity", "Pnl"])
+def test_param_int_subclass_preserves_stored_value(
+    entry_point: str, type_name: str
+) -> None:
+    class ShiftedInt(int):
+        def __rshift__(self, other: int) -> int:
+            return 1
+
+        def __index__(self) -> int:
+            return 99
+
+    constructor = getattr(openpit.param, type_name)
+    if entry_point == "from_int":
+        constructor = constructor.from_int
+    assert str(constructor(ShiftedInt(1))) == "1"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("entry_point", ["constructor", "from_int"])
+def test_param_index_integer_is_exact(entry_point: str) -> None:
+    class IndexInteger:
+        def __index__(self) -> int:
+            return 2**70 + 1
+
+        def __float__(self) -> float:
+            raise AssertionError("integer input must not be converted through float")
+
+    constructor = openpit.param.Quantity
+    if entry_point == "from_int":
+        constructor = constructor.from_int
+    assert str(constructor(IndexInteger())) == str(2**70 + 1)
+
+
+@pytest.mark.unit
+def test_param_index_error_propagates() -> None:
+    class InvalidIndex:
+        def __index__(self) -> int:
+            raise RuntimeError("index conversion failed")
+
+    with pytest.raises(RuntimeError, match="index conversion failed"):
+        openpit.param.Quantity(InvalidIndex())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("operation", ["mul", "rmul", "div", "mod"])
+def test_param_arithmetic_rejects_decimal_operands(operation: str) -> None:
+    quantity = openpit.param.Quantity("1")
+    with pytest.raises(TypeError, match="unsupported operand"):
+        if operation == "mul":
+            quantity * Decimal("1.5")
+        elif operation == "rmul":
+            Decimal("1.5") * quantity
+        elif operation == "div":
+            quantity / Decimal("2")
+        else:
+            quantity % Decimal("2")
+
+
+@pytest.mark.unit
+def test_param_leverage_rejects_decimal() -> None:
+    with pytest.raises(ValueError, match="leverage must be .*Leverage, int, or float"):
+        openpit.param.Leverage(Decimal("2"))
 
 
 @pytest.mark.unit
@@ -155,6 +418,33 @@ def test_param_exact_constructors_reject_precision_loss(value: str) -> None:
 def test_param_exact_constructors_preserve_boundaries(value: str) -> None:
     for constructor in (openpit.param.PositionSize, openpit.param.Quantity):
         assert str(constructor(value)) == value
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "entry_point", ["constructor", "from_decimal", "from_decimal_rounded"]
+)
+@pytest.mark.parametrize(
+    "type_name,value,scale",
+    [
+        ("Quantity", "79228162514264337593543950335", 0),
+        ("Pnl", "-79228162514264337593543950335", 0),
+        ("Quantity", "0.0000000000000000000000000001", 28),
+        ("Quantity", "7.9228162514264337593543950335", 28),
+    ],
+)
+def test_param_decimal_constructors_preserve_boundaries(
+    entry_point: str, type_name: str, value: str, scale: int
+) -> None:
+    constructor = getattr(openpit.param, type_name)
+    decimal = Decimal(value)
+    if entry_point == "constructor":
+        result = constructor(decimal)
+    elif entry_point == "from_decimal":
+        result = constructor.from_decimal(decimal)
+    else:
+        result = constructor.from_decimal_rounded(decimal, scale, "MidpointNearestEven")
+    assert str(result) == value
 
 
 @pytest.mark.unit

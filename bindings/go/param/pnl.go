@@ -56,9 +56,10 @@ func newPnlOrPanic(value Pnl, err error) Pnl {
 
 // NewPnlFromDecimal converts a shopspring decimal to a Pnl.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewPnlFromDecimal(v decimal.Decimal) (Pnl, error) {
 	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
 	if err != nil {
@@ -152,9 +153,10 @@ func NewPnlFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) 
 
 // NewPnlFromDecimalRounded converts a shopspring decimal to a rounded Pnl.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewPnlFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,

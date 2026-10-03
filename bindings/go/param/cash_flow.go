@@ -60,9 +60,10 @@ func newCashFlowOrPanic(value CashFlow, err error) CashFlow {
 
 // NewCashFlowFromDecimal converts a shopspring decimal to a CashFlow.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewCashFlowFromDecimal(v decimal.Decimal) (CashFlow, error) {
 	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
 	if err != nil {
@@ -162,9 +163,10 @@ func NewCashFlowFromFloatRounded(
 
 // NewCashFlowFromDecimalRounded converts a shopspring decimal to a rounded CashFlow.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewCashFlowFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,

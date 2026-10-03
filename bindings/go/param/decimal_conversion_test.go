@@ -26,6 +26,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+func TestDecimalConversionCoreMantissaLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewQuantityFromDecimal(decimal.New(1, 30))
+	if err == nil || errors.Is(err, ErrOverflow) {
+		t.Fatalf("error = %v, want a core error without ErrOverflow", err)
+	}
+}
+
 func TestDecimalConversionCoefficientBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -213,6 +222,8 @@ func TestDecimalConversionCoefficientBoundaries(t *testing.T) {
 		wantOverflow bool
 	}{
 		{name: "two_to_127", coefficient: "170141183460469231731687303715884105728", wantOverflow: true},
+		{name: "positive_exponent", coefficient: "7", exponent: 3},
+		{name: "negative_positive_exponent", coefficient: "-7", exponent: 3},
 		{name: "two_to_64_plus_five", coefficient: "18446744073709551621"},
 		{name: "two_to_64_plus_five", coefficient: "18446744073709551621", exponent: -4},
 		{name: "negative_two_to_64_plus_five", coefficient: "-18446744073709551621"},

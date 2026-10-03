@@ -60,9 +60,10 @@ func newQuantityOrPanic(value Quantity, err error) Quantity {
 
 // NewQuantityFromDecimal converts a shopspring decimal to a Quantity.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewQuantityFromDecimal(v decimal.Decimal) (Quantity, error) {
 	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
 	if err != nil {
@@ -160,9 +161,10 @@ func NewQuantityFromFloatRounded(
 
 // NewQuantityFromDecimalRounded converts a shopspring decimal to a rounded Quantity.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewQuantityFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,

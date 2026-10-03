@@ -6186,7 +6186,8 @@ macro_rules! impl_decimal_pymethods {
             }
 
             #[staticmethod]
-            fn from_int(value: i128) -> PyResult<Self> {
+            fn from_int(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+                let value = extract_python_integer(value, $py_name)?;
                 Ok(Self {
                     inner: <$domain>::from_str(value.to_string().as_str())
                         .map_err(|error| create_param_error(error.to_string()))?,
@@ -6452,7 +6453,8 @@ macro_rules! impl_decimal_pymethods {
             }
 
             #[staticmethod]
-            fn from_int(value: i128) -> PyResult<Self> {
+            fn from_int(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+                let value = extract_python_integer(value, $py_name)?;
                 Ok(Self {
                     inner: <$domain>::from_str(value.to_string().as_str())
                         .map_err(|error| create_param_error(error.to_string()))?,
@@ -9137,25 +9139,106 @@ fn rust_decimal_to_python_decimal(
     Ok(decimal_cls.call1((text,))?.unbind())
 }
 
-fn extract_python_decimal_string(value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
-    let py = value.py();
-    let decimal_mod = PyModule::import(py, "decimal")?;
+fn is_python_decimal(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let decimal_mod = PyModule::import(value.py(), "decimal")?;
     let decimal_cls = decimal_mod.getattr("Decimal")?;
-    if value.is_instance(&decimal_cls)? {
-        return Ok(Some(value.str()?.extract::<String>()?));
-    }
-    Ok(None)
+    value.is_instance(&decimal_cls)
 }
+
+fn extract_python_integer(value: &Bound<'_, PyAny>, type_name: &str) -> PyResult<i128> {
+    let integer = unsafe {
+        Bound::from_owned_ptr_or_err(value.py(), pyo3::ffi::PyNumber_Index(value.as_ptr()))?
+    };
+    integer.extract::<i128>().map_err(|_| {
+        create_param_error(format!(
+            "{type_name} integer is outside the core decimal range"
+        ))
+    })
+}
+
+const DECIMAL_ERROR_EXCERPT_LENGTH: usize = 64;
 
 fn parse_python_decimal(
     value: &Bound<'_, PyAny>,
     type_name: &str,
 ) -> PyResult<rust_decimal::Decimal> {
-    let text = extract_python_decimal_string(value)?.ok_or_else(|| {
-        PyTypeError::new_err(format!("{type_name}.from_decimal expects decimal.Decimal"))
-    })?;
-    text.parse::<rust_decimal::Decimal>()
-        .map_err(|error| create_param_error(error.to_string()))
+    let decimal_cls = PyModule::import(value.py(), "decimal")?.getattr("Decimal")?;
+    if !value.is_instance(&decimal_cls)? {
+        return Err(PyTypeError::new_err(format!(
+            "{type_name}.from_decimal expects decimal.Decimal"
+        )));
+    }
+
+    let finite = decimal_cls
+        .call_method1("is_finite", (value,))?
+        .extract::<bool>()?;
+    let python_text = decimal_cls.call_method1("__str__", (value,))?;
+    let text = python_text.extract::<&str>()?;
+    let mut excerpt: String = text.chars().take(DECIMAL_ERROR_EXCERPT_LENGTH).collect();
+    if excerpt.len() < text.len() {
+        excerpt.push_str("...");
+    }
+    if !finite {
+        return Err(create_param_error(format!(
+            "{type_name} decimal {excerpt} is not finite"
+        )));
+    }
+
+    let range_error = || {
+        create_param_error(format!(
+            "{type_name} decimal {excerpt} exceeds the core decimal range"
+        ))
+    };
+    let negative = text.starts_with('-');
+    let mut coefficient = 0_i128;
+    let mut fractional_digits = 0_i64;
+    let mut fractional = false;
+    let mut exponent = 0_i64;
+    for (index, byte) in text.bytes().enumerate().skip(usize::from(negative)) {
+        match byte {
+            b'0'..=b'9' => {
+                coefficient = coefficient
+                    .checked_mul(10)
+                    .and_then(|number| number.checked_add(i128::from(byte - b'0')))
+                    .ok_or_else(range_error)?;
+                if fractional {
+                    fractional_digits = fractional_digits.checked_add(1).ok_or_else(range_error)?;
+                }
+            }
+            b'.' => fractional = true,
+            b'E' | b'e' => {
+                exponent = text[index + 1..]
+                    .parse::<i64>()
+                    .map_err(|_| range_error())?;
+                break;
+            }
+            _ => return Err(range_error()),
+        }
+    }
+    let exponent = exponent
+        .checked_sub(fractional_digits)
+        .ok_or_else(range_error)?;
+
+    let scale = if exponent < 0 {
+        exponent
+            .checked_neg()
+            .and_then(|scale| u32::try_from(scale).ok())
+            .ok_or_else(range_error)?
+    } else {
+        // Skipping zero keeps the fold bounded even for enormous exponents.
+        if coefficient != 0 {
+            for _ in 0..exponent {
+                coefficient = coefficient.checked_mul(10).ok_or_else(range_error)?;
+            }
+        }
+        0
+    };
+    let mantissa = if negative { -coefficient } else { coefficient };
+    rust_decimal::Decimal::try_from_i128_with_scale(mantissa, scale).map_err(|error| {
+        create_param_error(format!(
+            "{type_name} decimal {excerpt} exceeds the core decimal range: {error}"
+        ))
+    })
 }
 
 fn is_other_decimal_param_type(value: &Bound<'_, PyAny>, expected_type: &str) -> PyResult<bool> {
@@ -9220,6 +9303,10 @@ fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<Option<ScalarOpe
         ));
     }
 
+    if is_python_decimal(value)? {
+        return Ok(None);
+    }
+
     if let Ok(number) = value.extract::<f64>() {
         return Ok(Some(ScalarOperand::F64(number)));
     }
@@ -9230,7 +9317,7 @@ fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<Option<ScalarOpe
 fn parse_leverage_input(value: &Bound<'_, PyAny>) -> PyResult<Leverage> {
     // Python bool is a subclass of int, so True/False would pass as 1/0 here.
     // We explicitly reject bool to avoid silently accepting it as a numeric value.
-    if value.extract::<bool>().is_ok() {
+    if value.extract::<bool>().is_ok() || is_python_decimal(value)? {
         return Err(PyValueError::new_err(
             "leverage must be openpit.param.Leverage, int, or float",
         ));
@@ -9260,8 +9347,9 @@ macro_rules! define_typed_decimal_input_parser {
                 return Ok(value.inner);
             }
 
-            if let Some(text) = extract_python_decimal_string(value)? {
-                return $parse_fn(&text);
+            if is_python_decimal(value)? {
+                let decimal = parse_python_decimal(value, $type_name)?;
+                return $parse_fn(&decimal.to_string());
             }
 
             let error_message = format!("{0} must be a Decimal, str, int, or float", $type_name);
@@ -9278,12 +9366,10 @@ macro_rules! define_typed_decimal_input_parser {
                 return $parse_fn(&text);
             }
 
-            if let Ok(number) = value.extract::<i64>() {
-                return $parse_fn(&number.to_string());
-            }
-
-            if let Ok(number) = value.extract::<u64>() {
-                return $parse_fn(&number.to_string());
+            match extract_python_integer(value, $type_name) {
+                Ok(number) => return $parse_fn(&number.to_string()),
+                Err(error) if error.is_instance_of::<PyTypeError>(value.py()) => {}
+                Err(error) => return Err(error),
             }
 
             if let Ok(number) = value.extract::<f64>() {

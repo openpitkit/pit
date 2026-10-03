@@ -56,9 +56,10 @@ func newFeeOrPanic(value Fee, err error) Fee {
 
 // NewFeeFromDecimal converts a shopspring decimal to a Fee.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewFeeFromDecimal(v decimal.Decimal) (Fee, error) {
 	nativeDecimal, err := native.NewNativeDecimalFromDecimal(v)
 	if err != nil {
@@ -152,9 +153,10 @@ func NewFeeFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) 
 
 // NewFeeFromDecimalRounded converts a shopspring decimal to a rounded Fee.
 //
-// Returns an error wrapping ErrOverflow if the coefficient exceeds signed
-// 128-bit range, or a core error if its mantissa exceeds 96 bits or scale
-// exceeds 28.
+// Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
+// a positive exponent folded in - exceeds signed 128-bit range, or v's scale
+// (its negated exponent) does not fit int32. Returns a core error if that
+// mantissa exceeds 96 bits or v's scale exceeds 28.
 func NewFeeFromDecimalRounded(
 	v decimal.Decimal,
 	scale uint32,
