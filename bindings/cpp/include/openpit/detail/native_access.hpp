@@ -28,9 +28,11 @@ namespace openpit::detail {
 // explicitly trusted SDK types may cross the native boundary.
 class NativeAccess final {
  private:
+  // The Native chain (Function::operator(), GetOperation::Invoke, Get,
+  // GetImpl) has no conditional noexcept: MSVC 14.51 crashes with C1001 on
+  // it, and nothing reads it.
   template <typename Wrapper>
-  [[nodiscard]] static constexpr auto GetImpl(
-      const Wrapper& wrapper, int) noexcept(noexcept(wrapper.Native()))
+  [[nodiscard]] static constexpr auto GetImpl(const Wrapper& wrapper, int)
       -> decltype(wrapper.Native()) {
     return wrapper.Native();
   }
@@ -48,9 +50,7 @@ class NativeAccess final {
   }
 
   template <typename Wrapper>
-  [[nodiscard]] static constexpr decltype(auto) Get(
-      const Wrapper& wrapper) noexcept(noexcept(NativeAccess::GetImpl(wrapper,
-                                                                      0))) {
+  [[nodiscard]] static constexpr decltype(auto) Get(const Wrapper& wrapper) {
     return NativeAccess::GetImpl(wrapper, 0);
   }
 
@@ -62,7 +62,7 @@ class NativeAccess final {
   struct GetOperation {
     template <typename Wrapper>
     [[nodiscard]] static constexpr decltype(auto) Invoke(
-        const Wrapper& wrapper) noexcept(noexcept(NativeAccess::Get(wrapper))) {
+        const Wrapper& wrapper) {
       return NativeAccess::Get(wrapper);
     }
   };
@@ -82,9 +82,8 @@ class NativeAccess final {
 
    private:
     template <typename... Arguments>
-    [[nodiscard]] constexpr decltype(auto) operator()(Arguments&&... arguments)
-        const noexcept(noexcept(
-            Operation::Invoke(std::forward<Arguments>(arguments)...))) {
+    [[nodiscard]] constexpr decltype(auto) operator()(
+        Arguments&&... arguments) const {
       return Operation::Invoke(std::forward<Arguments>(arguments)...);
     }
 

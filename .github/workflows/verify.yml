@@ -137,18 +137,27 @@ jobs:
         include:
           - name: linux-gcc
             os: ubuntu-22.04
+            cmake: "3.28"
             cc: gcc
             cxx: g++
           - name: linux-clang
             os: ubuntu-22.04
+            cmake: "3.28"
             cc: clang
             cxx: clang++
           - name: macos-appleclang
             os: macos-14
+            cmake: "3.28"
             cc: clang
             cxx: clang++
           - name: windows-msvc
             os: windows-2022
+            cmake: "3.28"
+          # windows-2025 ships Visual Studio 2026 since June 2026; the
+          # Visual Studio 18 2026 generator first ships in CMake 4.2.
+          - name: windows-msvc-2026
+            os: windows-2025
+            cmake: "4.2"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -168,13 +177,13 @@ jobs:
       - name: Setup CMake
         uses: jwlawson/actions-setup-cmake@v2
         with:
-          cmake-version: "3.28"
+          cmake-version: ${{ matrix.cmake }}
 
       - name: Setup just
         uses: extractions/setup-just@v3
 
       - name: Setup MSVC developer environment
-        if: matrix.os == 'windows-2022'
+        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -192,14 +201,14 @@ jobs:
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
       - name: Add LLVM to PATH (Windows)
-        if: matrix.os == 'windows-2022'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
 
       # clang-format ships a per-OS-divergent format from apt/brew, so pin one
       # wheel-packaged build across every runner to keep fmt-check deterministic.
       - name: Install pinned clang-format
-        if: ${{ matrix.os != 'windows-2022' }}
+        if: ${{ runner.os != 'Windows' }}
         shell: bash
         run: |
           pipx install "clang-format==${CI_CLANG_FORMAT}"
