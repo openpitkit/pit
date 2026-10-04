@@ -2,6 +2,9 @@
 -r checks/requirements.txt
 
 black
+# Pinned to CI_CLANG_FORMAT in .github/ci-versions.env: clang-format releases
+# disagree on layout, so fmt-cpp must run the same build locally as in CI.
+clang-format==22.1.5
 # Pinned: it renders every published documentation page, so an unpinned
 # release could change the published HTML without a change in this repository.
 markdown-it-py==4.2.0
