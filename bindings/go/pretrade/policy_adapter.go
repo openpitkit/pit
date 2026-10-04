@@ -50,24 +50,40 @@ type ClientExecutionReport interface {
 // ClientPreTradePolicy is a pre-trade policy written against client-owned
 // order and execution report types.
 //
-// Account adjustments use the standard SDK model type because the adjustment
-// payload routing does not carry a client-typed wrapper through the engine
-// callback path.
+// Order and Report hook arguments are the original caller-owned Go payload
+// objects recovered from ClientEngine, not views of engine memory. Their
+// lifetime follows the caller's types. Account adjustments use the standard
+// SDK model type because the adjustment payload routing does not carry a
+// client-typed wrapper through the engine callback path; that argument remains
+// a callback-scoped view of engine memory.
 // Any tx.Mutations value passed to a hook is valid only for that hook call; do
-// not retain it or use it after return, when Push returns
-// tx.ErrMutationsExpired.
+// not retain it or use it after return. Use after return is undefined.
 type ClientPreTradePolicy[Order ClientOrder, Report ClientExecutionReport] interface {
 	Close()
 	Name() string
 	PolicyGroupID() model.PolicyGroupID
+	// CheckPreTradeStart receives the original caller-owned Order payload, not
+	// an engine-memory view.
 	CheckPreTradeStart(Context, Order) []reject.Reject
+	// PerformPreTradeCheck receives the original caller-owned Order payload, not
+	// an engine-memory view.
 	PerformPreTradeCheck(Context, Order, tx.Mutations, Result) []reject.Reject
+	// ApplyExecutionReport receives the original caller-owned Report payload,
+	// not an engine-memory view.
 	ApplyExecutionReport(
 		PostTradeContext,
 		Report,
 		PostTradeAdjustments,
 		PostTradePnls,
 	) []reject.AccountBlock
+	// ApplyAccountAdjustment receives an engine-memory view valid only during
+	// this hook. Its string fields and model values derived from it, including
+	// nested values returned by Values(), can alias engine-owned memory.
+	// NewAccountAdjustmentFromValues(adjustment.Values()) is not an independent
+	// copy because its nested operation values keep those string views. To
+	// retain data, copy leaf values inside the hook: Asset(), Instrument(), and
+	// CollateralAsset() return independent param values, while scalar fields are
+	// values.
 	ApplyAccountAdjustment(
 		accountadjustment.Context,
 		param.AccountID,

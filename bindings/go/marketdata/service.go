@@ -326,10 +326,14 @@ func (s *Service) SetInstrumentTTL(instrumentID InstrumentID, ttl QuoteTTL) erro
 		instrumentID.Handle(),
 		ttl.Handle(),
 	)
-	if status == native.MarketDataRegisterStatusOk {
+	switch status {
+	case native.MarketDataRegisterStatusOk:
 		return nil
+	case native.MarketDataRegisterStatusUnknownInstrument:
+		return newUnknownInstrumentIDError(instrumentID)
+	default:
+		return fmt.Errorf("openpit_marketdata_service_set_instrument_ttl: unexpected status %d", status)
 	}
-	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // ClearInstrumentTTL removes the per-instrument TTL override for instrumentID,
@@ -341,10 +345,14 @@ func (s *Service) ClearInstrumentTTL(instrumentID InstrumentID) error {
 		return ErrServiceClosed
 	}
 	status := native.MarketDataServiceClearInstrumentTTL(s.handle, instrumentID.Handle())
-	if status == native.MarketDataRegisterStatusOk {
+	switch status {
+	case native.MarketDataRegisterStatusOk:
 		return nil
+	case native.MarketDataRegisterStatusUnknownInstrument:
+		return newUnknownInstrumentIDError(instrumentID)
+	default:
+		return fmt.Errorf("openpit_marketdata_service_clear_instrument_ttl: unexpected status %d", status)
 	}
-	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // SetAccountTTL sets a service-wide TTL override for all instruments when
@@ -422,10 +430,14 @@ func (s *Service) SetInstrumentAccountTTL(
 		accountID.Handle(),
 		ttl.Handle(),
 	)
-	if status == native.MarketDataRegisterStatusOk {
+	switch status {
+	case native.MarketDataRegisterStatusOk:
 		return nil
+	case native.MarketDataRegisterStatusUnknownInstrument:
+		return newUnknownInstrumentIDError(instrumentID)
+	default:
+		return fmt.Errorf("openpit_marketdata_service_set_instrument_account_ttl: unexpected status %d", status)
 	}
-	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // ClearInstrumentAccountTTL removes the per-instrument, per-account TTL
@@ -444,10 +456,14 @@ func (s *Service) ClearInstrumentAccountTTL(
 		instrumentID.Handle(),
 		accountID.Handle(),
 	)
-	if status == native.MarketDataRegisterStatusOk {
+	switch status {
+	case native.MarketDataRegisterStatusOk:
 		return nil
+	case native.MarketDataRegisterStatusUnknownInstrument:
+		return newUnknownInstrumentIDError(instrumentID)
+	default:
+		return fmt.Errorf("openpit_marketdata_service_clear_instrument_account_ttl: unexpected status %d", status)
 	}
-	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // SetInstrumentAccountGroupTTL sets a per-instrument, per-group TTL override.
@@ -473,10 +489,14 @@ func (s *Service) SetInstrumentAccountGroupTTL(
 		accountGroupID.Handle(),
 		ttl.Handle(),
 	)
-	if status == native.MarketDataRegisterStatusOk {
+	switch status {
+	case native.MarketDataRegisterStatusOk:
 		return nil
+	case native.MarketDataRegisterStatusUnknownInstrument:
+		return newUnknownInstrumentIDError(instrumentID)
+	default:
+		return fmt.Errorf("openpit_marketdata_service_set_instrument_account_group_ttl: unexpected status %d", status)
 	}
-	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // ClearInstrumentAccountGroupTTL removes the per-instrument, per-group TTL
@@ -501,10 +521,14 @@ func (s *Service) ClearInstrumentAccountGroupTTL(
 		instrumentID.Handle(),
 		accountGroupID.Handle(),
 	)
-	if status == native.MarketDataRegisterStatusOk {
+	switch status {
+	case native.MarketDataRegisterStatusOk:
 		return nil
+	case native.MarketDataRegisterStatusUnknownInstrument:
+		return newUnknownInstrumentIDError(instrumentID)
+	default:
+		return fmt.Errorf("openpit_marketdata_service_clear_instrument_account_group_ttl: unexpected status %d", status)
 	}
-	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // Clear clears the stored quote for instrumentID. It is a no-op if

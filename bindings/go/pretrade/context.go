@@ -47,9 +47,10 @@ func (c Context) IsDropCopy() bool {
 }
 
 // RecordDropCopyStartMutation registers an atomic start-stage mutation for the
-// current drop-copy operation. It returns an error outside an active drop-copy
-// callback. Apply tentative state before registering it; commit finalizes that
-// state, while rollback must reverse it even if commit was not reached.
+// current drop-copy operation. Called during the hook that received the
+// context, it returns an error when that hook's operation is not a drop copy.
+// Apply tentative state before registering it; commit finalizes that state,
+// while rollback must reverse it even if commit was not reached.
 func (c Context) RecordDropCopyStartMutation(commit, rollback func()) error {
 	return mutation.RecordDropCopyStartMutation(c.handle, commit, rollback)
 }

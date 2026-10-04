@@ -18,6 +18,8 @@
 package model
 
 import (
+	"bytes"
+	"runtime"
 	"testing"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -236,6 +238,207 @@ func TestExecutionReportFillFieldRoundTrip(t *testing.T) {
 
 	fill.Reset()
 	assertExecutionReportFillUnset(t, fill)
+}
+
+func TestExecutionReportLockOwnerCopyUnsetKeepsReportLock(t *testing.T) {
+	fixture := newExecutionReportFixture(t)
+	want := newFixtureLock(t, fixture.lockPrice)
+	report := func() ExecutionReport {
+		fill := NewExecutionReportFill()
+		fill.SetLock(want)
+		value := NewExecutionReport()
+		value.SetFill(fill)
+		return value
+	}()
+
+	fill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill().IsSet() = false, want true")
+	}
+	fill.UnsetLock()
+
+	reportFill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill().IsSet() = false after copy UnsetLock, want true")
+	}
+	if got := reportFill.Lock(); !bytes.Equal(got, want) {
+		t.Fatalf("report Fill().Lock() = %v, want %v", got, want)
+	}
+}
+
+func TestExecutionReportLockOwnerSetFillIsNotAliased(t *testing.T) {
+	fixture := newExecutionReportFixture(t)
+	want := newFixtureLock(t, fixture.lockPrice)
+	other := newFixtureLock(t, fixture.tradePrice)
+	fill := NewExecutionReportFill()
+	fill.SetLock(want)
+	report := NewExecutionReport()
+	report.SetFill(fill)
+
+	fill.UnsetLock()
+	fill.SetLock(other)
+	runtime.GC()
+
+	reportFill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill().IsSet() = false, want true")
+	}
+	if got := reportFill.Lock(); !bytes.Equal(got, want) {
+		t.Fatalf("report Fill().Lock() = %v, want %v", got, want)
+	}
+}
+
+func TestExecutionReportLockOwnerValueCopyOwnsHandle(t *testing.T) {
+	fixture := newExecutionReportFixture(t)
+	want := newFixtureLock(t, fixture.lockPrice)
+	a := NewExecutionReportFill()
+	a.SetLock(want)
+	b := a
+
+	a.UnsetLock()
+	runtime.GC()
+	if got := b.Lock(); !bytes.Equal(got, want) {
+		t.Fatalf("copied Fill.Lock() = %v, want %v", got, want)
+	}
+	b.UnsetLock()
+	runtime.GC()
+}
+
+func TestExecutionReportLockOwnerFillSharesReportOwner(t *testing.T) {
+	fixture := newExecutionReportFixture(t)
+	fill := NewExecutionReportFill()
+	fill.SetLock(newFixtureLock(t, fixture.lockPrice))
+	report := NewExecutionReport()
+	report.SetFill(fill)
+
+	reportFill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill().IsSet() = false, want true")
+	}
+	if report.retainFillLock == nil {
+		t.Fatal("report lock owner = nil, want non-nil")
+	}
+	if reportFill.retainLock != report.retainFillLock {
+		t.Fatal("Fill() lock owner differs from report lock owner")
+	}
+}
+
+func TestExecutionReportLockOwnerSetFillClonesBorrowedLock(t *testing.T) {
+	fixture := newExecutionReportFixture(t)
+	fill := NewExecutionReportFill()
+	fill.SetLock(newFixtureLock(t, fixture.lockPrice))
+	src := NewExecutionReport()
+	src.SetFill(fill)
+	if src.retainFillLock == nil || src.retainFillLock != fill.retainLock {
+		t.Fatal("SetFill() did not share the fill's lock owner")
+	}
+	srcFill, ok := src.Fill().Get()
+	if !ok {
+		t.Fatal("source Fill().IsSet() = false, want true")
+	}
+	if native.ExecutionReportFillGetLock(srcFill.value) != native.ExecutionReportFillGetLock(fill.value) {
+		t.Fatal("SetFill() cloned a lock that already has an owner")
+	}
+
+	rebuilt := NewExecutionReportFromHandle(src.Handle())
+	clone := NewExecutionReportFromValues(rebuilt.Values())
+	if clone.retainFillLock == nil {
+		t.Fatal("clone lock owner = nil, want non-nil")
+	}
+	if clone.retainFillLock == src.retainFillLock {
+		t.Fatal("clone shares the source report's lock owner")
+	}
+	cloneFill, ok := clone.Fill().Get()
+	if !ok {
+		t.Fatal("clone Fill().IsSet() = false, want true")
+	}
+	if native.ExecutionReportFillGetLock(cloneFill.value) == native.ExecutionReportFillGetLock(srcFill.value) {
+		t.Fatal("clone shares the source report's native lock")
+	}
+	if native.ExecutionReportFillGetLock(cloneFill.value) != clone.retainFillLock.handle {
+		t.Fatal("clone stores a lock its owner does not own")
+	}
+	if got, want := cloneFill.Lock(), srcFill.Lock(); !bytes.Equal(got, want) {
+		t.Fatalf("clone Fill().Lock() = %v, want %v", got, want)
+	}
+	runtime.KeepAlive(src)
+}
+
+func TestExecutionReportLockOwnerViewUpdatesReportOwner(t *testing.T) {
+	fixture := newExecutionReportFixture(t)
+	want := newFixtureLock(t, fixture.lockPrice)
+	report := NewExecutionReport()
+	view := report.EnsureFillView()
+
+	view.SetLock(want)
+	if report.retainFillLock == nil {
+		t.Fatal("report lock owner = nil after view SetLock, want non-nil")
+	}
+	fill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill().IsSet() = false after view SetLock, want true")
+	}
+	if fill.retainLock != report.retainFillLock {
+		t.Fatal("Fill() lock owner differs from report owner after view SetLock")
+	}
+
+	view.UnsetLock()
+	if report.retainFillLock != nil {
+		t.Fatal("report lock owner != nil after view UnsetLock")
+	}
+	view.SetLock(want)
+	view.Reset()
+	if report.retainFillLock != nil {
+		t.Fatal("report lock owner != nil after view Reset")
+	}
+}
+
+func TestExecutionReportLockOwnerEngineOwnedLockIsNotDestroyed(t *testing.T) {
+	fixture := newExecutionReportFixture(t)
+	handle := native.CreatePretradePreTradeLock()
+	defer native.DestroyPretradePreTradeLock(handle)
+	if err := native.PretradePreTradeLockPush(
+		handle,
+		native.DefaultPolicyGroupID,
+		fixture.lockPrice.Handle(),
+	); err != nil {
+		t.Fatalf("PretradePreTradeLockPush error = %v", err)
+	}
+	want := executionReportFillLockBytes(handle)
+
+	nativeFill := native.NewExecutionReportFill()
+	native.ExecutionReportFillSetLock(&nativeFill, handle)
+	unsetFill := newExecutionReportFill(nativeFill)
+	unsetFill.UnsetLock()
+	setFill := newExecutionReportFill(nativeFill)
+	setFill.SetLock(newFixtureLock(t, fixture.tradePrice))
+
+	nativeReport := native.NewExecutionReport()
+	native.ExecutionReportSetFill(&nativeReport, nativeFill)
+	report := NewExecutionReportFromHandle(nativeReport)
+	if report.retainFillLock != nil {
+		t.Fatal("report from native handle has a Go lock owner")
+	}
+	fill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill().IsSet() = false for native report, want true")
+	}
+	if fill.retainLock != nil {
+		t.Fatal("fill from native report has a Go lock owner")
+	}
+	view := report.EnsureFillView()
+	view.UnsetLock()
+	report = NewExecutionReportFromHandle(nativeReport)
+	view = report.EnsureFillView()
+	view.SetLock(newFixtureLock(t, fixture.tradePrice))
+
+	// A lock Go wrongly destroyed is freed memory that the allocations above
+	// reuse, so its bytes no longer match.
+	if got := executionReportFillLockBytes(handle); !bytes.Equal(got, want) {
+		t.Fatalf("engine-owned lock = %v, want %v", got, want)
+	}
+	runtime.KeepAlive(setFill)
+	runtime.KeepAlive(report)
 }
 
 func TestExecutionReportPositionImpactFieldRoundTrip(t *testing.T) {

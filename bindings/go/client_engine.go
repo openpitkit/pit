@@ -137,9 +137,10 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyDropCopy(
 func (e *ClientEngine[Order, Report, Adjustment]) ApplyExecutionReport(
 	report Report,
 ) (PostTradeResult, error) {
-	engineReport, payload := newClientReportPayload(report)
+	engineReport, payload, sourceReport := newClientReportPayload(report)
 	defer payload.release()
 	result, err := e.engine.ApplyExecutionReport(engineReport)
+	runtime.KeepAlive(sourceReport)
 	runtime.KeepAlive(report)
 	return result, err
 }
@@ -270,12 +271,12 @@ func newClientOrderPayload[Order pretrade.ClientOrder](
 
 func newClientReportPayload[Report pretrade.ClientExecutionReport](
 	report Report,
-) (model.ExecutionReport, *clientPayloadHandle) {
+) (model.ExecutionReport, *clientPayloadHandle, model.ExecutionReport) {
 	engineReport := report.EngineExecutionReport()
 	nativeReport := engineReport.Handle()
 	payload := newClientPayloadHandle(report)
 	native.ExecutionReportSetUserData(&nativeReport, callback.NewUserDataFromHandle(payload.handle))
-	return model.NewExecutionReportFromHandle(nativeReport), payload
+	return model.NewExecutionReportFromHandle(nativeReport), payload, engineReport
 }
 
 func newClientAdjustmentPayloads[Adjustment clientAccountAdjustment](

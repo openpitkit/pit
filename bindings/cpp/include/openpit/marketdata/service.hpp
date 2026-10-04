@@ -361,19 +361,21 @@ class Service {
   // TTL overrides
 
   // Updates the instrument-level TTL for an already-registered instrument.
+  // Throws `openpit::Error` on an empty service handle.
   [[nodiscard]] RegisterStatus SetInstrumentTtl(InstrumentId instrumentId,
                                                 const QuoteTtl& ttl) {
-    return static_cast<RegisterStatus>(
-        openpit_marketdata_service_set_instrument_ttl(
-            m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(ttl)));
+    return MapPush(openpit_marketdata_service_set_instrument_ttl(
+                       m_handle.Get(), ::openpit::detail::Native(instrumentId),
+                       ::openpit::detail::Native(ttl)),
+                   nullptr, "market-data service handle is empty");
   }
 
   // Reverts the instrument-level TTL for `instrumentId` back to "inherit".
+  // Throws `openpit::Error` on an empty service handle.
   [[nodiscard]] RegisterStatus ClearInstrumentTtl(InstrumentId instrumentId) {
-    return static_cast<RegisterStatus>(
-        openpit_marketdata_service_clear_instrument_ttl(
-            m_handle.Get(), ::openpit::detail::Native(instrumentId)));
+    return MapPush(openpit_marketdata_service_clear_instrument_ttl(
+                       m_handle.Get(), ::openpit::detail::Native(instrumentId)),
+                   nullptr, "market-data service handle is empty");
   }
 
   // Pins the service-level TTL for `accountId`.
@@ -405,45 +407,50 @@ class Service {
   }
 
   // Pins the highest-priority instrument x account TTL cell.
+  // Throws `openpit::Error` on an empty service handle.
   [[nodiscard]] RegisterStatus SetInstrumentAccountTtl(
       InstrumentId instrumentId, param::AccountId accountId,
       const QuoteTtl& ttl) {
-    return static_cast<RegisterStatus>(
-        openpit_marketdata_service_set_instrument_account_ttl(
-            m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(accountId),
-            ::openpit::detail::Native(ttl)));
+    return MapPush(openpit_marketdata_service_set_instrument_account_ttl(
+                       m_handle.Get(), ::openpit::detail::Native(instrumentId),
+                       ::openpit::detail::Native(accountId),
+                       ::openpit::detail::Native(ttl)),
+                   nullptr, "market-data service handle is empty");
   }
 
   // Reverts the instrument x account TTL cell back to "inherit".
+  // Throws `openpit::Error` on an empty service handle.
   [[nodiscard]] RegisterStatus ClearInstrumentAccountTtl(
       InstrumentId instrumentId, param::AccountId accountId) {
-    return static_cast<RegisterStatus>(
-        openpit_marketdata_service_clear_instrument_account_ttl(
-            m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(accountId)));
+    return MapPush(openpit_marketdata_service_clear_instrument_account_ttl(
+                       m_handle.Get(), ::openpit::detail::Native(instrumentId),
+                       ::openpit::detail::Native(accountId)),
+                   nullptr, "market-data service handle is empty");
   }
 
   // Pins the instrument x group TTL cell. Pass `param::DefaultAccountGroup` for
   // the instrument's default-group cell.
+  // Throws `openpit::Error` on an empty service handle.
   [[nodiscard]] RegisterStatus SetInstrumentAccountGroupTtl(
       InstrumentId instrumentId, param::AccountGroupId accountGroupId,
       const QuoteTtl& ttl) {
-    return static_cast<RegisterStatus>(
-        openpit_marketdata_service_set_instrument_account_group_ttl(
-            m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(accountGroupId),
-            ::openpit::detail::Native(ttl)));
+    return MapPush(openpit_marketdata_service_set_instrument_account_group_ttl(
+                       m_handle.Get(), ::openpit::detail::Native(instrumentId),
+                       ::openpit::detail::Native(accountGroupId),
+                       ::openpit::detail::Native(ttl)),
+                   nullptr, "market-data service handle is empty");
   }
 
   // Reverts the instrument x group TTL cell back to "inherit". Pass
   // `param::DefaultAccountGroup` for the instrument's default-group cell.
+  // Throws `openpit::Error` on an empty service handle.
   [[nodiscard]] RegisterStatus ClearInstrumentAccountGroupTtl(
       InstrumentId instrumentId, param::AccountGroupId accountGroupId) {
-    return static_cast<RegisterStatus>(
+    return MapPush(
         openpit_marketdata_service_clear_instrument_account_group_ttl(
             m_handle.Get(), ::openpit::detail::Native(instrumentId),
-            ::openpit::detail::Native(accountGroupId)));
+            ::openpit::detail::Native(accountGroupId)),
+        nullptr, "market-data service handle is empty");
   }
 
  private:
@@ -511,7 +518,7 @@ class Service {
     return result;
   }
 
-  // Maps a push-family status, throwing on the `Error` boundary case.
+  // Maps an update status, throwing on the `Error` boundary case.
   [[nodiscard]] static RegisterStatus MapPush(
       OpenPitMarketDataRegisterStatus status, OpenPitSharedString* error,
       const char* fallback) {

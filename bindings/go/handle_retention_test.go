@@ -18,14 +18,18 @@
 package openpit
 
 import (
+	"bytes"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 )
@@ -151,6 +155,71 @@ func TestHandleRetentionPolicyBuilders(t *testing.T) {
 }
 
 func TestHandleRetentionModelChildren(t *testing.T) {
+	t.Run("execution report fill lock", func(t *testing.T) {
+		price, err := param.NewPriceFromString("124")
+		if err != nil {
+			t.Fatalf("NewPriceFromString() error = %v", err)
+		}
+		lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{
+			{PolicyGroupID: model.DefaultPolicyGroupID, Price: price},
+		})
+		if err != nil {
+			t.Fatalf("NewLockFromEntries() error = %v", err)
+		}
+		want := lock.Bytes()
+		fill := func() model.ExecutionReportFill {
+			fill := model.NewExecutionReportFill()
+			fill.SetLock(want)
+			report := model.NewExecutionReport()
+			report.SetFill(fill)
+			value, ok := report.Fill().Get()
+			if !ok {
+				t.Fatal("Fill().IsSet() = false, want true")
+			}
+			return value
+		}()
+
+		forceHandleRetentionFinalizers(t)
+		overwriteHandleRetentionLocks(t)
+		if got := fill.Lock(); !bytes.Equal(got, want) {
+			t.Fatalf("Fill().Lock() after report GC = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("execution report clone from borrowed fill lock", func(t *testing.T) {
+		price, err := param.NewPriceFromString("124")
+		if err != nil {
+			t.Fatalf("NewPriceFromString() error = %v", err)
+		}
+		lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{
+			{PolicyGroupID: model.DefaultPolicyGroupID, Price: price},
+		})
+		if err != nil {
+			t.Fatalf("NewLockFromEntries() error = %v", err)
+		}
+		want := lock.Bytes()
+		clone := func() model.ExecutionReport {
+			fill := model.NewExecutionReportFill()
+			fill.SetLock(want)
+			src := model.NewExecutionReport()
+			src.SetFill(fill)
+			rebuilt := model.NewExecutionReportFromHandle(src.Handle())
+			clone := model.NewExecutionReportFromValues(rebuilt.Values())
+			runtime.KeepAlive(src)
+			return clone
+		}()
+
+		forceHandleRetentionFinalizers(t)
+		overwriteHandleRetentionLocks(t)
+		fill, ok := clone.Fill().Get()
+		if !ok {
+			t.Fatal("clone Fill().IsSet() = false, want true")
+		}
+		if got := fill.Lock(); !bytes.Equal(got, want) {
+			t.Fatalf("clone Fill().Lock() after source GC = %v, want %v", got, want)
+		}
+	})
+
 	t.Run("order operation", func(t *testing.T) {
 		operation := newEphemeralOrderOperation(t)
 		forceHandleRetentionFinalizers(t)
@@ -188,6 +257,112 @@ func TestHandleRetentionModelChildren(t *testing.T) {
 		assertHandleRetentionAsset(t, operation.CollateralAsset(), "AUD")
 		runtime.KeepAlive(replacements)
 	})
+}
+
+func TestHandleRetentionAccessorLastReceiver(t *testing.T) {
+	const (
+		readers     = 64
+		assetLength = 64 * 1024
+	)
+
+	tests := []struct {
+		name string
+		read func(param.Asset, func()) optional.Option[param.Asset]
+	}{
+		{
+			name: "value_receiver",
+			read: func(asset param.Asset, wait func()) optional.Option[param.Asset] {
+				margin := model.NewOrderMargin()
+				margin.SetCollateralAsset(asset)
+				wait()
+				return margin.CollateralAsset()
+			},
+		},
+		{
+			name: "view",
+			read: func(asset param.Asset, wait func()) optional.Option[param.Asset] {
+				order := model.NewOrder()
+				view := order.EnsureMarginView()
+				view.SetCollateralAsset(asset)
+				wait()
+				return view.CollateralAsset()
+			},
+		},
+		{
+			name: "parent_to_child",
+			read: func(asset param.Asset, wait func()) optional.Option[param.Asset] {
+				operation := model.NewExecutionReportOperation()
+				operation.SetInstrument(param.NewInstrument(asset, asset))
+				report := model.NewExecutionReport()
+				report.SetOperation(operation)
+				wait()
+				child, ok := report.Operation().Get()
+				if !ok {
+					return optional.None[param.Asset]()
+				}
+				instrument, ok := child.Instrument().Get()
+				if !ok {
+					return optional.None[param.Asset]()
+				}
+				return optional.Some(instrument.UnderlyingAsset)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			want := strings.Repeat("A", assetLength)
+			overwrite := strings.Repeat("Z", assetLength)
+			start := make(chan struct{})
+			results := make(chan string, readers)
+			var ready sync.WaitGroup
+			ready.Add(readers)
+			wait := func() {
+				ready.Done()
+				<-start
+			}
+			for range readers {
+				asset := builtinTestAsset(t, want)
+				go func(asset param.Asset) {
+					value, ok := test.read(asset, wait).Get()
+					if !ok {
+						results <- ""
+						return
+					}
+					got := strings.Clone(value.Handle())
+					runtime.KeepAlive(value)
+					results <- got
+				}(asset)
+			}
+
+			ready.Wait()
+			close(start)
+			replacementsDone := make(chan []*native.String, 1)
+			go func() {
+				replacements := make([]*native.String, 1024)
+				for i := range replacements {
+					replacements[i] = native.NewString(overwrite)
+				}
+				replacementsDone <- replacements
+			}()
+			forceHandleRetentionFinalizers(t)
+			replacements := <-replacementsDone
+			for range readers {
+				if got := <-results; got != want {
+					prefix := got
+					if len(prefix) > 64 {
+						prefix = prefix[:64]
+					}
+					t.Fatalf(
+						"accessor prefix = %q, length = %d, want A bytes",
+						prefix,
+						len(got),
+					)
+				}
+			}
+			runtime.KeepAlive(replacements)
+		})
+	}
 }
 
 func newEphemeralRateLimitBuilder(t *testing.T) *policies.RateLimitReadyBuilder {
@@ -406,9 +581,12 @@ func forceHandleRetentionFinalizers(t *testing.T) {
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
 
-	// The second sentinel waits for the first sentinel's entire finalizer
-	// batch to finish, regardless of the order within that batch.
-	for i := 0; i < 2; i++ {
+	// Finalizers for objects unreachable before this call have run on return.
+	// GC completes sweeping, but runFinalizers can take a LIFO batch mid-sweep.
+	// Each sentinel is allocated only after the previous one's finalizer runs.
+	// By the second sentinel, all pre-call finalizers are queued; the third
+	// must be in a later batch, so the second's entire batch has finished.
+	for i := 0; i < 3; i++ {
 		finalized := make(chan struct{})
 		sentinel := &handleRetentionFinalizerSentinel{value: [16]byte{1}}
 		runtime.SetFinalizer(sentinel, func(*handleRetentionFinalizerSentinel) {
@@ -442,4 +620,12 @@ func overwriteHandleRetentionAssets(t *testing.T, lengths ...int) []param.Asset 
 		}
 	}
 	return replacements
+}
+
+func overwriteHandleRetentionLocks(t *testing.T) {
+	t.Helper()
+	for range 32 {
+		lock := native.CreatePretradePreTradeLock()
+		t.Cleanup(func() { native.DestroyPretradePreTradeLock(lock) })
+	}
 }

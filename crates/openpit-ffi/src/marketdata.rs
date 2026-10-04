@@ -239,7 +239,8 @@ pub enum OpenPitMarketDataGetStatus {
     /// group is unknown and no bucket may be selected on its behalf.
     AccountGroupResolutionFailed = 4,
     /// The supplied quote-resolution selector is invalid, or `service`,
-    /// `resolve_account_group`, or `out_quote` is null.
+    /// `resolve_account_group`, or `out_quote` is null, or the core reported a
+    /// market-data error this ABI does not map.
     Error = 255,
 }
 
@@ -263,8 +264,9 @@ pub enum OpenPitMarketDataRegisterStatus {
     DuplicateInstrument = 3,
     /// The supplied instrument id is not registered with the service.
     UnknownInstrument = 4,
-    /// A boundary failure occurred (null pointer or an invalid payload); when
-    /// `out_error` is not null, a caller-owned error string was written.
+    /// A boundary failure occurred (null pointer or an invalid payload).
+    /// For functions that take `out_error`, a caller-owned error string was
+    /// written when `out_error` is not null.
     Error = 5,
     /// A targeted push (`push_for`) was called with both the account list and
     /// the group list empty.
@@ -779,17 +781,20 @@ pub extern "C" fn openpit_marketdata_service_clear_account_group_ttl(
 ///
 /// Status:
 /// - `Ok`: updated; the new TTL takes effect on the next read;
-/// - `UnknownInstrument`: `instrument_id` is not registered.
+/// - `UnknownInstrument`: `instrument_id` is not registered;
+/// - `Error`: `service` is null.
 ///
 /// Contract:
-/// - `service` must be a valid non-null handle; passing null aborts the call.
+/// - A non-null `service` must be a valid handle; passing null returns `Error`.
 #[no_mangle]
 pub extern "C" fn openpit_marketdata_service_set_instrument_ttl(
     service: *const OpenPitMarketDataService,
     instrument_id: OpenPitMarketDataInstrumentId,
     ttl: OpenPitMarketDataQuoteTtl,
 ) -> OpenPitMarketDataRegisterStatus {
-    assert!(!service.is_null(), "market-data service must be non-null");
+    if service.is_null() {
+        return OpenPitMarketDataRegisterStatus::Error;
+    }
     match unsafe { &*service }
         .handle
         .set_instrument_ttl(InstrumentId::new(instrument_id), ttl.to_quote_ttl())
@@ -803,16 +808,19 @@ pub extern "C" fn openpit_marketdata_service_set_instrument_ttl(
 ///
 /// Status:
 /// - `Ok`: cleared;
-/// - `UnknownInstrument`: `instrument_id` is not registered.
+/// - `UnknownInstrument`: `instrument_id` is not registered;
+/// - `Error`: `service` is null.
 ///
 /// Contract:
-/// - `service` must be a valid non-null handle; passing null aborts the call.
+/// - A non-null `service` must be a valid handle; passing null returns `Error`.
 #[no_mangle]
 pub extern "C" fn openpit_marketdata_service_clear_instrument_ttl(
     service: *const OpenPitMarketDataService,
     instrument_id: OpenPitMarketDataInstrumentId,
 ) -> OpenPitMarketDataRegisterStatus {
-    assert!(!service.is_null(), "market-data service must be non-null");
+    if service.is_null() {
+        return OpenPitMarketDataRegisterStatus::Error;
+    }
     match unsafe { &*service }
         .handle
         .clear_instrument_ttl(InstrumentId::new(instrument_id))
@@ -832,10 +840,11 @@ pub extern "C" fn openpit_marketdata_service_clear_instrument_ttl(
 ///
 /// Status:
 /// - `Ok`: pinned;
-/// - `UnknownInstrument`: `instrument_id` is not registered.
+/// - `UnknownInstrument`: `instrument_id` is not registered;
+/// - `Error`: `service` is null.
 ///
 /// Contract:
-/// - `service` must be a valid non-null handle; passing null aborts the call.
+/// - A non-null `service` must be a valid handle; passing null returns `Error`.
 #[no_mangle]
 pub extern "C" fn openpit_marketdata_service_set_instrument_account_ttl(
     service: *const OpenPitMarketDataService,
@@ -843,7 +852,9 @@ pub extern "C" fn openpit_marketdata_service_set_instrument_account_ttl(
     account_id: OpenPitParamAccountId,
     ttl: OpenPitMarketDataQuoteTtl,
 ) -> OpenPitMarketDataRegisterStatus {
-    assert!(!service.is_null(), "market-data service must be non-null");
+    if service.is_null() {
+        return OpenPitMarketDataRegisterStatus::Error;
+    }
     match unsafe { &*service }.handle.set_instrument_account_ttl(
         InstrumentId::new(instrument_id),
         AccountId::from_u64(account_id),
@@ -859,17 +870,20 @@ pub extern "C" fn openpit_marketdata_service_set_instrument_account_ttl(
 ///
 /// Status:
 /// - `Ok`: cleared;
-/// - `UnknownInstrument`: `instrument_id` is not registered.
+/// - `UnknownInstrument`: `instrument_id` is not registered;
+/// - `Error`: `service` is null.
 ///
 /// Contract:
-/// - `service` must be a valid non-null handle; passing null aborts the call.
+/// - A non-null `service` must be a valid handle; passing null returns `Error`.
 #[no_mangle]
 pub extern "C" fn openpit_marketdata_service_clear_instrument_account_ttl(
     service: *const OpenPitMarketDataService,
     instrument_id: OpenPitMarketDataInstrumentId,
     account_id: OpenPitParamAccountId,
 ) -> OpenPitMarketDataRegisterStatus {
-    assert!(!service.is_null(), "market-data service must be non-null");
+    if service.is_null() {
+        return OpenPitMarketDataRegisterStatus::Error;
+    }
     match unsafe { &*service }.handle.clear_instrument_account_ttl(
         InstrumentId::new(instrument_id),
         AccountId::from_u64(account_id),
@@ -889,10 +903,11 @@ pub extern "C" fn openpit_marketdata_service_clear_instrument_account_ttl(
 ///
 /// Status:
 /// - `Ok`: pinned;
-/// - `UnknownInstrument`: `instrument_id` is not registered.
+/// - `UnknownInstrument`: `instrument_id` is not registered;
+/// - `Error`: `service` is null.
 ///
 /// Contract:
-/// - `service` must be a valid non-null handle; passing null aborts the call.
+/// - A non-null `service` must be a valid handle; passing null returns `Error`.
 #[no_mangle]
 pub extern "C" fn openpit_marketdata_service_set_instrument_account_group_ttl(
     service: *const OpenPitMarketDataService,
@@ -900,7 +915,9 @@ pub extern "C" fn openpit_marketdata_service_set_instrument_account_group_ttl(
     account_group_id: OpenPitParamAccountGroupId,
     ttl: OpenPitMarketDataQuoteTtl,
 ) -> OpenPitMarketDataRegisterStatus {
-    assert!(!service.is_null(), "market-data service must be non-null");
+    if service.is_null() {
+        return OpenPitMarketDataRegisterStatus::Error;
+    }
     match unsafe { &*service }
         .handle
         .set_instrument_account_group_ttl(
@@ -921,17 +938,20 @@ pub extern "C" fn openpit_marketdata_service_set_instrument_account_group_ttl(
 ///
 /// Status:
 /// - `Ok`: cleared;
-/// - `UnknownInstrument`: `instrument_id` is not registered.
+/// - `UnknownInstrument`: `instrument_id` is not registered;
+/// - `Error`: `service` is null.
 ///
 /// Contract:
-/// - `service` must be a valid non-null handle; passing null aborts the call.
+/// - A non-null `service` must be a valid handle; passing null returns `Error`.
 #[no_mangle]
 pub extern "C" fn openpit_marketdata_service_clear_instrument_account_group_ttl(
     service: *const OpenPitMarketDataService,
     instrument_id: OpenPitMarketDataInstrumentId,
     account_group_id: OpenPitParamAccountGroupId,
 ) -> OpenPitMarketDataRegisterStatus {
-    assert!(!service.is_null(), "market-data service must be non-null");
+    if service.is_null() {
+        return OpenPitMarketDataRegisterStatus::Error;
+    }
     match unsafe { &*service }
         .handle
         .clear_instrument_account_group_ttl(
@@ -1189,8 +1209,9 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
 ///   "the account has no group", because that would silently move the read onto
 ///   the default-group bucket;
 /// - `Error`: `resolution` is not one of the documented selector constants, or
-///   `service`, `resolve_account_group`, or `out_quote` is null; `out_quote` is
-///   left untouched.
+///   `service`, `resolve_account_group`, or `out_quote` is null, or the core
+///   reported a market-data error this ABI does not map; `out_quote` is left
+///   untouched.
 ///
 /// Contract:
 /// - `service`, `resolve_account_group`, and `out_quote` must be valid non-null
@@ -1249,9 +1270,9 @@ pub extern "C" fn openpit_marketdata_service_get(
             unsafe { *out_quote = OpenPitMarketDataQuote::from_quote(quote) };
             OpenPitMarketDataGetStatus::QuoteExpired
         }
-        // `MarketDataError` is `#[non_exhaustive]`; treat any future variant as
-        // "no usable quote available".
-        Err(_) => OpenPitMarketDataGetStatus::Unavailable,
+        // `MarketDataError` is `#[non_exhaustive]`; a variant this ABI does not
+        // map is reported as a failure, never as "no usable quote".
+        Err(_) => OpenPitMarketDataGetStatus::Error,
     }
 }
 
@@ -1291,6 +1312,7 @@ pub extern "C" fn openpit_marketdata_service_resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account_group_id::OPENPIT_DEFAULT_ACCOUNT_GROUP;
     use crate::string::{openpit_destroy_shared_string, OpenPitSharedString};
     use crate::OpenPitStringView;
 
@@ -1726,6 +1748,61 @@ mod tests {
         assert_eq!(status, OpenPitMarketDataRegisterStatus::Error);
         assert!(!err.is_null());
         openpit_destroy_shared_string(err);
+    }
+
+    #[test]
+    fn set_instrument_ttl_null_service_returns_error() {
+        let status = openpit_marketdata_service_set_instrument_ttl(
+            std::ptr::null(),
+            1,
+            openpit_create_marketdata_quote_ttl_infinite(),
+        );
+        assert_eq!(status, OpenPitMarketDataRegisterStatus::Error);
+    }
+
+    #[test]
+    fn clear_instrument_ttl_null_service_returns_error() {
+        let status = openpit_marketdata_service_clear_instrument_ttl(std::ptr::null(), 1);
+        assert_eq!(status, OpenPitMarketDataRegisterStatus::Error);
+    }
+
+    #[test]
+    fn set_instrument_account_ttl_null_service_returns_error() {
+        let status = openpit_marketdata_service_set_instrument_account_ttl(
+            std::ptr::null(),
+            1,
+            1,
+            openpit_create_marketdata_quote_ttl_infinite(),
+        );
+        assert_eq!(status, OpenPitMarketDataRegisterStatus::Error);
+    }
+
+    #[test]
+    fn clear_instrument_account_ttl_null_service_returns_error() {
+        let status =
+            openpit_marketdata_service_clear_instrument_account_ttl(std::ptr::null(), 1, 1);
+        assert_eq!(status, OpenPitMarketDataRegisterStatus::Error);
+    }
+
+    #[test]
+    fn set_instrument_account_group_ttl_null_service_returns_error() {
+        let status = openpit_marketdata_service_set_instrument_account_group_ttl(
+            std::ptr::null(),
+            1,
+            OPENPIT_DEFAULT_ACCOUNT_GROUP,
+            openpit_create_marketdata_quote_ttl_infinite(),
+        );
+        assert_eq!(status, OpenPitMarketDataRegisterStatus::Error);
+    }
+
+    #[test]
+    fn clear_instrument_account_group_ttl_null_service_returns_error() {
+        let status = openpit_marketdata_service_clear_instrument_account_group_ttl(
+            std::ptr::null(),
+            1,
+            OPENPIT_DEFAULT_ACCOUNT_GROUP,
+        );
+        assert_eq!(status, OpenPitMarketDataRegisterStatus::Error);
     }
 
     #[test]

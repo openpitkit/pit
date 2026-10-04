@@ -25,6 +25,10 @@ import (
 
 // PostTradeContext carries engine-provided context passed to the
 // ApplyExecutionReport policy callback.
+//
+// The context is non-owning and callback-scoped: it borrows engine state that
+// is valid only for the duration of the hook that received it. Retaining the
+// context or using it after that hook has returned is undefined.
 type PostTradeContext struct{ handle native.PostTradeContext }
 
 // NewPostTradeContextFromHandle creates a PostTradeContext from a native handle.

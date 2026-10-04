@@ -18,6 +18,8 @@
 package model
 
 import (
+	"runtime"
+
 	"go.openpit.dev/openpit/internal/convert"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
@@ -305,7 +307,9 @@ func (o *OrderOperation) UnsetTradeAmount() {
 
 // Instrument returns the optional instrument.
 func (o OrderOperation) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromHandle(native.OrderOperationGetInstrument(o.value))
+	value := param.NewInstrumentFromHandle(native.OrderOperationGetInstrument(o.value))
+	runtime.KeepAlive(o.retainInstrument)
+	return value
 }
 
 // SetInstrument sets the instrument.
@@ -404,7 +408,9 @@ func (v *OrderOperationView) UnsetTradeAmount() {
 
 // Instrument returns the optional instrument from the view.
 func (v OrderOperationView) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromHandle(native.OrderOperationGetInstrument(*v.ref))
+	value := param.NewInstrumentFromHandle(native.OrderOperationGetInstrument(*v.ref))
+	runtime.KeepAlive(v.retainInstrument)
+	return value
 }
 
 // SetInstrument sets the instrument on the view.
@@ -698,7 +704,9 @@ func (m *OrderMargin) setValues(values OrderMarginValues) {
 
 // CollateralAsset returns the optional collateral asset.
 func (m OrderMargin) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromHandle(native.OrderMarginGetCollateralAsset(m.value))
+	value := param.NewAssetFromHandle(native.OrderMarginGetCollateralAsset(m.value))
+	runtime.KeepAlive(m.retainCollateralAsset)
+	return value
 }
 
 // SetCollateralAsset sets the collateral asset.
@@ -764,7 +772,9 @@ func (v *OrderMarginView) Reset() {
 
 // CollateralAsset returns the optional collateral asset from the view.
 func (v OrderMarginView) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromHandle(native.OrderMarginGetCollateralAsset(*v.ref))
+	value := param.NewAssetFromHandle(native.OrderMarginGetCollateralAsset(*v.ref))
+	runtime.KeepAlive(v.retainCollateralAsset)
+	return value
 }
 
 // SetCollateralAsset sets the collateral asset on the view.

@@ -18,7 +18,6 @@
 package tx
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -43,32 +42,12 @@ func TestMutationsPushRequiresRollbackCallback(t *testing.T) {
 	}
 }
 
-func TestMutationsPushReturnsErrMutationsExpiredForZeroValue(t *testing.T) {
+func TestMutationsPushReturnsErrorOnInvalidMutationHandle(t *testing.T) {
 	err := Mutations{}.Push(func() {}, func() {})
-	if !errors.Is(err, ErrMutationsExpired) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestMutationsPushReturnsNativeErrorForLiveNilHandle(t *testing.T) {
-	m, _ := NewMutationsFromHandle(nil)
-	err := m.Push(func() {}, func() {})
 	if err == nil {
-		t.Fatal("expected native error for nil mutations handle")
-	}
-	if errors.Is(err, ErrMutationsExpired) {
-		t.Fatalf("live scope returned ErrMutationsExpired: %v", err)
+		t.Fatal("expected error when mutation handle is nil")
 	}
 	if !strings.Contains(err.Error(), "mutations is null") {
-		t.Fatalf("unexpected native error: %v", err)
-	}
-}
-
-func TestMutationsPushReturnsErrMutationsExpiredForExpiredNilHandle(t *testing.T) {
-	m, expire := NewMutationsFromHandle(nil)
-	expire()
-	err := m.Push(func() {}, func() {})
-	if !errors.Is(err, ErrMutationsExpired) {
-		t.Fatalf("expected ErrMutationsExpired, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

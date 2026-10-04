@@ -506,6 +506,30 @@ TEST(MarketDataService, GetOnEmptyServiceThrows) {
       openpit::Error);
 }
 
+TEST(MarketDataService, TtlOverridesOnEmptyServiceThrow) {
+  md::Service service;
+  const md::InstrumentId id = md::InstrumentId::FromUint64(5);
+  const AccountId account = AccountId::FromUint64(1);
+  const md::QuoteTtl ttl = md::QuoteTtl::Infinite();
+
+  EXPECT_THROW(static_cast<void>(service.SetInstrumentTtl(id, ttl)),
+               openpit::Error);
+  EXPECT_THROW(static_cast<void>(service.ClearInstrumentTtl(id)),
+               openpit::Error);
+  EXPECT_THROW(
+      static_cast<void>(service.SetInstrumentAccountTtl(id, account, ttl)),
+      openpit::Error);
+  EXPECT_THROW(
+      static_cast<void>(service.ClearInstrumentAccountTtl(id, account)),
+      openpit::Error);
+  EXPECT_THROW(static_cast<void>(service.SetInstrumentAccountGroupTtl(
+                   id, DefaultAccountGroup, ttl)),
+               openpit::Error);
+  EXPECT_THROW(static_cast<void>(service.ClearInstrumentAccountGroupTtl(
+                   id, DefaultAccountGroup)),
+               openpit::Error);
+}
+
 TEST(MarketDataService, AccountGroupResolverRethrowsOriginalException) {
   md::Service service = BuildService(md::SyncPolicy::None);
   const md::InstrumentId id = Register(

@@ -53,7 +53,7 @@ const (
 // propagated; the retirement result carries only the policy name and refusal
 // kind.
 // The mutations value is valid only during this hook call. Do not retain it or
-// use it after return; Push then returns tx.ErrMutationsExpired.
+// use it after return; doing so is undefined.
 type AccountRetirementPolicy interface {
 	RetireAccount(accountID param.AccountID, mutations tx.Mutations) AccountRetirementDecision
 }

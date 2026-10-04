@@ -44,6 +44,15 @@ type DryRunPolicy interface {
 	//
 	// Must not mutate any engine or external state. Returns the rejects the
 	// start stage would produce for order with zero side effects.
+	//
+	// The order is a view of engine memory and is valid only during this hook.
+	// Its string fields and model values derived from it, including nested
+	// values returned by Values(), can alias engine-owned memory.
+	// NewOrderFromValues(order.Values()) is not an independent copy because its
+	// nested OrderOperation and OrderMargin values keep those string views. To
+	// retain data, copy leaf values inside the hook: Instrument() and
+	// CollateralAsset() return independent param values; scalar fields are
+	// values.
 	CheckPreTradeStartDryRun(Context, model.Order) []reject.Reject
 
 	// PerformPreTradeCheckDryRun is the read-only variant of
@@ -53,7 +62,17 @@ type DryRunPolicy interface {
 	// provided for API symmetry but any mutations pushed to it are discarded
 	// by the engine. Returns the rejects the main stage would produce with
 	// zero side effects.
+	//
+	// The order is a view of engine memory and is valid only during this hook.
+	// Its string fields and model values derived from it, including nested
+	// values returned by Values(), can alias engine-owned memory.
+	// NewOrderFromValues(order.Values()) is not an independent copy because its
+	// nested OrderOperation and OrderMargin values keep those string views. To
+	// retain data, copy leaf values inside the hook: Instrument() and
+	// CollateralAsset() return independent param values; scalar fields are
+	// values.
+	//
 	// The mutations value is valid only during this hook call. Do not retain it
-	// or use it after return; Push then returns tx.ErrMutationsExpired.
+	// or use it after return; doing so is undefined.
 	PerformPreTradeCheckDryRun(Context, model.Order, tx.Mutations, Result) []reject.Reject
 }

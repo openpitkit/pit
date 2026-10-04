@@ -19,6 +19,7 @@ package model
 
 import (
 	"fmt"
+	"runtime"
 
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
@@ -34,10 +35,11 @@ type ExecutionReport struct {
 
 	// retainOperationInstrument keeps the Instrument (and its two constituent
 	// Assets) alive while the C struct's OpenPitStringView fields point to their
-	// C-heap buffers.  See param/asset.go and internal/native/asset_buf.go
+	// C-heap buffers.  See param/asset.go and internal/native/string.go
 	// for the full explanation of the retain pattern.
 	retainOperationInstrument param.Instrument
 	retainFillFeeCurrency     param.Asset
+	retainFillLock            *executionReportFillLockOwner
 }
 
 // NewExecutionReport creates a new zeroed ExecutionReport.
@@ -61,6 +63,15 @@ func NewExecutionReportFromValues(values ExecutionReportValues) ExecutionReport 
 }
 
 // NewExecutionReportFromHandle creates an ExecutionReport from a native handle.
+// It never takes ownership of the handle's lock or Asset string buffers. If
+// value came from ExecutionReport.Handle, it borrows the source report's
+// Go-owned lock and Asset string buffers: value and the rebuilt report are
+// valid only while the source report is reachable and not modified. Any Set,
+// Unset, Reset or SetValues call on the source report or its views ends the
+// borrow, even when the new value equals the old one. Keep the source report
+// alive and unmodified until the last use of value, the rebuilt report, or
+// anything read from them, including any native call they are passed to, for
+// example with runtime.KeepAlive after that use.
 func NewExecutionReportFromHandle(value native.ExecutionReport) ExecutionReport {
 	return ExecutionReport{value: value}
 }
@@ -70,6 +81,7 @@ func (r *ExecutionReport) Reset() {
 	native.ExecutionReportReset(&r.value)
 	r.retainOperationInstrument = param.Instrument{}
 	r.retainFillFeeCurrency = param.Asset{}
+	r.retainFillLock = nil
 }
 
 // Values returns a copy of the current execution report fields.
@@ -109,9 +121,9 @@ func (r ExecutionReport) Operation() optional.Option[ExecutionReportOperation] {
 	if !native.ExecutionReportOperationOptionalIsSet(operation) {
 		return optional.None[ExecutionReportOperation]()
 	}
-	return optional.Some(
-		newExecutionReportOperation(native.ExecutionReportOperationOptionalGet(operation)),
-	)
+	value := newExecutionReportOperation(native.ExecutionReportOperationOptionalGet(operation))
+	runtime.KeepAlive(r.retainOperationInstrument)
+	return optional.Some(value)
 }
 
 // SetOperation sets the operation on the report.
@@ -174,13 +186,21 @@ func (r ExecutionReport) Fill() optional.Option[ExecutionReportFill] {
 	if !native.ExecutionReportFillOptionalIsSet(fill) {
 		return optional.None[ExecutionReportFill]()
 	}
-	return optional.Some(newExecutionReportFill(native.ExecutionReportFillOptionalGet(fill)))
+	value := newExecutionReportFill(native.ExecutionReportFillOptionalGet(fill))
+	runtime.KeepAlive(r.retainFillFeeCurrency)
+	value.retainLock = r.retainFillLock
+	return optional.Some(value)
 }
 
 // SetFill sets the fill on the report.
 func (r *ExecutionReport) SetFill(fill ExecutionReportFill) {
+	if lock := native.ExecutionReportFillGetLock(fill.value); lock != nil && fill.retainLock == nil {
+		fill.retainLock = newExecutionReportFillLockOwner(native.PretradePreTradeLockClone(lock))
+		native.ExecutionReportFillSetLock(&fill.value, fill.retainLock.handle)
+	}
 	native.ExecutionReportSetFill(&r.value, fill.value)
 	r.retainFillFeeCurrency = fill.retainFeeCurrency
+	r.retainFillLock = fill.retainLock
 }
 
 // EnsureFillView ensures the fill exists and returns a mutable view.
@@ -192,6 +212,7 @@ func (r *ExecutionReport) EnsureFillView() ExecutionReportFillView {
 	return newExecutionReportFillView(
 		native.ExecutionReportFillOptionalGetView(fill),
 		&r.retainFillFeeCurrency,
+		&r.retainFillLock,
 	)
 }
 
@@ -199,6 +220,7 @@ func (r *ExecutionReport) EnsureFillView() ExecutionReportFillView {
 func (r *ExecutionReport) UnsetFill() {
 	native.ExecutionReportUnsetFill(&r.value)
 	r.retainFillFeeCurrency = param.Asset{}
+	r.retainFillLock = nil
 }
 
 // PositionImpact returns the optional position impact of the report.
@@ -243,7 +265,15 @@ func (r ExecutionReport) EngineExecutionReport() ExecutionReport {
 	return r
 }
 
-// Handle returns the underlying native handle.
+// Handle returns a native struct that borrows the report's Go-owned lock and
+// Asset string buffers. The struct, and any report rebuilt from it with
+// NewExecutionReportFromHandle, are valid only while the report is reachable
+// and not modified: any Set, Unset, Reset or SetValues call on the report or
+// its views ends the borrow, even when the new value equals the old one. Keep
+// the report alive and unmodified until the last use of the struct, a rebuilt
+// report, or anything read from them, including any native call they are
+// passed to, for example with runtime.KeepAlive after that use.
+// NewExecutionReportFromHandle never takes ownership.
 func (r ExecutionReport) Handle() native.ExecutionReport {
 	return r.value
 }
@@ -326,7 +356,9 @@ func (o *ExecutionReportOperation) setValues(values ExecutionReportOperationValu
 
 // Instrument returns the optional instrument of the operation.
 func (o ExecutionReportOperation) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromHandle(native.ExecutionReportOperationGetInstrument(o.value))
+	value := param.NewInstrumentFromHandle(native.ExecutionReportOperationGetInstrument(o.value))
+	runtime.KeepAlive(o.retainInstrument)
+	return value
 }
 
 // SetInstrument sets the instrument on the operation.
@@ -395,7 +427,9 @@ func (v *ExecutionReportOperationView) Reset() {
 
 // Instrument returns the optional instrument from the view.
 func (v ExecutionReportOperationView) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromHandle(native.ExecutionReportOperationGetInstrument(*v.ref))
+	value := param.NewInstrumentFromHandle(native.ExecutionReportOperationGetInstrument(*v.ref))
+	runtime.KeepAlive(v.retainInstrument)
+	return value
 }
 
 // SetInstrument sets the instrument on the view.
@@ -621,10 +655,15 @@ func (t *ExecutionReportTrade) SetQuantity(quantity param.Quantity) {
 //------------------------------------------------------------------------------
 // ExecutionReportFill
 
+type executionReportFillLockOwner struct {
+	handle native.PretradePreTradeLock
+}
+
 // ExecutionReportFill holds fill details for an execution report.
 type ExecutionReportFill struct {
 	value             native.ExecutionReportFill
 	retainFeeCurrency param.Asset
+	retainLock        *executionReportFillLockOwner
 }
 
 // ExecutionReportFillValues holds the optional fill fields.
@@ -667,6 +706,7 @@ func newExecutionReportFill(value native.ExecutionReportFill) ExecutionReportFil
 func (f *ExecutionReportFill) Reset() {
 	native.ExecutionReportFillReset(&f.value)
 	f.retainFeeCurrency = param.Asset{}
+	f.retainLock = nil
 }
 
 // Values returns a copy of the current fill fields.
@@ -727,7 +767,9 @@ func (f *ExecutionReportFill) UnsetLastTrade() {
 
 // Fee returns the optional fee attached to this fill.
 func (f ExecutionReportFill) Fee() optional.Option[param.MonetaryAmount] {
-	return param.NewMonetaryAmountOptionFromHandle(native.ExecutionReportFillGetFee(f.value))
+	value := param.NewMonetaryAmountOptionFromHandle(native.ExecutionReportFillGetFee(f.value))
+	runtime.KeepAlive(f.retainFeeCurrency)
+	return value
 }
 
 // SetFee sets the fee attached to this fill.
@@ -763,21 +805,26 @@ func (f *ExecutionReportFill) UnsetRemainingReservedQuantity() {
 
 // Lock returns the raw pre-trade lock attached to the fill, or nil when none is
 // set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes and
-// Lock.Bytes.
+// Lock.Bytes. A Go-owned native lock remains alive until the read completes.
 func (f ExecutionReportFill) Lock() []byte {
-	return executionReportFillLockBytes(native.ExecutionReportFillGetLock(f.value))
+	value := executionReportFillLockBytes(native.ExecutionReportFillGetLock(f.value))
+	runtime.KeepAlive(f.retainLock)
+	return value
 }
 
 // SetLock attaches a pre-trade lock to the fill from its raw bytes. The bytes
 // must come from pretrade.Lock.Bytes within the same library build; an empty or
-// nil slice clears the lock. The fill owns the stored lock.
+// nil slice clears this fill's lock. A non-empty lock is owned by a Go object
+// shared by copies of the fill and is destroyed after that owner is unreachable.
 func (f *ExecutionReportFill) SetLock(lock []byte) {
-	setExecutionReportFillLock(&f.value, lock)
+	f.retainLock = setExecutionReportFillLock(&f.value, lock)
 }
 
-// UnsetLock clears the pre-trade lock on the fill, releasing the stored lock.
+// UnsetLock clears this fill's lock and its reference to any Go-owned lock.
+// Other fill copies keep their lock and shared owner unchanged.
 func (f *ExecutionReportFill) UnsetLock() {
 	unsetExecutionReportFillLock(&f.value)
+	f.retainLock = nil
 }
 
 // IsFinal reports whether the order is closed out by this fill.
@@ -799,19 +846,26 @@ func (f *ExecutionReportFill) UnsetIsFinal() {
 type ExecutionReportFillView struct {
 	ref               *native.ExecutionReportFill
 	retainFeeCurrency *param.Asset
+	retainLock        **executionReportFillLockOwner
 }
 
 func newExecutionReportFillView(
 	ref *native.ExecutionReportFill,
 	retainFeeCurrency *param.Asset,
+	retainLock **executionReportFillLockOwner,
 ) ExecutionReportFillView {
-	return ExecutionReportFillView{ref: ref, retainFeeCurrency: retainFeeCurrency}
+	return ExecutionReportFillView{
+		ref:               ref,
+		retainFeeCurrency: retainFeeCurrency,
+		retainLock:        retainLock,
+	}
 }
 
 // Reset zeroes out the fill view.
 func (v *ExecutionReportFillView) Reset() {
 	native.ExecutionReportFillReset(v.ref)
 	*v.retainFeeCurrency = param.Asset{}
+	*v.retainLock = nil
 }
 
 // LastTrade returns the optional last trade from the view.
@@ -835,7 +889,9 @@ func (v *ExecutionReportFillView) UnsetLastTrade() {
 
 // Fee returns the optional fee attached to the view.
 func (v ExecutionReportFillView) Fee() optional.Option[param.MonetaryAmount] {
-	return param.NewMonetaryAmountOptionFromHandle(native.ExecutionReportFillGetFee(*v.ref))
+	value := param.NewMonetaryAmountOptionFromHandle(native.ExecutionReportFillGetFee(*v.ref))
+	runtime.KeepAlive(v.retainFeeCurrency)
+	return value
 }
 
 // SetFee sets the fee attached to the view.
@@ -870,21 +926,27 @@ func (v *ExecutionReportFillView) UnsetRemainingReservedQuantity() {
 
 // Lock returns the raw pre-trade lock attached to the view, or nil when none is
 // set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes and
-// Lock.Bytes.
+// Lock.Bytes. A Go-owned native lock remains alive until the read completes.
 func (v ExecutionReportFillView) Lock() []byte {
-	return executionReportFillLockBytes(native.ExecutionReportFillGetLock(*v.ref))
+	value := executionReportFillLockBytes(native.ExecutionReportFillGetLock(*v.ref))
+	runtime.KeepAlive(*v.retainLock)
+	return value
 }
 
 // SetLock attaches a pre-trade lock to the view from its raw bytes. The bytes
 // must come from pretrade.Lock.Bytes within the same library build; an empty or
-// nil slice clears the lock. The fill owns the stored lock.
+// nil slice clears the owning report's lock. A non-empty lock is owned by a Go
+// object shared by copies of the report and is destroyed after that owner is
+// unreachable.
 func (v *ExecutionReportFillView) SetLock(lock []byte) {
-	setExecutionReportFillLock(v.ref, lock)
+	*v.retainLock = setExecutionReportFillLock(v.ref, lock)
 }
 
-// UnsetLock clears the pre-trade lock on the view, releasing the stored lock.
+// UnsetLock clears the owning report's lock and its Go-owner reference without
+// changing any copied fill or report.
 func (v *ExecutionReportFillView) UnsetLock() {
 	unsetExecutionReportFillLock(v.ref)
+	*v.retainLock = nil
 }
 
 // IsFinal reports whether the order is closed out by this fill.
@@ -921,13 +983,13 @@ func executionReportFillLockBytes(lock native.PretradePreTradeLock) []byte {
 	return value
 }
 
-// setExecutionReportFillLock replaces the fill's stored lock with one decoded
-// from the raw bytes. Empty bytes clear the lock. The fill owns the stored
-// handle (the C struct's lock field; null means no lock).
-func setExecutionReportFillLock(fill *native.ExecutionReportFill, lock []byte) {
-	unsetExecutionReportFillLock(fill)
+func setExecutionReportFillLock(
+	fill *native.ExecutionReportFill,
+	lock []byte,
+) *executionReportFillLockOwner {
 	if len(lock) == 0 {
-		return
+		native.ExecutionReportFillUnsetLock(fill)
+		return nil
 	}
 	handle, err := native.CreatePretradePreTradeLockFromRaw(lock)
 	if err != nil {
@@ -935,14 +997,20 @@ func setExecutionReportFillLock(fill *native.ExecutionReportFill, lock []byte) {
 		// wrong pre-trade behavior.
 		panic(fmt.Sprintf("failed to decode pre-trade lock bytes: %v", err))
 	}
+	owner := newExecutionReportFillLockOwner(handle)
 	native.ExecutionReportFillSetLock(fill, handle)
+	return owner
 }
 
-// unsetExecutionReportFillLock clears and frees the fill's stored lock handle.
+func newExecutionReportFillLockOwner(handle native.PretradePreTradeLock) *executionReportFillLockOwner {
+	owner := &executionReportFillLockOwner{handle: handle}
+	runtime.SetFinalizer(owner, func(owner *executionReportFillLockOwner) {
+		native.DestroyPretradePreTradeLock(owner.handle)
+	})
+	return owner
+}
+
 func unsetExecutionReportFillLock(fill *native.ExecutionReportFill) {
-	if existing := native.ExecutionReportFillGetLock(*fill); existing != nil {
-		native.DestroyPretradePreTradeLock(existing)
-	}
 	native.ExecutionReportFillUnsetLock(fill)
 }
 

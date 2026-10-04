@@ -20,6 +20,8 @@
 package model
 
 import (
+	"runtime"
+
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -396,7 +398,9 @@ func (o *AccountAdjustmentBalanceOperation) setValues(
 
 // Asset returns the optional balance-operation asset.
 func (o AccountAdjustmentBalanceOperation) Asset() optional.Option[param.Asset] {
-	return param.NewAssetFromHandle(native.AccountAdjustmentBalanceOperationGetAsset(o.value))
+	value := param.NewAssetFromHandle(native.AccountAdjustmentBalanceOperationGetAsset(o.value))
+	runtime.KeepAlive(o.retainAsset)
+	return value
 }
 
 // SetAsset sets the balance-operation asset.
@@ -477,7 +481,9 @@ func (o *AccountAdjustmentBalanceOperationView) Reset() {
 
 // Asset returns the optional balance-operation asset from the view.
 func (o AccountAdjustmentBalanceOperationView) Asset() optional.Option[param.Asset] {
-	return param.NewAssetFromHandle(native.AccountAdjustmentBalanceOperationGetAsset(*o.ref))
+	value := param.NewAssetFromHandle(native.AccountAdjustmentBalanceOperationGetAsset(*o.ref))
+	runtime.KeepAlive(o.retainAsset)
+	return value
 }
 
 // SetAsset sets the balance-operation asset on the view.
@@ -629,9 +635,11 @@ func (o *AccountAdjustmentPositionOperation) setValues(
 
 // Instrument returns the optional position-operation instrument.
 func (o AccountAdjustmentPositionOperation) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromHandle(
+	value := param.NewInstrumentFromHandle(
 		native.AccountAdjustmentPositionOperationGetInstrument(o.value),
 	)
+	runtime.KeepAlive(o.retainInstrument)
+	return value
 }
 
 // SetInstrument sets the position-operation instrument.
@@ -648,9 +656,11 @@ func (o *AccountAdjustmentPositionOperation) UnsetInstrument() {
 
 // CollateralAsset returns the optional collateral asset.
 func (o AccountAdjustmentPositionOperation) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromHandle(
+	value := param.NewAssetFromHandle(
 		native.AccountAdjustmentPositionOperationGetCollateralAsset(o.value),
 	)
+	runtime.KeepAlive(o.retainCollateralAsset)
+	return value
 }
 
 // SetCollateralAsset sets the collateral asset.
@@ -749,9 +759,11 @@ func (o *AccountAdjustmentPositionOperationView) Reset() {
 
 // Instrument returns the optional instrument from the view.
 func (o AccountAdjustmentPositionOperationView) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromHandle(
+	value := param.NewInstrumentFromHandle(
 		native.AccountAdjustmentPositionOperationGetInstrument(*o.ref),
 	)
+	runtime.KeepAlive(o.retainInstrument)
+	return value
 }
 
 // SetInstrument sets the instrument on the view.
@@ -768,9 +780,11 @@ func (o *AccountAdjustmentPositionOperationView) UnsetInstrument() {
 
 // CollateralAsset returns the optional collateral asset from the view.
 func (o AccountAdjustmentPositionOperationView) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromHandle(
+	value := param.NewAssetFromHandle(
 		native.AccountAdjustmentPositionOperationGetCollateralAsset(*o.ref),
 	)
+	runtime.KeepAlive(o.retainCollateralAsset)
+	return value
 }
 
 // SetCollateralAsset sets the collateral asset on the view.

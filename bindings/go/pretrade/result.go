@@ -32,6 +32,10 @@ import (
 // It carries the extra channels a main-stage pre-trade policy may fill in
 // addition to its reject return: lock prices and account-adjustment outcomes.
 // The engine assigns the policy group to every pushed item.
+//
+// The collector is non-owning and callback-scoped: it borrows engine state
+// that is valid only for the duration of the hook that received it. Retaining
+// the collector or using it after that hook has returned is undefined.
 type Result struct{ handle native.PretradePreTradeResult }
 
 // NewPreTradeResultFromHandle wraps a native handle into a Result.
@@ -55,6 +59,10 @@ func (r Result) PushAccountAdjustment(
 
 // PostTradeAdjustments is the callback-scoped collector passed to
 // ApplyExecutionReport. It carries group-tagged account-adjustment outcomes.
+//
+// The collector is non-owning and callback-scoped: it borrows engine state
+// that is valid only for the duration of the hook that received it. Retaining
+// the collector or using it after that hook has returned is undefined.
 type PostTradeAdjustments struct {
 	handle native.PostTradeAdjustmentList
 }
@@ -80,6 +88,10 @@ func (a PostTradeAdjustments) Push(
 
 // PostTradePnls is the callback-scoped collector passed to
 // ApplyExecutionReport. It carries group-tagged account-level PnL outcomes.
+//
+// The collector is non-owning and callback-scoped: it borrows engine state
+// that is valid only for the duration of the hook that received it. Retaining
+// the collector or using it after that hook has returned is undefined.
 type PostTradePnls struct {
 	handle native.PostTradeAccountPnlList
 }
@@ -99,6 +111,10 @@ func (p PostTradePnls) Push(outcome accountadjustment.AccountPnlOutcome) error {
 // AccountOutcomes is the callback-scoped collector passed to
 // ApplyAccountAdjustment. It carries account-outcome entries; the engine
 // assigns the policy group to every pushed entry.
+//
+// The collector is non-owning and callback-scoped: it borrows engine state
+// that is valid only for the duration of the hook that received it. Retaining
+// the collector or using it after that hook has returned is undefined.
 type AccountOutcomes struct {
 	handle native.PretradeAccountAdjustmentResult
 }

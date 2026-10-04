@@ -47,6 +47,15 @@ type Policy interface {
 	// order and their reject lists are merged before the engine returns to the
 	// caller.
 	//
+	// The order is a view of engine memory and is valid only during this hook.
+	// Its string fields and model values derived from it, including nested
+	// values returned by Values(), can alias engine-owned memory.
+	// NewOrderFromValues(order.Values()) is not an independent copy because its
+	// nested OrderOperation and OrderMargin values keep those string views. To
+	// retain data, copy leaf values inside the hook: Instrument() and
+	// CollateralAsset() return independent param values; scalar fields are
+	// values.
+	//
 	// A panic is recovered at the SDK boundary and reported as a
 	// SystemUnavailable reject with the panic value in its details.
 	CheckPreTradeStart(Context, model.Order) []reject.Reject
@@ -62,6 +71,15 @@ type Policy interface {
 	// non-enforcing rejects; evaluation-failure rejects discard it and abort the
 	// drop-copy operation.
 	//
+	// The order is a view of engine memory and is valid only during this hook.
+	// Its string fields and model values derived from it, including nested
+	// values returned by Values(), can alias engine-owned memory.
+	// NewOrderFromValues(order.Values()) is not an independent copy because its
+	// nested OrderOperation and OrderMargin values keep those string views. To
+	// retain data, copy leaf values inside the hook: Instrument() and
+	// CollateralAsset() return independent param values; scalar fields are
+	// values.
+	//
 	// Rollback safety:
 	// In this pre-trade pipeline, rollback may happen after external systems
 	// observed intermediate reserved state. Avoid absolute-value rollback in
@@ -71,7 +89,7 @@ type Policy interface {
 	// A panic is recovered at the SDK boundary and reported as a
 	// SystemUnavailable reject with the panic value in its details.
 	// The mutations value is valid only during this hook call. Do not retain it
-	// or use it after return; Push then returns tx.ErrMutationsExpired.
+	// or use it after return; doing so is undefined.
 	PerformPreTradeCheck(Context, model.Order, tx.Mutations, Result) []reject.Reject
 
 	// ApplyExecutionReport applies post-trade updates from execution reports.
@@ -80,6 +98,16 @@ type Policy interface {
 	// means no kill switch. A non-empty list means this policy entered a
 	// blocked state after the report was applied. Policies may independently
 	// fill the adjustment and account-PnL collectors.
+	//
+	// The report is a view of engine memory and is valid only during this hook.
+	// Its string fields and a fill's pre-trade lock alias engine-owned memory,
+	// as can model values derived from it, including nested values returned by
+	// Values(). NewExecutionReportFromValues(report.Values()) is an independent
+	// deep copy: Operation() and Fill() copy their instrument and fee-currency
+	// assets into fresh buffers, and SetFill() clones a borrowed fill lock into
+	// a new Go owner. Leaf accessors such as Instrument() and Fee() return
+	// independent param values, Lock() returns independent bytes, and scalar
+	// fields are values.
 	//
 	// A panic is recovered at the SDK boundary and reported as an account
 	// block with code SystemUnavailable and the panic value in its details.
@@ -96,10 +124,19 @@ type Policy interface {
 	// may fill the outcomes collector with account-outcome entries; the engine
 	// keeps outcomes and account blocks only when the policy accepts.
 	//
+	// The adjustment is a view of engine memory and is valid only during this
+	// hook. Its string fields and model values derived from it, including nested
+	// values returned by Values(), can alias engine-owned memory.
+	// NewAccountAdjustmentFromValues(adjustment.Values()) is not an independent
+	// copy because its nested operation values keep those string views. To
+	// retain data, copy leaf values inside the hook: Asset(), Instrument(), and
+	// CollateralAsset() return independent param values, while scalar fields are
+	// values.
+	//
 	// A panic is recovered at the SDK boundary and reported as a
 	// SystemUnavailable reject with the panic value in its details.
 	// The mutations value is valid only during this hook call. Do not retain it
-	// or use it after return; Push then returns tx.ErrMutationsExpired.
+	// or use it after return; doing so is undefined.
 	ApplyAccountAdjustment(
 		accountadjustment.Context,
 		param.AccountID,

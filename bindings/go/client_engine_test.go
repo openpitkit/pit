@@ -18,6 +18,7 @@
 package openpit
 
 import (
+	"bytes"
 	"errors"
 	"runtime/cgo"
 	"testing"
@@ -40,6 +41,27 @@ type clientEngineTestOrder struct {
 type clientEngineTestReport struct {
 	model.ExecutionReport
 	VenueExecID string
+}
+
+type clientEngineFreshModelReport struct {
+	lock         []byte
+	fee          param.Fee
+	feeCurrency  string
+	nativeReport native.ExecutionReport
+}
+
+func (r *clientEngineFreshModelReport) EngineExecutionReport() model.ExecutionReport {
+	currency, err := param.NewAsset(r.feeCurrency)
+	if err != nil {
+		panic(err)
+	}
+	fill := model.NewExecutionReportFill()
+	fill.SetFee(param.NewMonetaryAmount(r.fee, currency))
+	fill.SetLock(r.lock)
+	report := model.NewExecutionReport()
+	report.SetFill(fill)
+	r.nativeReport = report.Handle()
+	return report
 }
 
 type clientEngineTestAdjustment struct {
@@ -136,6 +158,51 @@ func TestClientEnginePassesClientExecutionReport(t *testing.T) {
 			policy.report.VenueExecID,
 			report.VenueExecID,
 		)
+	}
+}
+
+func TestClientEngineRetainsFreshExecutionReportModel(t *testing.T) {
+	price, err := param.NewPriceFromString("124")
+	if err != nil {
+		t.Fatalf("NewPriceFromString() error = %v", err)
+	}
+	lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{
+		{PolicyGroupID: model.DefaultPolicyGroupID, Price: price},
+	})
+	if err != nil {
+		t.Fatalf("NewLockFromEntries() error = %v", err)
+	}
+	fee, err := param.NewFeeFromString("0.1")
+	if err != nil {
+		t.Fatalf("NewFeeFromString() error = %v", err)
+	}
+	report := &clientEngineFreshModelReport{
+		lock:        lock.Bytes(),
+		fee:         fee,
+		feeCurrency: "USD",
+	}
+	policy := &clientEngineGCReportPolicy{t: t}
+	engine, err := NewClientEngineBuilder[
+		clientEngineTestOrder,
+		*clientEngineFreshModelReport,
+		clientEngineTestAdjustment,
+	]().
+		FullSync().
+		PreTrade(policy).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	if _, err := engine.ApplyExecutionReport(report); err != nil {
+		t.Fatalf("ApplyExecutionReport() error = %v", err)
+	}
+	if !policy.fillSet {
+		t.Fatal("policy report Fill().IsSet() = false, want true")
+	}
+	if !bytes.Equal(policy.gotLock, report.lock) {
+		t.Fatalf("policy report lock = %v, want %v", policy.gotLock, report.lock)
 	}
 }
 
@@ -362,6 +429,65 @@ type clientEngineTestStartPolicy struct {
 	order      clientEngineTestOrder
 	report     clientEngineTestReport
 	killSwitch bool
+}
+
+type clientEngineGCReportPolicy struct {
+	t       *testing.T
+	fillSet bool
+	gotLock []byte
+}
+
+func (clientEngineGCReportPolicy) Close() {}
+
+func (clientEngineGCReportPolicy) Name() string {
+	return "client-engine-gc-report"
+}
+
+func (clientEngineGCReportPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
+func (clientEngineGCReportPolicy) CheckPreTradeStart(
+	pretrade.Context,
+	clientEngineTestOrder,
+) []reject.Reject {
+	return nil
+}
+
+func (clientEngineGCReportPolicy) PerformPreTradeCheck(
+	pretrade.Context,
+	clientEngineTestOrder,
+	tx.Mutations,
+	pretrade.Result,
+) []reject.Reject {
+	return nil
+}
+
+func (p *clientEngineGCReportPolicy) ApplyExecutionReport(
+	_ pretrade.PostTradeContext,
+	report *clientEngineFreshModelReport,
+	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
+) []reject.AccountBlock {
+	forceHandleRetentionFinalizers(p.t)
+	overwriteHandleRetentionLocks(p.t)
+	engineReport := model.NewExecutionReportFromHandle(report.nativeReport)
+	fill, ok := engineReport.Fill().Get()
+	p.fillSet = ok
+	if ok {
+		p.gotLock = fill.Lock()
+	}
+	return nil
+}
+
+func (clientEngineGCReportPolicy) ApplyAccountAdjustment(
+	accountadjustment.Context,
+	param.AccountID,
+	model.AccountAdjustment,
+	tx.Mutations,
+	pretrade.AccountOutcomes,
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 func (clientEngineTestStartPolicy) Close() {}
