@@ -82,9 +82,13 @@ function Invoke-Native {
   if ($LogName -eq 'copy-container-output') {
     $destination = $Arguments[2]
     New-Item -ItemType Directory -Path $destination | Out-Null
-    $exit = if ($case -match '^installer') { 42 } else { 0 }
-    $exit | Set-Content (Join-Path $destination 'installer-run-exit-code.txt')
-    '["C:\\Temp\\dd_setup.log"]' | Set-Content (Join-Path $destination 'installer-logs.json')
+    $exit = if ($case -eq 'negative-exit-file') { -1 } elseif ($case -match '^installer') { 42 } else { 0 }
+    if ($case -eq 'empty-exit-file') {
+      [IO.File]::WriteAllText((Join-Path $destination 'installer-run-exit-code.txt'), '')
+    } else {
+      $exit | Set-Content (Join-Path $destination 'installer-run-exit-code.txt')
+    }
+    '["C:\\Temp\\dd_setup.log","C:\\Temp\\dd_install.log"]' | Set-Content (Join-Path $destination 'installer-logs.json')
   }
   return ''
 }
@@ -121,8 +125,18 @@ function Invoke-Case {
     if ($calls[$i] -match '^docker-commit ') { $commitIndex = $i }
     if ($calls[$i] -match '^copy-dd_setup.log ') { $copyIndex = $i }
   }
-  if ($copyIndex -lt 0) { throw "$Case skipped installer log copying" }
-  $shouldCommit = $Case -notmatch '^installer|^copy-failure'
+  if ($Case -eq 'empty-exit-file') {
+    if ($copyIndex -ge 0) { throw 'empty exit code was accepted before copying installer logs' }
+    if ((Get-Content -Raw (Join-Path $out 'failures.log')) -notmatch 'must contain the Dockerfile RUN command exit code') {
+      throw 'missing installer exit code was not explained'
+    }
+  } else {
+    if ($copyIndex -lt 0) { throw "$Case skipped installer log copying" }
+    if ($Case -ne 'copy-failure' -and -not ($calls -match '^copy-dd_install.log ')) {
+      throw "$Case did not copy every installer log from the JSON manifest"
+    }
+  }
+  $shouldCommit = $Case -notmatch '^installer|^copy-failure|^empty-exit-file|^negative-exit-file'
   if ($shouldCommit -and $commitIndex -le $copyIndex) { throw "$Case did not copy logs before commit" }
   if (-not $shouldCommit -and $commitIndex -ge 0) { throw "$Case committed after a failed prerequisite" }
   if (-not ($calls -match '^export-docker-events ') -or -not ($calls -match '^docker-info-after ')) {
@@ -132,7 +146,27 @@ function Invoke-Case {
 
 try {
   Invoke-Case 'success' 0
+  $successOutput = Join-Path $testRoot "case-$script:sequence"
+  $exitLines = @(Get-Content (Join-Path $successOutput 'run-installer.cmd') | Where-Object { $_ -match 'installer-run-exit-code\.txt' })
+  if ($exitLines.Count -ne 1) { throw 'expected exactly one CMD exit-code recording command' }
+  $OutputDirectory = Join-Path $testRoot 'cmd-logs'
+  New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
+  foreach ($expectedCode in @(0, 42, 3010, -1)) {
+    $exitPath = Join-Path $testRoot "cmd-exit-$expectedCode.txt"
+    $commandPath = Join-Path $testRoot "record-exit-$expectedCode.cmd"
+    @(
+      '@echo off'
+      "set `"INSTALLER_RUN_EXIT=$expectedCode`""
+      $exitLines[0].Replace('C:\openpit-image-diagnostics\installer-run-exit-code.txt', "`"$exitPath`"")
+    ) | Set-Content -Encoding ASCII $commandPath
+    Invoke-Native 'cmd.exe' @('/d', '/c', $commandPath) "cmd-exit-$expectedCode" | Out-Null
+    if ((Get-Content -Raw -LiteralPath $exitPath).Trim() -ne "$expectedCode") {
+      throw "CMD exit-code recording corrupted $expectedCode"
+    }
+  }
   Invoke-Case 'already-enabled' 0
+  Invoke-Case 'empty-exit-file' 1
+  Invoke-Case 'negative-exit-file' -1
   Invoke-Case 'installer-failure' 42
   Invoke-Case 'commit-failure' 17
   Invoke-Case 'copy-failure' 23
@@ -142,6 +176,7 @@ try {
   Invoke-Case 'installer-log-write-failure' 42
 
   $mutations = @(
+    @{ Case = 'negative-exit-file'; Exit = -1; From = '\A-?[0-9]+\s*\z'; To = '\A[0-9]+\s*\z' },
     @{ Case = 'installer-failure'; Exit = 42; From = '$script:resultCode = $failureCode'; To = '$script:resultCode = 1' },
     @{ Case = 'commit-failure'; Exit = 17; From = '$script:resultCode = $failureCode'; To = '$script:resultCode = 1' },
     @{ Case = 'copy-failure'; Exit = 23; From = '$script:resultCode = $script:diagnosticCode'; To = '$script:resultCode = 0' },
@@ -173,7 +208,7 @@ try {
     $fixture | Set-Content -Encoding UTF8 $fixturePath
   }
   $mocked | Set-Content -Encoding UTF8 $scriptPath
-  Write-Host 'Passed native output/exit checks, 10 lifecycle cases, and 9 intentional mutation checks.'
+  Write-Host 'Passed native output/exit checks, four real CMD exit-code checks, 12 lifecycle cases, and 10 intentional mutation checks.'
   Write-Host "Test evidence: $testRoot"
 } finally {
   Remove-Item Env:\OPENPIT_DIAGNOSTIC_TEST_CASE

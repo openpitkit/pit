@@ -170,7 +170,7 @@ if errorlevel 1 exit /b %errorlevel%
 cmd.exe /S /C C:\openpit-image-diagnostics\installer-command.cmd
 set "INSTALLER_RUN_EXIT=%ERRORLEVEL%"
 echo Dockerfile RUN command exit code: %INSTALLER_RUN_EXIT%
-echo %INSTALLER_RUN_EXIT%>C:\openpit-image-diagnostics\installer-run-exit-code.txt
+>C:\openpit-image-diagnostics\installer-run-exit-code.txt echo %INSTALLER_RUN_EXIT%
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\openpit-image-diagnostics\collect-container.ps1 after
 set "COLLECT_EXIT=%ERRORLEVEL%"
 if not "%INSTALLER_RUN_EXIT%"=="0" exit /b %INSTALLER_RUN_EXIT%
@@ -210,14 +210,22 @@ exit /b %COLLECT_EXIT%
     if ($state.ExitCode -ne 0 -and $script:resultCode -eq 0) { $script:resultCode = [int]$state.ExitCode }
     $containerOutput = Join-Path $OutputDirectory 'container-output'
     Invoke-Native 'docker.exe' @('cp', "${containerName}:$containerDirectory", $containerOutput) 'copy-container-output' | Out-Null
-    $installerExit = [int](Get-Content -Raw -LiteralPath (Join-Path $containerOutput 'installer-run-exit-code.txt'))
+    $installerExitText = Get-Content -Raw -LiteralPath (Join-Path $containerOutput 'installer-run-exit-code.txt')
+    if ([string]::IsNullOrWhiteSpace($installerExitText) -or $installerExitText -notmatch '\A-?[0-9]+\s*\z') {
+      throw 'installer-run-exit-code.txt must contain the Dockerfile RUN command exit code'
+    }
+    $installerExit = [int]$installerExitText
     Write-Host "Dockerfile RUN command exit code: $installerExit"
     if ($installerExit -ne 0 -and $script:resultCode -eq 0) { $script:resultCode = $installerExit }
-    $logs = @(Get-Content -Raw -LiteralPath (Join-Path $containerOutput 'installer-logs.json') | ConvertFrom-Json)
+    $logs = Get-Content -Raw -LiteralPath (Join-Path $containerOutput 'installer-logs.json') | ConvertFrom-Json
+    $logs = @($logs)
     if ($logs.Count -eq 0) { throw 'installer log manifest is empty' }
     $logDirectory = Join-Path $OutputDirectory 'installer-logs'
     New-Item -ItemType Directory -Path $logDirectory | Out-Null
     foreach ($log in $logs) {
+      if ($log -isnot [string] -or [string]::IsNullOrWhiteSpace($log)) {
+        throw 'installer log manifest must contain nonempty file paths'
+      }
       $name = Split-Path -Leaf $log
       Invoke-Native 'docker.exe' @('cp', "${containerName}:$log", (Join-Path $logDirectory $name)) "copy-$name" | Out-Null
     }
