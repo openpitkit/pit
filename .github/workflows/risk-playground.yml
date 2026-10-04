@@ -142,6 +142,6 @@ jobs:
           wranglerVersion: ${{ env.CI_WRANGLER }}
           command: >-
             pages deploy examples/js/risk_playground/dist
-            --project-name=openpit-demo
+            --project-name=openpit-playground
             --branch=main
             --commit-hash=${{ github.sha }}
