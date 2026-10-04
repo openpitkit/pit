@@ -289,6 +289,13 @@ func TestAccountAdjustmentAmountLifecycle(t *testing.T) {
 	assertAccountAdjustmentAmountUnset(t, amount)
 }
 
+func TestAccountAdjustmentBoundsFromValues(t *testing.T) {
+	fixture := newAccountAdjustmentFixture(t)
+	values := accountAdjustmentBoundsValuesFromFixture(fixture)
+	bounds := NewAccountAdjustmentBoundsFromValues(values)
+	assertAccountAdjustmentBoundsValuesEqual(t, bounds.Values(), values)
+}
+
 func TestAccountAdjustmentBoundsLifecycle(t *testing.T) {
 	fixture := newAccountAdjustmentFixture(t)
 	boundsValues := accountAdjustmentBoundsValuesFromFixture(fixture)
@@ -325,9 +332,11 @@ func TestAccountAdjustmentBoundsLifecycle(t *testing.T) {
 	bounds.UnsetIncomingLower()
 	assertPositionSizeOptionUnset(t, bounds.IncomingLower())
 
-	// Keep this direct call to exercise SetValues path without changing
-	// production behavior assumptions in this test session.
 	bounds.SetValues(boundsValues)
+	assertAccountAdjustmentBoundsValuesEqual(t, bounds.Values(), boundsValues)
+	partialValues := AccountAdjustmentBoundsValues{BalanceUpper: boundsValues.BalanceUpper}
+	bounds.SetValues(partialValues)
+	assertAccountAdjustmentBoundsValuesEqual(t, bounds.Values(), partialValues)
 
 	adjustment := NewAccountAdjustment()
 	view := adjustment.EnsureBoundsView()
@@ -711,6 +720,20 @@ func assertAccountAdjustmentBoundsOptionUnset(
 ) {
 	t.Helper()
 	assertAccountAdjustmentBoundsOptionValuesEqual(t, got, optional.None[AccountAdjustmentBounds]())
+}
+
+func assertAccountAdjustmentBoundsValuesEqual(
+	t *testing.T,
+	got AccountAdjustmentBoundsValues,
+	want AccountAdjustmentBoundsValues,
+) {
+	t.Helper()
+	assertPositionSizeOptionValuesEqual(t, got.BalanceUpper, want.BalanceUpper)
+	assertPositionSizeOptionValuesEqual(t, got.BalanceLower, want.BalanceLower)
+	assertPositionSizeOptionValuesEqual(t, got.HeldUpper, want.HeldUpper)
+	assertPositionSizeOptionValuesEqual(t, got.HeldLower, want.HeldLower)
+	assertPositionSizeOptionValuesEqual(t, got.IncomingUpper, want.IncomingUpper)
+	assertPositionSizeOptionValuesEqual(t, got.IncomingLower, want.IncomingLower)
 }
 
 func assertAccountAdjustmentBoundsOptionValuesEqual(

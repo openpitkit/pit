@@ -51,7 +51,8 @@ const (
 const callbackPanicValue = "go policy hook exploded"
 
 type panickingHookPolicy struct {
-	hook panickingHook
+	hook       panickingHook
+	panicValue any
 }
 
 var _ pretrade.DryRunPolicy = (*panickingHookPolicy)(nil)
@@ -66,7 +67,7 @@ func (*panickingHookPolicy) PolicyGroupID() model.PolicyGroupID {
 
 func (p *panickingHookPolicy) panicIf(hook panickingHook) {
 	if p.hook == hook {
-		panic(callbackPanicValue)
+		panic(p.panicValue)
 	}
 }
 
@@ -127,11 +128,15 @@ func (p *panickingHookPolicy) PerformPreTradeCheckDryRun(
 	return nil
 }
 
-func newPanickingHookEngine(t *testing.T, hook panickingHook) *Engine {
+func newPanickingHookEngine(
+	t *testing.T,
+	hook panickingHook,
+	panicValue any,
+) *Engine {
 	t.Helper()
 	engine, err := NewEngineBuilder().
 		FullSync().
-		PreTrade(&panickingHookPolicy{hook: hook}).
+		PreTrade(&panickingHookPolicy{hook: hook, panicValue: panicValue}).
 		Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -155,7 +160,9 @@ func assertCallbackPanicReject(t *testing.T, rejects []reject.Reject) {
 }
 
 func TestCustomPolicyPanicNativeE2E_CheckPreTradeStart(t *testing.T) {
-	engine := newPanickingHookEngine(t, panicOnCheckPreTradeStart)
+	engine := newPanickingHookEngine(
+		t, panicOnCheckPreTradeStart, callbackPanicValue,
+	)
 
 	request, rejects, err := engine.StartPreTrade(newValidOrderForNativeE2E(t))
 	if err != nil {
@@ -169,7 +176,9 @@ func TestCustomPolicyPanicNativeE2E_CheckPreTradeStart(t *testing.T) {
 }
 
 func TestCustomPolicyPanicNativeE2E_PerformPreTradeCheck(t *testing.T) {
-	engine := newPanickingHookEngine(t, panicOnPerformPreTradeCheck)
+	engine := newPanickingHookEngine(
+		t, panicOnPerformPreTradeCheck, callbackPanicValue,
+	)
 
 	reservation, rejects, err := engine.ExecutePreTrade(newValidOrderForNativeE2E(t))
 	if err != nil {
@@ -183,7 +192,9 @@ func TestCustomPolicyPanicNativeE2E_PerformPreTradeCheck(t *testing.T) {
 }
 
 func TestCustomPolicyPanicNativeE2E_DropCopyPerformPreTradeCheck(t *testing.T) {
-	engine := newPanickingHookEngine(t, panicOnPerformPreTradeCheck)
+	engine := newPanickingHookEngine(
+		t, panicOnPerformPreTradeCheck, callbackPanicValue,
+	)
 
 	assertCallbackPanicReject(
 		t,
@@ -192,7 +203,9 @@ func TestCustomPolicyPanicNativeE2E_DropCopyPerformPreTradeCheck(t *testing.T) {
 }
 
 func TestCustomPolicyPanicNativeE2E_ApplyExecutionReport(t *testing.T) {
-	engine := newPanickingHookEngine(t, panicOnApplyExecutionReport)
+	engine := newPanickingHookEngine(
+		t, panicOnApplyExecutionReport, callbackPanicValue,
+	)
 
 	result, err := engine.ApplyExecutionReport(model.NewExecutionReport())
 	if err != nil {
@@ -212,8 +225,39 @@ func TestCustomPolicyPanicNativeE2E_ApplyExecutionReport(t *testing.T) {
 	}
 }
 
+func TestCustomPolicyPanicNativeE2E_ApplyExecutionReportPanicNil(t *testing.T) {
+	t.Setenv("GODEBUG", "panicnil=1")
+	recovered := func() (recovered any) {
+		defer func() {
+			recovered = recover()
+		}()
+		panic(nil)
+	}()
+	if recovered != nil {
+		t.Fatalf("recover() = %v, want nil with GODEBUG=panicnil=1", recovered)
+	}
+
+	engine := newPanickingHookEngine(t, panicOnApplyExecutionReport, nil)
+	result, err := engine.ApplyExecutionReport(model.NewExecutionReport())
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport() error = %v", err)
+	}
+	if len(result.AccountBlocks) != 1 {
+		t.Fatalf("AccountBlocks len = %d, want 1", len(result.AccountBlocks))
+	}
+	block := result.AccountBlocks[0]
+	if block.Code != reject.CodeSystemUnavailable {
+		t.Fatalf("block code = %v, want %v", block.Code, reject.CodeSystemUnavailable)
+	}
+	if block.Policy != "panicking-hook" {
+		t.Fatalf("block policy = %q, want %q", block.Policy, "panicking-hook")
+	}
+}
+
 func TestCustomPolicyPanicNativeE2E_ApplyAccountAdjustment(t *testing.T) {
-	engine := newPanickingHookEngine(t, panicOnApplyAccountAdjustment)
+	engine := newPanickingHookEngine(
+		t, panicOnApplyAccountAdjustment, callbackPanicValue,
+	)
 
 	adjustment, err := model.NewAccountAdjustmentFromValues(
 		model.AccountAdjustmentValues{
@@ -257,7 +301,10 @@ func TestCustomPolicyPanicNativeE2E_CloseReachesTeardownHandler(t *testing.T) {
 
 	engine, err := NewEngineBuilder().
 		FullSync().
-		PreTrade(&panickingHookPolicy{hook: panicOnClose}).
+		PreTrade(&panickingHookPolicy{
+			hook:       panicOnClose,
+			panicValue: callbackPanicValue,
+		}).
 		Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -279,7 +326,9 @@ func TestCustomPolicyPanicNativeE2E_CloseReachesTeardownHandler(t *testing.T) {
 }
 
 func TestCustomPolicyPanicNativeE2E_CheckPreTradeStartDryRun(t *testing.T) {
-	engine := newPanickingHookEngine(t, panicOnCheckPreTradeStartDryRun)
+	engine := newPanickingHookEngine(
+		t, panicOnCheckPreTradeStartDryRun, callbackPanicValue,
+	)
 
 	report, err := engine.StartPreTradeDryRun(newValidOrderForNativeE2E(t))
 	if err != nil {
@@ -301,7 +350,9 @@ func TestCustomPolicyPanicNativeE2E_CheckPreTradeStartDryRun(t *testing.T) {
 }
 
 func TestCustomPolicyPanicNativeE2E_PerformPreTradeCheckDryRun(t *testing.T) {
-	engine := newPanickingHookEngine(t, panicOnPerformPreTradeCheckDryRun)
+	engine := newPanickingHookEngine(
+		t, panicOnPerformPreTradeCheckDryRun, callbackPanicValue,
+	)
 
 	report, err := engine.ExecutePreTradeDryRun(newValidOrderForNativeE2E(t))
 	if err != nil {

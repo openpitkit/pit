@@ -93,8 +93,9 @@ func (e *ClientEngine[Order, Report, Adjustment]) Stop() {
 func (e *ClientEngine[Order, Report, Adjustment]) StartPreTrade(
 	order Order,
 ) (*ClientRequest, []reject.Reject, error) {
-	engineOrder, payload := newClientOrderPayload(order)
+	engineOrder, payload, sourceOrder := newClientOrderPayload(order)
 	request, rejects, err := e.engine.StartPreTrade(engineOrder)
+	runtime.KeepAlive(sourceOrder)
 	runtime.KeepAlive(order)
 	if err != nil || rejects != nil {
 		payload.release()
@@ -110,9 +111,10 @@ func (e *ClientEngine[Order, Report, Adjustment]) StartPreTrade(
 func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 	order Order,
 ) (*pretrade.Reservation, []reject.Reject, error) {
-	engineOrder, payload := newClientOrderPayload(order)
+	engineOrder, payload, sourceOrder := newClientOrderPayload(order)
 	defer payload.release()
 	reservation, rejects, err := e.engine.ExecutePreTrade(engineOrder)
+	runtime.KeepAlive(sourceOrder)
 	runtime.KeepAlive(order)
 	return reservation, rejects, err
 }
@@ -123,9 +125,10 @@ func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 func (e *ClientEngine[Order, Report, Adjustment]) ApplyDropCopy(
 	order Order,
 ) (*pretrade.DropCopyOperation, []reject.Reject, error) {
-	engineOrder, payload := newClientOrderPayload(order)
+	engineOrder, payload, sourceOrder := newClientOrderPayload(order)
 	defer payload.release()
 	operation, rejects, err := e.engine.ApplyDropCopy(engineOrder)
+	runtime.KeepAlive(sourceOrder)
 	runtime.KeepAlive(order)
 	return operation, rejects, err
 }
@@ -153,9 +156,10 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	adjustments []Adjustment,
 ) (accountadjustment.BatchResult, error) {
-	engineAdjustments, payloads := newClientAdjustmentPayloads(adjustments)
+	engineAdjustments, payloads, sourceAdjustments := newClientAdjustmentPayloads(adjustments)
 	defer payloads.release()
 	result, err := e.engine.ApplyAccountAdjustment(accountID, engineAdjustments)
+	runtime.KeepAlive(sourceAdjustments)
 	runtime.KeepAlive(adjustments)
 	return result, err
 }
@@ -261,12 +265,12 @@ func (handles clientPayloadHandles) release() {
 
 func newClientOrderPayload[Order pretrade.ClientOrder](
 	order Order,
-) (model.Order, *clientPayloadHandle) {
+) (model.Order, *clientPayloadHandle, model.Order) {
 	engineOrder := order.EngineOrder()
 	nativeOrder := engineOrder.Handle()
 	payload := newClientPayloadHandle(order)
 	native.OrderSetUserData(&nativeOrder, callback.NewUserDataFromHandle(payload.handle))
-	return model.NewOrderFromHandle(nativeOrder), payload
+	return model.NewOrderFromHandle(nativeOrder), payload, engineOrder
 }
 
 func newClientReportPayload[Report pretrade.ClientExecutionReport](
@@ -281,18 +285,19 @@ func newClientReportPayload[Report pretrade.ClientExecutionReport](
 
 func newClientAdjustmentPayloads[Adjustment clientAccountAdjustment](
 	adjustments []Adjustment,
-) ([]model.AccountAdjustment, clientPayloadHandles) {
+) ([]model.AccountAdjustment, clientPayloadHandles, []model.AccountAdjustment) {
 	engineAdjustments := make([]model.AccountAdjustment, len(adjustments))
 	payloads := make(clientPayloadHandles, len(adjustments))
+	sourceAdjustments := make([]model.AccountAdjustment, len(adjustments))
 	for i, adjustment := range adjustments {
-		engineAdjustments[i], payloads[i] = newClientAdjustmentPayload(adjustment)
+		engineAdjustments[i], payloads[i], sourceAdjustments[i] = newClientAdjustmentPayload(adjustment)
 	}
-	return engineAdjustments, payloads
+	return engineAdjustments, payloads, sourceAdjustments
 }
 
 func newClientAdjustmentPayload[Adjustment clientAccountAdjustment](
 	adjustment Adjustment,
-) (model.AccountAdjustment, *clientPayloadHandle) {
+) (model.AccountAdjustment, *clientPayloadHandle, model.AccountAdjustment) {
 	engineAdjustment := adjustment.EngineAccountAdjustment()
 	nativeAdjustment := engineAdjustment.Handle()
 	payload := newClientPayloadHandle(adjustment)
@@ -300,5 +305,5 @@ func newClientAdjustmentPayload[Adjustment clientAccountAdjustment](
 		&nativeAdjustment,
 		callback.NewUserDataFromHandle(payload.handle),
 	)
-	return model.NewAccountAdjustmentFromHandle(nativeAdjustment), payload
+	return model.NewAccountAdjustmentFromHandle(nativeAdjustment), payload, engineAdjustment
 }

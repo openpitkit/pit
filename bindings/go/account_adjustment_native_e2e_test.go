@@ -26,9 +26,50 @@ import (
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 	"go.openpit.dev/openpit/tx"
 )
+
+func TestAccountAdjustmentNativeE2E_BoundsFromValuesRejectOutOfBounds(t *testing.T) {
+	engine, err := NewEngineBuilder().FullSync().
+		Builtin(policies.BuildSpotFunds()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	adjustment := model.NewAccountAdjustment()
+	balanceOperation := adjustment.EnsureBalanceOperationView()
+	balanceOperation.SetAsset(mustAdjustmentNativeAsset(t, "USD"))
+	amount := adjustment.EnsureAmountView()
+	amount.SetBalance(param.NewAbsoluteAdjustmentAmount(
+		mustAdjustmentNativePositionSize(t, "11"),
+	))
+	adjustment.SetBounds(model.NewAccountAdjustmentBoundsFromValues(
+		model.AccountAdjustmentBoundsValues{
+			BalanceUpper: optional.Some(mustAdjustmentNativePositionSize(t, "10")),
+		},
+	))
+
+	result, err := engine.ApplyAccountAdjustment(
+		param.NewAccountIDFromUint64(77),
+		[]model.AccountAdjustment{adjustment},
+	)
+	if err != nil {
+		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
+	}
+	batchError, ok := result.BatchError.Get()
+	if !ok {
+		t.Fatal("ApplyAccountAdjustment() accepted out-of-bounds balance, want rejection")
+	}
+	if len(batchError.Rejects) != 1 {
+		t.Fatalf("reject count = %d, want 1", len(batchError.Rejects))
+	}
+	if got := batchError.Rejects[0].Code; got != reject.CodeAccountAdjustmentBoundsExceeded {
+		t.Fatalf("reject code = %v, want %v", got, reject.CodeAccountAdjustmentBoundsExceeded)
+	}
+}
 
 func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testing.T) {
 	policy := &accountAdjustmentCountingPolicy{name: "count-adjustments"}

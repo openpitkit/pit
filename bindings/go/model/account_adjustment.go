@@ -1086,7 +1086,7 @@ func (b *AccountAdjustmentBounds) SetValues(values AccountAdjustmentBoundsValues
 	b.setValues(values)
 }
 
-func (b AccountAdjustmentBounds) setValues(values AccountAdjustmentBoundsValues) {
+func (b *AccountAdjustmentBounds) setValues(values AccountAdjustmentBoundsValues) {
 	if value, ok := values.BalanceUpper.Get(); ok {
 		b.SetBalanceUpper(value)
 	}

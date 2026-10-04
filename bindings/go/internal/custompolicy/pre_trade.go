@@ -200,8 +200,11 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 	userData unsafe.Pointer,
 ) (result *C.OpenPitPretradeAccountBlockList) {
 	policyName := "openpit.callback"
+	// recover() can return nil for panic(nil), so track normal completion.
+	completed := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		recovered := recover()
+		if !completed {
 			result = newNativeAccountBlockListOrNil(
 				callbackPanicAccountBlocks(policyName, recovered),
 			)
@@ -209,7 +212,7 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 	}()
 	policy := getPreTrade(userData)
 	policyName = policy.name
-	return newNativeAccountBlockListOrNil(
+	result = newNativeAccountBlockListOrNil(
 		policy.impl.ApplyExecutionReport(
 			pretrade.NewPostTradeContextFromHandle(
 				native.PostTradeContext(ctx),
@@ -225,6 +228,8 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 			),
 		),
 	)
+	completed = true
+	return result
 }
 
 //export pitPretradePreTradePolicyApplyAccountAdjustment

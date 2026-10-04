@@ -19,6 +19,7 @@ package param
 
 import (
 	"hash/fnv"
+	"runtime"
 
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -118,7 +119,10 @@ func (a Asset) String() string { return a.Safe() }
 // Equal reports whether a and b identify the same asset by comparing their
 // byte content.  Always use Equal instead of == for semantic comparison.
 func (a Asset) Equal(b Asset) bool {
-	return a.Unsafe() == b.Unsafe()
+	equal := a.Unsafe() == b.Unsafe()
+	runtime.KeepAlive(a.buf)
+	runtime.KeepAlive(b.buf)
+	return equal
 }
 
 // Hash returns a content-based FNV-64a hash of the identifier.  Assets that
@@ -130,6 +134,7 @@ func (a Asset) Hash() uint64 {
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(a.Unsafe()))
+	runtime.KeepAlive(a.buf)
 	return h.Sum64()
 }
 

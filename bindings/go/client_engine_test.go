@@ -20,7 +20,9 @@ package openpit
 import (
 	"bytes"
 	"errors"
+	"runtime"
 	"runtime/cgo"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/openpit/accountadjustment"
@@ -62,6 +64,44 @@ func (r *clientEngineFreshModelReport) EngineExecutionReport() model.ExecutionRe
 	report.SetFill(fill)
 	r.nativeReport = report.Handle()
 	return report
+}
+
+type clientEngineFreshModelOrder struct {
+	asset       string
+	nativeOrder native.Order
+}
+
+func (o *clientEngineFreshModelOrder) EngineOrder() model.Order {
+	asset, err := param.NewAsset(o.asset)
+	if err != nil {
+		panic(err)
+	}
+	margin := model.NewOrderMargin()
+	margin.SetCollateralAsset(asset)
+	order := model.NewOrder()
+	order.SetMargin(margin)
+	operation := order.EnsureOperationView()
+	operation.SetAccountID(param.NewAccountIDFromUint64(1))
+	o.nativeOrder = order.Handle()
+	return order
+}
+
+type clientEngineFreshModelAdjustment struct {
+	asset            string
+	nativeAdjustment native.AccountAdjustment
+}
+
+func (a *clientEngineFreshModelAdjustment) EngineAccountAdjustment() model.AccountAdjustment {
+	asset, err := param.NewAsset(a.asset)
+	if err != nil {
+		panic(err)
+	}
+	operation := model.NewAccountAdjustmentBalanceOperation()
+	operation.SetAsset(asset)
+	adjustment := model.NewAccountAdjustment()
+	adjustment.SetBalanceOperationAndUnsetOtherOperations(operation)
+	a.nativeAdjustment = adjustment.Handle()
+	return adjustment
 }
 
 type clientEngineTestAdjustment struct {
@@ -161,6 +201,58 @@ func TestClientEnginePassesClientExecutionReport(t *testing.T) {
 	}
 }
 
+func TestClientEngineSafeReportPayloadMismatchReturnsSystemUnavailable(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		payload any
+	}{
+		{name: "missing"},
+		{name: "mismatched", payload: 42},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			policy := &clientEngineTestStartPolicy{killSwitch: true}
+			engine, err := NewClientEngineBuilder[
+				clientEngineTestOrder,
+				clientEngineTestReport,
+				clientEngineTestAdjustment,
+			]().
+				FullSync().
+				PreTrade(policy).
+				Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			defer engine.Stop()
+
+			report := model.NewExecutionReport()
+			if test.payload != nil {
+				nativeReport := report.Handle()
+				handle := cgo.NewHandle(test.payload)
+				t.Cleanup(handle.Delete)
+				native.ExecutionReportSetUserData(&nativeReport, callback.NewUserDataFromHandle(handle))
+				report = model.NewExecutionReportFromHandle(nativeReport)
+			}
+
+			result, err := engine.engine.ApplyExecutionReport(report)
+			if err != nil {
+				t.Fatalf("ApplyExecutionReport() error = %v", err)
+			}
+			want := reject.AccountBlock{
+				Code:    reject.CodeSystemUnavailable,
+				Policy:  policy.Name(),
+				Reason:  "client execution report payload mismatch",
+				Details: "expected client execution report payload type openpit.clientEngineTestReport",
+			}
+			if len(result.AccountBlocks) != 1 || result.AccountBlocks[0] != want {
+				t.Fatalf("AccountBlocks = %v, want [%v]", result.AccountBlocks, want)
+			}
+			if policy.reportCalled {
+				t.Fatal("client policy ApplyExecutionReport() called with invalid payload")
+			}
+		})
+	}
+}
+
 func TestClientEngineRetainsFreshExecutionReportModel(t *testing.T) {
 	price, err := param.NewPriceFromString("124")
 	if err != nil {
@@ -203,6 +295,120 @@ func TestClientEngineRetainsFreshExecutionReportModel(t *testing.T) {
 	}
 	if !bytes.Equal(policy.gotLock, report.lock) {
 		t.Fatalf("policy report lock = %v, want %v", policy.gotLock, report.lock)
+	}
+}
+
+func TestClientEngineRetainsFreshOrderModel(t *testing.T) {
+	const assetLength = 64 * 1024
+	const samples = 64
+	want := strings.Repeat("A", assetLength)
+	for _, entryPoint := range []string{
+		"StartPreTrade",
+		"ExecutePreTrade",
+		"ApplyDropCopy",
+	} {
+		t.Run(entryPoint, func(t *testing.T) {
+			policy := &clientEngineGCAssetPolicy{
+				t: t, checkStart: entryPoint == "StartPreTrade",
+			}
+			engine, err := NewClientEngineBuilder[
+				*clientEngineFreshModelOrder,
+				clientEngineTestReport,
+				*clientEngineFreshModelAdjustment,
+			]().
+				FullSync().
+				PreTrade(policy).
+				Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			defer engine.Stop()
+
+			for i := 0; i < samples; i++ {
+				order := &clientEngineFreshModelOrder{asset: want}
+				var rejects []reject.Reject
+				var err error
+				switch entryPoint {
+				case "StartPreTrade":
+					var request *ClientRequest
+					request, rejects, err = engine.StartPreTrade(order)
+					if request != nil {
+						request.Close()
+					}
+				case "ExecutePreTrade":
+					var reservation *pretrade.Reservation
+					reservation, rejects, err = engine.ExecutePreTrade(order)
+					if reservation != nil {
+						reservation.Close()
+					}
+				case "ApplyDropCopy":
+					var operation *pretrade.DropCopyOperation
+					operation, rejects, err = engine.ApplyDropCopy(order)
+					if operation != nil {
+						operation.Close()
+					}
+				}
+				if err != nil {
+					t.Fatalf("%s() sample %d error = %v", entryPoint, i, err)
+				}
+				if len(rejects) != 0 {
+					t.Fatalf("%s() sample %d rejects = %v, want none", entryPoint, i, rejects)
+				}
+				if !policy.orderAssetSet {
+					t.Fatalf("sample %d: policy order collateral asset is unset", i)
+				}
+				if policy.gotOrderAsset != want {
+					prefix := policy.gotOrderAsset
+					if len(prefix) > 64 {
+						prefix = prefix[:64]
+					}
+					t.Fatalf(
+						"sample %d: policy order collateral asset prefix = %q, length = %d, want A bytes",
+						i, prefix, len(policy.gotOrderAsset),
+					)
+				}
+			}
+			if policy.orderChecks != samples {
+				t.Fatalf("policy order checks = %d, want %d", policy.orderChecks, samples)
+			}
+		})
+	}
+}
+
+func TestClientEngineRetainsFreshAccountAdjustmentModel(t *testing.T) {
+	const assetLength = 64 * 1024
+	const samples = 64
+	want := strings.Repeat("A", assetLength)
+	adjustments := make([]*clientEngineFreshModelAdjustment, samples)
+	for i := range adjustments {
+		adjustments[i] = &clientEngineFreshModelAdjustment{asset: want}
+	}
+	policy := &clientEngineGCAssetPolicy{t: t, adjustments: adjustments}
+	engine, err := NewClientEngineBuilder[
+		*clientEngineFreshModelOrder,
+		clientEngineTestReport,
+		*clientEngineFreshModelAdjustment,
+	]().
+		FullSync().
+		PreTrade(policy).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	result, err := engine.ApplyAccountAdjustment(
+		param.NewAccountIDFromUint64(1),
+		adjustments,
+	)
+	if err != nil {
+		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
+	}
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
+	}
+	if policy.adjustmentChecks != samples {
+		t.Fatalf("policy adjustment checks = %d, want %d", policy.adjustmentChecks, samples)
 	}
 }
 
@@ -426,9 +632,10 @@ func TestClientEngineDropCopyPayloadMismatchIsEvaluationFailure(t *testing.T) {
 }
 
 type clientEngineTestStartPolicy struct {
-	order      clientEngineTestOrder
-	report     clientEngineTestReport
-	killSwitch bool
+	order        clientEngineTestOrder
+	report       clientEngineTestReport
+	reportCalled bool
+	killSwitch   bool
 }
 
 type clientEngineGCReportPolicy struct {
@@ -490,6 +697,122 @@ func (clientEngineGCReportPolicy) ApplyAccountAdjustment(
 	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
+type clientEngineGCAssetPolicy struct {
+	t                *testing.T
+	checkStart       bool
+	orderChecks      int
+	orderAssetSet    bool
+	gotOrderAsset    string
+	adjustments      []*clientEngineFreshModelAdjustment
+	adjustmentChecks int
+}
+
+func (clientEngineGCAssetPolicy) Close() {}
+
+func (clientEngineGCAssetPolicy) Name() string {
+	return "client-engine-gc-asset"
+}
+
+func (clientEngineGCAssetPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
+func (p *clientEngineGCAssetPolicy) CheckPreTradeStart(
+	_ pretrade.Context,
+	order *clientEngineFreshModelOrder,
+) []reject.Reject {
+	if p.checkStart {
+		p.checkOrderAsset(order)
+	}
+	return nil
+}
+
+func (p *clientEngineGCAssetPolicy) PerformPreTradeCheck(
+	_ pretrade.Context,
+	order *clientEngineFreshModelOrder,
+	_ tx.Mutations,
+	_ pretrade.Result,
+) []reject.Reject {
+	if !p.checkStart {
+		p.checkOrderAsset(order)
+	}
+	return nil
+}
+
+func (p *clientEngineGCAssetPolicy) checkOrderAsset(order *clientEngineFreshModelOrder) {
+	p.orderChecks++
+	p.orderAssetSet = false
+	p.gotOrderAsset = ""
+	forceHandleRetentionFinalizers(p.t)
+	replacements := newClientEngineAssetReplacementBuffers(len(order.asset))
+	engineOrder := model.NewOrderFromHandle(order.nativeOrder)
+	margin, marginSet := engineOrder.Margin().Get()
+	if marginSet {
+		asset, assetSet := margin.CollateralAsset().Get()
+		p.orderAssetSet = assetSet
+		if assetSet {
+			p.gotOrderAsset = asset.Safe()
+		}
+	}
+	runtime.KeepAlive(replacements)
+}
+
+func (clientEngineGCAssetPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	clientEngineTestReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
+	return nil
+}
+
+func (p *clientEngineGCAssetPolicy) ApplyAccountAdjustment(
+	_ accountadjustment.Context,
+	_ param.AccountID,
+	_ model.AccountAdjustment,
+	_ tx.Mutations,
+	_ pretrade.AccountOutcomes,
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	adjustment := p.adjustments[p.adjustmentChecks]
+	p.adjustmentChecks++
+	forceHandleRetentionFinalizers(p.t)
+	replacements := newClientEngineAssetReplacementBuffers(len(adjustment.asset))
+	engineAdjustment := model.NewAccountAdjustmentFromHandle(adjustment.nativeAdjustment)
+	var gotAsset string
+	var assetSet bool
+	operation, operationSet := engineAdjustment.BalanceOperation().Get()
+	if operationSet {
+		var asset param.Asset
+		asset, assetSet = operation.Asset().Get()
+		if assetSet {
+			gotAsset = asset.Safe()
+		}
+	}
+	runtime.KeepAlive(replacements)
+	if !assetSet {
+		p.t.Errorf("sample %d: policy adjustment asset is unset", p.adjustmentChecks-1)
+	} else if gotAsset != adjustment.asset {
+		prefix := gotAsset
+		if len(prefix) > 64 {
+			prefix = prefix[:64]
+		}
+		p.t.Errorf(
+			"sample %d: policy adjustment asset prefix = %q, length = %d, want A bytes",
+			p.adjustmentChecks-1, prefix, len(gotAsset),
+		)
+	}
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
+}
+
+func newClientEngineAssetReplacementBuffers(length int) []*native.String {
+	overwrite := strings.Repeat("Z", length)
+	replacements := make([]*native.String, 1024)
+	for i := range replacements {
+		replacements[i] = native.NewString(overwrite)
+	}
+	return replacements
+}
+
 func (clientEngineTestStartPolicy) Close() {}
 
 func (clientEngineTestStartPolicy) Name() string {
@@ -523,6 +846,7 @@ func (p *clientEngineTestStartPolicy) ApplyExecutionReport(
 	_ pretrade.PostTradeAdjustments,
 	_ pretrade.PostTradePnls,
 ) []reject.AccountBlock {
+	p.reportCalled = true
 	p.report = report
 	if p.killSwitch {
 		return []reject.AccountBlock{

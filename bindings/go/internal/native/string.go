@@ -199,7 +199,9 @@ func (b *String) Unsafe() string {
 // fully independent of the C buffer and remains valid after the String is
 // collected.
 func (b *String) Safe() string {
-	return string(unsafe.Slice((*byte)(unsafe.Pointer(b.ptr)), b.len))
+	value := string(unsafe.Slice((*byte)(unsafe.Pointer(b.ptr)), b.len))
+	runtime.KeepAlive(b)
+	return value
 }
 
 // Len returns the byte length of the string.

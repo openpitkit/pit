@@ -109,16 +109,50 @@ func TestSafeClientPreTradePolicyCastsOrderPayload(t *testing.T) {
 	}
 }
 
-func TestSafeClientPreTradePolicyApplyExecutionReportIgnoresMissingPayload(t *testing.T) {
-	wrapped := NewSafeClientPreTradePolicy(&clientPayloadTestPolicy{killSwitch: true})
+func TestSafeClientPreTradePolicyApplyExecutionReportBlocksMissingPayload(t *testing.T) {
+	policy := &clientPayloadTestPolicy{killSwitch: true}
+	wrapped := NewSafeClientPreTradePolicy(policy)
 
-	if len(wrapped.ApplyExecutionReport(
+	blocks := wrapped.ApplyExecutionReport(
 		PostTradeContext{},
 		model.NewExecutionReport(),
 		PostTradeAdjustments{},
 		PostTradePnls{},
-	)) != 0 {
-		t.Fatal("ApplyExecutionReport() returned blocks, want empty")
+	)
+	want := reject.AccountBlock{
+		Code:    reject.CodeSystemUnavailable,
+		Policy:  policy.Name(),
+		Reason:  "client execution report payload mismatch",
+		Details: "expected client execution report payload type pretrade.clientPayloadTestReport",
+	}
+	if len(blocks) != 1 || blocks[0] != want {
+		t.Fatalf("ApplyExecutionReport() blocks = %v, want [%v]", blocks, want)
+	}
+	if policy.reportCalled {
+		t.Fatal("client policy ApplyExecutionReport() called with missing payload")
+	}
+}
+
+func TestSafeClientPreTradePolicyApplyExecutionReportCastsReport(t *testing.T) {
+	policy := &clientPayloadTestPolicy{killSwitch: true}
+	wrapped := NewSafeClientPreTradePolicy(policy)
+	report := clientPayloadTestReport{
+		ExecutionReport: model.NewExecutionReport(),
+		VenueExecID:     "safe-main-report",
+	}
+
+	blocks := wrapped.ApplyExecutionReport(
+		PostTradeContext{},
+		reportWithPayload(t, report),
+		PostTradeAdjustments{},
+		PostTradePnls{},
+	)
+	want := reject.NewAccountBlock(reject.CodePnlKillSwitchTriggered, "test", "kill switch", "")
+	if len(blocks) != 1 || blocks[0] != want {
+		t.Fatalf("ApplyExecutionReport() blocks = %v, want [%v]", blocks, want)
+	}
+	if !policy.reportCalled || policy.report != report {
+		t.Fatalf("client policy report = %v, called = %v, want %v", policy.report, policy.reportCalled, report)
 	}
 }
 
@@ -249,22 +283,34 @@ func TestSafePayloadReturnsFalseForInvalidHandlePointer(t *testing.T) {
 	}
 }
 
-func TestSafeClientPreTradePolicyApplyExecutionReportReturnsFalseOnMismatchedPayload(t *testing.T) {
-	wrapped := NewSafeClientPreTradePolicy(&clientPayloadTestPolicy{killSwitch: true})
+func TestSafeClientPreTradePolicyApplyExecutionReportBlocksMismatchedPayload(t *testing.T) {
+	policy := &clientPayloadTestPolicy{killSwitch: true}
+	wrapped := NewSafeClientPreTradePolicy(policy)
 
-	if len(wrapped.ApplyExecutionReport(
+	blocks := wrapped.ApplyExecutionReport(
 		PostTradeContext{},
 		reportWithAnyPayload(t, 42),
 		PostTradeAdjustments{},
 		PostTradePnls{},
-	)) != 0 {
-		t.Fatal("ApplyExecutionReport() returned blocks, want empty")
+	)
+	want := reject.AccountBlock{
+		Code:    reject.CodeSystemUnavailable,
+		Policy:  policy.Name(),
+		Reason:  "client execution report payload mismatch",
+		Details: "expected client execution report payload type pretrade.clientPayloadTestReport",
+	}
+	if len(blocks) != 1 || blocks[0] != want {
+		t.Fatalf("ApplyExecutionReport() blocks = %v, want [%v]", blocks, want)
+	}
+	if policy.reportCalled {
+		t.Fatal("client policy ApplyExecutionReport() called with mismatched payload")
 	}
 }
 
 type clientPayloadTestPolicy struct {
 	order                   clientPayloadTestOrder
 	report                  clientPayloadTestReport
+	reportCalled            bool
 	killSwitch              bool
 	closeCalls              int
 	accountAdjustmentCalled bool
@@ -302,6 +348,7 @@ func (p *clientPayloadTestPolicy) ApplyExecutionReport(
 	_ PostTradeAdjustments,
 	_ PostTradePnls,
 ) []reject.AccountBlock {
+	p.reportCalled = true
 	p.report = report
 	if p.killSwitch {
 		return []reject.AccountBlock{reject.NewAccountBlock(reject.CodePnlKillSwitchTriggered, "test", "kill switch", "")}

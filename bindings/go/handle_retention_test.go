@@ -19,6 +19,7 @@ package openpit
 
 import (
 	"bytes"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -358,6 +359,97 @@ func TestHandleRetentionAccessorLastReceiver(t *testing.T) {
 						prefix,
 						len(got),
 					)
+				}
+			}
+			runtime.KeepAlive(replacements)
+		})
+	}
+}
+
+func TestHandleRetentionAssetCopyLastReceiver(t *testing.T) {
+	const (
+		readers     = 64
+		assetLength = 64 * 1024
+	)
+
+	want := strings.Repeat("A", assetLength)
+	overwrite := strings.Repeat("Z", assetLength)
+	wantHash := builtinTestAsset(t, want).Hash()
+	tests := []struct {
+		name  string
+		check func(param.Asset) string
+	}{
+		{
+			name: "Safe",
+			check: func(asset param.Asset) string {
+				if got := asset.Safe(); got != want {
+					prefix := got
+					if len(prefix) > 64 {
+						prefix = prefix[:64]
+					}
+					return fmt.Sprintf(
+						"Safe() prefix = %q, length = %d, want A bytes",
+						prefix,
+						len(got),
+					)
+				}
+				return ""
+			},
+		},
+		{
+			name: "Equal",
+			check: func(asset param.Asset) string {
+				argument, err := param.NewAsset(want)
+				if err != nil {
+					return fmt.Sprintf("NewAsset() error = %v", err)
+				}
+				if !asset.Equal(argument) {
+					return "Equal() = false, want true"
+				}
+				return ""
+			},
+		},
+		{
+			name: "Hash",
+			check: func(asset param.Asset) string {
+				if got := asset.Hash(); got != wantHash {
+					return fmt.Sprintf("Hash() = %d, want %d", got, wantHash)
+				}
+				return ""
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			start := make(chan struct{})
+			results := make(chan string, readers)
+			var ready sync.WaitGroup
+			ready.Add(readers)
+			for range readers {
+				asset := builtinTestAsset(t, want)
+				go func(asset param.Asset) {
+					ready.Done()
+					<-start
+					results <- test.check(asset)
+				}(asset)
+			}
+
+			ready.Wait()
+			close(start)
+			replacementsDone := make(chan []*native.String, 1)
+			go func() {
+				replacements := make([]*native.String, 1024)
+				for i := range replacements {
+					replacements[i] = native.NewString(overwrite)
+				}
+				replacementsDone <- replacements
+			}()
+			forceHandleRetentionFinalizers(t)
+			replacements := <-replacementsDone
+			for range readers {
+				if mismatch := <-results; mismatch != "" {
+					t.Fatal(mismatch)
 				}
 			}
 			runtime.KeepAlive(replacements)

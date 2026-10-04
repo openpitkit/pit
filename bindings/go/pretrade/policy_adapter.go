@@ -19,6 +19,7 @@ package pretrade
 
 import (
 	"fmt"
+	"reflect"
 	"unsafe"
 
 	"go.openpit.dev/openpit/accountadjustment"
@@ -95,8 +96,9 @@ type ClientPreTradePolicy[Order ClientOrder, Report ClientExecutionReport] inter
 // NewSafeClientPreTradePolicy adapts a client typed pre-trade policy to
 // the standard policy interface with payload validation.
 //
-// Missing or mismatched order payloads become an order-scoped reject. Missing
-// or mismatched report payloads return false.
+// Missing or mismatched order payloads become an order-scoped reject.
+// Missing or mismatched report payloads become a SystemUnavailable account
+// block.
 func NewSafeClientPreTradePolicy[
 	Order ClientOrder,
 	Report ClientExecutionReport,
@@ -188,7 +190,15 @@ func (p *safeClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
 ) []reject.AccountBlock {
 	report, ok := safeReportPayload[Report](engineReport)
 	if !ok {
-		return nil
+		return []reject.AccountBlock{reject.NewAccountBlock(
+			reject.CodeSystemUnavailable,
+			p.policy.Name(),
+			"client execution report payload mismatch",
+			fmt.Sprintf(
+				"expected client execution report payload type %v",
+				reflect.TypeFor[Report](),
+			),
+		)}
 	}
 	return p.policy.ApplyExecutionReport(ctx, report, adjustments, pnls)
 }
