@@ -73,8 +73,29 @@ The Windows suite builds and checks `python-wheel-windows-amd64`,
 examples. The script rejects a Linux Docker engine, since Windows containers
 cannot run there.
 
+For image-build failures, the **Diagnose Windows release image** workflow runs
+on a branch push that changes its workflow file or `e2e/diagnose-windows-image.ps1`.
+Push runs use the immutable base image from failed release run `37215148097`.
+Once the workflow is on the default branch, it can also be started manually
+with a required base image reference pinned by its SHA-256 digest. It executes
+the Dockerfile's Build Tools installation in a retained container, exports
+installer logs, and attempts the image commit separately.
+The `windows-image-diagnostics-<run>-<attempt>` artifact includes container
+state, disk space, Docker output, and Windows container event logs. This
+diagnostic does not need release assets or release credentials.
+
+On a compatible Windows host, the same experiment is available through
+`e2e/diagnose-windows-image.ps1`, with mandatory `-BaseImage` and
+`-OutputDirectory` arguments. The output directory must not already exist.
+The script leaves its container and diagnostic image available for inspection.
+
 ## How to run the tests
 
-There is no separate unit-test step: each scenario *is* the test. A scenario
-fails (and the run exits non-zero) if the released artifact cannot be fetched,
-the consumer or an example fails to build, or any of their tests fail.
+Each release scenario *is* the test. A scenario fails (and the run exits
+non-zero) if the released artifact cannot be fetched, the consumer or an
+example fails to build, or any of their tests fail.
+
+Check the diagnostic script's error handling with
+`powershell -NoProfile -File e2e/tests/diagnose-windows-image.Tests.ps1`.
+These focused checks use a simulated Docker lifecycle and native subprocesses;
+the Windows workflow runs the actual installation and image commit.
