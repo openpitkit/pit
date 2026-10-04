@@ -103,6 +103,11 @@ C_API_SECTION = ApiSection(
 API_SECTIONS: tuple[ApiSection, ...] = (
     C_API_SECTION,
     ApiSection(
+        "python-api",
+        "Python API",
+        "Python package guides and generated public API reference for openpit.",
+    ),
+    ApiSection(
         "cpp-api",
         "C++ API",
         "C++ SDK reference for the OpenPit::openpit CMake package.",
@@ -2425,8 +2430,7 @@ def render_doc_page(
             [
                 f'  <meta name="description" content="{escaped_description}" />',
                 f'  <meta property="og:title" content="{escaped_title}" />',
-                f'  <meta property="og:description"'
-                f' content="{escaped_description}" />',
+                f'  <meta property="og:description" content="{escaped_description}" />',
                 '  <meta property="og:type" content="website" />',
                 '  <meta property="og:site_name" content="OpenPit" />',
                 '  <meta property="og:locale" content="en_US" />',

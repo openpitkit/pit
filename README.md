@@ -125,11 +125,15 @@ constraints that tolerate API evolution during the pre-stable phase.
 
 ## Where To Start
 
+- [Integration route for AI coding assistants](https://wiki.openpit.dev/Getting-Started/#integration-route)
+  helps you choose a version and SDK, run a first example, and follow the integration
+  contracts with a reusable implementation prompt.
 - [openpit.dev](https://openpit.dev/) - project website with an overview and
   links to all documentation.
 - [docs.openpit.dev](https://docs.openpit.dev/) - generated API references:
   [C](https://docs.openpit.dev/c-api/),
-  [C++](https://docs.openpit.dev/cpp-api/), and
+  [C++](https://docs.openpit.dev/cpp-api/),
+  [Python](https://docs.openpit.dev/python-api/), and
   [JavaScript](https://docs.openpit.dev/js-api/).
 - [Go SDK README](bindings/go/README.md) - integrate OpenPit from Go.
 - [Python SDK README](bindings/python/README.md) - the `openpit` Python

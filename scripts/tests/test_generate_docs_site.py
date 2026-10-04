@@ -18,8 +18,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,6 +52,9 @@ Body text.
 </details>
 """
 
+DOCS_VERSION = "1.2.3"
+DOCS_REVISION = "a" * 40
+
 
 def load_module(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -67,6 +72,7 @@ def load_c_api_module():
 
 def load_docs_site_module():
     load_c_api_module()
+    load_module(SCRIPTS_DIR / "_docs_provenance.py", "_docs_provenance")
     return load_module(DOCS_SITE_SCRIPT_PATH, "_generate_docs_site")
 
 
@@ -175,8 +181,7 @@ def make_site_dir(root: Path) -> Path:
     )
     (js_api / "guides").mkdir(exist_ok=True)
     (js_api / "guides" / "index.html").write_text(
-        "<!doctype html><html><head><title>Guides</title></head>"
-        "<body></body></html>\n",
+        "<!doctype html><html><head><title>Guides</title></head><body></body></html>\n",
         encoding="utf-8",
     )
     for directory, name in (
@@ -216,9 +221,154 @@ def make_repo(module, root: Path, monkeypatch) -> Path:
     tests to an unrelated documentation edit.
     """
     readme = write_sample_readme(root)
+    monkeypatch.setattr(module, "ROOT", root)
     monkeypatch.setattr(module, "SITE_DIR", make_site_dir(root))
     monkeypatch.setattr(module, "README_PATH", readme)
+    manifest = root / "crates" / "openpit" / "Cargo.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(f'[package]\nname = "openpit"\nversion = "{DOCS_VERSION}"\n')
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda command, **kwargs: DOCS_REVISION if command[-1] == "HEAD" else "",
+    )
+    python_docs = root / "bindings" / "python" / "docs" / "_build"
+    (python_docs / "api").mkdir(parents=True)
+    (python_docs / "_static").mkdir()
+    (python_docs / "_static" / "basic.css").write_text("body {}\n")
+    (python_docs / "index.html").write_text(
+        "<html><head><title>Python API</title></head><body>"
+        '<a href="api/engine.html#openpit.Engine">Engine</a></body></html>'
+    )
+    (python_docs / "api" / "engine.html").write_text(
+        "<html><head><title>Python Engine</title></head><body>"
+        '<a href="../index.html">Python</a></body></html>'
+    )
+    (python_docs / "docs-provenance.json").write_text(
+        json.dumps(
+            {
+                "version": DOCS_VERSION,
+                "revision": DOCS_REVISION,
+                "source_state": "committed",
+            }
+        )
+    )
     return root
+
+
+def test_assembled_pages_expose_pinned_development_provenance(tmp_path, monkeypatch):
+    module = load_docs_site_module()
+    make_repo(module, tmp_path / "repo", monkeypatch)
+    target = module.assemble(tmp_path / "site")
+
+    for path in target.rglob("*.html"):
+        page = path.read_text()
+        assert f'name="openpit-version" content="{DOCS_VERSION}"' in page
+        assert f'name="openpit-source-revision" content="{DOCS_REVISION}"' in page
+        assert 'rel="describedby" href="https://docs.openpit.dev/llms.txt"' in page
+        assert "Rolling development documentation" in page
+        assert "may differ from an installed release" in page
+        assert "https://github.com/openpitkit/pit/blob/main/" not in page
+    index = (target / "index.html").read_text()
+    assert f"https://github.com/openpitkit/pit/blob/{DOCS_REVISION}/LICENSE" in index
+
+
+def test_python_reference_is_published_and_discoverable(tmp_path, monkeypatch):
+    module = load_docs_site_module()
+    make_repo(module, tmp_path / "repo", monkeypatch)
+    target = module.assemble(tmp_path / "site")
+
+    page = (target / "python-api" / "api" / "engine.html").read_text()
+    assert 'href="https://docs.openpit.dev/python-api/api/engine"' in page
+    assert 'href="../"' in page
+    assert (target / "python-api" / "_static" / "basic.css").read_text() == "body {}\n"
+    llms = (target / "llms.txt").read_text()
+    assert DOCS_VERSION in llms and DOCS_REVISION in llms
+    assert "https://docs.openpit.dev/python-api/" in llms
+    assert "https://docs.openpit.dev/python-api/api/engine" in llms
+    assert "https://pkg.go.dev/go.openpit.dev/openpit" in llms
+    assert "https://docs.rs/openpit/" in llms
+    assert (
+        "https://docs.openpit.dev/python-api/api/engine"
+        in (target / "sitemap.xml").read_text()
+    )
+
+
+def test_dirty_build_identifies_links_as_base_revision(tmp_path, monkeypatch):
+    module = load_docs_site_module()
+    root = make_repo(module, tmp_path / "repo", monkeypatch)
+    marker = root / "bindings/python/docs/_build/docs-provenance.json"
+    provenance = json.loads(marker.read_text())
+    provenance["source_state"] = "working-tree"
+    marker.write_text(json.dumps(provenance))
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda command, **kwargs: (
+            DOCS_REVISION if command[-1] == "HEAD" else " M README.md\n"
+        ),
+    )
+
+    target = module.assemble(tmp_path / "site")
+
+    page = (target / "index.html").read_text()
+    assert 'name="openpit-source-state" content="working-tree"' in page
+    assert "Uncommitted working tree; source links refer to the base revision" in page
+    assert "working-tree" in (target / "llms.txt").read_text()
+
+
+def test_python_build_caches_are_not_published(tmp_path, monkeypatch):
+    module = load_docs_site_module()
+    root = make_repo(module, tmp_path / "repo", monkeypatch)
+    python_docs = root / "bindings/python/docs/_build"
+    (python_docs / ".doctrees").mkdir()
+    (python_docs / ".doctrees" / "environment.pickle").write_bytes(b"cache")
+    (python_docs / ".buildinfo").write_text("build cache")
+    (python_docs / "_sources").mkdir()
+    (python_docs / "_sources" / "index.md.txt").write_text("# Python\n")
+
+    target = module.assemble(tmp_path / "site") / "python-api"
+
+    assert not (target / ".doctrees").exists()
+    assert not (target / ".buildinfo").exists()
+    assert (target / "_sources" / "index.md.txt").read_text() == "# Python\n"
+
+
+@pytest.mark.parametrize("damage", ["missing", "revision", "version", "invalid_json"])
+def test_assembly_rejects_unidentified_python_docs_before_writing(
+    tmp_path, monkeypatch, damage
+):
+    module = load_docs_site_module()
+    root = make_repo(module, tmp_path / "repo", monkeypatch)
+    marker = root / "bindings/python/docs/_build/docs-provenance.json"
+    if damage == "missing":
+        marker.unlink()
+    elif damage == "invalid_json":
+        marker.write_text("{")
+    else:
+        identity = json.loads(marker.read_text())
+        identity[damage] = "0" * 40 if damage == "revision" else "1.2.2"
+        marker.write_text(json.dumps(identity))
+    target = tmp_path / "site"
+    target.mkdir()
+    (target / "keep.txt").write_text("previous deployment")
+
+    with pytest.raises(module.MissingSiteSourceError, match="Python.*provenance"):
+        module.assemble(target)
+    assert (target / "keep.txt").read_text() == "previous deployment"
+
+
+@pytest.mark.parametrize("damage", ["version", "revision"])
+def test_assembly_rejects_invalid_source_provenance(tmp_path, monkeypatch, damage):
+    module = load_docs_site_module()
+    root = make_repo(module, tmp_path / "repo", monkeypatch)
+    if damage == "version":
+        (root / "crates/openpit/Cargo.toml").write_text('[package]\nversion = "main"\n')
+    else:
+        monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: "main")
+
+    with pytest.raises(ValueError, match="version|revision"):
+        module.assemble(tmp_path / "site")
 
 
 def test_readme_links_are_rewritten_per_target_kind(tmp_path: Path) -> None:
@@ -473,7 +623,14 @@ def test_assembled_sitemap_matches_the_final_tree(tmp_path: Path, monkeypatch) -
 def test_llms_txt_describes_every_published_reference() -> None:
     module = load_docs_site_module()
 
-    llms = module.render_llms_txt()
+    llms = module.render_llms_txt(
+        {
+            "version": DOCS_VERSION,
+            "revision": DOCS_REVISION,
+            "source_state": "committed",
+        },
+        [],
+    )
 
     assert llms.startswith("# OpenPit API References\n")
     for section in module.API_SECTIONS:
@@ -516,6 +673,7 @@ def test_assemble_publishes_only_the_documentation_tree(
         "index.html",
         "js-api",
         "llms.txt",
+        "python-api",
         "robots.txt",
         "sitemap.xml",
     ]
@@ -537,10 +695,16 @@ def test_assemble_publishes_only_the_documentation_tree(
         module.render_robots_txt()
     )
     # The subdomain gets its own llms.txt, never the landing page's.
-    assert (target / "llms.txt").read_text(encoding="utf-8") == module.render_llms_txt()
-    assert (target / "404.html").read_text(encoding="utf-8") == (
-        module.render_not_found_page()
+    assert (target / "llms.txt").read_text(encoding="utf-8") == module.render_llms_txt(
+        {
+            "version": DOCS_VERSION,
+            "revision": DOCS_REVISION,
+            "source_state": "committed",
+        },
+        module.discover_sitemap_urls(target),
     )
+    not_found = (target / "404.html").read_text(encoding="utf-8")
+    assert '<meta name="robots" content="noindex, follow"' in not_found
     assert (target / "_redirects").read_text(encoding="utf-8") == (
         module.render_redirects(target)
     )

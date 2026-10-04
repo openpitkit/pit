@@ -4,6 +4,7 @@
 __pycache__/
 /.tmp/
 /.wt/
+/.venv/
 
 # Generated API documentation. Built and published from the CI pipeline only;
 # the authored files under docs/ (assets, favicon*, partials, ...) stay tracked.

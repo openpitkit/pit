@@ -274,8 +274,10 @@ gen-docs-site: gen-docs-c gen-docs-cpp gen-docs-js
 
 # Collect the generated references, the README-rendered root index, the
 # robots.txt, sitemap, and the referenced assets into target/docs-site. The
-# sitemap and redirects are derived from the final normalized HTML tree. That
-# tree is what Cloudflare Pages publishes as docs.openpit.dev; the openpit.dev
+# sitemap and redirects are derived from the final normalized HTML tree.
+# Python HTML and its provenance must first be produced by build-python-docs
+# or restored from that job's artifact. That tree is what Cloudflare Pages
+# publishes as docs.openpit.dev; the openpit.dev
 # landing page lives in its own repository and stays out of it.
 assemble-docs-site: _ensure-python-env gen-docs-site
     {{ python_path }} scripts/_generate_docs_site.py
@@ -283,6 +285,7 @@ assemble-docs-site: _ensure-python-env gen-docs-site
 # Build Python API docs; warnings are errors.
 build-python-docs: python-develop-debug
     cd bindings/python && sphinx-build -b html docs docs/_build -W
+    {{ python_path }} scripts/_docs_provenance.py bindings/python/docs/_build
 # Copy monorepo LICENSE, OWNERS and THIRD-PARTY-LICENSES into the Python
 # package.
 copy-python-metadata:

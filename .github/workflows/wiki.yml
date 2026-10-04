@@ -64,6 +64,10 @@ jobs:
         working-directory: ${{ runner.temp }}/pit.wiki
         run: python -m pip install -r .site/requirements.txt
 
+      - name: Test wiki source preparation and discovery
+        working-directory: ${{ runner.temp }}/pit.wiki
+        run: python -m unittest discover -s .site/scripts/tests -v
+
       - name: Prepare wiki source
         working-directory: ${{ runner.temp }}/pit.wiki
         run: python .site/scripts/prepare_wiki_source.py --source .

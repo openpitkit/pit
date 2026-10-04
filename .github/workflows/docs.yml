@@ -70,9 +70,19 @@ jobs:
       - name: Build documentation
         run: just --justfile "$JUSTFILE" build-python-docs
 
+      - name: Upload Python documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-docs
+          path: bindings/python/docs/_build
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
   build-site:
     name: Build docs site
     runs-on: ubuntu-22.04
+    needs: [build]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -139,6 +149,12 @@ jobs:
       - name: Setup just
         uses: extractions/setup-just@v3
 
+      - name: Download Python documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: python-docs
+          path: bindings/python/docs/_build
+
       - name: Build documentation site
         run: just --justfile "$JUSTFILE" assemble-docs-site
 
@@ -167,8 +183,7 @@ jobs:
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/main'
       && github.repository == 'openpitkit/pit'
-    # Only build-site produces what is published; the other doc jobs build
-    # references that never reach this site, so they must not gate the deploy.
+    # build-site combines the Python artifact and the other generated references.
     needs: [build-site]
     permissions:
       contents: read

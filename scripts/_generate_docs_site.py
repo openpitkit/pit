@@ -30,6 +30,7 @@ of ``docs.openpit.dev`` even when a copy is left behind under ``docs/``.
 
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 import shutil
@@ -38,6 +39,7 @@ from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 import _generate_api_c_h as header
+from _docs_provenance import read_provenance
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
@@ -250,7 +252,7 @@ def split_leading_title(tokens: list[Token]) -> tuple[str, list[Token]]:
     shape = [token.type for token in opening]
     if shape != ["heading_open", "inline", "heading_close"] or opening[0].tag != "h1":
         raise InvalidReadmeError(
-            "README must start with a level-one heading, but it starts with" f" {shape}"
+            f"README must start with a level-one heading, but it starts with {shape}"
         )
     return tokens[1].content.strip(), tokens[3:]
 
@@ -601,7 +603,7 @@ def normalize_navigation_data(
             clean = _clean_generated_url(
                 match.group("url"), section, aliases, source_path
             )
-            return f'{match.group("quote")}{clean}{match.group("quote")}'
+            return f"{match.group('quote')}{clean}{match.group('quote')}"
 
         normalized = _DATA_URL_RE.sub(rewrite_url, text)
         if normalized != text:
@@ -637,7 +639,7 @@ def render_robots_txt() -> str:
     return "\n".join(lines)
 
 
-def render_llms_txt() -> str:
+def render_llms_txt(provenance: dict[str, str], urls: list[str]) -> str:
     """Render the llms.txt for the documentation subdomain.
 
     The landing page describes the project; this one describes what is
@@ -649,9 +651,17 @@ def render_llms_txt() -> str:
         "",
         f"> {header.SITE_BASE_URL} publishes the generated API references of"
         " OpenPit, an open-source, embeddable pre-trade risk engine and SDK."
-        " Every page here is generated from the sources of the release it"
-        " documents; the project overview lives on the landing page and the"
+        " These are rolling development docs and may differ from an installed"
+        " release; the project overview lives on the landing page and the"
         " conceptual documentation in the wiki.",
+        "",
+        f"Package version in this checkout: {provenance['version']}.",
+        f"Source revision: {provenance['revision']}.",
+        f"Source state: {provenance['source_state']}. "
+        "Uncommitted builds link to their base revision.",
+        f"Source: https://github.com/openpitkit/pit/tree/{provenance['revision']}",
+        "Match documentation and examples to the version you installed. The wiki"
+        " and external package references are published independently.",
         "",
         "## References",
         "",
@@ -662,6 +672,14 @@ def render_llms_txt() -> str:
     )
     lines.extend(
         [
+            "- [Go API](https://pkg.go.dev/go.openpit.dev/openpit): Released Go"
+            " module reference; select your installed module version.",
+            "- [Rust API](https://docs.rs/openpit/): Released Rust crate reference;"
+            " select your installed crate version.",
+            "",
+            "## Complete page index",
+            "",
+            *(f"- [{url}]({url})" for url in urls),
             "",
             "## Project",
             "",
@@ -669,18 +687,62 @@ def render_llms_txt() -> str:
             " documentation links.",
             "- [Wiki](https://wiki.openpit.dev/): Architecture, domain types,"
             " pipeline design, and policies.",
-            "- [Source repository](https://github.com/openpitkit/pit): Rust"
+            "- [Source repository](https://github.com/openpitkit/pit/tree/"
+            f"{provenance['revision']}): Rust"
             " workspace with the Go, Python, JavaScript/TypeScript, C++, Rust,"
             " and C SDK surfaces.",
             "",
             "## License",
             "",
             "[Apache License 2.0]"
-            "(https://github.com/openpitkit/pit/blob/main/LICENSE).",
+            f"(https://github.com/openpitkit/pit/blob/{provenance['revision']}/LICENSE).",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def stamp_provenance(path: Path, provenance: dict[str, str]) -> None:
+    """Expose the build identity and machine index in each published HTML page."""
+    text = path.read_text(encoding="utf-8")
+    revision = provenance["revision"]
+    version = escape(provenance["version"], quote=True)
+    for kind in ("blob", "tree"):
+        text = text.replace(
+            f"https://github.com/openpitkit/pit/{kind}/main/",
+            f"https://github.com/openpitkit/pit/{kind}/{revision}/",
+        )
+    metadata = (
+        f'<meta name="openpit-version" content="{version}" />\n'
+        f'<meta name="openpit-source-revision" content="{revision}" />\n'
+        f'<meta name="openpit-source-state" content="{provenance["source_state"]}" />\n'
+        '<link rel="describedby" href="https://docs.openpit.dev/llms.txt" '
+        'type="text/plain" />\n'
+    )
+    if _HEAD_END_RE.search(text) is None:
+        raise MissingSiteSourceError(f"{path} has no closing HTML head")
+    text = _HEAD_END_RE.sub(metadata + "</head>", text, count=1)
+    source_note = (
+        "Uncommitted working tree; source links refer to the base revision. "
+        if provenance["source_state"] == "working-tree"
+        else ""
+    )
+    banner = (
+        '<aside aria-label="Documentation version" style="padding:1rem;'
+        'text-align:center">Rolling development documentation. '
+        f"Package version {version}; "
+        f'<a href="https://github.com/openpitkit/pit/tree/{revision}">'
+        f"source {revision}</a>. "
+        "This documentation may differ from an installed release. "
+        f"{source_note}"
+        '<a href="https://docs.openpit.dev/llms.txt">Complete documentation index</a>.'
+        "</aside>"
+    )
+    body = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
+    if body.search(text) is None:
+        raise MissingSiteSourceError(f"{path} has no HTML body")
+    text = body.sub(lambda match: match.group(0) + banner, text, count=1)
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _is_noindex(text: str) -> bool:
@@ -854,6 +916,24 @@ def assemble(dest: Path | None = None) -> Path:
     from a regenerated reference cannot linger in the published site.
     """
     target = OUTPUT_DIR if dest is None else dest
+    provenance = read_provenance(ROOT)
+    python_docs = ROOT / "bindings" / "python" / "docs" / "_build"
+    try:
+        python_provenance = json.loads(
+            (python_docs / "docs-provenance.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise MissingSiteSourceError(
+            "Python documentation provenance is missing or invalid"
+        ) from error
+    if python_provenance != provenance:
+        raise MissingSiteSourceError(
+            "Python documentation provenance does not match this checkout"
+        )
+    for section in API_SECTIONS:
+        _require_section(
+            python_docs if section.slug == "python-api" else SITE_DIR / section.slug
+        )
     index = render_index_page()
     not_found = render_not_found_page()
 
@@ -866,16 +946,17 @@ def assemble(dest: Path | None = None) -> Path:
     for section in API_SECTIONS:
         section_target = target / section.slug
         shutil.copytree(
-            _require_section(SITE_DIR / section.slug),
+            python_docs if section.slug == "python-api" else SITE_DIR / section.slug,
             section_target,
-            ignore=shutil.ignore_patterns(".DS_Store", "sitemap.xml"),
+            ignore=shutil.ignore_patterns(
+                ".DS_Store", "sitemap.xml", ".doctrees", ".buildinfo", ".buildinfo.bak"
+            ),
         )
         normalize_reference(section_target, section)
 
     (target / "robots.txt").write_text(
         render_robots_txt(), encoding="utf-8", newline="\n"
     )
-    (target / "llms.txt").write_text(render_llms_txt(), encoding="utf-8", newline="\n")
 
     assets = target / "assets"
     assets.mkdir()
@@ -884,11 +965,18 @@ def assemble(dest: Path | None = None) -> Path:
     for name in ROOT_FILES:
         shutil.copy2(_require(SITE_DIR / name), target / name)
 
+    for path in sorted(target.rglob("*.html")):
+        stamp_provenance(path, provenance)
+    urls = discover_sitemap_urls(target)
+    (target / "llms.txt").write_text(
+        render_llms_txt(provenance, urls), encoding="utf-8", newline="\n"
+    )
+
     (target / "_redirects").write_text(
         render_redirects(target), encoding="utf-8", newline="\n"
     )
     (target / "sitemap.xml").write_text(
-        render_sitemap(discover_sitemap_urls(target)),
+        render_sitemap(urls),
         encoding="utf-8",
         newline="\n",
     )

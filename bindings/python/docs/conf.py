@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 PYTHON_BINDINGS_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = PYTHON_BINDINGS_ROOT.parents[1]
 PYTHON_SOURCE = PYTHON_BINDINGS_ROOT / "python"
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+
+from _docs_provenance import read_provenance  # noqa: E402
 
 if os.environ.get("OPENPIT_DOCS_USE_SOURCE_PATH") == "1" and PYTHON_SOURCE.exists():
     sys.path.insert(0, str(PYTHON_SOURCE))
@@ -35,25 +37,7 @@ author = "The Pit Project Owners"
 copyright = "2026, The Pit Project Owners"
 
 
-def _release_from_git() -> str:
-    ref_name = os.environ.get("GITHUB_REF_NAME")
-    if ref_name:
-        return ref_name.removeprefix("v")
-
-    try:
-        tag = subprocess.check_output(
-            ["git", "describe", "--tags", "--exact-match"],
-            cwd=PROJECT_ROOT,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "0.0.0+local"
-
-    return tag.removeprefix("v")
-
-
-release = os.environ.get("OPENPIT_DOCS_VERSION", _release_from_git()).removeprefix("v")
+release = read_provenance(PROJECT_ROOT)["version"]
 version = release
 
 extensions = [

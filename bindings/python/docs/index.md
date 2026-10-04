@@ -71,11 +71,13 @@ if not result:
     raise RuntimeError(result.rejects[0].reason)
 
 try:
-    # Send the order to the venue here.
-    result.reservation.commit()
+    # Replace pass with the application's venue-send call.
+    pass
 except Exception:
     result.reservation.rollback()
     raise
+else:
+    result.reservation.commit()
 ```
 
 ```{toctree}
