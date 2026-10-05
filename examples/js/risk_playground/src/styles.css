@@ -49,6 +49,14 @@ input:focus-visible { outline: 2px solid var(--border-hover); outline-offset: 2p
 .brand-home:hover { color: var(--accent); }
 .brand-home + .eyebrow::before { content: "|"; margin-right: var(--space-2); }
 
+.toolbar-controls { align-items: center; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.language-picker { color: var(--muted-lt); display: inline-flex; position: relative; }
+.language-picker:hover { color: var(--text); }
+.language-picker::after { border-bottom: 1.5px solid currentColor; border-right: 1.5px solid currentColor; content: ""; height: 5px; pointer-events: none; position: absolute; right: 11px; top: 50%; transform: translateY(-70%) rotate(45deg); width: 5px; }
+.language-switcher { appearance: none; background: var(--surface); border: var(--border-line); border-radius: var(--radius-card); color: inherit; cursor: pointer; font: inherit; font-size: var(--text-2xs); height: 30px; line-height: 1; margin: 0; padding: 0 28px 0 10px; }
+.language-switcher:focus-visible { border-color: var(--border-hover); outline: 1px solid var(--border-hover); outline-offset: 0; }
+
 .theme-switcher { background: var(--surface); border: var(--border-line); border-radius: var(--radius-card); display: inline-flex; gap: 2px; padding: 2px; }
 .theme-switcher button { background: transparent; border: 0; border-radius: calc(var(--radius-card) - 2px); color: var(--muted-lt); cursor: pointer; font-size: var(--text-2xs); line-height: 1; padding: 7px 8px; }
 .theme-switcher button:hover { color: var(--text); }

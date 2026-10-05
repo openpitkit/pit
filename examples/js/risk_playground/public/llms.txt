@@ -9,6 +9,7 @@ There is no backend: every decision comes from the real `@openpit/engine` JavaSc
 - Five pre-trade checks: P&L kill switch, Spot Funds balance, order size, order value, and order rate per minute.
 - Preset scenarios: a normal buy, a fat-finger quantity, an oversized order value, insufficient funds, a rapid-fire burst past the rate limit, and a realized loss that trips the P&L kill switch and halts the account.
 - Every accepted order is filled at once through an execution report that carries a fixed 0.25 USD venue fee; the balance and P&L on screen come from the engine's post-trade results.
+- The interface is available in English, German, Spanish, Russian, Ukrainian, Simplified Chinese, and Hindi; it follows the browser's languages and defaults to English, and `?lang=<code>` pins one. The engine's reject reasons are always in English.
 - The traded instrument is a simulated SPCX (Space Exploration Technologies Corp.) shown at a simulated mark of 162.45 USD and settled in USD; the default order buys 30 SPCX at that price, and every value is editable.
 
 ## Documentation

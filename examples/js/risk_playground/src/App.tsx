@@ -23,6 +23,14 @@ import { trackPlaygroundEvent } from "./analytics.ts";
 import brandMarkDark from "./assets/pit-logo-dark.svg";
 import brandMarkLight from "./assets/pit-logo-light.svg";
 import { Badge, Button, Card } from "./design-system.tsx";
+import { useI18n } from "./i18n-context.tsx";
+import {
+  LOCALES,
+  matchLocale,
+  type LocaleId,
+  type MessageKey,
+  type Translate,
+} from "./i18n.ts";
 import {
   DEFAULT_LIMITS,
   type CheckName,
@@ -55,6 +63,19 @@ interface InputOrder {
   readonly quantity: string;
   readonly side: "BUY" | "SELL";
 }
+
+/**
+ * A message under the controls: one of this page's own, translated when it is
+ * shown, or the engine's or runtime's text, which has no translation.
+ */
+type InputError =
+  | {
+      readonly key: Extract<
+        MessageKey,
+        "error.limits" | "error.lossScenario" | "error.order"
+      >;
+    }
+  | { readonly text: string };
 
 interface CheckView {
   readonly detail: string;
@@ -93,23 +114,24 @@ const CHECK_ORDER: readonly CheckName[] = [
   "rate",
 ];
 
-const CHECK_LABELS: Record<CheckName, string> = {
-  funds: "Funds",
-  pnl: "P&L",
-  rate: "Order rate",
-  size: "Order size",
-  value: "Order value",
+const CHECK_LABEL_KEYS: Record<CheckName, MessageKey> = {
+  funds: "check.label.funds",
+  pnl: "check.label.pnl",
+  rate: "check.label.rate",
+  size: "check.label.size",
+  value: "check.label.value",
 };
 
 const YOUR_LIMITS_ID = "your-limits";
 
 export function App() {
+  const { locale, rich, setLocale, t } = useI18n();
   const session = useMemo(() => new RiskSession(), []);
   const [limits, setLimits] = useState(DEFAULT_INPUT_LIMITS);
   const [order, setOrder] = useState(DEFAULT_INPUT_ORDER);
   const [snapshot, setSnapshot] = useState<SessionSnapshot>(session.snapshot());
   const [verdict, setVerdict] = useState<GateDecision | null>(null);
-  const [inputError, setInputError] = useState<string | null>(null);
+  const [inputError, setInputError] = useState<InputError | null>(null);
   const [rapidFireRunning, setRapidFireRunning] = useState(false);
   const rapidFireRun = useRef(0);
   const [theme, setTheme] = useState<ThemeMode>(readTheme);
@@ -141,9 +163,7 @@ export function App() {
       setLimits(next);
       const parsed = parseLimits(next);
       if (parsed === null) {
-        setInputError(
-          "Limits must be positive whole numbers; rate must be 60/min or less.",
-        );
+        setInputError({ key: "error.limits" });
         return null;
       }
       try {
@@ -156,7 +176,7 @@ export function App() {
         // The engine kept its previous limits; show those, not the rejected
         // input.
         setLimits(inputLimitsFrom(session.appliedLimits()));
-        setInputError(errorMessage(error));
+        setInputError({ text: errorMessage(error) });
         return null;
       }
     },
@@ -189,6 +209,13 @@ export function App() {
     setTheme(nextTheme);
   };
 
+  const selectLanguage = (nextLocale: LocaleId): void => {
+    trackPlaygroundEvent("risk_playground_language_selected", {
+      language: nextLocale,
+    });
+    setLocale(nextLocale);
+  };
+
   const submit = useCallback(
     (
       nextOrder: InputOrder,
@@ -199,9 +226,7 @@ export function App() {
         parsed === null ||
         (limitsOverride === undefined && parsedLimits === null)
       ) {
-        setInputError(
-          "Quantity and limits must be positive whole numbers; price must be a positive decimal; rate must be 60/min or less.",
-        );
+        setInputError({ key: "error.order" });
         return null;
       }
       try {
@@ -215,7 +240,7 @@ export function App() {
         refresh();
         return decision;
       } catch (error) {
-        setInputError(errorMessage(error));
+        setInputError({ text: errorMessage(error) });
         return null;
       }
     },
@@ -282,7 +307,7 @@ export function App() {
     const sell = { ...DEFAULT_INPUT_ORDER, price: "1", side: "SELL" as const };
     const buyDecision = submit(buy, DEFAULT_LIMITS);
     if (buyDecision?.accepted !== true) {
-      setInputError("The loss scenario could not open its SPCX position.");
+      setInputError({ key: "error.lossScenario" });
       return;
     }
     setOrder(sell);
@@ -317,7 +342,7 @@ export function App() {
         }
       }
     } catch (error) {
-      setInputError(errorMessage(error));
+      setInputError({ text: errorMessage(error) });
     } finally {
       if (rapidFireRun.current === run) {
         setRapidFireRunning(false);
@@ -333,10 +358,10 @@ export function App() {
   const checks =
     verdict === null || parsedLimits === null || parsedOrder === null
       ? []
-      : checkViews(verdict, parsedLimits, parsedOrder, snapshot);
+      : checkViews(t, verdict, parsedLimits, parsedOrder, snapshot);
   const postTradeBlocked = verdict !== null && executionHalted(verdict);
   const accepted = verdict?.accepted === true && !postTradeBlocked;
-  const statusWord = snapshot.halted ? "Halted" : "Live";
+  const statusWord = snapshot.halted ? t("ribbon.halted") : t("ribbon.live");
 
   return (
     <main className="page" data-density="comfortable">
@@ -344,7 +369,7 @@ export function App() {
         <header className="masthead">
           <div className="brand-toolbar">
             <div className="brand-row">
-              <a aria-label="OpenPit home" href="https://openpit.dev">
+              <a aria-label={t("brand.homeLabel")} href="https://openpit.dev">
                 <img
                   alt=""
                   className="brand-mark"
@@ -356,50 +381,50 @@ export function App() {
               <a className="brand-home" href="https://openpit.dev">
                 OpenPit
               </a>
-              <span className="eyebrow">in-browser demo</span>
+              <span className="eyebrow">{t("brand.eyebrow")}</span>
             </div>
-            <ThemeSwitcher onSelect={selectTheme} theme={theme} />
+            <div className="toolbar-controls">
+              <LanguageSwitcher locale={locale} onSelect={selectLanguage} />
+              <ThemeSwitcher onSelect={selectTheme} theme={theme} />
+            </div>
           </div>
-          <h1>The pre-trade gate, live</h1>
+          <h1>{t("hero.title")}</h1>
           <p className="lead">
-            Set your limits, send an order, and watch the gate reserve funds,
-            settle a fill, and update session risk - all in your browser. A
-            trader, script, or AI agent <strong>can&apos;t</strong> get past
-            your limits. Not &quot;shouldn&apos;t.&quot; Can&apos;t.
+            {rich("hero.lead", {
+              emphasis: <strong>{t("hero.leadEmphasis")}</strong>,
+            })}
           </p>
           <p className="browser-note">
-            Orders, balances, and P&amp;L run locally in your browser on{" "}
-            <a href="https://openpit.dev">OpenPit</a> (WebAssembly).
+            {rich("hero.browserNote", {
+              openpit: <a href="https://openpit.dev">OpenPit</a>,
+            })}
           </p>
           <div className="engine-parity">
-            <strong>One WASM binary. Browser and Node.js.</strong>
-            <span>
-              Run the same OpenPit engine on both sides. With matching built-in
-              policies, state, market data, and event timing, identical orders
-              produce identical verdicts - enabling local pre-checks before the
-              server call.
-            </span>
+            <strong>{t("hero.parityTitle")}</strong>
+            <span>{t("hero.parityDetail")}</span>
           </div>
           <p className="browser-note source-note">
-            You can view the source code for this example{" "}
-            <a
-              href="https://github.com/openpitkit/pit/tree/main/examples/js/risk_playground"
-              rel="noopener"
-              target="_blank"
-            >
-              here
-            </a>
-            .
+            {rich("hero.sourceNote", {
+              sourceLink: (
+                <a
+                  href="https://github.com/openpitkit/pit/tree/main/examples/js/risk_playground"
+                  rel="noopener"
+                  target="_blank"
+                >
+                  {t("hero.sourceLink")}
+                </a>
+              ),
+            })}
           </p>
-          <div aria-label="How the playground works" className="steps">
+          <div aria-label={t("steps.label")} className="steps">
             <span>
-              <b>1</b> Reserve funds
+              <b>1</b> {t("steps.reserve")}
             </span>
             <span>
-              <b>2</b> Settle the fill
+              <b>2</b> {t("steps.settle")}
             </span>
             <span>
-              <b>3</b> Read the report
+              <b>3</b> {t("steps.report")}
             </span>
           </div>
         </header>
@@ -407,9 +432,8 @@ export function App() {
         <div className="grid">
           <div className="stack">
             <Card className="panel">
-              <PanelTitle number="1" title="Send an order">
-                Build an SPCX order, then send it through pre-trade, reserve,
-                commit, and its immediate execution report.
+              <PanelTitle number="1" title={t("order.title")}>
+                {t("order.intro")}
               </PanelTitle>
 
               <div className="instrument-row">
@@ -417,11 +441,17 @@ export function App() {
                 <span className="instrument-name">
                   Space Exploration Technologies Corp.
                 </span>
-                <span className="mark">simulated mark $162.45</span>
+                <span className="mark">
+                  {t("order.mark", { mark: "$162.45" })}
+                </span>
               </div>
 
-              <label className="field-label">Side</label>
-              <div className="side-row" role="group" aria-label="Order side">
+              <label className="field-label">{t("order.side")}</label>
+              <div
+                className="side-row"
+                role="group"
+                aria-label={t("order.sideGroup")}
+              >
                 <button
                   aria-pressed={order.side === "BUY"}
                   className={`side buy ${order.side === "BUY" ? "selected" : ""}`}
@@ -436,7 +466,7 @@ export function App() {
                   }}
                   type="button"
                 >
-                  Buy
+                  {t("order.buy")}
                 </button>
                 <button
                   aria-pressed={order.side === "SELL"}
@@ -452,18 +482,20 @@ export function App() {
                   }}
                   type="button"
                 >
-                  Sell
+                  {t("order.sell")}
                 </button>
               </div>
 
               <div className="field-row">
                 <NumberField
-                  label="Quantity - shares"
+                  id="field-quantity"
+                  label={t("order.quantity")}
                   onChange={(value) => editOrder({ ...order, quantity: value })}
                   value={order.quantity}
                 />
                 <NumberField
-                  label="Price - USD"
+                  id="field-price"
+                  label={t("order.price")}
                   inputMode="decimal"
                   min="0.0001"
                   onChange={(value) => editOrder({ ...order, price: value })}
@@ -473,14 +505,14 @@ export function App() {
               </div>
 
               <div className="order-value">
-                <span>Engine order value</span>
+                <span>{t("order.engineValue")}</span>
                 <strong>
                   {orderValueAtoms === null
-                    ? "reported after fill"
+                    ? t("order.valuePending")
                     : formatMoneyAtoms(orderValueAtoms)}
                 </strong>
               </div>
-              <p className="fee-note">Fixed venue fee - $0.25 USD</p>
+              <p className="fee-note">{t("order.fee", { fee: "$0.25 USD" })}</p>
 
               <div className="actions">
                 <Button
@@ -492,40 +524,40 @@ export function App() {
                   onClick={() => submit(order)}
                   style={{ height: 44, width: "100%" }}
                 >
-                  Send and settle
+                  {t("order.submit")}
                 </Button>
               </div>
 
               <div className="rule" />
-              <span className="field-label">Or try a scenario</span>
+              <span className="field-label">{t("scenario.title")}</span>
               <div className="scenario-row">
                 <ScenarioButton
                   color="var(--ok)"
                   disabled={rapidFireRunning}
                   onClick={runNormal}
                 >
-                  Normal buy
+                  {t("scenario.normal")}
                 </ScenarioButton>
                 <ScenarioButton
                   color="var(--danger)"
                   disabled={rapidFireRunning}
                   onClick={runFatFinger}
                 >
-                  Fat finger
+                  {t("scenario.fatFinger")}
                 </ScenarioButton>
                 <ScenarioButton
                   color="var(--danger)"
                   disabled={rapidFireRunning}
                   onClick={runOversizedValue}
                 >
-                  Oversized value
+                  {t("scenario.oversizedValue")}
                 </ScenarioButton>
                 <ScenarioButton
                   color="var(--danger)"
                   disabled={rapidFireRunning}
                   onClick={runSpotFundsLimit}
                 >
-                  Funds limit
+                  {t("scenario.fundsLimit")}
                 </ScenarioButton>
                 <ScenarioButton
                   color="var(--danger)"
@@ -537,27 +569,28 @@ export function App() {
                     }
                   }}
                 >
-                  {rapidFireRunning ? "Stop rapid fire" : "Rapid fire"}
+                  {rapidFireRunning
+                    ? t("scenario.rapidFireStop")
+                    : t("scenario.rapidFire")}
                 </ScenarioButton>
                 <ScenarioButton
                   color="var(--danger)"
                   disabled={rapidFireRunning}
                   onClick={runLossEvent}
                 >
-                  Realize loss
+                  {t("scenario.realizeLoss")}
                 </ScenarioButton>
               </div>
             </Card>
 
             <Card className="panel" id={YOUR_LIMITS_ID}>
-              <PanelTitle number="2" title="Your limits">
-                Funds owns the balance and P&amp;L state. The other limits still
-                run before an order reaches the simulated venue.
+              <PanelTitle number="2" title={t("limits.title")}>
+                {t("limits.intro")}
               </PanelTitle>
 
               <LimitControl
-                description="Sets the opening USD balance in Funds"
-                label="Funds cash allocation"
+                description={t("limit.funds.description")}
+                label={t("limit.funds.label")}
                 meter={
                   parsedLimits === null
                     ? undefined
@@ -577,8 +610,8 @@ export function App() {
                 value={limits.spotFundsLimit}
               />
               <LimitControl
-                description="Biggest single order the gate will pass"
-                label="Max order size"
+                description={t("limit.size.description")}
+                label={t("limit.size.label")}
                 meter={
                   parsedLimits === null
                     ? undefined
@@ -586,7 +619,7 @@ export function App() {
                         current: parsedOrder?.quantity ?? null,
                         format: formatIntegerBigInt,
                         limit: parsedLimits.maxShares,
-                        unit: "shares",
+                        unit: t("limit.size.unit"),
                       }
                 }
                 onChange={(value) => updateLimit("maxShares", value)}
@@ -594,8 +627,8 @@ export function App() {
                 value={limits.maxShares}
               />
               <LimitControl
-                description="OpenPit reports the accepted order value after pre-trade"
-                label="Max order value"
+                description={t("limit.value.description")}
+                label={t("limit.value.label")}
                 meter={
                   parsedLimits === null
                     ? undefined
@@ -610,8 +643,8 @@ export function App() {
                 value={limits.maxValue}
               />
               <LimitControl
-                description="How fast orders may be sent"
-                label="Max orders per minute"
+                description={t("limit.rate.description")}
+                label={t("limit.rate.label")}
                 max={MAX_DEMO_RATE}
                 meter={undefined}
                 onChange={(value) => updateLimit("maxRate", value)}
@@ -619,8 +652,8 @@ export function App() {
                 value={limits.maxRate}
               />
               <LimitControl
-                description="Halts the account once P&L falls below minus this, in USD"
-                label="Max session loss"
+                description={t("limit.loss.description")}
+                label={t("limit.loss.label")}
                 meter={
                   parsedLimits === null
                     ? undefined
@@ -641,21 +674,19 @@ export function App() {
 
           <div className="stack">
             <Card className="panel gate-panel">
-              <PanelTitle number="3" title="The gate decides">
-                Every order is checked against <LimitsLink /> before it reaches
-                the simulated venue, then an execution report returns
-                immediately with the fill.
+              <PanelTitle number="3" title={t("gate.title")}>
+                {rich("gate.intro", { limits: <LimitsLink /> })}
               </PanelTitle>
 
               <div className="ribbon">
                 <div>
-                  <span>Account</span>
+                  <span>{t("ribbon.account")}</span>
                   <Badge variant={snapshot.halted ? "danger" : "ok"}>
                     {statusWord}
                   </Badge>
                 </div>
                 <div>
-                  <span>Funds available</span>
+                  <span>{t("ribbon.funds")}</span>
                   <strong
                     title={formatMoneyAtoms(snapshot.availableFundsAtoms)}
                   >
@@ -663,7 +694,7 @@ export function App() {
                   </strong>
                 </div>
                 <div>
-                  <span>SPCX available</span>
+                  <span>{t("ribbon.shares")}</span>
                   <strong
                     title={formatQuantityAtoms(snapshot.availableSharesAtoms)}
                   >
@@ -671,7 +702,7 @@ export function App() {
                   </strong>
                 </div>
                 <div>
-                  <span>P&amp;L</span>
+                  <span>{t("ribbon.pnl")}</span>
                   <strong
                     className={snapshot.pnlAtoms < 0n ? "negative" : "positive"}
                     title={formatPnlAtoms(snapshot.pnlAtoms)}
@@ -680,8 +711,12 @@ export function App() {
                   </strong>
                 </div>
                 <div>
-                  <span>Rate limit</span>
-                  <strong>{parsedLimits?.maxRate ?? "-"} / min</strong>
+                  <span>{t("ribbon.rate")}</span>
+                  <strong>
+                    {t("ribbon.rateValue", {
+                      rate: parsedLimits?.maxRate ?? "-",
+                    })}
+                  </strong>
                 </div>
               </div>
 
@@ -692,61 +727,59 @@ export function App() {
                 style={{ height: 44, width: "100%" }}
                 variant="outline"
               >
-                Reset
+                {t("gate.reset")}
               </Button>
 
               {inputError !== null && (
-                <p className="input-error">{inputError}</p>
+                <p className="input-error">
+                  {"key" in inputError ? t(inputError.key) : inputError.text}
+                </p>
               )}
 
               <div aria-live="polite">
                 {verdict === null ? (
                   <div className="empty-state">
-                    <strong>Send an order to run the lifecycle</strong>
-                    <p>
-                      The gate checks the order against <LimitsLink />,
-                      reserves Funds, commits the accepted order, then
-                      immediately applies its execution report.
-                    </p>
+                    <strong>{t("gate.emptyTitle")}</strong>
+                    <p>{rich("gate.emptyBody", { limits: <LimitsLink /> })}</p>
                   </div>
                 ) : (
                   <section
                     className={`verdict ${accepted ? "accepted" : "blocked"}`}
                   >
                     <div className="verdict-head">
-                      <h2>{verdictTitle(verdict)}</h2>
+                      <h2>{verdictTitle(t, verdict)}</h2>
                       <span>
-                        pre-trade + fill report
+                        {t("verdict.sourceStage")}
                         <br />
-                        OpenPit WebAssembly engine
+                        {t("verdict.sourceEngine")}
                       </span>
                     </div>
-                    <p className="reason">{reasonFor(verdict)}</p>
+                    <p className="reason">{reasonFor(t, verdict)}</p>
                     {verdict.execution !== null && (
                       <section className="execution-report">
                         <span className="check-heading">
-                          Execution report applied
+                          {t("report.title")}
                         </span>
                         <div>
-                          <span>Fee</span>
+                          <span>{t("report.fee")}</span>
                           <strong>
                             ${verdict.execution.feeAmount}{" "}
                             {verdict.execution.feeCurrency}
                           </strong>
                         </div>
                         <div>
-                          <span>Settlement</span>
+                          <span>{t("report.settlement")}</span>
                           <strong>
                             {verdict.execution.accountBlockCode === null
-                              ? "completed"
-                              : "completed, account halted"}
+                              ? t("report.completed")
+                              : t("report.completedHalted")}
                           </strong>
                         </div>
                       </section>
                     )}
                     <div className="check-list">
                       <span className="check-heading">
-                        Checked against <LimitsLink />
+                        {rich("checks.title", { limits: <LimitsLink /> })}
                       </span>
                       {checks.map((check) => (
                         <CheckRow check={check} key={check.name} />
@@ -775,16 +808,17 @@ function ThemeSwitcher({
   readonly onSelect: (theme: ThemeMode) => void;
   readonly theme: ThemeMode;
 }) {
+  const { t } = useI18n();
   const options: readonly {
     readonly label: string;
     readonly value: ThemeMode;
   }[] = [
-    { label: "System", value: "system" },
-    { label: "Light", value: "light" },
-    { label: "Dark", value: "dark" },
+    { label: t("theme.system"), value: "system" },
+    { label: t("theme.light"), value: "light" },
+    { label: t("theme.dark"), value: "dark" },
   ];
   return (
-    <div aria-label="Color theme" className="theme-switcher" role="group">
+    <div aria-label={t("theme.label")} className="theme-switcher" role="group">
       {options.map((option) => (
         <button
           aria-pressed={theme === option.value}
@@ -797,6 +831,38 @@ function ThemeSwitcher({
         </button>
       ))}
     </div>
+  );
+}
+
+function LanguageSwitcher({
+  locale,
+  onSelect,
+}: {
+  readonly locale: LocaleId;
+  readonly onSelect: (locale: LocaleId) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <span className="language-picker">
+      <select
+        aria-label={t("language.label")}
+        className="language-switcher"
+        onChange={(event) => {
+          const selected = matchLocale(event.target.value);
+          if (selected === null) {
+            throw new RangeError(`unsupported language ${event.target.value}`);
+          }
+          onSelect(selected);
+        }}
+        value={locale}
+      >
+        {LOCALES.map(({ id, name }) => (
+          <option key={id} lang={id} value={id}>
+            {name}
+          </option>
+        ))}
+      </select>
+    </span>
   );
 }
 
@@ -822,14 +888,16 @@ function PanelTitle({
 
 /** Points a verdict back at the panel that configures the checks. */
 function LimitsLink() {
+  const { t } = useI18n();
   return (
     <a className="limits-link" href={`#${YOUR_LIMITS_ID}`}>
-      your limits
+      {t("limits.link")}
     </a>
   );
 }
 
 function NumberField({
+  id,
   inputMode = "numeric",
   label,
   min = "1",
@@ -837,6 +905,7 @@ function NumberField({
   step = "1",
   value,
 }: {
+  readonly id: string;
   readonly inputMode?: "decimal" | "numeric";
   readonly label: string;
   readonly min?: string;
@@ -844,7 +913,6 @@ function NumberField({
   readonly step?: string;
   readonly value: string;
 }) {
-  const id = `field-${label.toLowerCase().replaceAll(/[^a-z]+/g, "-")}`;
   return (
     <div>
       <label className="field-label" htmlFor={id}>
@@ -905,6 +973,7 @@ function LimitControl({
   readonly onCommit: () => void;
   readonly value: string;
 }) {
+  const { t } = useI18n();
   const limit = parsePositiveWhole(value);
   const valid = limit !== null && (max === undefined || limit <= max);
   return (
@@ -931,15 +1000,13 @@ function LimitControl({
       {!valid ? (
         <p className="limit-invalid">
           {max === undefined
-            ? "Enter a positive whole number to apply this limit."
-            : `Enter a positive whole number no greater than ${max}.`}
+            ? t("limit.invalid")
+            : t("limit.invalidMax", { max })}
         </p>
       ) : (
         <>
           {meter !== undefined && <LimitMeter {...meter} />}
-          <p className="limit-engine-note">
-            OpenPit applies this limit during pre-trade.
-          </p>
+          <p className="limit-engine-note">{t("limit.engineNote")}</p>
         </>
       )}
     </div>
@@ -947,6 +1014,7 @@ function LimitControl({
 }
 
 function LimitMeter({ current, format, limit, unit = "" }: LimitMeterConfig) {
+  const { t } = useI18n();
   const percentage =
     current === null || limit <= 0n
       ? null
@@ -955,7 +1023,7 @@ function LimitMeter({ current, format, limit, unit = "" }: LimitMeterConfig) {
     <div className="limit-meter">
       <div className="limit-meter-meta">
         <strong>
-          {current === null ? "Engine report pending" : format(current)}
+          {current === null ? t("meter.pending") : format(current)}
         </strong>
         <span>
           / {format(limit)}
@@ -964,7 +1032,7 @@ function LimitMeter({ current, format, limit, unit = "" }: LimitMeterConfig) {
         {percentage !== null && <b>{percentage}%</b>}
       </div>
       <div
-        aria-label={`${format(limit)} limit usage`}
+        aria-label={t("meter.usage", { limit: format(limit) })}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={percentage ?? 0}
@@ -1011,6 +1079,7 @@ function CheckRow({ check }: { readonly check: CheckView }) {
 }
 
 function checkViews(
+  t: Translate,
   verdict: GateDecision,
   limits: DemoLimits,
   order: DemoOrder,
@@ -1025,9 +1094,10 @@ function checkViews(
           ? "pass"
           : "skip";
     return {
-      name: CHECK_LABELS[name],
+      name: t(CHECK_LABEL_KEYS[name]),
       state,
       detail: checkDetail(
+        t,
         name,
         limits,
         order,
@@ -1041,6 +1111,7 @@ function checkViews(
 }
 
 function checkDetail(
+  t: Translate,
   name: CheckName,
   limits: DemoLimits,
   order: DemoOrder,
@@ -1055,29 +1126,35 @@ function checkDetail(
       : `${reject.reason} - ${reject.details}`;
   }
   if (state === "skip") {
-    return "The engine response contains no separate verdict for this check";
+    return t("check.detail.skip");
   }
   if (name === "pnl") {
     if (executionHalted(verdict)) {
-      return "pre-trade passed; the execution report then tripped the P&L axis";
+      return t("check.detail.pnlHalted");
     }
-    return `OpenPit reported P&L ${formatPnlAtoms(snapshot.pnlAtoms)} against the -${formatUsd(
-      limits.lossLimit,
-    )} loss limit`;
+    return t("check.detail.pnlPassed", {
+      limit: formatUsd(limits.lossLimit),
+      pnl: formatPnlAtoms(snapshot.pnlAtoms),
+    });
   }
   if (name === "funds") {
     if (order.side === "SELL") {
-      return `${formatIntegerBigInt(order.quantity)} SPCX shares are available before settlement`;
+      return t("check.detail.fundsSell", {
+        quantity: formatIntegerBigInt(order.quantity),
+      });
     }
-    return "Funds accepted this order against its available balance";
+    return t("check.detail.fundsBuy");
   }
   if (name === "size") {
-    return `${formatIntegerBigInt(order.quantity)} <= ${formatIntegerBigInt(limits.maxShares)} share limit`;
+    return t("check.detail.size", {
+      limit: formatIntegerBigInt(limits.maxShares),
+      quantity: formatIntegerBigInt(order.quantity),
+    });
   }
   if (name === "value") {
-    return `OpenPit accepted the order against the ${formatUsd(limits.maxValue)} value limit`;
+    return t("check.detail.value", { limit: formatUsd(limits.maxValue) });
   }
-  return `OpenPit accepted this order under the ${limits.maxRate}/min rate limit`;
+  return t("check.detail.rate", { rate: limits.maxRate });
 }
 
 function rejectForCheck(
@@ -1087,24 +1164,26 @@ function rejectForCheck(
   return rejects.find((reject) => reject.checks.includes(check));
 }
 
-function verdictTitle(verdict: GateDecision): string {
+function verdictTitle(t: Translate, verdict: GateDecision): string {
   if (!verdict.accepted) {
-    return "BLOCKED";
+    return t("verdict.blocked");
   }
-  return executionHalted(verdict) ? "FILLED - HALTED" : "FILLED";
+  return executionHalted(verdict)
+    ? t("verdict.filledHalted")
+    : t("verdict.filled");
 }
 
-function reasonFor(verdict: GateDecision): string {
+function reasonFor(t: Translate, verdict: GateDecision): string {
   if (verdict.accepted) {
     if (executionHalted(verdict)) {
-      return "Pre-trade passed and settled the fill. Its execution report then pushed P&L past the loss limit and halted the account.";
+      return t("verdict.reasonFilledHalted");
     }
-    return "Pre-trade passed. Funds reserved the balance, committed the order, and settled the immediate execution report.";
+    return t("verdict.reasonFilled");
   }
   const reasons = [...new Set(verdict.rejects.map((reject) => reject.reason))];
   return reasons.length === 0
-    ? "Blocked by OpenPit."
-    : `Blocked - ${reasons.join("; ")}.`;
+    ? t("verdict.reasonBlockedGeneric")
+    : t("verdict.reasonBlocked", { reasons: reasons.join("; ") });
 }
 
 function executionHalted(verdict: GateDecision): boolean {

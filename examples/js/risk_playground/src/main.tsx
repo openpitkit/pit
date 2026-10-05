@@ -19,6 +19,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App.tsx";
 import { initializeAnalytics } from "./analytics.ts";
+import { I18nProvider } from "./i18n-context.tsx";
 import "./design-system/tokens/colors.css";
 import "./design-system/tokens/typography.css";
 import "./design-system/tokens/spacing.css";
@@ -31,4 +32,8 @@ if (container === null) {
   throw new Error("the risk playground could not initialize");
 }
 
-createRoot(container).render(<App />);
+createRoot(container).render(
+  <I18nProvider>
+    <App />
+  </I18nProvider>,
+);
