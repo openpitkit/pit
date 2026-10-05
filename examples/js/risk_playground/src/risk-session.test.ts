@@ -45,6 +45,7 @@ describe("RiskSession", () => {
       halted: false,
       lastOrderValueAtoms: 48_735_000n,
       pnlAtoms: -2_500n,
+      usedFundsAtoms: 48_737_500n,
     });
   });
 
@@ -231,6 +232,7 @@ describe("RiskSession", () => {
     expect(session.snapshot()).toMatchObject({
       availableFundsAtoms: 51_272_500n,
       availableSharesAtoms: 300_000n,
+      usedFundsAtoms: 48_737_500n,
     });
   });
 

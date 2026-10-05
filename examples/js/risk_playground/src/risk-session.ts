@@ -96,6 +96,8 @@ export interface SessionSnapshot {
   readonly halted: boolean;
   readonly lastOrderValueAtoms: bigint | null;
   readonly pnlAtoms: bigint;
+  /** Applied allocation minus Funds balance; sells can make it negative. */
+  readonly usedFundsAtoms: bigint;
 }
 
 export const DEFAULT_LIMITS: DemoLimits = {
@@ -198,6 +200,8 @@ export class RiskSession {
       halted: this.halted,
       lastOrderValueAtoms: this.lastOrderValueAtoms,
       pnlAtoms: this.pnlAtoms,
+      usedFundsAtoms:
+        this.limits.spotFundsLimit * MONEY_FACTOR - this.availableFundsAtoms,
     };
   }
 

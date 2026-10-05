@@ -153,10 +153,6 @@ export function App() {
   const parsedLimits = useMemo(() => parseLimits(limits), [limits]);
   const parsedOrder = useMemo(() => parseOrder(order), [order]);
   const orderValueAtoms = snapshot.lastOrderValueAtoms;
-  const fundsUsedAtoms =
-    parsedLimits === null
-      ? null
-      : parsedLimits.spotFundsLimit * 10_000n - snapshot.availableFundsAtoms;
 
   const applyLimits = useCallback(
     (next: InputLimits): DemoLimits | null => {
@@ -596,11 +592,9 @@ export function App() {
                     ? undefined
                     : {
                         current:
-                          fundsUsedAtoms === null
-                            ? null
-                            : fundsUsedAtoms < 0n
-                              ? 0n
-                              : fundsUsedAtoms,
+                          snapshot.usedFundsAtoms < 0n
+                            ? 0n
+                            : snapshot.usedFundsAtoms,
                         format: formatMoneyAtoms,
                         limit: parsedLimits.spotFundsLimit * 10_000n,
                       }
