@@ -34,7 +34,11 @@ export function initializeAnalytics(): void {
   }
 
   posthog.init("phc_q3EM7XmhYeX4xvaWEyfZFPqFJdPaJiGcbALhSBksidxK", {
-    api_host: "https://eu.i.posthog.com",
+    // The first-party proxy the OpenPit sites share; ad blockers that drop
+    // direct PostHog hosts let it through.
+    api_host: "https://pulse.openpit.dev",
+    ui_host: "https://eu.posthog.com",
+    defaults: "2026-08-30",
     autocapture: true,
     capture_exceptions: false,
     capture_pageleave: true,

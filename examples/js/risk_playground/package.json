@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@openpit/engine": "file:../../../bindings/js",
-    "posthog-js": "^1.331.1",
+    "posthog-js": "^1.438.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
