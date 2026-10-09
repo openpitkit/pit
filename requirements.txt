@@ -1,5 +1,6 @@
 # Component dependency sets, kept next to what they serve.
 -r checks/requirements.txt
+-r bindings/python/requirements.txt
 
 black
 # Pinned to CI_CLANG_FORMAT in .github/ci-versions.env: clang-format releases
@@ -9,5 +10,4 @@ clang-format==22.1.5
 # release could change the published HTML without a change in this repository.
 markdown-it-py==4.2.0
 maturin
-pytest
 ruff

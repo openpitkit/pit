@@ -29,11 +29,17 @@ cargo_about_dir := repo_dir / "target" / "cargo-about"
 path_separator := if os_family() == "windows" { ";" } else { ":" }
 python_path := env_var_or_default("PYTHON_PATH", default_python_path)
 semgrep_path := if os_family() == "windows" { venv_bin / "semgrep.exe" } else { venv_bin / "semgrep" }
+# The Python binding built from this checkout lives in an environment of its
+# own, apart from the tools above: an environment holding only tools can then
+# be shared between checkouts without any of them importing another's binding.
+binding_venv_dir := repo_dir / "target" / "python"
+binding_python_path := if os_family() == "windows" { binding_venv_dir / "Scripts" / "python.exe" } else { binding_venv_dir / "bin" / "python" }
 bootstrap_python := env_var_or_default("PIT_BOOTSTRAP_PYTHON", if os_family() == "windows" { "python" } else { "python3" })
 windows_target := env_var_or_default("PIT_WINDOWS_TARGET", "x86_64-pc-windows-msvc")
 just_helper := "scripts/just_helpers.py"
 python_config := "bindings/python/pyproject.toml"
-export VIRTUAL_ENV := venv_dir
+# `maturin develop` installs into the environment VIRTUAL_ENV names.
+export VIRTUAL_ENV := binding_venv_dir
 export PYO3_PYTHON := python_path
 export PIT_WINDOWS_TARGET := windows_target
 export PATH := node_bin_dir + path_separator + venv_bin + path_separator + (cargo_about_dir / "bin") + path_separator + env_var("PATH")
@@ -53,6 +59,16 @@ _ensure-python-env:
 [windows]
 _ensure-python-env:
     {{ bootstrap_python }} {{ just_helper }} ensure-python-env "{{ venv_dir }}" "{{ python_path }}" requirements.txt
+
+# Create/update the environment the Python binding is built into and its tests
+# and examples run in.
+[unix]
+_ensure-python-binding-env: _ensure-python-env
+    test -x "{{ binding_python_path }}" || "{{ python_path }}" -m venv "{{ binding_venv_dir }}"
+    "{{ binding_python_path }}" -m pip install -r bindings/python/requirements.txt
+[windows]
+_ensure-python-binding-env: _ensure-python-env
+    {{ python_path }} {{ just_helper }} ensure-python-env "{{ binding_venv_dir }}" "{{ binding_python_path }}" bindings/python/requirements.txt
 
 # Install or update the project-local Node.js runtime pinned by CI_NODE.
 ensure-node:
@@ -445,14 +461,14 @@ test-release-e2e version:
 test-release-e2e version:
     powershell -NoProfile -ExecutionPolicy Bypass -File e2e/run-windows.ps1 {{ version }}
 
-# Shared pytest runner helper.
+# Shared pytest runner helper for the binding's tests and examples.
 [unix]
-_pytest args: _ensure-python-env
+_pytest args: _ensure-python-binding-env
     # shellcheck disable=SC1083
-    {{ python_path }} -m pytest -q --no-header -c {{ python_config }} {{ args }}
+    {{ binding_python_path }} -m pytest -q --no-header -c {{ python_config }} {{ args }}
 [windows]
-_pytest args: _ensure-python-env
-    {{ python_path }} -m pytest -q --no-header -c {{ python_config }} {{ args }}
+_pytest args: _ensure-python-binding-env
+    {{ binding_python_path }} -m pytest -q --no-header -c {{ python_config }} {{ args }}
 
 # Full Python test suite (debug).
 [unix]
@@ -463,13 +479,13 @@ test-python-debug: python-develop-debug
     for d in examples/python/*/; do
       [ -f "${d}main.py" ] || continue
       if [[ -f "${d}requirements.txt" ]]; then
-        {{ python_path }} -m pip install -r "${d}requirements.txt"
+        {{ binding_python_path }} -m pip install -r "${d}requirements.txt"
       fi
       just _pytest "$d"
     done
 [windows]
 test-python-debug: python-develop-debug
-    {{ python_path }} {{ just_helper }} test-python
+    {{ binding_python_path }} {{ just_helper }} test-python
 
 # Full Python test suite (release).
 [unix]
@@ -480,13 +496,13 @@ test-python-release: python-develop-release
     for d in examples/python/*/; do
       [ -f "${d}main.py" ] || continue
       if [[ -f "${d}requirements.txt" ]]; then
-        {{ python_path }} -m pip install -r "${d}requirements.txt"
+        {{ binding_python_path }} -m pip install -r "${d}requirements.txt"
       fi
       just _pytest "$d"
     done
 [windows]
 test-python-release: python-develop-release
-    {{ python_path }} {{ just_helper }} test-python
+    {{ binding_python_path }} {{ just_helper }} test-python
 
 # Full Python test suite (debug and release).
 test-python-full: test-python-debug test-python-release
@@ -514,53 +530,53 @@ test-python-integration-release: python-develop-release
 test-python-integration-full: test-python-integration-debug test-python-integration-release
 
 # Host-side tests for the Python build scripts under scripts/. They exercise
-# the generators only, so they need no built binding and no build mode.
-test-python-scripts:
-    just _pytest scripts/tests
+# the generators only, so they run with the tools, not the built binding.
+test-python-scripts: _ensure-python-env
+    {{ python_path }} -m pytest -q --no-header -c {{ python_config }} scripts/tests
 
 # Run a workspace Python example from examples/python against local sources (debug).
 run-examples-python-debug: python-develop-debug
-    {{ python_path }} examples/python/rate_pnl_killswitch/main.py
-    {{ python_path }} examples/python/spot_funds/main.py
+    {{ binding_python_path }} examples/python/rate_pnl_killswitch/main.py
+    {{ binding_python_path }} examples/python/spot_funds/main.py
     just run-examples-python-table-debug examples/tables/spot/coverage.md
 
 # Run a workspace Python example from examples/python against local sources (release).
 run-examples-python-release: python-develop-release
-    {{ python_path }} examples/python/rate_pnl_killswitch/main.py
-    {{ python_path }} examples/python/spot_funds/main.py
+    {{ binding_python_path }} examples/python/rate_pnl_killswitch/main.py
+    {{ binding_python_path }} examples/python/spot_funds/main.py
     just run-examples-python-table-release examples/tables/spot/coverage.md
 
 # Run a spot-policy scenario table through the Python spot_table example (debug).
 [unix]
 run-examples-python-table-debug test_file="examples/tables/spot/coverage.md": python-develop-debug
-    {{ python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }}
+    {{ binding_python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }}
 [windows]
 run-examples-python-table-debug test_file="examples/tables/spot/coverage.md": python-develop-debug
-    {{ python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}"
+    {{ binding_python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}"
 
 # Run a spot-policy scenario table through the Python spot_table example (release).
 [unix]
 run-examples-python-table-release test_file="examples/tables/spot/coverage.md": python-develop-release
-    {{ python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }}
+    {{ binding_python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }}
 [windows]
 run-examples-python-table-release test_file="examples/tables/spot/coverage.md": python-develop-release
-    {{ python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}"
+    {{ binding_python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}"
 
 # Repeat-run a scenario table through the Python example for `dur` (debug).
 [unix]
 run-examples-python-table-repeat-debug test_file="examples/tables/spot/coverage.md" dur="3m": python-develop-debug
-    {{ python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }} --min-duration {{ dur }}
+    {{ binding_python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }} --min-duration {{ dur }}
 [windows]
 run-examples-python-table-repeat-debug test_file="examples/tables/spot/coverage.md" dur="3m": python-develop-debug
-    {{ python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}" --min-duration "{{ dur }}"
+    {{ binding_python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}" --min-duration "{{ dur }}"
 
 # Repeat-run a scenario table through the Python example for `dur` (release).
 [unix]
 run-examples-python-table-repeat-release test_file="examples/tables/spot/coverage.md" dur="3m": python-develop-release
-    {{ python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }} --min-duration {{ dur }}
+    {{ binding_python_path }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }} --min-duration {{ dur }}
 [windows]
 run-examples-python-table-repeat-release test_file="examples/tables/spot/coverage.md" dur="3m": python-develop-release
-    {{ python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}" --min-duration "{{ dur }}"
+    {{ binding_python_path }} {{ just_helper }} run-python-spot-table "{{ test_file }}" --min-duration "{{ dur }}"
 
 # Full Go test suite (debug).
 test-go-debug:
@@ -849,20 +865,20 @@ release-dry:
     git push --force-with-lease origin HEAD:release-dry-run
     gh workflow run release.yml --ref release-dry-run -f dry_run=true
 
-# Install Python bindings into the current Python environment (debug build).
+# Install Python bindings into target/python (debug build).
 [unix]
-python-develop-debug: _ensure-python-env
+python-develop-debug: _ensure-python-binding-env
     {{ python_path }} -m maturin develop -q --manifest-path bindings/python/Cargo.toml
 [windows]
-python-develop-debug: _ensure-python-env
+python-develop-debug: _ensure-python-binding-env
     {{ python_path }} {{ just_helper }} python-develop debug
 
-# Install Python bindings into the current Python environment (release build).
+# Install Python bindings into target/python (release build).
 [unix]
-python-develop-release: _ensure-python-env
+python-develop-release: _ensure-python-binding-env
     {{ python_path }} -m maturin develop -q --release --manifest-path bindings/python/Cargo.toml
 [windows]
-python-develop-release: _ensure-python-env
+python-develop-release: _ensure-python-binding-env
     {{ python_path }} {{ just_helper }} python-develop release
 
 # Generate the FFI C header, its Go copy, and the dlsym stub for the FFI crate.

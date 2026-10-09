@@ -282,9 +282,11 @@ gen-docs-site: gen-docs-c gen-docs-cpp gen-docs-js
 assemble-docs-site: _ensure-python-env gen-docs-site
     {{ python_path }} scripts/_generate_docs_site.py
 
-# Build Python API docs; warnings are errors.
+# Build Python API docs; warnings are errors. Sphinx runs in the binding's
+# environment, the one that imports the binding it documents.
 build-python-docs: python-develop-debug
-    cd bindings/python && sphinx-build -b html docs docs/_build -W
+    {{ binding_python_path }} -m pip install -r bindings/python/docs/requirements.txt
+    cd bindings/python && {{ binding_python_path }} -m sphinx -b html docs docs/_build -W
     {{ python_path }} scripts/_docs_provenance.py bindings/python/docs/_build
 # Copy monorepo LICENSE, OWNERS and THIRD-PARTY-LICENSES into the Python
 # package.
@@ -364,9 +366,10 @@ verify-wheel-version mode version base_version:
         assert version != base_version, f"expected staging version, got production version {version}"
         assert version.startswith(base_version), f"expected version starting with {base_version}, got {version}"
     PY
-# Run the wheel test suite against a pre-installed wheel (no rebuild).
+# Run the wheel test suite against a pre-installed wheel (no rebuild). The
+# wheel is installed into the tools environment, so the tests run there.
 test-wheel:
-    just _pytest bindings/python/tests
+    {{ python_path }} -m pytest -q --no-header -c {{ python_config }} bindings/python/tests
 # Validate wheel metadata with twine.
 check-wheel path:
     twine check {{ path }}

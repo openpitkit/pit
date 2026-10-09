@@ -72,6 +72,9 @@ Local release build:
 just python-develop-release
 ```
 
+Both install the binding into `target/python`, an environment of its own; run
+Python from it: `target/python/bin/python`.
+
 Manual:
 
 ```bash
@@ -97,6 +100,9 @@ rustup target add x86_64-pc-windows-msvc
 just python-develop-debug
 just python-develop-release
 ```
+
+Both install the binding into `target\python`; run Python from it:
+`.\target\python\Scripts\python.exe`.
 
 Manual:
 

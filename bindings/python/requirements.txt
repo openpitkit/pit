@@ -1,0 +1,4 @@
+# What the Python binding's tests need beside the binding itself. The binding's
+# own environment (`target/python`) installs only this file; the
+# repository-root requirements.txt includes it as well.
+pytest
