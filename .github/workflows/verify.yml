@@ -205,19 +205,9 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
 
-      # clang-format ships a per-OS-divergent format from apt/brew, so pin one
-      # wheel-packaged build across every runner to keep fmt-check deterministic.
-      - name: Install pinned clang-format
-        if: ${{ runner.os != 'Windows' }}
-        shell: bash
-        run: |
-          pipx install "clang-format==${CI_CLANG_FORMAT}"
-          # Prepend pipx's bin dir so the pinned build shadows any clang-format
-          # already baked into the runner image (e.g. /usr/bin/clang-format).
-          CF_BIN_DIR="$(pipx environment --value PIPX_BIN_DIR)"
-          echo "$CF_BIN_DIR" >> "$GITHUB_PATH"
-          "$CF_BIN_DIR/clang-format" --version
-
+      # check-cpp-full formats with the clang-format pinned in requirements.txt:
+      # the recipes install it into the venv and put the venv ahead of the
+      # inherited PATH, shadowing the runner's apt/brew/LLVM build on every OS.
       - name: Check C++
         shell: bash
         run: |

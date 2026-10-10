@@ -801,7 +801,7 @@ test-examples-cpp-full: test-examples-cpp-debug test-examples-cpp-release
 
 # Format C++ sources in place.
 [unix]
-fmt-cpp:
+fmt-cpp: _ensure-python-env
     find bindings/cpp/include bindings/cpp/test e2e/clients/cpp -type f \( -name '*.hpp' -o -name '*.cpp' \) -print0 | xargs -0 clang-format -i
     find examples/cpp -type f \( -name '*.hpp' -o -name '*.cpp' \) -not -path '*/build/*' -not -path '*/build-*/*' -print0 | xargs -0 clang-format -i
 [windows]
@@ -810,7 +810,7 @@ fmt-cpp: _ensure-python-env
 
 # Check C++ formatting without modifying files.
 [unix]
-fmt-check-cpp:
+fmt-check-cpp: _ensure-python-env
     find bindings/cpp/include bindings/cpp/test e2e/clients/cpp -type f \( -name '*.hpp' -o -name '*.cpp' \) -print0 | xargs -0 clang-format --dry-run -Werror
     find examples/cpp -type f \( -name '*.hpp' -o -name '*.cpp' \) -not -path '*/build/*' -not -path '*/build-*/*' -print0 | xargs -0 clang-format --dry-run -Werror
 [windows]

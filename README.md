@@ -178,8 +178,9 @@ constraints that tolerate API evolution during the pre-stable phase.
 - [Node.js `>=18`](https://nodejs.org/) if you build or test the
   JavaScript/WASM binding
 - [CMake `>=3.21`](https://cmake.org/download/), a C++17 compiler, and
-  [clang-format and clang-tidy](https://github.com/llvm/llvm-project/releases)
-  if you build, test, format, or lint C++ bindings and examples
+  [clang-tidy](https://github.com/llvm/llvm-project/releases) if you build,
+  test, or lint C++ bindings and examples; the recipes format C++ with the
+  clang-format pinned in `requirements.txt`, from the project venv
 - [doxygen](https://www.doxygen.nl/download.html) and
   [Graphviz](https://graphviz.org/download/) if you generate the C++ reference
   docs
@@ -394,7 +395,8 @@ npm test
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
   with MSVC C++ tools if you build or test C++ bindings and examples
 - [LLVM](https://github.com/llvm/llvm-project/releases) if you build or test Go
-  through CGo, format/lint C++, or use `clang`/`lld`
+  through CGo, lint C++, or use `clang`/`lld`; the recipes format C++ with the
+  clang-format pinned in `requirements.txt`, from the project venv
 - [Doxygen](https://www.doxygen.nl/download.html) and
   [Graphviz](https://graphviz.org/download/) if you generate the C++ reference
   docs
