@@ -96,42 +96,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends doxygen graphviz
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.CI_RUST }}
-          targets: wasm32-unknown-unknown
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.CI_NODE }}
-          cache: npm
-          cache-dependency-path: bindings/js/package-lock.json
-
-      - name: Resolve wasm-bindgen-cli version
-        id: wasm-bindgen
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="$(
-            awk '/^wasm-bindgen[[:space:]]*=/ {
-                   match($0, /[0-9]+\.[0-9]+\.[0-9]+/); print substr($0, RSTART, RLENGTH); exit
-                 }' bindings/js/Cargo.toml
-          )"
-          if [[ -z "${VERSION}" ]]; then
-            echo "::error::could not resolve the wasm-bindgen version from bindings/js/Cargo.toml"
-            exit 1
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Install wasm-bindgen-cli
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen-cli@${{ steps.wasm-bindgen.outputs.version }}
+      - name: Setup wasm toolchain
+        uses: ./.github/actions/setup-wasm-toolchain
 
       - name: Setup Python
         uses: actions/setup-python@v5
