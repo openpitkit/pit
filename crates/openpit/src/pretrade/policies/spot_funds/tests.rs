@@ -18,6 +18,7 @@
 //! Unit tests for [`SpotFundsPolicy`].
 
 mod position_limit;
+mod properties;
 
 use super::execution::single_lock_price;
 use super::rollback::AccountPnlAssertionRollback;

@@ -345,8 +345,9 @@ impl RateLimitSettings {
     }
 }
 
-// Pairs a validated limit with a fresh counter whose zeroed window_start makes
-// the first push start a new window.
+// Pairs a validated limit with a fresh counter. Its zeroed window_start is the
+// policy epoch, so a first push less than one window after the epoch counts in
+// [epoch, epoch + window), and a later first push opens a new window.
 fn fresh_slot(limit: RateLimit) -> RateLimitSlot {
     RateLimitSlot {
         counter: Arc::new(AtomicWindowCounter::new(0)),
@@ -725,7 +726,7 @@ where
                         VecDeque::new,
                         |entry, _is_new| {
                             advance_window(entry, now, limit.window);
-                            entry.push_back(now);
+                            insert_in_time_order(entry, now);
                             entry.len() as u64
                         },
                     );
@@ -742,7 +743,7 @@ where
                             VecDeque::new,
                             |entry, _is_new| {
                                 advance_window(entry, now, limit.window);
-                                entry.push_back(now);
+                                insert_in_time_order(entry, now);
                                 entry.len() as u64
                             },
                         );
@@ -908,30 +909,44 @@ fn validate_limit(limit: RateLimit) -> Result<RateLimit, RateLimitPolicyError> {
     Ok(limit)
 }
 
+// The expiry rule of a sliding-window log, shared by the real check and the
+// dry run: an entry expires once a full window has elapsed since it, and an
+// entry that is not in the past as of `now` never does.
+fn entry_expired(entry: Instant, now: Instant, window: Duration) -> bool {
+    now.checked_duration_since(entry)
+        .is_some_and(|elapsed| elapsed >= window)
+}
+
 fn advance_window(timestamps: &mut VecDeque<Instant>, now: Instant, window: Duration) {
-    while let Some(oldest) = timestamps.front().copied() {
-        match now.checked_duration_since(oldest) {
-            Some(elapsed) if elapsed >= window => {
-                timestamps.pop_front();
-            }
-            _ => break,
-        }
+    while timestamps
+        .front()
+        .is_some_and(|oldest| entry_expired(*oldest, now, window))
+    {
+        timestamps.pop_front();
+    }
+}
+
+// Keeps the log in time order: a late reading is inserted at its place, not at
+// the back, so the expired entries always form a prefix that `advance_window`
+// removes whole. Trimming by a scan of the whole log instead would make every
+// call linear in a log that, under a flood, holds every attempt in the window.
+fn insert_in_time_order(timestamps: &mut VecDeque<Instant>, now: Instant) {
+    if timestamps.back().is_some_and(|newest| *newest > now) {
+        let at = timestamps.partition_point(|entry| *entry <= now);
+        timestamps.insert(at, now);
+    } else {
+        timestamps.push_back(now);
     }
 }
 
 // Read-only would-be count for a sliding-window axis: how many entries are
 // still inside `window` as of `now`, plus one for the order being dry-run.
-// Mirrors `advance_window` + `push_back` + `len` without mutating storage, so a
-// dry-run can report a would-be breach without consuming budget.
+// Mirrors `advance_window` + `insert_in_time_order` + `len` without mutating
+// storage, so a dry-run can report a would-be breach without consuming budget.
 fn would_be_window_count(timestamps: &VecDeque<Instant>, now: Instant, window: Duration) -> u64 {
-    // An entry is expired exactly when `advance_window` would pop it: a
-    // measurable elapsed time that has reached the window. Anything else (still
-    // inside the window, or not in the past) is live.
     let live = timestamps
         .iter()
-        .filter(
-            |ts| !matches!(now.checked_duration_since(**ts), Some(elapsed) if elapsed >= window),
-        )
+        .filter(|entry| !entry_expired(**entry, now, window))
         .count() as u64;
     live + 1
 }
@@ -1651,6 +1666,53 @@ mod tests {
     }
 
     #[test]
+    fn expired_late_clock_reading_leaves_account_window_logs() {
+        // A call whose clock reading predates the newest log entry still
+        // leaves the log once its window has elapsed, so the dry-run and the
+        // real check count the same live entries.
+        let o = order(account(1));
+        let base = Instant::now();
+        for policy in [
+            account_policy(account(1), 2, Duration::from_secs(10)),
+            account_asset_policy(account(1), "USD", 2, Duration::from_secs(10)),
+        ] {
+            assert!(check_at(&policy, &o, base + Duration::from_secs(20)).is_ok());
+            assert!(check_at(&policy, &o, base + Duration::from_secs(15)).is_ok());
+
+            // The entry at base + 15s has expired at base + 25s.
+            let now = base + Duration::from_secs(25);
+            check_dry_run_at(&policy, &o, now).expect("dry-run must not count the expired entry");
+            check_at(&policy, &o, now).expect("real check must not count the expired entry");
+        }
+    }
+
+    #[test]
+    fn late_clock_reading_does_not_revive_expired_account_log_entry() {
+        // The call reading base + 5s arrives after the one reading base + 20s
+        // and expires at base + 16s. A later call reading base + 7s must not
+        // count it again: the window then holds 7s, 16s and 20s.
+        let policy = account_policy(account(1), 3, Duration::from_secs(10));
+        let o = order(account(1));
+        let base = Instant::now();
+
+        for secs in [20, 5, 16] {
+            assert!(check_at(&policy, &o, base + Duration::from_secs(secs)).is_ok());
+        }
+
+        let now = base + Duration::from_secs(7);
+        check_dry_run_at(&policy, &o, now).expect("dry-run must not count the expired entry");
+        check_at(&policy, &o, now).expect("real check must not count the expired entry");
+
+        // Exactly three entries are live, so a fourth order breaches.
+        let reject = check_at(&policy, &o, now).expect_err("fourth live order must be rejected");
+        assert_eq!(reject[0].reason, "rate limit exceeded: account barrier");
+        assert_eq!(
+            reject[0].details,
+            "submitted 4 orders in 10s window, max allowed: 3"
+        );
+    }
+
+    #[test]
     fn broker_barrier_applies_to_all_accounts() {
         let policy = broker_policy(2, Duration::from_secs(10));
         let base = Instant::now();
@@ -2361,5 +2423,286 @@ mod tests {
 
     fn account(id: u64) -> AccountId {
         AccountId::from_u64(id)
+    }
+
+    // The fixed-window counter and the whole policy against independent
+    // reference models, over arbitrary non-monotone clock readings.
+    mod properties {
+        use std::time::Duration;
+
+        use proptest::prelude::*;
+
+        use crate::core::{Instrument, OrderOperation};
+        use crate::param::Asset;
+        use crate::pretrade::policies::proptest_config::config;
+        use crate::pretrade::Rejects;
+
+        use super::super::{
+            rate_limit_reject, RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier,
+            RateLimitAssetBarrier, RateLimitBrokerBarrier, RateLimitSettings,
+        };
+        use super::{account, broker_policy, check_at, check_dry_run_at, order, policy_from};
+
+        // Sized for about 3 s per property in a debug build.
+        const COUNTER_CASES: u32 = 8192;
+        const POLICY_CASES: u32 = 8192;
+
+        // The expiry rule of the fixed window and the sliding log: a reading
+        // earlier than `since` never expires it.
+        fn expired(now: u64, since: u64, window: Duration) -> bool {
+            now >= since && Duration::from_nanos(now - since) >= window
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum CounterCall {
+            Push(u64),
+            Peek(u64),
+        }
+
+        proptest! {
+            #![proptest_config(config(COUNTER_CASES))]
+
+            // Late readings included, every count matches the model, whose
+            // window start only moves forward. No order is allowed, so every
+            // check rejects with its count.
+            #[test]
+            fn fixed_window_start_never_moves_backward(
+                window in 1u64..=1000,
+                calls in prop::collection::vec(
+                    prop_oneof![
+                        (0u64..=4000).prop_map(CounterCall::Push),
+                        (0u64..=4000).prop_map(CounterCall::Peek),
+                    ],
+                    1..=64,
+                ),
+            ) {
+                let limit = RateLimit {
+                    max_orders: 0,
+                    window: Duration::from_nanos(window),
+                };
+                let policy = broker_policy(limit.max_orders, limit.window);
+                let mut model = [ModelBarrier::new(Barrier::Broker, limit)];
+                let o = order(account(1));
+                let at = |offset| policy.epoch + Duration::from_nanos(offset);
+                for (step, call) in calls.into_iter().enumerate() {
+                    let (actual, expected) = match call {
+                        CounterCall::Push(offset) => (
+                            check_at(&policy, &o, at(offset)),
+                            model_check(&mut model, 1, "USD", offset),
+                        ),
+                        CounterCall::Peek(offset) => (
+                            check_dry_run_at(&policy, &o, at(offset)),
+                            model_check(&mut model.clone(), 1, "USD", offset),
+                        ),
+                    };
+                    prop_assert_eq!(actual, expected, "{:?} at step {}", call, step);
+                }
+            }
+        }
+
+        // A barrier by axis and key. Account 3 and GBP never get one, so
+        // orders also reach keys without a barrier.
+        #[derive(Debug, Clone, Copy)]
+        enum Barrier {
+            Broker,
+            Asset(&'static str),
+            Account(u64),
+            AccountAsset(u64, &'static str),
+        }
+
+        impl Barrier {
+            fn applies(self, account_id: u64, settlement: &str) -> bool {
+                match self {
+                    Self::Broker => true,
+                    Self::Asset(code) => code == settlement,
+                    Self::Account(id) => id == account_id,
+                    Self::AccountAsset(id, code) => id == account_id && code == settlement,
+                }
+            }
+
+            fn name(self) -> &'static str {
+                match self {
+                    Self::Broker => "broker barrier",
+                    Self::Asset(_) => "asset barrier",
+                    Self::Account(_) => "account barrier",
+                    Self::AccountAsset(..) => "account+asset barrier",
+                }
+            }
+        }
+
+        // Every candidate barrier, in reject priority order.
+        const BARRIERS: [Barrier; 8] = [
+            Barrier::Broker,
+            Barrier::Asset("USD"),
+            Barrier::Asset("EUR"),
+            Barrier::Account(1),
+            Barrier::Account(2),
+            Barrier::AccountAsset(1, "USD"),
+            Barrier::AccountAsset(2, "EUR"),
+            Barrier::AccountAsset(1, "EUR"),
+        ];
+
+        fn barrier_limits() -> impl Strategy<Value = Vec<(Barrier, RateLimit)>> {
+            let rate_limit = (0usize..=4, 1u64..=64).prop_map(|(max_orders, window)| RateLimit {
+                max_orders,
+                window: Duration::from_nanos(window),
+            });
+            prop::array::uniform8(prop::option::of(rate_limit)).prop_map(|limits| {
+                BARRIERS
+                    .into_iter()
+                    .zip(limits)
+                    .filter_map(|(barrier, limit)| limit.map(|limit| (barrier, limit)))
+                    .collect()
+            })
+        }
+
+        fn settings(barriers: &[(Barrier, RateLimit)]) -> RateLimitSettings {
+            let mut broker = None;
+            let mut assets = Vec::new();
+            let mut accounts = Vec::new();
+            let mut account_assets = Vec::new();
+            for (barrier, limit) in barriers.iter().cloned() {
+                match barrier {
+                    Barrier::Broker => broker = Some(RateLimitBrokerBarrier { limit }),
+                    Barrier::Asset(code) => assets.push(RateLimitAssetBarrier {
+                        limit,
+                        settlement_asset: asset(code),
+                    }),
+                    Barrier::Account(id) => accounts.push(RateLimitAccountBarrier {
+                        limit,
+                        account_id: account(id),
+                    }),
+                    Barrier::AccountAsset(id, code) => {
+                        account_assets.push(RateLimitAccountAssetBarrier {
+                            limit,
+                            account_id: account(id),
+                            settlement_asset: asset(code),
+                        })
+                    }
+                }
+            }
+            RateLimitSettings::new(broker, assets, accounts, account_assets).expect("valid config")
+        }
+
+        fn asset(code: &str) -> Asset {
+            Asset::new(code).expect("asset code must be valid")
+        }
+
+        // Reference state of one barrier, in nanoseconds since the policy
+        // epoch: a fixed window on the broker and asset axes, a sliding log on
+        // the account axes.
+        #[derive(Clone)]
+        struct ModelBarrier {
+            barrier: Barrier,
+            limit: RateLimit,
+            window_start: u64,
+            count: usize,
+            log: Vec<u64>,
+        }
+
+        impl ModelBarrier {
+            fn new(barrier: Barrier, limit: RateLimit) -> Self {
+                Self {
+                    barrier,
+                    limit,
+                    window_start: 0,
+                    count: 0,
+                    log: Vec::new(),
+                }
+            }
+
+            // Consumes a slot and returns the new count, which is also the
+            // count a dry run at the same reading must report.
+            fn push(&mut self, now: u64) -> usize {
+                let window = self.limit.window;
+                match self.barrier {
+                    Barrier::Broker | Barrier::Asset(_) => {
+                        if expired(now, self.window_start, window) {
+                            self.window_start = now;
+                            self.count = 0;
+                        }
+                        self.count += 1;
+                        self.count
+                    }
+                    Barrier::Account(_) | Barrier::AccountAsset(..) => {
+                        // Trimmed as of every reading, so an entry once expired
+                        // stays gone when a later call reads an earlier clock.
+                        self.log.retain(|&entry| !expired(now, entry, window));
+                        self.log.push(now);
+                        self.log.len()
+                    }
+                }
+            }
+        }
+
+        // Every applicable barrier consumes a slot, rejected or not; the
+        // verdict is the first breach in priority order.
+        fn model_check(
+            model: &mut [ModelBarrier],
+            account_id: u64,
+            settlement: &str,
+            now: u64,
+        ) -> Result<(), Rejects> {
+            let mut verdict = Ok(());
+            for barrier in model
+                .iter_mut()
+                .filter(|barrier| barrier.barrier.applies(account_id, settlement))
+            {
+                let count = barrier.push(now);
+                if verdict.is_ok() && count > barrier.limit.max_orders {
+                    verdict = Err(rate_limit_reject(
+                        barrier.barrier.name(),
+                        u64::try_from(count).expect("order count must fit u64"),
+                        u64::try_from(barrier.limit.max_orders).expect("max orders must fit u64"),
+                        barrier.limit.window,
+                    ));
+                }
+            }
+            verdict
+        }
+
+        proptest! {
+            #![proptest_config(config(POLICY_CASES))]
+
+            #[test]
+            fn policy_matches_reference_model(
+                barriers in barrier_limits(),
+                steps in prop::collection::vec(
+                    (1u64..=3, prop::sample::select(vec!["USD", "EUR", "GBP"]), 0u64..=256),
+                    1..=48,
+                ),
+            ) {
+                let policy = policy_from(settings(&barriers));
+                let mut model: Vec<_> = barriers
+                    .into_iter()
+                    .map(|(barrier, limit)| ModelBarrier::new(barrier, limit))
+                    .collect();
+                for (step, (account_id, settlement, offset)) in steps.into_iter().enumerate() {
+                    let o = OrderOperation {
+                        instrument: Instrument::new(asset("AAPL"), asset(settlement)),
+                        ..order(account(account_id))
+                    };
+                    let now = policy.epoch + Duration::from_nanos(offset);
+                    let dry = check_dry_run_at(&policy, &o, now);
+                    let dry_again = check_dry_run_at(&policy, &o, now);
+                    let real = check_at(&policy, &o, now);
+                    let expected = model_check(&mut model, account_id, settlement, offset);
+                    prop_assert_eq!(&dry_again, &dry, "dry run moved state at step {}", step);
+                    prop_assert_eq!(
+                        &dry,
+                        &real,
+                        "dry run differs from real check at step {}",
+                        step
+                    );
+                    prop_assert_eq!(&dry, &expected, "dry run differs from model at step {}", step);
+                    prop_assert_eq!(
+                        &real,
+                        &expected,
+                        "real check differs from model at step {}",
+                        step
+                    );
+                }
+            }
+        }
     }
 }

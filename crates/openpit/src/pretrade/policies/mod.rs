@@ -21,6 +21,8 @@ pub mod order_size_limit;
 pub mod order_validation;
 mod pnl_bounds;
 pub mod pnl_bounds_killswitch;
+#[cfg(test)]
+mod proptest_config;
 pub mod rate_limit;
 mod spot_funds;
 
