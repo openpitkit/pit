@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -669,20 +670,63 @@ where
         ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
+        self.check_start(ctx, order, true)
+    }
+
+    /// Dry-run start-stage check.
+    ///
+    /// Rate limiting is an immediate-side-effect policy: the normal
+    /// [`check_pre_trade_start`](Self::check_pre_trade_start) consumes a slot in
+    /// every applicable window counter, and rejected attempts are never rolled
+    /// back. A dry-run must not move that state, so this override consumes no
+    /// budget and pushes nothing into any counter. It still reports the verdict
+    /// a real call would produce: it runs the real check's path without
+    /// recording the order - each fixed-window counter is *peeked* read-only
+    /// for the count a push would yield, and each sliding-window log is counted
+    /// by the same rule as in the real check and left as it is - so an order
+    /// that would breach an already-exhausted window is rejected here too, with
+    /// no side effect.
+    fn check_pre_trade_start_dry_run(
+        &self,
+        ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        order: &Order,
+    ) -> Result<(), Rejects> {
+        self.check_start(ctx, order, false)
+    }
+}
+
+impl<LockingPolicyFactory> RateLimitPolicy<LockingPolicyFactory>
+where
+    LockingPolicyFactory: crate::storage::LockingPolicyFactory
+        + crate::storage::CreateStorageFor<AccountId>
+        + 'static,
+{
+    // The start-stage check behind both the real check and the dry run, so
+    // the two count every axis by one rule; `record` only decides whether the
+    // order consumes its slot.
+    //
+    // One coherent settings snapshot decides both applicability and the exact
+    // live counter/log to count on. ALL applicable axes are counted before
+    // resolving (flood semantics): every applicable axis must consume its slot
+    // even when an earlier-priority axis already breaches, so a flood cannot
+    // bypass a counter by tripping another. The breach is resolved in priority
+    // order: broker -> asset -> account -> account+asset. Accessors may publish
+    // new settings; this check keeps the version selected before they run.
+    fn check_start<Order>(
+        &self,
+        ctx: &PreTradeContext<LockingPolicyFactory>,
+        order: &Order,
+        record: bool,
+    ) -> Result<(), Rejects>
+    where
+        Order: HasAccountId + HasInstrument,
+    {
         let now = start_pre_trade_now();
         let now_nanos = now
             .checked_duration_since(self.epoch)
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        // One coherent settings snapshot decides both applicability and the
-        // exact live counter/log to push. ALL applicable axes are pushed before
-        // resolving (flood semantics): every applicable axis must consume its
-        // slot even when an earlier-priority axis already breaches, so a flood
-        // cannot bypass a counter by tripping another. The breach is resolved
-        // in priority order: broker -> asset -> account -> account+asset.
-        // Accessors may publish new settings; this check keeps the version
-        // selected before they run.
         self.settings.with_snapshot(|s| {
             let needs_settlement = !s.asset_limits.is_empty() || !s.account_asset_limits.is_empty();
             let needs_account = !s.account_limits.is_empty() || !s.account_asset_limits.is_empty();
@@ -707,28 +751,27 @@ where
             } else {
                 None
             };
+
             let broker = s.broker.as_ref().map(|slot| {
-                let count = slot.counter.push(now_nanos, window_nanos(&slot.limit));
+                let count = fixed_window_count(slot, now_nanos, record);
                 over_limit(count, &slot.limit, "broker barrier")
             });
 
             let asset = settlement_opt.as_ref().and_then(|settlement| {
                 s.asset_limits.get(settlement).map(|slot| {
-                    let count = slot.counter.push(now_nanos, window_nanos(&slot.limit));
+                    let count = fixed_window_count(slot, now_nanos, record);
                     over_limit(count, &slot.limit, "asset barrier")
                 })
             });
 
             let account = account_id_opt.and_then(|account_id| {
                 s.account_limits.get(&account_id).map(|limit| {
-                    let count = self.per_account_timestamps.with_mut(
+                    let count = sliding_window_count(
+                        &self.per_account_timestamps,
                         account_id,
-                        VecDeque::new,
-                        |entry, _is_new| {
-                            advance_window(entry, now, limit.window);
-                            insert_in_time_order(entry, now);
-                            entry.len() as u64
-                        },
+                        now,
+                        limit.window,
+                        record,
                     );
                     over_limit(count, limit, "account barrier")
                 })
@@ -738,14 +781,12 @@ where
                 settlement_opt.as_ref().and_then(|settlement| {
                     let key = (account_id, settlement.clone());
                     s.account_asset_limits.get(&key).map(|limit| {
-                        let count = self.per_account_asset_timestamps.with_mut(
+                        let count = sliding_window_count(
+                            &self.per_account_asset_timestamps,
                             key,
-                            VecDeque::new,
-                            |entry, _is_new| {
-                                advance_window(entry, now, limit.window);
-                                insert_in_time_order(entry, now);
-                                entry.len() as u64
-                            },
+                            now,
+                            limit.window,
+                            record,
                         );
                         over_limit(count, limit, "account+asset barrier")
                     })
@@ -763,108 +804,45 @@ where
             }
         })
     }
+}
 
-    /// Dry-run start-stage check.
-    ///
-    /// Rate limiting is an immediate-side-effect policy: the normal
-    /// [`check_pre_trade_start`](Self::check_pre_trade_start) consumes a slot in
-    /// every applicable window counter, and rejected attempts are never rolled
-    /// back. A dry-run must not move that state, so this override consumes no
-    /// budget and pushes nothing into any counter. It still reports the verdict
-    /// a real call would produce: each axis is *peeked* read-only for the count
-    /// a push would yield, so an order that would breach an already-exhausted
-    /// window is rejected here too, with no side effect.
-    fn check_pre_trade_start_dry_run(
-        &self,
-        ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
-        order: &Order,
-    ) -> Result<(), Rejects> {
-        let now = start_pre_trade_now();
-        let now_nanos = now
-            .checked_duration_since(self.epoch)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-
-        // Read-only mirror of `check_pre_trade_start`: same axes, same priority
-        // resolution, but every count is the would-be count from a peek rather
-        // than a mutating push, so no budget is consumed.
-        // Accessors may publish new settings; this check keeps the version
-        // selected before they run.
-        self.settings.with_snapshot(|s| {
-            let needs_settlement = !s.asset_limits.is_empty() || !s.account_asset_limits.is_empty();
-            let needs_account = !s.account_limits.is_empty() || !s.account_asset_limits.is_empty();
-
-            let settlement_opt: Option<Asset> = if needs_settlement {
-                Some(
-                    order
-                        .instrument()
-                        .map_err(|e| {
-                            Rejects::from(missing_required_field_reject(self, "instrument", &e))
-                        })?
-                        .settlement_asset()
-                        .clone(),
-                )
-            } else {
-                None
-            };
-            let account_id_opt: Option<AccountId> = if needs_account {
-                Some(ctx.account_id().map_err(|e| {
-                    Rejects::from(missing_required_field_reject(self, "account ID", &e))
-                })?)
-            } else {
-                None
-            };
-
-            let broker = s.broker.as_ref().map(|slot| {
-                let count = slot.counter.peek(now_nanos, window_nanos(&slot.limit));
-                over_limit(count, &slot.limit, "broker barrier")
-            });
-
-            let asset = settlement_opt.as_ref().and_then(|settlement| {
-                s.asset_limits.get(settlement).map(|slot| {
-                    let count = slot.counter.peek(now_nanos, window_nanos(&slot.limit));
-                    over_limit(count, &slot.limit, "asset barrier")
-                })
-            });
-
-            let account = account_id_opt.and_then(|account_id| {
-                s.account_limits.get(&account_id).map(|limit| {
-                    let count = self
-                        .per_account_timestamps
-                        .with(&account_id, |entry| {
-                            would_be_window_count(entry, now, limit.window)
-                        })
-                        .unwrap_or(1);
-                    over_limit(count, limit, "account barrier")
-                })
-            });
-
-            let account_asset = account_id_opt.and_then(|account_id| {
-                settlement_opt.as_ref().and_then(|settlement| {
-                    let key = (account_id, settlement.clone());
-                    s.account_asset_limits.get(&key).map(|limit| {
-                        let count = self
-                            .per_account_asset_timestamps
-                            .with(&key, |entry| {
-                                would_be_window_count(entry, now, limit.window)
-                            })
-                            .unwrap_or(1);
-                        over_limit(count, limit, "account+asset barrier")
-                    })
-                })
-            });
-
-            match broker
-                .flatten()
-                .or_else(|| asset.flatten())
-                .or_else(|| account.flatten())
-                .or_else(|| account_asset.flatten())
-            {
-                Some(reject) => Err(reject),
-                None => Ok(()),
-            }
-        })
+// The count of an order on a fixed-window counter: `push` records the order,
+// `peek` answers what that push would return without recording it.
+fn fixed_window_count(slot: &RateLimitSlot, now_nanos: u64, record: bool) -> u64 {
+    let window = window_nanos(&slot.limit);
+    if record {
+        slot.counter.push(now_nanos, window)
+    } else {
+        slot.counter.peek(now_nanos, window)
     }
+}
+
+// The count of an order on the sliding-window log under `key`, taken by
+// `window_count` on both paths; only a recording call then trims the log and
+// inserts the order. A dry run reads without creating the log: a key with no
+// log yet holds no entries, so the order would be its first.
+fn sliding_window_count<Key, LockingPolicy>(
+    logs: &Storage<Key, VecDeque<Instant>, LockingPolicy>,
+    key: Key,
+    now: Instant,
+    window: Duration,
+    record: bool,
+) -> u64
+where
+    Key: Hash + Eq + Clone,
+    LockingPolicy: crate::storage::LockingPolicy,
+{
+    if !record {
+        return logs
+            .with(&key, |log| window_count(log, now, window))
+            .unwrap_or(1);
+    }
+    logs.with_mut(key, VecDeque::new, |log, _is_new| {
+        let count = window_count(log, now, window);
+        advance_window(log, now, window);
+        insert_in_time_order(log, now);
+        count
+    })
 }
 
 fn window_nanos(limit: &RateLimit) -> u64 {
@@ -928,8 +906,9 @@ fn advance_window(timestamps: &mut VecDeque<Instant>, now: Instant, window: Dura
 
 // Keeps the log in time order: a late reading is inserted at its place, not at
 // the back, so the expired entries always form a prefix that `advance_window`
-// removes whole. Trimming by a scan of the whole log instead would make every
-// call linear in a log that, under a flood, holds every attempt in the window.
+// removes whole and `window_count` finds by binary search. Scanning the whole
+// log instead would make every call linear in a log that, under a flood, holds
+// every attempt in the window.
 fn insert_in_time_order(timestamps: &mut VecDeque<Instant>, now: Instant) {
     if timestamps.back().is_some_and(|newest| *newest > now) {
         let at = timestamps.partition_point(|entry| *entry <= now);
@@ -939,16 +918,12 @@ fn insert_in_time_order(timestamps: &mut VecDeque<Instant>, now: Instant) {
     }
 }
 
-// Read-only would-be count for a sliding-window axis: how many entries are
-// still inside `window` as of `now`, plus one for the order being dry-run.
-// Mirrors `advance_window` + `insert_in_time_order` + `len` without mutating
-// storage, so a dry-run can report a would-be breach without consuming budget.
-fn would_be_window_count(timestamps: &VecDeque<Instant>, now: Instant, window: Duration) -> u64 {
-    let live = timestamps
-        .iter()
-        .filter(|entry| !entry_expired(**entry, now, window))
-        .count() as u64;
-    live + 1
+// The count of an order on a sliding-window log as of `now`: the entries still
+// inside `window`, plus one for the order itself. The expired entries are the
+// prefix the time order keeps them in, so the count costs O(log n).
+fn window_count(timestamps: &VecDeque<Instant>, now: Instant, window: Duration) -> u64 {
+    let expired = timestamps.partition_point(|entry| entry_expired(*entry, now, window));
+    (timestamps.len() - expired) as u64 + 1
 }
 
 #[cfg(test)]
@@ -1558,6 +1533,59 @@ mod tests {
 
         // A real order in a fresh window passes: the dry-runs spent no budget.
         assert!(check_at(&policy, &o, base + Duration::from_secs(11)).is_ok());
+    }
+
+    #[test]
+    fn dry_run_creates_no_account_window_logs() {
+        // A dry run counts a key with no log yet as empty and must not create
+        // the log. The count alone cannot show it: an empty log counts the
+        // same.
+        let account_id = account(1);
+        let usd = Asset::new("USD").expect("asset code must be valid");
+        let limit = RateLimit {
+            max_orders: 10,
+            window: Duration::from_secs(60),
+        };
+        let policy = policy_from(
+            RateLimitSettings::new(
+                None,
+                [],
+                [RateLimitAccountBarrier {
+                    limit: limit.clone(),
+                    account_id,
+                }],
+                [RateLimitAccountAssetBarrier {
+                    limit,
+                    account_id,
+                    settlement_asset: usd.clone(),
+                }],
+            )
+            .expect("valid barriers"),
+        );
+        let o = order(account_id);
+        let key = (account_id, usd);
+        let now = Instant::now();
+
+        assert!(check_dry_run_at(&policy, &o, now).is_ok());
+        assert!(policy
+            .per_account_timestamps
+            .with(&account_id, |_| ())
+            .is_none());
+        assert!(policy
+            .per_account_asset_timestamps
+            .with(&key, |_| ())
+            .is_none());
+
+        // The same lookups see the logs once a real check records the order.
+        assert!(check_at(&policy, &o, now).is_ok());
+        assert!(policy
+            .per_account_timestamps
+            .with(&account_id, |_| ())
+            .is_some());
+        assert!(policy
+            .per_account_asset_timestamps
+            .with(&key, |_| ())
+            .is_some());
     }
 
     #[test]
