@@ -450,6 +450,46 @@ using DeskStartAdapter =
     openpit::pretrade::StartPolicyAdapterWithSafeSlowArgType<
         DeskPolicy, DeskOrder, openpit::ExecutionReport>;
 
+// A context-taking start hook is outside the adapter contract, in either
+// argument order and whether it takes `const Context&` or `Context&`, so both
+// adapters reject it at compile time instead of exposing no such hook and
+// losing it silently.
+struct OrderContextStartDeskPolicy {
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(const DeskOrder&,
+                                                         const Context&) const;
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(const DeskOrder&,
+                                                               Context&) const;
+};
+
+struct ContextOrderStartDeskPolicy {
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+      Context&, const DeskOrder&) const;
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
+      const Context&, const DeskOrder&) const;
+};
+
+struct OrderOnlyStartDeskPolicy {
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+      const DeskOrder&) const;
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
+      const DeskOrder&) const;
+};
+
+static_assert(openpit::pretrade::detail::HasStartWithContext<
+              OrderContextStartDeskPolicy, DeskOrder>::value);
+static_assert(openpit::pretrade::detail::HasStartDryRunWithContext<
+              OrderContextStartDeskPolicy, DeskOrder>::value);
+static_assert(openpit::pretrade::detail::HasStartWithContext<
+              ContextOrderStartDeskPolicy, DeskOrder>::value);
+static_assert(openpit::pretrade::detail::HasStartDryRunWithContext<
+              ContextOrderStartDeskPolicy, DeskOrder>::value);
+
+// The supported order-only forms must not trip the detectors.
+static_assert(!openpit::pretrade::detail::HasStartWithContext<
+              OrderOnlyStartDeskPolicy, DeskOrder>::value);
+static_assert(!openpit::pretrade::detail::HasStartDryRunWithContext<
+              OrderOnlyStartDeskPolicy, DeskOrder>::value);
+
 TEST(PolicyAdapter, SafeSlowMainStageHappyPathAccepts) {
   DeskMainAdapter adapter{DeskPolicy{}};
   DeskOrder order;
@@ -752,6 +792,32 @@ class DryRunHookPolicy {
   DryRunHookCounters* m_counters;
 };
 
+// Its only dry-run hook is the context-taking start dry-run.
+class ContextStartDryRunHookPolicy {
+ public:
+  explicit ContextStartDryRunHookPolicy(DryRunHookCounters* counters)
+      : m_counters(counters) {}
+
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+      const Context& context, const openpit::Order& order) const {
+    static_cast<void>(context);
+    static_cast<void>(order);
+    ++m_counters->start;
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
+      const Context& context, const openpit::Order& order) const {
+    static_cast<void>(context);
+    static_cast<void>(order);
+    ++m_counters->startDryRun;
+    return std::nullopt;
+  }
+
+ private:
+  DryRunHookCounters* m_counters;
+};
+
 class DropCopyBlockingPolicy {
  public:
   void PerformPreTradeCheck(const Context& context,
@@ -912,6 +978,27 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
   EXPECT_EQ(result.rejects.front().code, RejectCode::Custom);
   EXPECT_EQ(counters.start, 1u);
   EXPECT_EQ(counters.main, 1u);
+}
+
+TEST(CustomPolicy, UsesContextStartDryRunHookForDryRunPipeline) {
+  DryRunHookCounters counters;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<ContextStartDryRunHookPolicy> policy(
+      "ContextStartDryRunHookPolicy", ContextStartDryRunHookPolicy{&counters});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  const openpit::pretrade::DryRunReport probe =
+      engine.ExecutePreTradeDryRun(MakeDryRunHookOrder());
+  EXPECT_TRUE(probe.Passed());
+  EXPECT_EQ(counters.startDryRun, 1u);
+  EXPECT_EQ(counters.start, 0u);
+
+  const openpit::pretrade::ExecuteResult result =
+      engine.ExecutePreTrade(MakeDryRunHookOrder());
+  EXPECT_TRUE(result.Passed());
+  EXPECT_EQ(counters.start, 1u);
+  EXPECT_EQ(counters.startDryRun, 1u);
 }
 
 TEST(CustomPolicy, DropCopySurfacesAppliedAccountBlock) {

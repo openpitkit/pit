@@ -366,18 +366,12 @@ class CustomPolicy {
       }
     }
     OpenPitSharedString* error = nullptr;
-    OpenPitPretradePreTradePolicy* raw = nullptr;
-    if constexpr (UsesDryRunHooks()) {
-      raw = openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
-          ::openpit::detail::MakeStringView(name), policyGroupId, StartHook(),
-          StartDryRunHook(), MainHook(), MainDryRunHook(), ReportHook(),
-          AdjustmentHook(), nullptr, &FreeTrampoline, m_handler.get(), &error);
-    } else {
-      raw = openpit_create_pretrade_custom_pre_trade_policy(
-          ::openpit::detail::MakeStringView(name), policyGroupId, StartHook(),
-          MainHook(), ReportHook(), AdjustmentHook(), nullptr, &FreeTrampoline,
-          m_handler.get(), &error);
-    }
+    OpenPitPretradePreTradePolicy* raw =
+        openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
+            ::openpit::detail::MakeStringView(name), policyGroupId, StartHook(),
+            StartDryRunHook(), MainHook(), MainDryRunHook(), ReportHook(),
+            AdjustmentHook(), nullptr, &FreeTrampoline, m_handler.get(),
+            &error);
     if (raw == nullptr) {
       ::openpit::detail::ThrowFromSharedString(error,
                                                "custom policy creation failed");
@@ -404,12 +398,6 @@ class CustomPolicy {
 
   [[nodiscard]] OpenPitPretradePreTradePolicy* Native() const noexcept {
     return m_policy.Get();
-  }
-
-  static constexpr bool UsesDryRunHooks() noexcept {
-    return detail::HasCheckPreTradeStartDryRun<Handler>::value ||
-           detail::HasPerformPreTradeCheckDryRun<Handler>::value ||
-           detail::HasPerformPreTradeCheckDryRunFull<Handler>::value;
   }
 
   static OpenPitPretradePreTradePolicyCheckPreTradeStartFn StartHook() {

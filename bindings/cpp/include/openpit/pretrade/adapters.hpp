@@ -147,6 +147,45 @@ struct HasStartDryRun<
     std::void_t<decltype(std::declval<const Policy&>().CheckPreTradeStartDryRun(
         std::declval<const Order&>()))>> : std::true_type {};
 
+// Detect a start-stage hook that also takes a `Context`, in either argument
+// order. The adapter contract has no such form, so matching it is an error:
+// without it the adapter would expose no such hook and lose it silently. The
+// probe passes a non-const `Context&` so a `Context&` parameter matches as
+// well as a `const Context&` one.
+template <typename Policy, typename FirstArgument, typename SecondArgument,
+          typename = void>
+struct HasStartTaking : std::false_type {};
+
+template <typename Policy, typename FirstArgument, typename SecondArgument>
+struct HasStartTaking<
+    Policy, FirstArgument, SecondArgument,
+    std::void_t<decltype(std::declval<const Policy&>().CheckPreTradeStart(
+        std::declval<FirstArgument>(), std::declval<SecondArgument>()))>>
+    : std::true_type {};
+
+template <typename Policy, typename FirstArgument, typename SecondArgument,
+          typename = void>
+struct HasStartDryRunTaking : std::false_type {};
+
+template <typename Policy, typename FirstArgument, typename SecondArgument>
+struct HasStartDryRunTaking<
+    Policy, FirstArgument, SecondArgument,
+    std::void_t<decltype(std::declval<const Policy&>().CheckPreTradeStartDryRun(
+        std::declval<FirstArgument>(), std::declval<SecondArgument>()))>>
+    : std::true_type {};
+
+template <typename Policy, typename Order>
+struct HasStartWithContext
+    : std::bool_constant<
+          HasStartTaking<Policy, const Order&, Context&>::value ||
+          HasStartTaking<Policy, Context&, const Order&>::value> {};
+
+template <typename Policy, typename Order>
+struct HasStartDryRunWithContext
+    : std::bool_constant<
+          HasStartDryRunTaking<Policy, const Order&, Context&>::value ||
+          HasStartDryRunTaking<Policy, Context&, const Order&>::value> {};
+
 [[noreturn]] inline void ThrowTypeMismatch(std::string_view policy_name,
                                            const std::type_info& expected_type,
                                            const std::type_info& actual_type) {
@@ -199,6 +238,16 @@ class StartPolicyAdapter {
       !detail::HasLegacyReportFull<ClientPolicy, ClientReport>::value,
       "ClientPolicy::ApplyExecutionReport(context, report, adjustments) was "
       "removed; add PostTradePnls& as the fourth argument");
+  static_assert(
+      !detail::HasStartWithContext<ClientPolicy, ClientOrder>::value,
+      "ClientPolicy::CheckPreTradeStart taking a Context is not supported by "
+      "the adapter; use a direct CustomPolicy handler with "
+      "CheckPreTradeStart(const Context&, const openpit::Order&)");
+  static_assert(
+      !detail::HasStartDryRunWithContext<ClientPolicy, ClientOrder>::value,
+      "ClientPolicy::CheckPreTradeStartDryRun taking a Context is not "
+      "supported by the adapter; use a direct CustomPolicy handler with "
+      "CheckPreTradeStartDryRun(const Context&, const openpit::Order&)");
 
  public:
   // Creates adapter around a client start-stage policy instance.
@@ -339,6 +388,16 @@ class PolicyAdapter {
       !detail::HasLegacyReportFull<ClientPolicy, ClientReport>::value,
       "ClientPolicy::ApplyExecutionReport(context, report, adjustments) was "
       "removed; add PostTradePnls& as the fourth argument");
+  static_assert(
+      !detail::HasStartWithContext<ClientPolicy, ClientOrder>::value,
+      "ClientPolicy::CheckPreTradeStart taking a Context is not supported by "
+      "the adapter; use a direct CustomPolicy handler with "
+      "CheckPreTradeStart(const Context&, const openpit::Order&)");
+  static_assert(
+      !detail::HasStartDryRunWithContext<ClientPolicy, ClientOrder>::value,
+      "ClientPolicy::CheckPreTradeStartDryRun taking a Context is not "
+      "supported by the adapter; use a direct CustomPolicy handler with "
+      "CheckPreTradeStartDryRun(const Context&, const openpit::Order&)");
 
  public:
   // Creates adapter around a client main-stage policy instance.

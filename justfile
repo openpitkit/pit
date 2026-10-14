@@ -159,6 +159,8 @@ install: ensure-node
     else
       ( cd bindings/js && npm install --no-audit --no-fund )
     fi
+    echo "examples/js: installing JS example dependencies"
+    ( cd examples/js && npm ci --no-audit --no-fund )
 
     # 5. Python dev install (reuses the existing debug recipe).
     just python-develop-debug
