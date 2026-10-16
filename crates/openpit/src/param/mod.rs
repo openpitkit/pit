@@ -1253,7 +1253,7 @@ macro_rules! test_value_type_common_methods {
 #[cfg(test)]
 #[allow(clippy::wrong_self_convention)]
 mod tests {
-    use super::{Error, ParamKind, PositionSize, Quantity, RoundingStrategy};
+    use super::{Error, ParamKind, Pnl, PositionSize, Quantity, RoundingStrategy};
     use rust_decimal::Decimal;
 
     define_non_negative_value_type!(TestUnsigned, ParamKind::Quantity);
@@ -1807,6 +1807,29 @@ mod tests {
         assert_eq!(
             two.checked_div_u64(2).expect("must be valid").to_decimal(),
             Decimal::from(1)
+        );
+    }
+
+    #[test]
+    fn unaligned_subtraction_borrows_across_the_rescaled_words() {
+        // 34028236693 rescaled to 28 places lies just above 2^128, so taking
+        // one unit written at 28 places has to borrow across the word above
+        // the low 96 bits, which holds 0.
+        let coarse = "34028236693";
+        let fine = "1.0000000000000000000000000000";
+        let expected = "34028236692";
+
+        let pnl = |value: &str| Pnl::from_str(value).expect("must be valid");
+        assert_eq!(pnl(coarse).checked_sub(pnl(fine)), Ok(pnl(expected)));
+        assert_eq!(
+            pnl(coarse).checked_add(pnl(&format!("-{fine}"))),
+            Ok(pnl(expected))
+        );
+
+        let quantity = |value: &str| Quantity::from_str(value).expect("must be valid");
+        assert_eq!(
+            quantity(coarse).checked_sub(quantity(fine)),
+            Ok(quantity(expected))
         );
     }
 
