@@ -9666,14 +9666,13 @@ mod field_access_tests {
         INIT.call_once(|| {
             Python::initialize();
             // PyO3 embeds the interpreter against the base CPython install,
-            // not the virtualenv `PYO3_PYTHON` points at, and the embedded
-            // binary has no `pyvenv.cfg`, so `site` never resolves the venv
-            // prefix. As a result the venv `site-packages` (and the
-            // `maturin develop` `.pth` that puts the editable `openpit`
-            // package on the path) are absent from the embedded `sys.path`.
-            // Query the venv interpreter for its effective `sys.path` and
-            // prepend the missing entries so `import openpit` resolves
-            // regardless of how `cargo test` was invoked.
+            // and the embedded binary has no `pyvenv.cfg`, so `site` never
+            // resolves a venv prefix. As a result the `site-packages` of the
+            // environment `maturin develop` installed into (and the `.pth`
+            // that puts the editable `openpit` package on the path) are
+            // absent from the embedded `sys.path`. Query that environment's
+            // interpreter for its effective `sys.path` and prepend the
+            // missing entries so `import openpit` resolves.
             if let Err(error) = Python::attach(prepend_venv_sys_path) {
                 panic!("failed to configure venv sys.path for embedded python: {error}");
             }
@@ -9681,8 +9680,21 @@ mod field_access_tests {
     }
 
     fn prepend_venv_sys_path(py: Python<'_>) -> PyResult<()> {
-        let interpreter = option_env!("PYO3_PYTHON").unwrap_or("python3");
-        let output = std::process::Command::new(interpreter)
+        // `maturin develop` installs into the environment VIRTUAL_ENV names.
+        let venv = option_env!("VIRTUAL_ENV").ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "VIRTUAL_ENV was unset at build time: build the tests in the \
+                 environment `maturin develop` installed openpit into",
+            )
+        })?;
+        let interpreter = if cfg!(windows) {
+            std::path::Path::new(venv)
+                .join("Scripts")
+                .join("python.exe")
+        } else {
+            std::path::Path::new(venv).join("bin").join("python")
+        };
+        let output = std::process::Command::new(&interpreter)
             .args(["-c", "import sys; print('\\n'.join(sys.path))"])
             .output()
             .map_err(|error| {
