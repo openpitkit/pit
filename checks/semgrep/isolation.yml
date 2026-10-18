@@ -25,12 +25,18 @@
 rules:
   - id: no-internal-document-reference
     message: >-
-      Published source and documentation must not reference internal design
-      material. Such a link discloses both the existence and the structure of
-      documents that are not published. State the contract in place instead.
+      Published source and documentation must not reference unpublished
+      internal material. Such a link discloses both the existence and the
+      structure of documents that are not published. State the contract in
+      place instead.
     severity: ERROR
     languages: [generic]
-    pattern-regex: 'doc/(design|code_style|agents)\b|design/[a-z_]+/'
+    # Published documentation lives under docs/, so a path through a bare doc/
+    # directory points outside the repository; matching the directory rather
+    # than its sections keeps unpublished section names out of the rule. A doc/
+    # segment inside a URL is a public page, not a path, and is left alone. A
+    # relative path into a design subtree is matched on its own.
+    pattern-regex: '(?:(?<![A-Za-z0-9_./-])|(?<=\./))doc/[A-Za-z_]|design/[a-z_]+/'
     paths:
       exclude:
         # The rule quotes the paths it forbids.
@@ -38,18 +44,29 @@ rules:
 
   - id: no-tracker-ids-in-code
     message: >-
-      Issue identifiers do not belong in the repository. They rot when the
-      tracker changes and mean nothing to a reader without access to it.
-      Describe the pending work in words.
+      Issue identifiers and links into an issue tracker do not belong in the
+      repository. They rot when the tracker changes and mean nothing to a
+      reader without access to it. Describe the pending work in words.
     severity: ERROR
     languages: [generic]
     # Only this project's tracker prefixes: a generic [A-Z]+-<digits> pattern
-    # would match UTF-8, SHA-256, ISO-8601 and every similar spelling.
-    pattern-regex: '\b(OPENPIT|PIT|SDK|OF|CLD|CLW|JMW)-\d+\b|TODO\([^)]*-\d+\)'
+    # would match UTF-8, SHA-256, ISO-8601 and every similar spelling. Links
+    # into a hosted tracker are matched by host, whatever issue they point at.
+    pattern-regex: '\b(OPENPIT|PIT|SDK|OF|OFS|CLD|CLW|JMW)-\d+\b|TODO\([^)]*-\d+\)|\b[a-z0-9-]+\.atlassian\.net\b|\bapp\.plane\.so\b|\blinear\.app/'
     paths:
       exclude:
         # The rule quotes the prefixes it forbids.
         - /checks/semgrep/**
+
+  - id: no-machine-local-path
+    message: >-
+      An absolute path into a user's home directory does not belong in the
+      repository. It resolves on no other machine and discloses the local
+      environment. Use a path relative to the repository or a documented
+      location.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/|\b[A-Za-z]:\\Users\\'
 
   - id: binding-isolation-go
     message: >-

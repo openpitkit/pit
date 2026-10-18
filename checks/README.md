@@ -43,8 +43,9 @@ a test is the message a user sees.
 
 - `semgrep/text-style.yml` - ASCII punctuation, no invisible characters, no
   emoji, no narrating comments.
-- `semgrep/isolation.yml` - no reference to unpublished design material, no
-  tracker identifiers, no binding documenting itself by pointing at a sibling.
+- `semgrep/isolation.yml` - no reference to unpublished material, no tracker
+  identifiers or tracker links, no absolute paths into a home directory, no
+  binding documenting itself by pointing at a sibling.
 - `semgrep/privacy.yml` - account and account-group identifiers never rendered
   into a message.
 - `semgrep/financial-types-rust.yml` - domain value types instead of `f64`, no
