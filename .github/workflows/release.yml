@@ -213,7 +213,7 @@ jobs:
             os: macos-15-intel
             target: x86_64-apple-darwin
           - name: macos-aarch64
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
     steps:
       - name: Checkout
@@ -613,7 +613,7 @@ jobs:
             goarch: amd64
             lib_name: libopenpit_ffi.dylib
           - name: darwin-arm64
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
             goos: darwin
             goarch: arm64
@@ -1414,7 +1414,7 @@ jobs:
           # engine library shows, because arm64 refuses to load it. The runner
           # has no Docker, so only the native scenario is selected.
           - name: macOS
-            os: macos-14
+            os: macos-15
             setup_qemu: false
             e2e_targets: cpp-vcpkg-macos-arm64
           - name: Windows
