@@ -809,26 +809,81 @@ def ci_version(name: str) -> str:
 
 def golangci_lint_version(output: str) -> str | None:
     first_line = output.splitlines()[0] if output else ""
-    match = re.search(r"\bversion\s+v?(\d+\.\d+\.\d+)\b", first_line)
+    match = re.search(r"\bversion\s+v?(\d+\.\d+\.\d+)(?=\s|$)", first_line)
     if match is None:
         return None
     return match.group(1)
 
 
-def command_check_golangci_lint(_: argparse.Namespace) -> None:
+def latest_golangci_lint_version() -> str:
+    url = "https://api.github.com/repos/golangci/golangci-lint/releases/latest"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "openpit-toolchain-check",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            release = json.load(response)
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ) as exc:
+        raise SystemExit(
+            f"could not check golangci-lint updates at {url}: {exc}"
+        ) from None
+    if not isinstance(release, dict):
+        raise SystemExit(f"invalid golangci-lint release response from {url}")
+    tag = release.get("tag_name")
+    if (
+        not isinstance(tag, str)
+        or re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None
+        or release.get("draft") is not False
+        or release.get("prerelease") is not False
+    ):
+        raise SystemExit(f"invalid stable golangci-lint release from {url}: {tag!r}")
+    return tag.removeprefix("v")
+
+
+def command_check_golangci_lint(args: argparse.Namespace) -> None:
     expected = ci_version("CI_GOLANGCI_LINT")
+    if re.fullmatch(r"\d+\.\d+\.\d+", expected) is None:
+        raise SystemExit(f"invalid CI_GOLANGCI_LINT version pin: {expected!r}")
+    print(f"golangci-lint pinned: v{expected} (.github/ci-versions.env)")
+    if args.check_updates:
+        latest = latest_golangci_lint_version()
+        if tuple(map(int, latest.split("."))) > tuple(map(int, expected.split("."))):
+            print(
+                f"golangci-lint UPDATE AVAILABLE: pinned v{expected}, "
+                f"latest stable v{latest}\n"
+                f"https://github.com/golangci/golangci-lint/releases/tag/v{latest}"
+            )
+        elif latest == expected:
+            print(f"golangci-lint latest stable: v{latest}; pin is current")
+        else:
+            print(
+                f"golangci-lint pinned v{expected} "
+                f"is newer than latest stable v{latest}"
+            )
     executable = shutil.which("golangci-lint")
     if executable is None:
         raise SystemExit(
             f"golangci-lint v{expected} is required; it was not found on PATH"
         )
     with tempfile.TemporaryDirectory(prefix="openpit-golangci-version-") as temp_dir:
-        result = run(["golangci-lint", "version"], cwd=Path(temp_dir), capture=True)
+        result = run([executable, "version"], cwd=Path(temp_dir), capture=True)
     first_line = result.stdout.splitlines()[0] if result.stdout else ""
     if golangci_lint_version(result.stdout) == expected:
+        print(f"golangci-lint v{expected}: matches CI/CD ({executable})")
         return
     raise SystemExit(
-        f"golangci-lint v{expected} is required to match CI/CD; got: {first_line}"
+        f"golangci-lint version mismatch: v{expected} is required to match CI/CD "
+        f"(.github/ci-versions.env); got: {first_line!r} ({executable}). "
+        f"Use golangci-lint v{expected} on PATH before running lint-go."
     )
 
 
@@ -1286,9 +1341,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparser.add_argument("paths", nargs="+")
     subparser.set_defaults(func=command_check_gofmt)
 
-    subparsers.add_parser("check-golangci-lint").set_defaults(
-        func=command_check_golangci_lint
+    subparser = subparsers.add_parser("check-golangci-lint")
+    subparser.add_argument(
+        "--check-updates",
+        action="store_true",
+        help="report newer stable releases from GitHub without changing the CI pin",
     )
+    subparser.set_defaults(func=command_check_golangci_lint)
 
     subparsers.add_parser("go-cover-summary").set_defaults(
         func=command_go_cover_summary

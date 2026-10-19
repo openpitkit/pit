@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import os
 import sys
 import time
@@ -277,6 +279,230 @@ def test_golangci_lint_version_rejects_empty_output() -> None:
     module = load_module()
 
     assert module.golangci_lint_version("") is None
+
+
+@pytest.mark.parametrize("suffix", ["-rc.1", "-dev", "+custom"])
+def test_golangci_lint_version_rejects_nonrelease_build(suffix) -> None:
+    module = load_module()
+
+    assert (
+        module.golangci_lint_version(f"golangci-lint has version 2.12.2{suffix}")
+        is None
+    )
+
+
+@pytest.fixture
+def golangci_lint_check(tmp_path, monkeypatch):
+    module = load_module()
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    pins = tmp_path / ".github" / "ci-versions.env"
+    pins.parent.mkdir()
+    pins.write_text("CI_GOLANGCI_LINT=2.12.2\n", encoding="utf-8")
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/tools/golangci-lint")
+
+    def version_command(command, *, cwd, capture):
+        assert command == ["/tools/golangci-lint", "version"]
+        assert cwd != tmp_path
+        assert cwd.is_dir()
+        assert capture
+        return module.subprocess.CompletedProcess(
+            command, 0, stdout="golangci-lint has version 2.12.2 built with go1.26.2\n"
+        )
+
+    monkeypatch.setattr(module, "run", version_command)
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail(
+            "offline version check must not use the network"
+        ),
+    )
+    return module
+
+
+def test_check_golangci_lint_matches_ci_without_network(golangci_lint_check, capsys):
+    module = golangci_lint_check
+
+    module.command_check_golangci_lint(
+        module.build_parser().parse_args(["check-golangci-lint"])
+    )
+
+    output = capsys.readouterr().out
+    assert "pinned: v2.12.2 (.github/ci-versions.env)" in output
+    assert "matches CI/CD (/tools/golangci-lint)" in output
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "golangci-lint has version 2.11.0",
+        "golangci-lint has version 2.15.0",
+        "golangci-lint has version 2.12.2-rc.1",
+        "golangci-lint dev build",
+        "",
+    ],
+)
+def test_check_golangci_lint_rejects_drift(golangci_lint_check, monkeypatch, output):
+    module = golangci_lint_check
+    monkeypatch.setattr(
+        module,
+        "run",
+        lambda *args, **kwargs: module.subprocess.CompletedProcess(
+            [], 0, stdout=output
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="version mismatch") as error:
+        module.command_check_golangci_lint(
+            module.build_parser().parse_args(["check-golangci-lint"])
+        )
+
+    assert "v2.12.2 is required to match CI/CD" in str(error.value)
+    assert repr(output) in str(error.value)
+
+
+def test_check_golangci_lint_rejects_missing_tool(golangci_lint_check, monkeypatch):
+    module = golangci_lint_check
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+
+    with pytest.raises(
+        SystemExit, match="v2.12.2 is required; it was not found on PATH"
+    ):
+        module.command_check_golangci_lint(
+            module.build_parser().parse_args(["check-golangci-lint"])
+        )
+
+
+@pytest.mark.parametrize("pin", ["", "latest", "2.12", "2.12.2-rc.1"])
+def test_check_golangci_lint_rejects_invalid_pin(golangci_lint_check, monkeypatch, pin):
+    module = golangci_lint_check
+    monkeypatch.setattr(module, "ci_version", lambda name: pin)
+
+    with pytest.raises(SystemExit, match="invalid CI_GOLANGCI_LINT version pin"):
+        module.command_check_golangci_lint(
+            module.build_parser().parse_args(["check-golangci-lint"])
+        )
+
+
+@pytest.mark.parametrize(
+    ("latest", "message"),
+    [
+        ("2.15.0", "UPDATE AVAILABLE: pinned v2.12.2, latest stable v2.15.0"),
+        ("2.12.2", "latest stable: v2.12.2; pin is current"),
+        ("2.9.0", "pinned v2.12.2 is newer than latest stable v2.9.0"),
+    ],
+)
+def test_check_golangci_lint_reports_updates_without_changing_pin(
+    golangci_lint_check, monkeypatch, capsys, latest, message
+):
+    module = golangci_lint_check
+    monkeypatch.setattr(module, "latest_golangci_lint_version", lambda: latest)
+
+    module.command_check_golangci_lint(
+        module.build_parser().parse_args(["check-golangci-lint", "--check-updates"])
+    )
+
+    assert message in capsys.readouterr().out
+    assert module.ci_version("CI_GOLANGCI_LINT") == "2.12.2"
+
+
+def test_latest_golangci_lint_version_reads_stable_release(monkeypatch):
+    module = load_module()
+
+    def latest_release(request, *, timeout):
+        assert request.full_url == (
+            "https://api.github.com/repos/golangci/golangci-lint/releases/latest"
+        )
+        assert request.get_header("Accept") == "application/vnd.github+json"
+        assert timeout == 10
+        return io.BytesIO(b'{"tag_name":"v2.15.0","draft":false,"prerelease":false}')
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", latest_release)
+
+    assert module.latest_golangci_lint_version() == "2.15.0"
+
+
+def test_check_golangci_lint_reports_update_and_drift_together(
+    golangci_lint_check, monkeypatch, capsys
+):
+    module = golangci_lint_check
+    monkeypatch.setattr(module, "latest_golangci_lint_version", lambda: "2.15.0")
+    monkeypatch.setattr(
+        module,
+        "run",
+        lambda *args, **kwargs: module.subprocess.CompletedProcess(
+            [], 0, stdout="golangci-lint has version 2.15.0"
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="version mismatch"):
+        module.command_check_golangci_lint(
+            module.build_parser().parse_args(["check-golangci-lint", "--check-updates"])
+        )
+
+    assert (
+        "UPDATE AVAILABLE: pinned v2.12.2, latest stable v2.15.0"
+        in capsys.readouterr().out
+    )
+
+
+@pytest.mark.parametrize(
+    "release",
+    [
+        [],
+        {},
+        {"tag_name": 215},
+        {"tag_name": "v2.15.0-rc.1", "draft": False, "prerelease": True},
+        {"tag_name": "v2.15.0", "draft": True, "prerelease": False},
+        {"tag_name": "v2.15.0", "draft": False, "prerelease": True},
+    ],
+)
+def test_latest_golangci_lint_version_rejects_invalid_release(monkeypatch, release):
+    module = load_module()
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: io.BytesIO(json.dumps(release).encode()),
+    )
+
+    with pytest.raises(SystemExit, match="invalid .*golangci-lint release"):
+        module.latest_golangci_lint_version()
+
+
+@pytest.mark.parametrize("payload", [b"not JSON", b"\xff"])
+def test_latest_golangci_lint_version_reports_bad_response(monkeypatch, payload):
+    module = load_module()
+    monkeypatch.setattr(
+        module.urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(payload)
+    )
+
+    with pytest.raises(SystemExit, match="could not check golangci-lint updates"):
+        module.latest_golangci_lint_version()
+
+
+@pytest.mark.parametrize("failure", ["http", "timeout"])
+def test_latest_golangci_lint_version_reports_network_failure(monkeypatch, failure):
+    module = load_module()
+
+    def unavailable(*args, **kwargs):
+        if failure == "timeout":
+            raise TimeoutError("request timed out")
+        raise module.urllib.error.HTTPError(
+            "https://api.github.com", 403, "rate limit", {}, None
+        )
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", unavailable)
+
+    with pytest.raises(SystemExit, match="could not check golangci-lint updates"):
+        module.latest_golangci_lint_version()
+
+
+def test_lint_go_checks_version_on_unix_and_windows():
+    recipes = (SCRIPT_PATH.parents[1] / "justfile").read_text(encoding="utf-8")
+    lint_go = [line for line in recipes.splitlines() if line.startswith("lint-go:")]
+
+    assert len(lint_go) == 2
+    assert all(line.split()[1] == "check-golangci-lint" for line in lint_go)
 
 
 def test_ci_version_missing_file_raises_clear_error(tmp_path, monkeypatch) -> None:

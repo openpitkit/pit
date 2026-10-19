@@ -353,9 +353,13 @@ lint-python: _ensure-python-env
     {{ python_path }} -m ruff check --config {{ python_config }} --quiet .
     {{ python_path }} -m black --config {{ python_config }} . --check --quiet
 
+# Check the CI version pin; --check-updates also reports the latest stable release.
+check-golangci-lint *args:
+    {{ bootstrap_python }} {{ just_helper }} check-golangci-lint {{ args }}
+
 # Lint Go.
 [unix]
-lint-go:
+lint-go: check-golangci-lint
     cd bindings/go && gofmt -l . | (! grep .)
     cd bindings/go && go vet -all ./... > /dev/null
     cd bindings/go && golangci-lint run --timeout=5m ./...
@@ -363,9 +367,8 @@ lint-go:
     just _go-examples debug go vet -all ./...
     just _go-examples debug golangci-lint run --timeout=5m ./...
 [windows]
-lint-go: _ensure-python-env
+lint-go: check-golangci-lint _ensure-python-env
     {{ python_path }} {{ just_helper }} check-gofmt bindings/go
-    {{ python_path }} {{ just_helper }} check-golangci-lint
     {{ python_path }} {{ just_helper }} go-in debug bindings/go go vet -all ./...
     {{ python_path }} {{ just_helper }} go-in debug bindings/go golangci-lint run --timeout=5m ./...
     {{ python_path }} {{ just_helper }} check-gofmt examples/go
