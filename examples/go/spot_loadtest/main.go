@@ -80,12 +80,12 @@ func main() {
 	// Build the pre-materialised deterministic event stream from the config.
 	// This is purely CPU work (no FFI); failures are config/logic errors.
 	log.SetOutput(os.Stderr) // ensure generator progress goes to stderr
-	fmt.Fprintln(os.Stderr, "Generating event stream...")
+	log.Print("Generating event stream...")
 	stream, err := generator.Generate(cfg)
 	if err != nil {
 		log.Fatalf("error: generator: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "Stream ready: %d order-checks, %d settlements, %d fundings\n",
+	log.Printf("Stream ready: %d order-checks, %d settlements, %d fundings",
 		stream.Stats.OrderChecks, stream.Stats.Settlements, stream.Stats.Fundings)
 
 	// Build the driver config from the app config.
@@ -134,8 +134,7 @@ func main() {
 	if errors.Is(err, driver.ErrBackpressureInvalidRun) ||
 		errors.Is(err, driver.ErrZeroChecksumInvalidRun) {
 		reporter.WriteInvalid(os.Stdout, e, cfg, *configPath, snap, stream.Stats)
-		fmt.Fprintf(os.Stderr,
-			"\nerror: run invalid - %v; latency numbers suppressed\n", err)
+		log.Printf("\nerror: run invalid - %v; latency numbers suppressed", err)
 		os.Exit(1)
 	}
 	if err != nil {
@@ -166,7 +165,7 @@ func runDebugCoreGuard(profile env.CoreBuildProfile, allow bool) error {
 		return fmt.Errorf("%s", msg)
 	}
 	// Override: print a prominent warning to stderr and continue.
-	fmt.Fprintf(os.Stderr,
+	log.Printf(
 		"\n*** WARNING: running with a debug core (-allow-debug-core). ***\n"+
 			"*** Latency numbers are NOT meaningful. ***\n\n"+
 			"%s\n\n", msg)

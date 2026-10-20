@@ -20,7 +20,7 @@ package driver
 import (
 	"context"
 	"fmt"
-	"os"
+	"log"
 	"time"
 
 	openpit "go.openpit.dev/openpit"
@@ -123,7 +123,7 @@ func buildEngine(observer asyncengine.Observer, dispatch engineDispatch) (*async
 	// dispatcher has drained.
 	stop := func(ctx context.Context) {
 		if err := ae.StopGraceful(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "spot_loadtest: async engine graceful stop: %v\n", err)
+			log.Printf("spot_loadtest: async engine graceful stop: %v", err)
 		}
 		engine.Stop()
 	}
