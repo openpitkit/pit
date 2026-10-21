@@ -2,7 +2,11 @@
 # rules they run. The repository-root requirements.txt includes this file, so
 # there is still one command to provision the environment.
 #
+# Pinned: a scanner upgrade changes what the rules match, so an unpinned gate
+# would change its findings silently on the next install. An upgrade is a
+# change of its own, with the gate re-run against the new version.
+#
 # Marked off Windows because the distribution ships no native Windows build;
 # the gate itself then fails loudly there rather than reporting a pass it never
 # ran.
-semgrep; sys_platform != "win32"
+semgrep==1.175.0; sys_platform != "win32"
