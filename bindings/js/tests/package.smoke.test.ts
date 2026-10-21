@@ -35,18 +35,36 @@ const jsCargoToml = fileURLToPath(new URL("../Cargo.toml", import.meta.url));
 const coreCargoToml = fileURLToPath(
   new URL("../../../crates/openpit/Cargo.toml", import.meta.url),
 );
-const packageSubpaths = [
-  ".",
-  "./param",
-  "./model",
-  "./pretrade",
-  "./pretrade/policies",
-  "./marketdata",
-  "./reject",
-  "./accountadjustment",
-  "./accounts",
-  "./tx",
-] as const;
+// Subpaths come from the source manifest, not from `dist/package.json`: the
+// published manifest is generated from this one, so deriving from it would let
+// the generator drop an export together with its smoke coverage.
+const sourceManifest = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { exports: Record<string, unknown> };
+// `./package.json` is the only non-code export. Every other key is a code
+// subpath; its shape is asserted by the "declares every export" test, so an
+// unexpected shape fails instead of being skipped. Every code subpath is loaded
+// by the CommonJS and ESM smokes, type-checked by the declaration consumer under
+// NodeNext and Bundler, bundled and run by the browser esm and cjs consumers,
+// and checked by the dist and pack tests. The mixed import/require identity
+// smoke covers a fixed representative subset on purpose.
+const packageSubpaths = Object.keys(sourceManifest.exports).filter(
+  (subpath) => subpath !== "./package.json",
+);
+const entrySpecifiers = packageSubpaths.map(
+  (subpath) => `@openpit/engine${subpath.slice(1)}`,
+);
+const esmEntryImports = entrySpecifiers
+  .map((specifier, index) => `import * as entry${index} from "${specifier}";`)
+  .join("\n");
+const cjsEntryRequires = entrySpecifiers
+  .map((specifier, index) => `const entry${index} = require("${specifier}");`)
+  .join("\n");
+const entryList = `[${entrySpecifiers.map((_, index) => `entry${index}`).join(", ")}]`;
+// Specifier/binding pairs, so a failing non-empty check names its subpath.
+const entryPairs = `[${entrySpecifiers
+  .map((specifier, index) => `[${JSON.stringify(specifier)}, entry${index}]`)
+  .join(", ")}]`;
 
 interface ExportConditions {
   browser: {
@@ -65,29 +83,14 @@ interface PublishedManifest {
 const commonJsSmoke = String.raw`
 const assert = require("node:assert/strict");
 
+${cjsEntryRequires}
 const { Engine } = require("@openpit/engine");
 const param = require("@openpit/engine/param");
 const model = require("@openpit/engine/model");
-const pretrade = require("@openpit/engine/pretrade");
 const policies = require("@openpit/engine/pretrade/policies");
-const marketdata = require("@openpit/engine/marketdata");
-const reject = require("@openpit/engine/reject");
-const accountadjustment = require("@openpit/engine/accountadjustment");
-const accounts = require("@openpit/engine/accounts");
-const tx = require("@openpit/engine/tx");
 
-for (const entry of [
-  param,
-  model,
-  pretrade,
-  policies,
-  marketdata,
-  reject,
-  accountadjustment,
-  accounts,
-  tx,
-]) {
-  assert.ok(Object.keys(entry).length > 0);
+for (const [specifier, entry] of ${entryPairs}) {
+  assert.ok(Object.keys(entry).length > 0, "CommonJS entry " + specifier + " has no exports");
 }
 
 assert.equal(model.Trade, param.Trade);
@@ -100,29 +103,14 @@ assert.equal(typeof engine.startPreTrade, "function");
 const esmSmoke = String.raw`
 import assert from "node:assert/strict";
 
+${esmEntryImports}
 import { Engine } from "@openpit/engine";
 import * as param from "@openpit/engine/param";
 import * as model from "@openpit/engine/model";
-import * as pretrade from "@openpit/engine/pretrade";
 import * as policies from "@openpit/engine/pretrade/policies";
-import * as marketdata from "@openpit/engine/marketdata";
-import * as reject from "@openpit/engine/reject";
-import * as accountadjustment from "@openpit/engine/accountadjustment";
-import * as accounts from "@openpit/engine/accounts";
-import * as tx from "@openpit/engine/tx";
 
-for (const entry of [
-  param,
-  model,
-  pretrade,
-  policies,
-  marketdata,
-  reject,
-  accountadjustment,
-  accounts,
-  tx,
-]) {
-  assert.ok(Object.keys(entry).length > 0);
+for (const [specifier, entry] of ${entryPairs}) {
+  assert.ok(Object.keys(entry).length > 0, "ESM entry " + specifier + " has no exports");
 }
 
 assert.equal(model.Trade, param.Trade);
@@ -181,6 +169,7 @@ function runBundledNode(source: string, inputType?: "module"): void {
 }
 
 const declarationConsumer = String.raw`
+${esmEntryImports}
 import {
   Engine,
   PolicyCallbackError,
@@ -226,6 +215,7 @@ void MarketDataError;
 void QuoteExpired;
 void PolicyCallbackError;
 void (undefined as OpenpitError | undefined);
+void ${entryList};
 Engine.builder().builtin(buildOrderValidation()).build();
 `;
 
@@ -281,14 +271,22 @@ async function buildBrowserConsumer(format: "esm" | "cjs"): Promise<string> {
   const source =
     format === "esm"
       ? String.raw`
+${esmEntryImports}
 import { Engine } from "@openpit/engine";
 import { buildOrderValidation } from "@openpit/engine/pretrade/policies";
+for (const [specifier, entry] of ${entryPairs}) {
+  if (Object.keys(entry).length === 0) throw new Error("browser ESM entry " + specifier + " has no exports");
+}
 const engine = Engine.builder().builtin(buildOrderValidation()).build();
 if (typeof engine.startPreTrade !== "function") throw new Error("browser ESM init failed");
 `
       : String.raw`
+${cjsEntryRequires}
 const { Engine } = require("@openpit/engine");
 const { buildOrderValidation } = require("@openpit/engine/pretrade/policies");
+for (const [specifier, entry] of ${entryPairs}) {
+  if (Object.keys(entry).length === 0) throw new Error("browser CJS entry " + specifier + " has no exports");
+}
 const engine = Engine.builder().builtin(buildOrderValidation()).build();
 if (typeof engine.startPreTrade !== "function") throw new Error("browser CJS init failed");
 `;
@@ -315,6 +313,19 @@ if (typeof engine.startPreTrade !== "function") throw new Error("browser CJS ini
 }
 
 describe("published package module formats", () => {
+  it("declares every export as package metadata or a full condition set", () => {
+    expect(sourceManifest.exports["./package.json"]).toBe("./package.json");
+    const anyString: unknown = expect.any(String);
+    for (const subpath of packageSubpaths) {
+      expect(sourceManifest.exports[subpath], `export "${subpath}"`).toEqual({
+        types: anyString,
+        browser: { import: anyString, require: anyString },
+        import: anyString,
+        require: anyString,
+      });
+    }
+  });
+
   it("keeps the JS crate and published npm version in workspace lockstep", () => {
     const cargoVersion = (path: string): string => {
       const match = readFileSync(path, "utf8").match(
@@ -340,8 +351,8 @@ describe("published package module formats", () => {
 
     for (const subpath of packageSubpaths) {
       const conditions = manifest.exports[subpath];
-      expect(conditions).not.toBeUndefined();
-      expect(typeof conditions).toBe("object");
+      expect(conditions, `dist export "${subpath}"`).not.toBeUndefined();
+      expect(typeof conditions, `dist export "${subpath}"`).toBe("object");
       if (typeof conditions === "string" || conditions === undefined) {
         continue;
       }
