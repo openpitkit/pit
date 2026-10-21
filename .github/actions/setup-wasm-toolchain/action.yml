@@ -16,7 +16,7 @@
 # Please see https://openpit.dev and the OWNERS file for details.
 
 name: Setup wasm toolchain
-description: Install the pinned Rust, Node and wasm-bindgen-cli that build the JS/WASM package; load .github/ci-versions.env first.
+description: Install the pinned Rust, Node and wasm-bindgen-cli that build the JS/WASM package; their versions are loaded from .github/ci-versions.env here.
 
 inputs:
   registry-url:
@@ -27,20 +27,13 @@ inputs:
 runs:
   using: composite
   steps:
-    # The versions below come from .github/ci-versions.env, which the caller
-    # loads into GITHUB_ENV first. Unloaded, they are empty and setup-node
-    # silently keeps the runner's Node, so a missing one fails here.
-    - name: Check CI versions
-      shell: bash
-      run: |
-        missing=0
-        for name in CI_RUST CI_NODE; do
-          if [[ -z "${!name}" ]]; then
-            echo "::error::${name} is empty; load .github/ci-versions.env into GITHUB_ENV before setup-wasm-toolchain"
-            missing=1
-          fi
-        done
-        exit "${missing}"
+    # The versions below come from .github/ci-versions.env, loaded here so the
+    # caller need not. With an empty version setup-node silently keeps the
+    # runner's Node, so the loader fails on a missing or empty pin instead.
+    - name: Load CI versions
+      uses: ./.github/actions/load-ci-versions
+      with:
+        required: CI_RUST CI_NODE
 
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable

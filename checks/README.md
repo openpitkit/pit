@@ -56,6 +56,8 @@ a test is the message a user sees.
   domain enum, no panic on a reachable path.
 - `semgrep/errors-go.yml` - no discarded error, no error checked and then
   dropped.
+- `semgrep/ci-versions.yml` - workflows and composite actions load CI pins
+  through `load-ci-versions`, which rejects missing or empty required pins.
 - `semgrep/tests/` - regression fixtures for `financial-types-rust.yml` and
   `fallbacks-rust.yml`; `errors-go.yml` has no fixture.
   `just check-semgrep` runs `semgrep --test` over them after the repository

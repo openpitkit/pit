@@ -1,0 +1,45 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# CI version pins.
+#
+# Under .github/, .github/ci-versions.env is read in one place: the
+# load-ci-versions composite action, which checks every pin the job names
+# before the file reaches GITHUB_ENV. Any other read there - an inline
+# `cat ... >> "$GITHUB_ENV"`, a `source`, a redirect - skips that check, and a
+# setup action handed an empty version input silently keeps the runner's own
+# tool. The justfile and scripts/just_helpers.py read single pins for their
+# own version checks; they fail on a missing pin and are outside this rule.
+
+rules:
+  - id: ci-versions-read-outside-loader
+    message: >-
+      CI loads .github/ci-versions.env only through the load-ci-versions
+      action: `uses: ./.github/actions/load-ci-versions` with `required:`
+      listing the CI_* names the job reads. A direct read skips the check that
+      each of those pins is present and non-empty.
+    severity: ERROR
+    languages: [generic]
+    # Every line that names the file counts as a read, except a whole-line
+    # comment and a `description:` value, which name it in prose.
+    pattern-regex: '^(?![ \t]*(#|description:)).*ci-versions\.env'
+    paths:
+      include:
+        - /.github/**
+      exclude:
+        # The loader is the one place that reads the file.
+        - /.github/actions/load-ci-versions/**

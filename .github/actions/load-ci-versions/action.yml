@@ -1,0 +1,67 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+name: Load CI versions
+description: Check that .github/ci-versions.env pins every version the job reads, then load the file into GITHUB_ENV.
+
+inputs:
+  required:
+    description: Whitespace-separated CI_* names the calling job reads; each must have a non-empty value in .github/ci-versions.env.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # setup-python, setup-go, wrangler-action and the like silently fall back
+    # to the runner's own tool when their version input is empty. Every name
+    # is therefore checked against the file itself, so an inherited value
+    # cannot hide a missing pin, and nothing reaches GITHUB_ENV unless all
+    # of them are present.
+    - name: Load CI versions
+      shell: bash
+      env:
+        REQUIRED_NAMES: ${{ inputs.required }}
+      run: |
+        set -euo pipefail
+        versions="${GITHUB_WORKSPACE}/.github/ci-versions.env"
+        # Split on any whitespace, newlines included, without pathname expansion.
+        read -r -a names <<< "${REQUIRED_NAMES//$'\n'/ }"
+        if (( ${#names[@]} == 0 )); then
+          echo "::error::load-ci-versions needs the CI_* names the job reads in its required input"
+          exit 1
+        fi
+        if [[ ! -f "${versions}" ]]; then
+          echo "::error::${versions} not found; expected CI version pins"
+          exit 1
+        fi
+        missing=0
+        for name in "${names[@]}"; do
+          value=""
+          while IFS= read -r line || [[ -n "${line}" ]]; do
+            if [[ "${line}" == *=* && "${line%%=*}" == "${name}" ]]; then
+              value="${line#*=}"
+            fi
+          done < "${versions}"
+          if [[ -z "${value//[[:space:]]/}" ]]; then
+            echo "::error::${name} is missing or empty in .github/ci-versions.env"
+            missing=1
+          fi
+        done
+        if (( missing )); then
+          exit 1
+        fi
+        cat "${versions}" >> "${GITHUB_ENV}"
