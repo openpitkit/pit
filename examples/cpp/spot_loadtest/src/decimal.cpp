@@ -18,6 +18,7 @@
 #include "spot_loadtest/decimal.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -36,18 +37,27 @@ Decimal Decimal::FromString(std::string_view text) {
     throw std::invalid_argument("decimal: empty number");
   }
 
-  Coefficient intPart = 0;
+  // Every digit is appended to one magnitude in units of 0.01. Capping it at
+  // the int64 maximum for either sign keeps the negation below defined and
+  // never yields INT64_MIN, which ToString cannot negate.
+  Coefficient magnitude = 0;
+  const auto appendDigit = [&magnitude](Coefficient digit) {
+    if (magnitude > (std::numeric_limits<Coefficient>::max() - digit) / 10) {
+      throw std::invalid_argument("decimal: value out of range");
+    }
+    magnitude = magnitude * 10 + digit;
+  };
+
   bool sawDigit = false;
   for (; i < n && text[i] != '.'; ++i) {
     const char c = text[i];
     if (c < '0' || c > '9') {
       throw std::invalid_argument("decimal: invalid integer digit");
     }
-    intPart = intPart * 10 + static_cast<Coefficient>(c - '0');
+    appendDigit(static_cast<Coefficient>(c - '0'));
     sawDigit = true;
   }
 
-  Coefficient fracPart = 0;
   int fracDigits = 0;
   if (i < n && text[i] == '.') {
     ++i;
@@ -59,7 +69,7 @@ Decimal Decimal::FromString(std::string_view text) {
       if (fracDigits >= 2) {
         throw std::invalid_argument("decimal: more than two fractional digits");
       }
-      fracPart = fracPart * 10 + static_cast<Coefficient>(c - '0');
+      appendDigit(static_cast<Coefficient>(c - '0'));
       ++fracDigits;
       sawDigit = true;
     }
@@ -70,13 +80,9 @@ Decimal Decimal::FromString(std::string_view text) {
 
   // Scale the fractional part up to exactly two digits (units of 0.01).
   for (; fracDigits < 2; ++fracDigits) {
-    fracPart *= 10;
+    appendDigit(0);
   }
-  Coefficient coefficient = intPart * 100 + fracPart;
-  if (negative) {
-    coefficient = -coefficient;
-  }
-  return Decimal(coefficient);
+  return Decimal(negative ? -magnitude : magnitude);
 }
 
 std::int64_t Decimal::FloorDivToInt(const Decimal &divisor) const {

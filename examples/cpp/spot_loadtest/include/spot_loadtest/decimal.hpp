@@ -54,7 +54,9 @@ public:
   }
 
   // Parses a decimal literal with at most two fractional digits (the pinned
-  // price/amount value space). Throws std::invalid_argument otherwise.
+  // price/amount value space) whose coefficient magnitude fits int64, so the
+  // accepted range is -92233720368547758.07 ..= 92233720368547758.07. Throws
+  // std::invalid_argument otherwise, including for a value out of that range.
   [[nodiscard]] static Decimal FromString(std::string_view text);
 
   [[nodiscard]] Coefficient RawCoefficient() const noexcept {

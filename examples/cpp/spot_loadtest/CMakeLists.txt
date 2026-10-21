@@ -111,8 +111,8 @@ if(COMMAND openpit_copy_runtime_dll)
 endif()
 
 #-------------------------------------------------------------------------------
-# Tests for measurement, progress, configuration, driving, generation, and
-# reporting, registered in this example's CMake project.
+# Tests for measurement, progress, configuration, decimal parsing, driving,
+# generation, and reporting, registered in this example's CMake project.
 
 if(SPOT_LOADTEST_BUILD_TESTS)
   include(FetchContent)
@@ -223,6 +223,7 @@ endif()
   spot_loadtest_add_test(spot_loadtest_measurement_tests test/measurement_test.cpp)
   spot_loadtest_add_test(spot_loadtest_progress_tests test/progress_test.cpp)
   spot_loadtest_add_test(spot_loadtest_config_tests test/config_test.cpp)
+  spot_loadtest_add_test(spot_loadtest_decimal_tests test/decimal_test.cpp)
   spot_loadtest_add_test(spot_loadtest_generator_tests test/generator_test.cpp)
   spot_loadtest_add_test(spot_loadtest_driver_tests test/driver_test.cpp)
   spot_loadtest_add_test(spot_loadtest_reporter_tests test/reporter_test.cpp)
