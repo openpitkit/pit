@@ -83,6 +83,23 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 	}
 	reservation.CommitAndClose()
 
+	fill, err := model.NewExecutionReportFillFromValues(
+		model.ExecutionReportFillValues{
+			LastTrade: optional.Some(
+				model.NewExecutionReportTrade(
+					mustOrderNativePrice(t, "182.50"),
+					mustOrderNativeQuantity(t, "2"),
+				),
+			),
+			RemainingReservedQuantity: optional.Some(mustOrderNativeQuantity(t, "0")),
+			Lock:                      mustOrderNativeLockBytes(t, mustOrderNativePrice(t, "182.40")),
+			IsFinal:                   optional.BoolSome(true),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewExecutionReportFillFromValues() error = %v", err)
+	}
+
 	report := model.NewExecutionReportFromValues(
 		model.ExecutionReportValues{
 			Operation: optional.Some(
@@ -104,21 +121,7 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 					},
 				),
 			),
-			Fill: optional.Some(
-				model.NewExecutionReportFillFromValues(
-					model.ExecutionReportFillValues{
-						LastTrade: optional.Some(
-							model.NewExecutionReportTrade(
-								mustOrderNativePrice(t, "182.50"),
-								mustOrderNativeQuantity(t, "2"),
-							),
-						),
-						RemainingReservedQuantity: optional.Some(mustOrderNativeQuantity(t, "0")),
-						Lock:                      mustOrderNativeLockBytes(t, mustOrderNativePrice(t, "182.40")),
-						IsFinal:                   optional.BoolSome(true),
-					},
-				),
-			),
+			Fill: optional.Some(fill),
 			PositionImpact: optional.Some(
 				model.NewExecutionReportPositionImpactFromValues(
 					model.ExecutionReportPositionImpactValues{

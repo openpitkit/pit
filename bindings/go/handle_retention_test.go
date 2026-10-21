@@ -170,7 +170,9 @@ func TestHandleRetentionModelChildren(t *testing.T) {
 		want := lock.Bytes()
 		fill := func() model.ExecutionReportFill {
 			fill := model.NewExecutionReportFill()
-			fill.SetLock(want)
+			if err := fill.SetLock(want); err != nil {
+				t.Fatalf("SetLock() error = %v", err)
+			}
 			report := model.NewExecutionReport()
 			report.SetFill(fill)
 			value, ok := report.Fill().Get()
@@ -201,7 +203,9 @@ func TestHandleRetentionModelChildren(t *testing.T) {
 		want := lock.Bytes()
 		clone := func() model.ExecutionReport {
 			fill := model.NewExecutionReportFill()
-			fill.SetLock(want)
+			if err := fill.SetLock(want); err != nil {
+				t.Fatalf("SetLock() error = %v", err)
+			}
 			src := model.NewExecutionReport()
 			src.SetFill(fill)
 			rebuilt := model.NewExecutionReportFromHandle(src.Handle())

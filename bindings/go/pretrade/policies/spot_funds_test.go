@@ -205,7 +205,9 @@ func applySpotFundsLifecycleFillWithFee(
 		fill.SetFee(value)
 	}
 	fill.SetRemainingReservedQuantity(mustQuantity(t, "0"))
-	fill.SetLock(lock.Bytes())
+	if err := fill.SetLock(lock.Bytes()); err != nil {
+		t.Fatalf("SetLock() error = %v", err)
+	}
 	fill.SetIsFinal(true)
 
 	result, err := engine.ApplyExecutionReport(report)
@@ -239,7 +241,9 @@ func directSpotFundsFillReport(
 		t.Fatalf("NewLockFromEntries() error = %v", err)
 	}
 	fill.SetRemainingReservedQuantity(mustQuantity(t, "0"))
-	fill.SetLock(lock.Bytes())
+	if err := fill.SetLock(lock.Bytes()); err != nil {
+		t.Fatalf("SetLock() error = %v", err)
+	}
 	fill.SetIsFinal(true)
 	return report
 }

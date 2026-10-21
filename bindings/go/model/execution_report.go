@@ -719,11 +719,15 @@ func NewExecutionReportFill() ExecutionReportFill {
 	return newExecutionReportFill(native.NewExecutionReportFill())
 }
 
-// NewExecutionReportFillFromValues creates an ExecutionReportFill from the given values.
-func NewExecutionReportFillFromValues(values ExecutionReportFillValues) ExecutionReportFill {
+// NewExecutionReportFillFromValues creates an ExecutionReportFill from the
+// given values. It returns the zero ExecutionReportFill and an error when
+// values.Lock is not empty and cannot be decoded as a pre-trade lock.
+func NewExecutionReportFillFromValues(values ExecutionReportFillValues) (ExecutionReportFill, error) {
 	fill := NewExecutionReportFill()
-	fill.setValues(values)
-	return fill
+	if err := fill.setValues(values); err != nil {
+		return ExecutionReportFill{}, err
+	}
+	return fill, nil
 }
 
 func newExecutionReportFill(value native.ExecutionReportFill) ExecutionReportFill {
@@ -753,13 +757,21 @@ func (f ExecutionReportFill) Values() ExecutionReportFillValues {
 	}
 }
 
-// SetValues resets the fill and applies the provided values.
-func (f *ExecutionReportFill) SetValues(values ExecutionReportFillValues) {
-	f.Reset()
-	f.setValues(values)
+// SetValues resets the fill and applies the provided values. It returns an
+// error when values.Lock is not empty and cannot be decoded as a pre-trade
+// lock; the fill is then left unchanged.
+func (f *ExecutionReportFill) SetValues(values ExecutionReportFillValues) error {
+	fill, err := NewExecutionReportFillFromValues(values)
+	if err != nil {
+		return err
+	}
+	*f = fill
+	return nil
 }
 
-func (f *ExecutionReportFill) setValues(values ExecutionReportFillValues) {
+// setValues applies values to the fill. When it returns an error, earlier
+// fields may already be applied, so the caller must discard the fill.
+func (f *ExecutionReportFill) setValues(values ExecutionReportFillValues) error {
 	if value, ok := values.LastTrade.Get(); ok {
 		f.SetLastTrade(value)
 	}
@@ -770,11 +782,14 @@ func (f *ExecutionReportFill) setValues(values ExecutionReportFillValues) {
 		f.SetRemainingReservedQuantity(value)
 	}
 	if values.Lock != nil {
-		f.SetLock(values.Lock)
+		if err := f.SetLock(values.Lock); err != nil {
+			return err
+		}
 	}
 	if value, ok := values.IsFinal.Get(); ok {
 		f.SetIsFinal(value)
 	}
+	return nil
 }
 
 // LastTrade returns the optional last trade of this fill.
@@ -851,8 +866,10 @@ func (f ExecutionReportFill) Lock() []byte {
 // must come from pretrade.Lock.Bytes within the same library build; an empty or
 // nil slice clears this fill's lock. A non-empty lock is owned by a Go object
 // shared by copies of the fill and is destroyed after that owner is unreachable.
-func (f *ExecutionReportFill) SetLock(lock []byte) {
-	f.retainLock = setExecutionReportFillLock(&f.value, lock)
+// It returns an error when the bytes cannot be decoded as a pre-trade lock; the
+// fill, including its current lock, is then left unchanged.
+func (f *ExecutionReportFill) SetLock(lock []byte) error {
+	return setExecutionReportFillLock(&f.value, &f.retainLock, lock)
 }
 
 // UnsetLock clears this fill's lock and its reference to any Go-owned lock.
@@ -974,9 +991,11 @@ func (v ExecutionReportFillView) Lock() []byte {
 // must come from pretrade.Lock.Bytes within the same library build; an empty or
 // nil slice clears the owning report's lock. A non-empty lock is owned by a Go
 // object shared by copies of the report and is destroyed after that owner is
-// unreachable.
-func (v *ExecutionReportFillView) SetLock(lock []byte) {
-	*v.retainLock = setExecutionReportFillLock(v.ref, lock)
+// unreachable. It returns an error when the bytes cannot be decoded as a
+// pre-trade lock; the owning report's fill, including its current lock, is then
+// left unchanged.
+func (v *ExecutionReportFillView) SetLock(lock []byte) error {
+	return setExecutionReportFillLock(v.ref, v.retainLock, lock)
 }
 
 // UnsetLock clears the owning report's lock and its Go-owner reference without
@@ -1020,23 +1039,28 @@ func executionReportFillLockBytes(lock native.PretradePreTradeLock) []byte {
 	return value
 }
 
+// setExecutionReportFillLock decodes lock, attaches it to fill and stores the
+// Go owner of the decoded native lock in *retain; an empty lock clears both the
+// fill's lock and *retain. A decode error leaves fill and *retain untouched, so
+// the current owner still retains the lock that fill holds.
 func setExecutionReportFillLock(
 	fill *native.ExecutionReportFill,
+	retain **executionReportFillLockOwner,
 	lock []byte,
-) *executionReportFillLockOwner {
+) error {
 	if len(lock) == 0 {
 		native.ExecutionReportFillUnsetLock(fill)
+		*retain = nil
 		return nil
 	}
 	handle, err := native.CreatePretradePreTradeLockFromRaw(lock)
 	if err != nil {
-		// Fail fast: invalid encoded lock bytes mean continuing would use
-		// wrong pre-trade behavior.
-		panic(fmt.Sprintf("failed to decode pre-trade lock bytes: %v", err))
+		return err
 	}
 	owner := newExecutionReportFillLockOwner(handle)
 	native.ExecutionReportFillSetLock(fill, handle)
-	return owner
+	*retain = owner
+	return nil
 }
 
 func newExecutionReportFillLockOwner(handle native.PretradePreTradeLock) *executionReportFillLockOwner {

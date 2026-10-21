@@ -2037,7 +2037,9 @@ func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	fill := report.EnsureFillView()
 	fill.SetLastTrade(model.NewExecutionReportTrade(price, filledQty))
 	fill.SetRemainingReservedQuantity(remainingReservedQty)
-	fill.SetLock(restored.Bytes())
+	if err := fill.SetLock(restored.Bytes()); err != nil {
+		t.Fatalf("SetLock() error = %v", err)
+	}
 	fill.SetIsFinal(true)
 
 	result, err := engine.ApplyExecutionReport(report)

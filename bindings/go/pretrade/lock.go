@@ -42,8 +42,13 @@ func NewLock() Lock {
 
 // NewLockFromBytes wraps a value previously obtained from Lock.Bytes.
 //
-// The bytes must come from Lock.Bytes within the same library build. Passing
-// arbitrary bytes is rejected when the engine first inspects the lock.
+// The bytes must come from Lock.Bytes within the same library build.
+// NewLockFromBytes does not validate them. They are decoded when they are
+// attached to an execution report fill, where
+// [model.ExecutionReportFill.SetLock] and
+// [model.ExecutionReportFillView.SetLock] return an error for invalid bytes.
+// Every Lock method that reads the records decodes them as well and returns
+// an error for invalid bytes too.
 func NewLockFromBytes(value []byte) Lock {
 	return Lock{value: value}
 }

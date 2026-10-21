@@ -232,6 +232,19 @@ func buildFillReport(
 	if err != nil {
 		return model.ExecutionReport{}, fmt.Errorf("build fill lock: %w", err)
 	}
+	fill, err := model.NewExecutionReportFillFromValues(
+		model.ExecutionReportFillValues{
+			LastTrade: optional.Some(
+				model.NewExecutionReportTrade(price, qty),
+			),
+			RemainingReservedQuantity: optional.Some(remainingReservedQty),
+			Lock:                      lock.Bytes(),
+			IsFinal:                   optional.BoolSome(true),
+		},
+	)
+	if err != nil {
+		return model.ExecutionReport{}, fmt.Errorf("build fill: %w", err)
+	}
 	return model.NewExecutionReportFromValues(
 		model.ExecutionReportValues{
 			Operation: optional.Some(
@@ -251,18 +264,7 @@ func buildFillReport(
 					},
 				),
 			),
-			Fill: optional.Some(
-				model.NewExecutionReportFillFromValues(
-					model.ExecutionReportFillValues{
-						LastTrade: optional.Some(
-							model.NewExecutionReportTrade(price, qty),
-						),
-						RemainingReservedQuantity: optional.Some(remainingReservedQty),
-						Lock:                      lock.Bytes(),
-						IsFinal:                   optional.BoolSome(true),
-					},
-				),
-			),
+			Fill: optional.Some(fill),
 		},
 	), nil
 }

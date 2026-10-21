@@ -59,7 +59,9 @@ func (r *clientEngineFreshModelReport) EngineExecutionReport() model.ExecutionRe
 	}
 	fill := model.NewExecutionReportFill()
 	fill.SetFee(param.NewMonetaryAmount(r.fee, currency))
-	fill.SetLock(r.lock)
+	if err := fill.SetLock(r.lock); err != nil {
+		panic(err)
+	}
 	report := model.NewExecutionReport()
 	report.SetFill(fill)
 	r.nativeReport = report.Handle()

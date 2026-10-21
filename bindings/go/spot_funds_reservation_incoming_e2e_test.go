@@ -435,6 +435,23 @@ func TestSpotFundsReservationIncoming_SellFillWithoutLockBlocksAccount(t *testin
 
 	// Deliver the fill WITHOUT attaching the lock. The engine must block the
 	// account with MissingRequiredField before touching any holdings.
+	fill, err := model.NewExecutionReportFillFromValues(
+		model.ExecutionReportFillValues{
+			LastTrade: optional.Some(
+				model.NewExecutionReportTrade(
+					sfReservationPrice(t, "150"),
+					sfReservationQuantity(t, "2"),
+				),
+			),
+			RemainingReservedQuantity: optional.Some(sfReservationQuantity(t, "0")),
+			// Lock intentionally absent: the engine must block the account.
+			Lock:    nil,
+			IsFinal: optional.BoolSome(true),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewExecutionReportFillFromValues() error = %v", err)
+	}
 	fillReport := model.NewExecutionReportFromValues(
 		model.ExecutionReportValues{
 			Operation: optional.Some(
@@ -451,22 +468,7 @@ func TestSpotFundsReservationIncoming_SellFillWithoutLockBlocksAccount(t *testin
 					},
 				),
 			),
-			Fill: optional.Some(
-				model.NewExecutionReportFillFromValues(
-					model.ExecutionReportFillValues{
-						LastTrade: optional.Some(
-							model.NewExecutionReportTrade(
-								sfReservationPrice(t, "150"),
-								sfReservationQuantity(t, "2"),
-							),
-						),
-						RemainingReservedQuantity: optional.Some(sfReservationQuantity(t, "0")),
-						// Lock intentionally absent: the engine must block the account.
-						Lock:    nil,
-						IsFinal: optional.BoolSome(true),
-					},
-				),
-			),
+			Fill: optional.Some(fill),
 		},
 	)
 
@@ -558,6 +560,18 @@ func TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount(t *test
 	// Deliver a cancel (is_final, full remaining_reserved_quantity, no
 	// last_trade) WITHOUT attaching the lock. The engine must block the account
 	// with MissingRequiredField before releasing any reservation.
+	fill, err := model.NewExecutionReportFillFromValues(
+		model.ExecutionReportFillValues{
+			// No LastTrade: this is a cancel, not a partial fill.
+			RemainingReservedQuantity: optional.Some(sfReservationQuantity(t, "2")),
+			// Lock intentionally absent: the engine must block the account.
+			Lock:    nil,
+			IsFinal: optional.BoolSome(true),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewExecutionReportFillFromValues() error = %v", err)
+	}
 	cancelReport := model.NewExecutionReportFromValues(
 		model.ExecutionReportValues{
 			Operation: optional.Some(
@@ -574,17 +588,7 @@ func TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount(t *test
 					},
 				),
 			),
-			Fill: optional.Some(
-				model.NewExecutionReportFillFromValues(
-					model.ExecutionReportFillValues{
-						// No LastTrade: this is a cancel, not a partial fill.
-						RemainingReservedQuantity: optional.Some(sfReservationQuantity(t, "2")),
-						// Lock intentionally absent: the engine must block the account.
-						Lock:    nil,
-						IsFinal: optional.BoolSome(true),
-					},
-				),
-			),
+			Fill: optional.Some(fill),
 		},
 	)
 

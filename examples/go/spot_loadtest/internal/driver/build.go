@@ -210,6 +210,15 @@ func buildReport(ev *generator.Event) (model.ExecutionReport, param.AccountID, e
 	if err != nil {
 		return model.ExecutionReport{}, param.AccountID{}, fmt.Errorf("build fill lock: %w", err)
 	}
+	fill, err := model.NewExecutionReportFillFromValues(model.ExecutionReportFillValues{
+		LastTrade:                 optional.Some(model.NewExecutionReportTrade(price, qty)),
+		RemainingReservedQuantity: optional.Some(remainingReservedQty),
+		Lock:                      lock.Bytes(),
+		IsFinal:                   optional.BoolSome(true),
+	})
+	if err != nil {
+		return model.ExecutionReport{}, param.AccountID{}, fmt.Errorf("build fill: %w", err)
+	}
 	report := model.NewExecutionReportFromValues(model.ExecutionReportValues{
 		Operation: optional.Some(model.NewExecutionReportOperationFromValues(
 			model.ExecutionReportOperationValues{
@@ -222,13 +231,7 @@ func buildReport(ev *generator.Event) (model.ExecutionReport, param.AccountID, e
 				Pnl: optional.Some(pnl),
 				Fee: optional.Some(fee),
 			})),
-		Fill: optional.Some(model.NewExecutionReportFillFromValues(
-			model.ExecutionReportFillValues{
-				LastTrade:                 optional.Some(model.NewExecutionReportTrade(price, qty)),
-				RemainingReservedQuantity: optional.Some(remainingReservedQty),
-				Lock:                      lock.Bytes(),
-				IsFinal:                   optional.BoolSome(true),
-			})),
+		Fill: optional.Some(fill),
 	})
 	return report, acc, nil
 }
