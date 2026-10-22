@@ -7,7 +7,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/)
 [![npm](https://img.shields.io/npm/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine) [![node](https://img.shields.io/node/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)](bindings/cpp/README.md)
-[![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit)
+[![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit)
 [![C API](https://img.shields.io/badge/C%20API-blue)](bindings/c/README.md)
 <!-- markdownlint-enable MD013 -->
 

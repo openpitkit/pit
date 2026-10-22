@@ -2,7 +2,6 @@
 name = "openpit"
 version = "0.9.1"
 edition = "2021"
-rust-version = "1.78"
 license = "Apache-2.0"
 repository = "https://github.com/openpitkit/pit"
 description = "Embeddable pre-trade risk SDK"
