@@ -31,7 +31,19 @@ just test-python-debug
 
 ### Manual
 
-After `just python-develop-debug`, from `examples/python/spot_funds/`:
+From the repository root, with Rust and Python >=3.10 installed:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m maturin develop --manifest-path bindings/python/Cargo.toml
+cd examples/python/spot_funds
+```
+
+On Windows, create the environment with `py -3 -m venv .venv` and activate it
+with `.venv\Scripts\Activate.ps1` in PowerShell. Just is optional.
+Then, in the same activated environment:
 
 ```sh
 python main.py          # run the scenario

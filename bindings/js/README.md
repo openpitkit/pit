@@ -68,25 +68,27 @@ import { Engine as DenoEngine } from "npm:@openpit/engine";
 
 End users should install the published
 [npm package](https://www.npmjs.com/package/@openpit/engine); a source build is
-needed only for local development on the binding itself. The full toolchain
-(Rust with the `wasm32-unknown-unknown` target, `wasm-bindgen`, `wasm-opt`, and
-the Node dev dependencies) is provisioned by:
+needed only for local development on the binding itself. It requires Rust,
+Node.js >=18, the `wasm32-unknown-unknown` target, and `wasm-bindgen-cli` at the
+exact version pinned in `bindings/js/Cargo.toml` (currently `0.2.122`). From
+the repository root, on POSIX:
 
 ```sh
-just install
-```
-
-Note that `just install` provisions the complete build toolchain for the whole
-repository. If you do not need the full build, read the recipe in
-[`justfile`](https://github.com/openpitkit/pit/blob/main/justfile) and install
-only the parts you need for this package: the `wasm32-unknown-unknown` target,
-a matching `wasm-bindgen-cli`, and the local npm dependencies. Then:
-
-```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.122 --locked --root target/wasm-tools
+export PATH="$PWD/target/wasm-tools/bin:$PATH"
 cd bindings/js
-npm install
+npm ci
 npm run build
 ```
+
+In PowerShell, use `$env:PATH = "$PWD/target/wasm-tools/bin;$env:PATH"` in
+place of `export`. The local build uses `wasm-opt` when available; release
+publishing requires it (`OPENPIT_WASM_OPT=require`).
+
+[Just](https://just.systems/) is optional. `just install` at the repository
+root provisions the complete repository toolchain, including other bindings;
+`just build-js` builds this package once its prerequisites are installed.
 
 ## Quick Start
 

@@ -35,8 +35,23 @@ maintainer prefixes such as `wt/` are not required for external contributions.
 
 Follow the [Local Build and Test](README.md#local-build-and-test) instructions
 to install the required toolchains and create the repository-local Python
-environment. From the repository root, a typical debug build and complete debug
-gate are:
+environment. Just is optional. The root README and the
+[examples guide](examples/README.md) include direct build and test commands
+for each language. For a Rust-only change, for example, from the repository root:
+
+```bash
+cargo build --workspace --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+```
+
+For other languages, run the binding's documented tests and its native lint
+tools (`ruff`/`black`, `go vet`/`golangci-lint`, or the npm lint scripts).
+Run the shared [invariant checks](checks/README.md#how-to-run) as well.
+
+With optional [Just](https://just.systems/), a typical debug build and complete
+debug gate are:
 
 ```bash
 just build-debug

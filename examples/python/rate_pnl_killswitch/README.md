@@ -31,7 +31,19 @@ just test-python-debug
 
 ### Manual
 
-After `just python-develop-debug`, from `examples/python/rate_pnl_killswitch/`:
+From the repository root, with Rust and Python >=3.10 installed:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m maturin develop --manifest-path bindings/python/Cargo.toml
+cd examples/python/rate_pnl_killswitch
+```
+
+On Windows, create the environment with `py -3 -m venv .venv` and activate it
+with `.venv\Scripts\Activate.ps1` in PowerShell. Just is optional.
+Then, in the same activated environment:
 
 ```sh
 python main.py          # run the scenario
@@ -52,7 +64,9 @@ python -m pytest .                # run the smoke test
 ## See also
 
 - [RateLimitPolicy](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-  and [PnlBoundsKillSwitchPolicy](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy) -
+  and [PnlBoundsKillSwitchPolicy][pnl-policy] -
   the policy references for the two kill switches combined here.
 - [`../spot_funds`](../spot_funds) - the smallest single-policy integration, a
   good starting point before this multi-policy supervisor.
+
+[pnl-policy]: https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy

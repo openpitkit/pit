@@ -29,13 +29,24 @@ Helper scripts used by the build and release tooling.
 
 ## How to run
 
-They are normally invoked through `just` ([just.systems](https://just.systems/)):
+From the repository root, after installing `requirements.txt` into the local
+Python environment described in the
+[root README](../README.md#local-build-and-test):
 
 ```sh
-just gen-api-c   # runs generate_api_c.py
+.venv/bin/python scripts/generate_api_c.py
 ```
 
-The documentation site is a pipeline-only flow:
+[Just](https://just.systems/) is optional: `just gen-api-c` runs the same script.
+
+The documentation site is a pipeline-only flow. After the reference artifacts
+have been generated or restored by CI, its assembly script can also run directly:
+
+```sh
+.venv/bin/python scripts/_generate_docs_site.py
+```
+
+The optional Just recipe also generates the C, C++, and JS references first:
 
 ```sh
 just --justfile pipeline.just assemble-docs-site   # runs _generate_docs_site.py

@@ -18,11 +18,14 @@ WASM-specific end-to-end demo.
 `@openpit/engine` is a self-contained WASM package: no native add-on to compile
 and no `await` in the common path. The examples depend on the locally built
 package via a `file:` reference, so build it once first. From the repository
-root:
+root, first follow the
+[binding source-build instructions](../../bindings/js/README.md#building-from-source--toolchain)
+to install the JS/WASM toolchain. Then build the package:
 
 ```sh
-just install                         # provisions the toolchain (once)
-cd bindings/js && npm run build      # builds bindings/js/dist
+cd bindings/js
+npm ci
+npm run build
 ```
 
 ## Running
@@ -40,7 +43,7 @@ npx tsx spot_table/main.ts --table ../tables/spot/coverage.md
 npm test     # Node smoke tests
 ```
 
-From the repository root, the `just` targets wrap the same commands:
+With optional [Just](https://just.systems/), from the repository root:
 
 ```sh
 just run-examples-js         # run all three Node examples
@@ -48,7 +51,7 @@ just run-examples-js-table   # spot_table over the coverage table
 just test-js                 # run the package and Node example tests
 ```
 
-The browser playground is a standalone app with its own `justfile`; see
+The browser playground is a standalone npm app; see
 [`risk_playground`](risk_playground/README.md).
 
 ## Idiomatic inputs

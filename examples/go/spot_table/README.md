@@ -24,15 +24,16 @@ just run-examples-go-table-repeat-debug examples/tables/spot/coverage.md 5m
 just test-go-debug
 ```
 
-No `just`? Build the native library once, point the loader at it, then run from
-`examples/go/spot_table/`:
+[Just](https://just.systems/) is optional. Without it, start from the
+repository root, build the native library once, and point the loader at it:
 
 ```sh
 cargo build -p openpit-ffi --release
 # .so on Linux, .dll on Windows:
 export OPENPIT_RUNTIME_LIBRARY_PATH="$PWD/target/release/libopenpit_ffi.dylib"
-
+cd examples/go/spot_table
 go run . -table ../../tables/spot/coverage.md
+go test ./...
 ```
 
 `-table` is required. Add `-min-duration 3m` to repeat-run for at least the

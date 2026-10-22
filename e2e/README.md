@@ -21,7 +21,8 @@ run in Docker; the macOS scenario runs natively.
 
 ## How to run
 
-Run against an already-published version.
+Run against an already-published version, from the repository root.
+[Just](https://just.systems/) is optional; the scripts can be called directly.
 
 ### Linux
 
@@ -52,6 +53,8 @@ the native scenario:
 
 ```sh
 OPENPIT_RELEASE_E2E_TARGETS=cpp-vcpkg-macos-arm64 just test-release-e2e 0.4.0
+# or directly:
+OPENPIT_RELEASE_E2E_TARGETS=cpp-vcpkg-macos-arm64 ./e2e/run.sh 0.4.0
 ```
 
 ### Windows

@@ -9,9 +9,21 @@ duplicated here. Anything they already catch belongs to them.
 
 ## How to run
 
+From the repository root, after creating the local Python environment and
+installing `requirements.txt` as described in the
+[root README](../README.md#local-build-and-test):
+
 ```sh
-just check-semgrep
+.venv/bin/semgrep scan --config checks/semgrep --error --quiet \
+  --metrics=off --disable-version-check .
+.venv/bin/semgrep --test --config checks/semgrep/financial-types-rust.yml \
+  --metrics=off --disable-version-check checks/semgrep/tests/financial-types-rust.rs
+.venv/bin/semgrep --test --config checks/semgrep/fallbacks-rust.yml \
+  --metrics=off --disable-version-check checks/semgrep/tests/fallbacks-rust.rs
 ```
+
+With optional [Just](https://just.systems/), `just check-semgrep` runs the same
+scan and rule tests.
 
 The target is a prerequisite of `lint-all`, so `check-debug`, `check-release`
 and `check-full` run it too. In CI it is the `Invariant checks` job of the

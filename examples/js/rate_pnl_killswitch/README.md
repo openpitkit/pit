@@ -15,12 +15,9 @@ the strategy is stopped the moment a kill switch returns an account block.
 The example imports `@openpit/engine`, a self-contained WASM package - there is
 no native add-on to compile and no `await` in the common path.
 
-The package must be built first. From the repository root:
-
-```sh
-just install                         # provisions the toolchain (once)
-cd bindings/js && npm run build      # builds dist/ consumed by these examples
-```
+Build the local package first, following the
+[JS examples prerequisites](../README.md#prerequisites). Those instructions
+use Rust and npm directly; [Just](https://just.systems/) is optional.
 
 ### With [Just](https://just.systems/)
 

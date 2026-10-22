@@ -22,14 +22,16 @@ just run-examples-cpp-table-debug examples/tables/spot/coverage.md
 just test-examples-cpp-debug
 ```
 
-No `just`? Build and run by hand:
+[Just](https://just.systems/) is optional. From the repository root:
 
 ```sh
 cargo build -p openpit-ffi --release
 RT="$PWD/target/release/libopenpit_ffi.dylib"   # .so on Linux, .dll on Windows
-cmake -S examples/cpp -B examples/cpp/build -DOPENPIT_RUNTIME_LIBRARY="$RT"
-cmake --build examples/cpp/build -j
+cmake -S examples/cpp -B examples/cpp/build \
+  -DCMAKE_BUILD_TYPE=Release -DOPENPIT_RUNTIME_LIBRARY="$RT"
+cmake --build examples/cpp/build --config Release -j
 ./examples/cpp/build/spot_table/spot_table --table examples/tables/spot/coverage.md
+ctest --test-dir examples/cpp/build -C Release --output-on-failure
 ```
 
 `--table` is required. Add `--min-duration 3m` to repeat-run for at least the

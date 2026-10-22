@@ -34,12 +34,9 @@ no native add-on to compile. The `--table` argument is required; it is a
 scenario path that resolves whether you run from the repository root or from
 this directory.
 
-The package must be built first. From the repository root:
-
-```sh
-just install                         # provisions the toolchain (once)
-cd bindings/js && npm run build      # builds dist/ consumed by these examples
-```
+Build the local package first, following the
+[JS examples prerequisites](../README.md#prerequisites). Those instructions
+use Rust and npm directly; [Just](https://just.systems/) is optional.
 
 ### With [Just](https://just.systems/)
 

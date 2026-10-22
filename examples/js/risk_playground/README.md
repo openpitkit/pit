@@ -20,15 +20,22 @@ Build the JS binding first, as the [examples README](../README.md#prerequisites)
 describes. Then, from this directory:
 
 ```sh
-just install   # once: locked dependencies, linked to ../../../bindings/js
-just run       # rebuilds the binding and starts the Vite dev server
+npm ci --no-audit --no-fund
+npm run dev
 ```
+
+After changing the SDK, rebuild it from `bindings/js` with `npm run build`
+before starting the dev server. Optional [Just](https://just.systems/)
+shortcuts are `just install` and `just run`; the latter rebuilds the SDK first.
 
 ## Build
 
 ```sh
-just check     # tests, type-checks, and bundles into dist/
+npm test
+npm run build   # type-checks and bundles into dist/
 ```
+
+With optional Just, `just check` runs both commands.
 
 CI runs the same `just check` against the local binding. Every push to `main`
 builds the binding from that commit and deploys the page with it.

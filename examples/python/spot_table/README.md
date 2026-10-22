@@ -45,12 +45,24 @@ just test-python-debug
 
 ### Manual
 
-After `just python-develop-debug`, from `examples/python/spot_table/`:
+From the repository root, with Rust and Python >=3.10 installed:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m maturin develop --manifest-path bindings/python/Cargo.toml
+cd examples/python/spot_table
+```
+
+On Windows, create the environment with `py -3 -m venv .venv` and activate it
+with `.venv\Scripts\Activate.ps1` in PowerShell. Just is optional.
+Then, in the same activated environment:
 
 ```sh
 python main.py --table ../../tables/spot/coverage.md                   # run once
 python main.py --table ../../tables/spot/coverage.md --min-duration 3m  # repeat-run
-python -m pytest examples/python/spot_table                           # run the test
+python -m pytest .                                                   # run the test
 ```
 
 Running with no `--table` prints a short usage message.
@@ -61,7 +73,7 @@ To run the example on its own, without the repository-root tooling, install
 its self-contained dependencies from this directory and run it:
 
 ```sh
-pip install -r requirements.txt                        # openpit (published wheel) + pytest
+pip install -r requirements.txt                      # published openpit + pytest
 python main.py --table ../../tables/spot/coverage.md   # run once
 python -m pytest .                                     # run the test
 ```

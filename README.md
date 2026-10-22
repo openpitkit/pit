@@ -199,7 +199,11 @@ scripts, generated API artifacts, and Python tooling such as `maturin` and
 
 #### Toolchain Setup
 
-`just install` provisions the full build toolchain in one shot: the wasm32
+Just is optional. Install only the toolchains for the bindings you need, using
+the manual commands below. For JS/WASM, follow the
+[source-build setup](bindings/js/README.md#building-from-source--toolchain).
+
+With Just, `just install` provisions the full build toolchain in one shot: the wasm32
 Rust target, `wasm-bindgen-cli` (pinned to the version the crate resolved to),
 the JS dev dependencies, and the Python dev install.
 
@@ -262,6 +266,9 @@ cd bindings/js
 npm install
 npm run build
 ```
+
+Install the [JS/WASM toolchain](bindings/js/README.md#building-from-source--toolchain)
+before running these commands; `just install` is not required.
 
 #### Go
 
