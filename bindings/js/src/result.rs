@@ -882,6 +882,7 @@ impl JsPostTradeResult {
     /// # Errors
     ///
     /// Throws `TypeError` when an array contains a value of the wrong type.
+    /// Throws `RangeError` when capacity cannot be reserved for an outcome array.
     #[wasm_bindgen(constructor)]
     pub fn new(
         #[wasm_bindgen(unchecked_optional_param_type = "readonly AccountBlock[]")]
@@ -946,7 +947,16 @@ where
             None,
         ));
     }
-    let mut result = Vec::with_capacity(values.length() as usize);
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(values.length() as usize)
+        .map_err(|_| {
+            make_error(
+                ErrorKind::Range,
+                &format!("post-trade result array cannot reserve capacity for {expected} values"),
+                None,
+            )
+        })?;
     for value in values.iter() {
         let value = extract_cloned_wrapper::<T>(&value)?.ok_or_else(|| {
             make_error(

@@ -1374,9 +1374,85 @@ describe("runtime custom policy", () => {
 
     expect(block.clone().reason).toBe("blocked");
     expect(outcome.clone().entry.asset).toBe("USD");
+    expect(pnl.clone().pnl?.delta.toString()).toBe("1.25");
     expect(result.accountBlocks[0]?.policy).toBe("constructor-inputs");
     expect(result.accountAdjustments[0]?.policyGroupId).toBe(7);
     expect(result.accountPnls[0]?.pnl?.delta.toString()).toBe("1.25");
+  });
+
+  describe.each([
+    { argument: "accountBlocks", position: 0, expected: "AccountBlock" },
+    { argument: "accountPnls", position: 1, expected: "AccountPnlOutcome" },
+    {
+      argument: "accountAdjustments",
+      position: 2,
+      expected: "AccountAdjustmentOutcome",
+    },
+  ])("PostTradeResult $argument", ({ position, expected }) => {
+    it.each([
+      { length: 2 ** 32 - 1, errorType: RangeError },
+      { length: 1, errorType: TypeError },
+    ])(
+      "rejects sparse arrays of length $length safely",
+      ({ length, errorType }) => {
+        const engines = [
+          Engine.builder().preTrade(sellGate).build(),
+          Engine.builder().preTrade(sellGate).build(),
+        ];
+        const block = new AccountBlock(
+          "constructor-inputs",
+          "Other",
+          "blocked",
+          "test block",
+          undefined,
+        );
+        const outcome = new AccountAdjustmentOutcome(
+          7,
+          new AccountOutcomeEntry("USD"),
+        );
+        const pnl = new AccountPnlOutcome(
+          7,
+          ACCOUNT,
+          new PnlOutcomeAmount("1.25", "7.5"),
+          undefined,
+        );
+        const inputs: [
+          AccountBlock[],
+          AccountPnlOutcome[],
+          AccountAdjustmentOutcome[],
+        ] = [[block], [pnl], [outcome]];
+        inputs[position] = new Array<never>(length);
+
+        let caught: unknown;
+        try {
+          new PostTradeResult(...inputs);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(errorType);
+        expect((caught as Error).message).toBe(
+          errorType === RangeError
+            ? `post-trade result array cannot reserve capacity for ${expected} values`
+            : `post-trade result array must contain only ${expected} values`,
+        );
+
+        const result = new PostTradeResult([block], [pnl], [outcome]);
+        expect(result.accountBlocks[0]?.policy).toBe("constructor-inputs");
+        expect(result.accountPnls[0]?.pnl?.delta.toString()).toBe("1.25");
+        expect(result.accountAdjustments[0]?.policyGroupId).toBe(7);
+        expect(block.clone().reason).toBe("blocked");
+        expect(pnl.clone().pnl?.delta.toString()).toBe("1.25");
+        expect(outcome.clone().entry.asset).toBe("USD");
+
+        for (const engine of engines) {
+          const accepted = engine.executePreTrade(order("BUY"));
+          expect(accepted.ok).toBe(true);
+          expect(accepted.rejects).toHaveLength(0);
+          expect(accepted.reservation).toBeDefined();
+          expect(() => accepted.reservation!.commit()).not.toThrow();
+        }
+      },
+    );
   });
 
   it("round-trips account PnLs from custom post-trade policies", () => {
