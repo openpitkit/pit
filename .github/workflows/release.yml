@@ -966,8 +966,185 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The microsoft/vcpkg port update runs by hand for now: vcpkg-upstream.yml
-  # names the condition for bringing sync-vcpkg-upstream back here.
+  # Proposes the released port to microsoft/vcpkg once everything else is
+  # published. It never fails the release: the job shows red, the run stays
+  # green, and the error goes to the run summary. Fix the cause and re-run this
+  # job; it takes the port from the managed registry, so a re-run outlives the
+  # artifacts of this run.
+  sync-vcpkg-upstream:
+    name: Propose microsoft/vcpkg port update
+    needs:
+      - publish-github-release
+      - publish-vcpkg-registry
+      - verify-tag
+    if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    permissions:
+      contents: read
+    concurrency:
+      group: openpit-vcpkg-upstream
+      cancel-in-progress: false
+    steps:
+      - name: Take the released port from the managed registry
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The managed registry pins every released port to a git tree, so
+          # this is exactly the port the release verified and published.
+          registry="$RUNNER_TEMP/openpit-vcpkg-registry"
+          git clone https://github.com/openpitkit/vcpkg-registry.git "${registry}"
+          tree="$(jq -r --arg version "${VERSION}" \
+            'first(.versions[] | select(.version == $version) | ."git-tree") // empty' \
+            "${registry}/versions/o-/openpit.json")"
+          if [[ -z "${tree}" ]]; then
+            echo "::error::openpit ${VERSION} is not in the managed vcpkg registry"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/openpit-vcpkg-port"
+          git -C "${registry}" archive "${tree}" \
+            | tar -x -C "$RUNNER_TEMP/openpit-vcpkg-port"
+
+      - name: Create or update the upstream pull request
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+          VCPKG_UPSTREAM_FORK: ${{ vars.VCPKG_UPSTREAM_FORK }}
+          VCPKG_UPSTREAM_PUSH_TOKEN: ${{ secrets.VCPKG_UPSTREAM_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${VCPKG_UPSTREAM_FORK}" \
+              || -z "${VCPKG_UPSTREAM_PUSH_TOKEN}" ]]; then
+            echo "::error::VCPKG_UPSTREAM_FORK and VCPKG_UPSTREAM_PUSH_TOKEN are required to propose the port to microsoft/vcpkg"
+            exit 1
+          fi
+          if [[ "${VCPKG_UPSTREAM_FORK}" != */* ]]; then
+            echo "::error::VCPKG_UPSTREAM_FORK must be an owner/repository value"
+            exit 1
+          fi
+          export GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}"
+
+          report() {
+            echo "$1"
+            printf '## microsoft/vcpkg update\n\n%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          fork_owner="${VCPKG_UPSTREAM_FORK%%/*}"
+          # Every release goes upstream, patches included, through one branch:
+          # a release that lands while the previous update is still in review
+          # moves that pull request to the new version, so it keeps its place
+          # in the review queue and microsoft/vcpkg never sees two of them.
+          branch="openpit-update"
+          title="[openpit] Update to ${VERSION}"
+          worktree="$RUNNER_TEMP/microsoft-vcpkg"
+
+          # gh matches --head against the branch name alone, never against
+          # owner:branch, so the fork owner is filtered here.
+          open_pr="$(gh pr list --repo microsoft/vcpkg --head "${branch}" \
+              --state open --json url,headRepositoryOwner \
+            | jq -r --arg owner "${fork_owner}" \
+              'map(select(.headRepositoryOwner.login == $owner)) | .[0].url // empty')"
+
+          if [[ -z "${open_pr}" ]]; then
+            # Fast-forward the fork server-side. Branching from upstream/master
+            # instead would push microsoft/vcpkg history the fork does not
+            # have. Both routes write the .github/workflows changes upstream
+            # made since the last sync, which GitHub refuses a token without
+            # the workflow scope.
+            if ! gh api --method POST \
+                "repos/${VCPKG_UPSTREAM_FORK}/merge-upstream" \
+                --field branch=master; then
+              echo "::error::cannot fast-forward ${VCPKG_UPSTREAM_FORK} master onto microsoft/vcpkg: the fork must carry no local commits on master, and VCPKG_UPSTREAM_PUSH_TOKEN needs the workflow scope"
+              exit 1
+            fi
+          fi
+
+          git clone \
+            "https://x-access-token:${VCPKG_UPSTREAM_PUSH_TOKEN}@github.com/${VCPKG_UPSTREAM_FORK}.git" \
+            "${worktree}"
+          git -C "${worktree}" config user.name "github-actions[bot]"
+          git -C "${worktree}" config user.email "github-actions[bot]@users.noreply.github.com"
+          if [[ -n "${open_pr}" ]]; then
+            git -C "${worktree}" checkout -B "${branch}" "origin/${branch}"
+          else
+            git -C "${worktree}" checkout -B "${branch}" origin/master
+          fi
+          base="$(git -C "${worktree}" merge-base HEAD origin/master)"
+
+          # microsoft/vcpkg squash-merges and requires each pull request to add
+          # exactly one version: a version this pull request proposed before
+          # never merged, and its git tree does not survive the squash. Start
+          # the version files over from the master the branch is based on.
+          git -C "${worktree}" checkout "${base}" -- \
+            versions/baseline.json versions/o-/openpit.json
+          rm -rf "${worktree}/ports/openpit"
+          cp -R "$RUNNER_TEMP/openpit-vcpkg-port" "${worktree}/ports/openpit"
+          git -C "${worktree}" add ports/openpit
+          if git -C "${worktree}" diff --cached --quiet HEAD -- ports/openpit; then
+            if [[ -n "${open_pr}" ]]; then
+              report "${open_pr} already proposes OpenPit ${VERSION}."
+            else
+              report "microsoft/vcpkg already contains OpenPit ${VERSION}."
+            fi
+            exit 0
+          fi
+
+          "${worktree}/bootstrap-vcpkg.sh" -disableMetrics
+          git -C "${worktree}" commit -m "${title}"
+          "${worktree}/vcpkg" x-add-version openpit
+          git -C "${worktree}" add versions
+          git -C "${worktree}" commit --amend --no-edit
+
+          body_file="$(mktemp)"
+          cat > "${body_file}" <<EOF
+          Updates the OpenPit C++ SDK port to ${VERSION}: the port the OpenPit release verified and published to its own registry, proposed by the release workflow.
+
+          - [x] Changes comply with the [maintainer guide](https://github.com/microsoft/vcpkg-docs/blob/main/vcpkg/contributing/maintainer-guide.md).
+          - [x] SHA512s are updated for each updated download.
+          - [x] The "supports" clause reflects platforms that may be fixed by this new version, or no changes were necessary.
+          - [x] Any fixed [CI baseline](https://github.com/microsoft/vcpkg/blob/master/scripts/ci.baseline.txt) and [CI feature baseline](https://github.com/microsoft/vcpkg/blob/master/scripts/ci.feature.baseline.txt) entries are removed from that file, or no entries needed to be changed.
+          - [x] All patch files in the port are applied and succeed.
+          - [x] The version database is fixed by rerunning \`./vcpkg x-add-version --all\` and committing the result.
+          - [x] Exactly one version is added in each modified versions file.
+          EOF
+
+          if [[ -n "${open_pr}" ]]; then
+            # A new commit on top keeps the review history: an open pull
+            # request is never force-pushed.
+            git -C "${worktree}" push origin "HEAD:${branch}"
+            gh pr edit "${open_pr}" --title "${title}" --body-file "${body_file}"
+            report "Moved ${open_pr} to OpenPit ${VERSION}."
+          else
+            # No open pull request uses the branch, so whatever an earlier,
+            # already merged update left on it is replaced.
+            git -C "${worktree}" push --force origin "HEAD:${branch}"
+            pr_url="$(gh pr create \
+              --repo microsoft/vcpkg \
+              --head "${fork_owner}:${branch}" \
+              --base master \
+              --title "${title}" \
+              --body-file "${body_file}")"
+            report "Proposed OpenPit ${VERSION}: ${pr_url}"
+          fi
+
+      - name: Summarize the skipped microsoft/vcpkg update
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          echo "::error::The microsoft/vcpkg update to OpenPit ${VERSION} failed. The release is published; fix the cause and re-run this job."
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## microsoft/vcpkg update skipped
+
+          Proposing OpenPit \`${VERSION}\` to microsoft/vcpkg failed. The release
+          itself is published. Fix the cause named in the job log and re-run the
+          **Propose microsoft/vcpkg port update** job.
+          EOF
 
   publish-go-sources:
     name: Publish pit-go sources

@@ -110,8 +110,7 @@ every OpenPit release note publishes the commit to use.
 
 #### Public [`microsoft/vcpkg`](https://github.com/microsoft/vcpkg) registry
 
-Not available yet: the OpenPit port is in upstream review. Once it is accepted,
-the manifest above is the whole setup, because vcpkg already ships with this
+The manifest above is the whole setup, because vcpkg already ships with this
 registry; new OpenPit releases reach it with a delay, and the managed registry
 keeps getting them first.
 
