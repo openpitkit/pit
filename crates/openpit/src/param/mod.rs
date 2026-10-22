@@ -26,6 +26,17 @@
 //! `from_f64` and related helpers exist for integration boundaries that
 //! already expose floating-point inputs.
 //!
+//! # Decimal representation
+//!
+//! Decimal-based types store a sign, a 96-bit unsigned coefficient up to
+//! `79228162514264337593543950335`, and a scale from `0` to `28`.
+//! The magnitude is `coefficient / 10^scale`: integer and fractional digits
+//! share the coefficient's capacity. Up to 29 significant decimal digits
+//! fit only when the coefficient stays within that maximum; increasing the
+//! scale reduces the maximum magnitude.
+//! Strict string constructors return [`Error::InvalidFormat`] when input
+//! exceeds these precision or range limits, rather than rounding it.
+//!
 //! # Type categories
 //!
 //! - **Unsigned types** ([`Quantity`], [`Volume`], [`Notional`]) - cannot be negative.
@@ -447,7 +458,11 @@ macro_rules! define_non_negative_value_type {
 
             /// Creates a value from a string representation without rounding.
             ///
-            /// Values exceeding decimal precision or range return
+            /// Input must fit a 96-bit coefficient no greater than
+            /// `79228162514264337593543950335` and a scale from `0` to `28`.
+            /// Integer and fractional digits share the coefficient's capacity,
+            /// allowing up to 29 significant digits when the coefficient fits.
+            /// Values exceeding these precision or range limits return
             /// [`Error::InvalidFormat`](super::Error::InvalidFormat).
             ///
             /// # Examples
@@ -798,7 +813,11 @@ macro_rules! define_signed_value_type {
 
             /// Creates a value from a string representation without rounding.
             ///
-            /// Values exceeding decimal precision or range return
+            /// Input must fit a 96-bit coefficient no greater than
+            /// `79228162514264337593543950335` and a scale from `0` to `28`.
+            /// Integer and fractional digits share the coefficient's capacity,
+            /// allowing up to 29 significant digits when the coefficient fits.
+            /// Values exceeding these precision or range limits return
             /// [`Error::InvalidFormat`](super::Error::InvalidFormat).
             ///
             /// # Examples
