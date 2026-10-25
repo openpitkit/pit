@@ -1,6 +1,6 @@
 [package]
 name = "openpit-js"
-version = "0.9.1"
+version = "0.10.0"
 edition = "2021"
 publish = false
 license = "Apache-2.0"
@@ -18,11 +18,11 @@ name = "openpit_js"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-openpit = { version = "0.9.1", path = "../../crates/openpit", features = [
+openpit = { version = "0.10.0", path = "../../crates/openpit", features = [
   "serde",
   "wasm-clock",
 ] }
-openpit-interop = { version = "0.9.1", path = "../../crates/openpit-interop" }
+openpit-interop = { version = "0.10.0", path = "../../crates/openpit-interop" }
 wasm-bindgen = "=0.2.122"
 js-sys = "0.3"
 rust_decimal = "1.41"
