@@ -59,7 +59,13 @@ void* operator new(std::size_t size) {
 }
 
 void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* memory) noexcept { std::free(memory); }
+// Inlining this malloc-backed replacement makes GCC diagnose new/free pairs.
+#if defined(__GNUC__) && !defined(__clang__)
+[[gnu::noinline]]
+#endif
+void operator delete(void* memory) noexcept {
+  std::free(memory);
+}
 void operator delete[](void* memory) noexcept { ::operator delete(memory); }
 void operator delete(void* memory, std::size_t) noexcept {
   ::operator delete(memory);

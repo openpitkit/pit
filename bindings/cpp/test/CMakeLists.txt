@@ -103,6 +103,8 @@ target_link_libraries(openpit_async_engine_alloc_tests
 openpit_add_test_target(openpit_async_engine_alloc_tests)
 
 add_executable(openpit_typed_async_engine_tests typed_async_engine_test.cpp)
+target_compile_options(openpit_typed_async_engine_tests PRIVATE
+  $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
 target_link_libraries(openpit_typed_async_engine_tests
   PRIVATE OpenPit::openpit GTest::gmock_main)
 
