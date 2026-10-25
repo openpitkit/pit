@@ -18,7 +18,7 @@
 // Drives the Rust wasm build for the `@openpit/engine` package:
 //   1. cargo build -p openpit-js --release --target wasm32-unknown-unknown
 //   2. wasm-bindgen --target web --typescript  (emits init()/initSync(bytes))
-//   3. wasm-opt -Oz   (mandatory on the release path, optional for dev)
+//   3. wasm-opt -O4   (mandatory on the release path, optional for dev)
 //
 // `--target web` is required because it exports `initSync(bytes)` (synchronous,
 // from controlled bytes) and a default async `init()`. That lets the Node and
@@ -27,14 +27,14 @@
 //
 // The cargo step pins a deterministic release configuration via
 // CARGO_PROFILE_RELEASE_* so the artifact does not depend on local overrides:
-// opt-level=z (smallest code), lto=fat, codegen-units=1. `panic = "abort"` is
+// opt-level=3 (speed), lto=fat, codegen-units=1. `panic = "abort"` is
 // the workspace release default and is left as-is on purpose: the shipped
 // `std` for wasm32-unknown-unknown is itself built with `panic = "abort"`, so
 // `-Cpanic=unwind` does not even link and `catch_unwind` could never catch.
 // Reachable panics do exist (for example a host with no `Performance` object),
 // and the crate's panic hook - see `start()` in src/lib.rs - converts them into
 // an `InternalError` thrown into JavaScript instead of a bare wasm trap.
-// wasm-opt is the second half of the size story; on the release path
+// wasm-opt applies its highest speed optimization level; on the release path
 // (OPENPIT_WASM_OPT=require) it is mandatory and a missing or failing pass is a
 // hard error, while dev builds keep it optional.
 
@@ -107,8 +107,8 @@ run(
       ...process.env,
       // Deterministic release knobs (the rest - panic=abort, strip - come from
       // the workspace `[profile.release]`). Pinned here so a stray local
-      // override cannot ship a larger or differently optimized artifact.
-      CARGO_PROFILE_RELEASE_OPT_LEVEL: "z",
+      // override cannot ship a less optimized artifact.
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "3",
       CARGO_PROFILE_RELEASE_LTO: "fat",
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1",
     },
@@ -136,12 +136,13 @@ run("wasm-bindgen", [
 ]);
 
 // On the release/publish path wasm-opt is mandatory, so a missing or failing
-// optimization fails the build instead of silently shipping a larger artifact.
+// optimization fails the build instead of silently shipping an unoptimized
+// artifact.
 const wasmOptRequired = process.env.OPENPIT_WASM_OPT === "require";
 
 const bgWasm = join(outDir, "openpit_js_bg.wasm");
 if (hasCommand("wasm-opt")) {
-  console.log("[build-wasm] wasm-opt -Oz");
+  console.log("[build-wasm] wasm-opt -O4");
   // Current rustc/LLVM emits bulk-memory and reference-types ops for
   // wasm32-unknown-unknown by default; enable the matching wasm-opt features so
   // validation passes (these are baseline in every runtime we target - Node
@@ -149,7 +150,7 @@ if (hasCommand("wasm-opt")) {
   const result = spawnSync(
     "wasm-opt",
     [
-      "-Oz",
+      "-O4",
       "--enable-bulk-memory",
       "--enable-reference-types",
       "--enable-mutable-globals",

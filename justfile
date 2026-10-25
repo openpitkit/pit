@@ -165,12 +165,12 @@ install: ensure-node
     # 5. Python dev install (reuses the existing debug recipe).
     just python-develop-debug
 
-    # 6. wasm-opt (binaryen) is optional: it only enables the release -Oz pass
+    # 6. wasm-opt (binaryen) is optional: it only enables the release -O4 pass
     # and is not a cargo tool. Never fail the recipe when it is missing.
     if command -v wasm-opt >/dev/null 2>&1; then
       echo "wasm-opt: already installed"
     else
-      echo "wasm-opt: optional, not found (enables release -Oz)."
+      echo "wasm-opt: optional, not found (enables release -O4)."
       echo "  install with: brew install binaryen  # or: apt-get install binaryen"
     fi
 
