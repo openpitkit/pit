@@ -344,6 +344,12 @@ struct WorkerSeams {
   // Runs after deferred queue registration, before cleanup publication.
   std::function<void()> afterDeferredRegistrationBeforePublication;
 
+  // Keep allocation faults out of MSVC's stopped-error construction.
+  static std::function<void()>& BeforeReservationCleanupHandoff() {
+    static thread_local std::function<void()> seam;
+    return seam;
+  }
+
   // Cold teardown seam on the joining thread, before a worker is joined.
   static std::function<void()>& BeforeJoin() {
     static thread_local std::function<void()> seam;

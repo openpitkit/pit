@@ -1396,6 +1396,10 @@ template <typename Op>
           cleanup();
           return;
         }
+        if (auto& before =
+                detail::WorkerSeams::BeforeReservationCleanupHandoff()) {
+          before();
+        }
         detail::DetachMandatoryCleanup(*engine, accountId, std::move(cleanup));
       },
       timeout);
