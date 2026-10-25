@@ -280,8 +280,12 @@ where
     /// account MUST implement this hook; otherwise that state silently survives
     /// retirement and a reused `AccountId` inherits it.
     ///
-    /// The engine holds its exclusive account-state transition while this hook
-    /// and its registered callbacks run, pausing every account-state writer.
+    /// Retirement is an exclusive operation (see the threading section on
+    /// [`Engine`](crate::Engine)): while this hook and its registered callbacks
+    /// run, no account-state write of a built-in policy is in flight. Under
+    /// `FullSync` the engine's transition lease provides that and does not
+    /// pause a custom policy that takes no lease; under `LocalSync` and
+    /// `AccountSync` the caller does, with no other engine call in flight.
     /// Keep both quick. Neither may call engine state-changing operations
     /// (pre-trade, execution reports, account adjustments, account
     /// administration, or configuration): that would deadlock.

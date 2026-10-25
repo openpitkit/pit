@@ -28,14 +28,22 @@
 //
 // The wrapped engine must be built with AccountSync. AsyncEngine maintains
 // per-key queues internally and guarantees that operations routed by the same
-// key never overlap. Account operations use an account routing key.
-// Account-group membership changes use the first supplied account's key. Group
-// blocking and group currency operations use an account-group routing key, so
-// they serialize with that group's other administrative operations rather than
-// with member-account work. UnblockAll uses the engine-wide routing key.
-// Parallelism across different keys depends on the strategy: Dynamic processes
-// distinct keys in parallel, while Sharded serializes keys that hash to the
-// same shard.
+// key never overlap. Account operations use an account routing key. Group
+// blocking uses an account-group routing key, so it serializes with that
+// group's other administrative operations rather than with member-account
+// work. UnblockAll uses the engine-wide routing key. Parallelism across
+// different keys depends on the strategy: Dynamic processes distinct keys in
+// parallel, while Sharded serializes keys that hash to the same shard.
+//
+// # Exclusive Operations
+//
+// Account-group membership, group currency, the SpotFunds retune, and account
+// retirement change state that every account reads, and under AccountSync the
+// engine takes no lock for them. They have no lane of their own: run them
+// through the Driver that Exclusive hands its callback, while every lane is
+// stopped. Ordinary tasks pay nothing for this; a section stops each lane with
+// a barrier behind every task whose Submit returned before the section began;
+// a Submit still in flight may land on either side.
 //
 // All public methods accept a context. The context controls how long the
 // caller is willing to wait for the task to be queued. Once a task is

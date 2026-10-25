@@ -96,6 +96,12 @@ target_link_libraries(openpit_async_engine_tests
 
 openpit_add_test_target(openpit_async_engine_tests)
 
+add_executable(openpit_async_engine_alloc_tests async_engine_alloc_test.cpp)
+target_link_libraries(openpit_async_engine_alloc_tests
+  PRIVATE OpenPit::openpit GTest::gmock_main)
+
+openpit_add_test_target(openpit_async_engine_alloc_tests)
+
 add_executable(openpit_typed_async_engine_tests typed_async_engine_test.cpp)
 target_link_libraries(openpit_typed_async_engine_tests
   PRIVATE OpenPit::openpit GTest::gmock_main)

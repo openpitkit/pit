@@ -472,6 +472,84 @@ where
         Some(mutator(value))
     }
 
+    /// Read/write scoped access to one entry, inserting on demand, guarded by
+    /// an exclusive index lock on both the hit and the miss path.
+    ///
+    /// Unlike [`with_mut`](Self::with_mut), whose hit path holds the index only
+    /// in shared mode, this never exposes `&mut Value` while another thread
+    /// may hold a shared index lock. Crate-private for the same reason as
+    /// [`with_mut_if_present_exclusive_index`](Self::with_mut_if_present_exclusive_index).
+    pub(crate) fn with_mut_exclusive_index<Mutator, Output, Initializer>(
+        &self,
+        key: Key,
+        default: Initializer,
+        mutator: Mutator,
+    ) -> Output
+    where
+        Mutator: FnOnce(&mut Value, bool) -> Output,
+        Initializer: FnOnce() -> Value,
+        Key: Clone,
+    {
+        #[cfg(debug_assertions)]
+        let _reentry = self.reentry.acquire_values_write();
+
+        let _index_guard = self.locking_policy.write_index();
+        // SAFETY: index exclusive lock; we have unique access to the map and
+        // may insert freely.
+        let data = unsafe { &mut *self.data.get() };
+        use std::collections::hash_map::Entry;
+
+        let lookup_key = key.clone();
+        let (value_cell, inserted): (&UnsafeCell<Value>, bool) = match data.entry(key) {
+            Entry::Occupied(entry) => (&**entry.into_mut(), false),
+            Entry::Vacant(entry) => (&**entry.insert(Box::new(UnsafeCell::new(default()))), true),
+        };
+        let _values_guard = self.locking_policy.write_values(&lookup_key);
+        // SAFETY: index exclusive + values exclusive => no other thread can
+        // observe or touch this entry; the `&mut Value` exposed to `mutator`
+        // is exclusive for the duration of the call.
+        let value: &mut Value = unsafe { &mut *value_cell.get() };
+        mutator(value, inserted)
+    }
+
+    /// Inserts `default()` under `key` when the key is absent and reports
+    /// whether this call inserted it. An existing entry is left untouched.
+    ///
+    /// The presence probe takes the index in shared mode and never forms a
+    /// reference to the value; only an insertion takes the index exclusively.
+    /// A table read concurrently by other threads can therefore record a
+    /// first-wins value without the `&mut` aliasing that
+    /// [`with_mut`](Self::with_mut) would produce on a hit.
+    pub(crate) fn insert_if_absent<Initializer>(&self, key: Key, default: Initializer) -> bool
+    where
+        Initializer: FnOnce() -> Value,
+    {
+        #[cfg(debug_assertions)]
+        let _reentry = self.reentry.acquire_values_write();
+
+        {
+            let _index_guard = self.locking_policy.read_index();
+            // SAFETY: index shared lock blocks structural mutation; only the
+            // key set is inspected, no value reference is formed.
+            if unsafe { &*self.data.get() }.contains_key(&key) {
+                return false;
+            }
+        }
+
+        let _index_guard = self.locking_policy.write_index();
+        // SAFETY: index exclusive lock; we have unique access to the map.
+        let data = unsafe { &mut *self.data.get() };
+        use std::collections::hash_map::Entry;
+
+        match data.entry(key) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(entry) => {
+                entry.insert(Box::new(UnsafeCell::new(default())));
+                true
+            }
+        }
+    }
+
     /// Read/write scoped access to one entry; inserts on demand.
     ///
     /// `mutator` is always invoked. It receives a mutable reference to

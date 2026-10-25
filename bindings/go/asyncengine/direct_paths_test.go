@@ -593,7 +593,7 @@ func TestAsyncEngineApplyAccountAdjustmentHappyPath(t *testing.T) {
 	}
 }
 
-func TestAsyncEngineRetireAccountUsesAccountLane(t *testing.T) {
+func TestAsyncEngineExclusiveRetirementWaitsForRunningLaneTask(t *testing.T) {
 	driver := newFakeDriver()
 	async, err := NewBuilder(driver).Dynamic().Build()
 	if err != nil {
@@ -615,15 +615,27 @@ func TestAsyncEngineRetireAccountUsesAccountLane(t *testing.T) {
 		return nil
 	})
 	<-entered
-	retirement := async.RetireAccount(context.Background(), accountID)
-	if retirement.Done() || atomic.LoadInt64(&driver.retireCount) != 0 {
-		t.Fatal("retirement ran before preceding task left the account lane")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	retirement := make(chan error, 1)
+	go func() {
+		retirement <- async.Exclusive(ctx, func(_ context.Context, d Driver) error {
+			return d.RetireAccount(accountID)
+		})
+	}()
+	select {
+	case err := <-retirement:
+		t.Fatalf("retirement returned %v while a lane task was still running", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if atomic.LoadInt64(&driver.retireCount) != 0 {
+		t.Fatal("retirement ran before the running task left its lane")
 	}
 	release()
 	if _, err := blocking.Await(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := retirement.Await(context.Background()); err != nil {
+	if err := <-retirement; err != nil {
 		t.Fatal(err)
 	}
 	if atomic.LoadInt64(&driver.retireCount) != 1 {

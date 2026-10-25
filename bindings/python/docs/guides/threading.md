@@ -15,6 +15,24 @@ builder:
   account are never concurrent). Sequential cross-thread invocation is
   always safe.
 
+## Exclusive operations
+
+A few rare operations change state that every account reads:
+`register_group`, `unregister_group`, `set_group_currency`, and
+`clear_group_currency` on `engine.accounts()`, and the Spot Funds retune
+`spot_funds` and `spot_funds_pnl_bounds_killswitch` on `engine.configure()`.
+
+- Under `full_sync()` the engine orders each of them itself.
+- Under `no_sync()` and `account_sync()` the engine takes no lock for
+  them, so ordinary calls pay nothing. Run each with no other call on the
+  engine in flight on any thread; breaking that rule is undefined behavior.
+  Moving an account between groups is `unregister_group` followed by
+  `register_group`: run both in one such stretch.
+
+Under `account_sync()`, policy callbacks for distinct accounts may run
+concurrently, so a custom policy synchronizes any state of its own that is
+not keyed by account.
+
 ## Recommended default
 
 Prefer `no_sync()` when the embedding does not explicitly work with multiple

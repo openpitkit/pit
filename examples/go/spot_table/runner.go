@@ -677,7 +677,9 @@ func RunAsync(
 }
 
 // registerGroupsAsync registers every aggregated GROUP membership on the async
-// engine and awaits the registrations before any dependent row is submitted.
+// engine before any dependent row is submitted. Group membership is an
+// exclusive engine operation, so all registrations run in one Exclusive
+// section.
 func registerGroupsAsync(
 	ctx context.Context,
 	engine *asyncengine.AsyncEngine,
@@ -685,22 +687,31 @@ func registerGroupsAsync(
 	report *Report,
 ) *Failure {
 	groups.countInReport(report)
-	accountsView := engine.Accounts()
-	for _, label := range groups.order {
-		groupID, err := accountGroupID(label)
-		if err != nil {
-			return &Failure{Row: groups.firstRow(label), Message: err.Error()}
-		}
-		if _, err := accountsView.RegisterGroup(
-			ctx, groups.members[label], groupID,
-		).Await(ctx); err != nil {
-			return &Failure{
-				Row:     groups.firstRow(label),
-				Message: "register group: " + err.Error(),
+	// failedLabel names the group being registered when the section fails;
+	// it stays empty when the section itself could not start.
+	failedLabel := ""
+	err := engine.Exclusive(ctx, func(_ context.Context, driver asyncengine.Driver) error {
+		accountsView := driver.Accounts()
+		for _, label := range groups.order {
+			failedLabel = label
+			groupID, err := accountGroupID(label)
+			if err != nil {
+				return err
+			}
+			if err := accountsView.RegisterGroup(groups.members[label], groupID); err != nil {
+				return fmt.Errorf("register group: %w", err)
 			}
 		}
+		failedLabel = ""
+		return nil
+	})
+	if err == nil {
+		return nil
 	}
-	return nil
+	if failedLabel == "" {
+		return &Failure{Message: "register groups: " + err.Error()}
+	}
+	return &Failure{Row: groups.firstRow(failedLabel), Message: err.Error()}
 }
 
 // asyncStep is a row submitted to the async engine, paired with the

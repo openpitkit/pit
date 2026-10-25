@@ -163,6 +163,12 @@ impl<KeyBound: 'static> LockingPolicyFactory for IndexLocking<KeyBound> {
         }
     }
 
+    /// The account-sync contract makes the caller run each transition with no
+    /// other call on the engine in flight.
+    fn serializes_state_transitions(&self) -> bool {
+        false
+    }
+
     fn new_shared<T: 'static>(value: T) -> IndexShared<T> {
         IndexShared(std::sync::Arc::new(value), std::marker::PhantomData)
     }

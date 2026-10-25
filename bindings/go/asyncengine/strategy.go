@@ -69,13 +69,13 @@ type queuedTask struct {
 	enqueuedAt time.Time
 }
 
-// submitFailureCleanupEntry is one queued handle release. admittedFence is
-// the value of q.admitted when the entry was queued: the entry runs only once
-// q.settled has caught up with it, so the release stays behind lane work that
-// was already admitted and cannot be held back by work admitted later.
+// submitFailureCleanupEntry is one mandatory backlog entry. admittedCutoff is
+// its immutable admission boundary. settleTarget also counts later abandoned
+// admissions, so they cannot move the entry ahead of accepted lane work.
 type submitFailureCleanupEntry struct {
 	task            queuedTask
-	admittedFence   int64
+	admittedCutoff  int64
+	settleTarget    int64
 	waitSubmitFence bool
 }
 
@@ -101,7 +101,8 @@ type submitFailureCleanupEntry struct {
 // admitted counts every task reserved for ch, settled counts every one of
 // them that has been handled or abandoned. Both strategies maintain them,
 // because a shard carries several accounts and a cleanup there must not wait
-// for the whole shard to fall idle.
+// for the whole shard to fall idle. Each backlog entry discounts abandonments
+// admitted after its cutoff by raising its settle target under mandatoryMu.
 type keyQueue struct {
 	ch   chan queuedTask
 	quit chan struct{}
@@ -145,8 +146,8 @@ func (q *keyQueue) lastActiveAt() time.Time {
 	return time.Unix(0, q.lastActive.Load())
 }
 
-// settle records that a task reserved by admitTask has been handled, aborted,
-// or given up on. It is what releases mandatory cleanup queued behind it.
+// settle records that a task reserved by admitTask has been handled or aborted.
+// It is what releases mandatory cleanup queued behind it.
 func (q *keyQueue) settle() {
 	q.settled.Add(1)
 }
@@ -195,6 +196,10 @@ const (
 	routingKeyAccount routingKeyKind = iota
 	routingKeyAccountGroup
 	routingKeyEngineWide
+	// routingKeyExclusive marks the barrier tasks of an Exclusive section.
+	// No producer routes by it, so a barrier never fences a producer, and
+	// observers never see it.
+	routingKeyExclusive
 )
 
 type routingKey struct {
@@ -222,6 +227,8 @@ type strategy interface {
 		onFailure func(error),
 	) error
 	scheduleSubmitFailureCleanup(key routingKey, cleanup func())
+	// exclusive runs run with every lane stopped; see AsyncEngine.Exclusive.
+	exclusive(ctx context.Context, run func()) error
 
 	stopGraceful(ctx context.Context) error
 	stopHard(ctx context.Context) error
@@ -255,6 +262,14 @@ type base struct {
 	lifecycleCleanupDone   chan struct{}
 	lifecycleCleanupCount  int
 	lifecycleCleanupSealed bool
+	// activeSection is the Exclusive section in progress, or nil. It is written
+	// under lifecycleCleanupMu, and Dynamic also holds s.mu for the write, so
+	// it may be read under either lock.
+	activeSection *exclusiveSection
+	// exclusiveTurn admits one Exclusive section at a time.
+	exclusiveTurn chan struct{}
+	// sections counts the Exclusive sections registered before stop.
+	sections sync.WaitGroup
 	// observerActive is false when cfg.observer is the shared no-op, letting
 	// the hot path skip the per-task timestamps the observer would discard.
 	observerActive bool
@@ -284,6 +299,7 @@ func newBase(cfg baseConfig, tracksIdle bool) base {
 		observerActive: cfg.observer != noopObserver,
 		tracksIdle:     tracksIdle,
 		submitFenceCh:  make(chan struct{}),
+		exclusiveTurn:  make(chan struct{}, 1),
 		stopCh:         make(chan struct{}),
 		hardStopCh:     make(chan struct{}),
 	}
@@ -404,7 +420,7 @@ func (b *base) sendToQueue(
 	// The task must be admitted before the send so cleanup never observes a
 	// false-idle queue and never runs ahead of a task already on its way in.
 	// A failed send settles the admission on the way out.
-	b.admitTask(q)
+	ticket := b.admitTask(q)
 
 	// Fast path: try a non-blocking send first.
 	select {
@@ -433,14 +449,14 @@ func (b *base) sendToQueue(
 			b.cfg.observer.OnEnqueue(key.observerAccountID(), len(q.ch))
 			return nil
 		case <-quit:
-			b.unmarkSent(q)
+			b.unmarkSent(q, ticket)
 			return errQueueRetired
 		case <-ctx.Done():
-			b.unmarkSent(q)
+			b.unmarkSent(q, ticket)
 			b.cfg.observer.OnSubmitCancelled(key.observerAccountID(), ctx.Err())
 			return ctx.Err()
 		case <-b.stopCh:
-			b.unmarkSent(q)
+			b.unmarkSent(q, ticket)
 			return ErrStopped
 		case <-tick:
 			elapsed := time.Since(start)
@@ -509,7 +525,13 @@ func (b *base) worker(q *keyQueue) {
 	for {
 		qt, mandatoryReady, waitSubmitFence := b.takeMandatoryCleanup(q)
 		if mandatoryReady {
-			b.handleTask(q, qt)
+			// Section barriers arrive only through the backlog, so ordinary
+			// channel tasks never pay for telling them apart.
+			if qt.key.kind == routingKeyExclusive {
+				b.handleBarrier(q, qt)
+			} else {
+				b.handleTask(q, qt)
+			}
 			continue
 		}
 		if channelClosed || laneRetired {
@@ -577,6 +599,19 @@ func (b *base) enqueueSubmitFailureCleanup(
 	if b.observerActive {
 		qt.enqueuedAt = time.Now()
 	}
+	return b.enqueueMandatory(q, qt, waitSubmitFence, true)
+}
+
+// enqueueMandatory appends qt to q's mandatory backlog behind accepted lane
+// work and wakes the worker; notify reports the enqueue to the observer. An
+// in-flight submit may land on either side. It refuses a lane that has been
+// retired or whose worker has exited.
+func (b *base) enqueueMandatory(
+	q *keyQueue,
+	qt queuedTask,
+	waitSubmitFence bool,
+	notify bool,
+) bool {
 	q.mandatoryMu.Lock()
 	if q.retired || q.workerExited {
 		q.mandatoryMu.Unlock()
@@ -588,17 +623,21 @@ func (b *base) enqueueSubmitFailureCleanup(
 	if q.mandatoryProgress == nil {
 		q.mandatoryProgress = make(chan struct{})
 	}
+	cutoff := q.admitted.Load()
 	q.mandatory = append(q.mandatory, submitFailureCleanupEntry{
 		task:            qt,
-		admittedFence:   q.admitted.Load(),
+		admittedCutoff:  cutoff,
+		settleTarget:    cutoff,
 		waitSubmitFence: waitSubmitFence,
 	})
 	q.mandatoryMu.Unlock()
 	b.markSent(q)
-	b.cfg.observer.OnEnqueue(key.observerAccountID(), len(q.ch))
 	select {
 	case q.mandatoryWake <- struct{}{}:
 	default:
+	}
+	if notify {
+		b.cfg.observer.OnEnqueue(qt.key.observerAccountID(), len(q.ch))
 	}
 	return true
 }
@@ -633,16 +672,16 @@ func (b *base) takeMandatoryCleanup(
 			// Producers registered before stop have all admitted their work
 			// by now, so the release owes that work an ordering too.
 			entry.waitSubmitFence = false
-			entry.admittedFence = q.admitted.Load()
+			entry.admittedCutoff = q.admitted.Load()
+			entry.settleTarget = entry.admittedCutoff
 			q.mandatory[0] = entry
 		default:
 			return queuedTask{}, false, true
 		}
 	}
-	// Wait for the lane work admitted before the entry, and only for that:
-	// tasks admitted afterwards, including those of unrelated accounts on a
-	// shared shard, cannot delay the release.
-	if q.settled.Load() < entry.admittedFence {
+	// Later abandonments raise the target with settled, so only settlements
+	// within the admission boundary or from accepted tasks advance the entry.
+	if q.settled.Load() < entry.settleTarget {
 		return queuedTask{}, false, false
 	}
 	q.mandatory[0] = submitFailureCleanupEntry{}
@@ -675,6 +714,22 @@ func (b *base) handleTask(q *keyQueue, qt queuedTask) {
 	started := time.Now()
 	qt.task.run()
 	b.cfg.observer.OnComplete(qt.key.observerAccountID(), time.Since(started))
+	if b.tracksIdle {
+		q.touch()
+	}
+}
+
+// handleBarrier runs an Exclusive section barrier taken from the backlog. It
+// stays out of observer metrics, and a hard stop aborts it instead.
+func (b *base) handleBarrier(q *keyQueue, qt queuedTask) {
+	if b.tracksIdle {
+		defer q.pending.Add(-1)
+	}
+	if b.hardStopped() {
+		qt.task.abort(ErrStopped)
+		return
+	}
+	qt.task.run()
 	if b.tracksIdle {
 		q.touch()
 	}
@@ -734,25 +789,43 @@ func (b *base) waitWorkers(ctx context.Context) error {
 // A successful stop cannot return while cleanup registered before its final
 // sealing point is still running.
 func (b *base) runLifecycleCleanup(cleanup func()) {
-	if !b.beginLifecycleCleanup() {
+	switch b.beginLifecycleCleanup(cleanup) {
+	case lifecycleCleanupPostponed:
+		return
+	case lifecycleCleanupUntracked:
 		cleanup()
 		return
+	case lifecycleCleanupTracked:
 	}
 	defer b.endLifecycleCleanup()
 	cleanup()
 }
 
-func (b *base) beginLifecycleCleanup() bool {
+type lifecycleCleanupAdmission uint8
+
+const (
+	lifecycleCleanupTracked lifecycleCleanupAdmission = iota
+	// lifecycleCleanupUntracked: registration is sealed by a completed stop.
+	lifecycleCleanupUntracked
+	// lifecycleCleanupPostponed: an Exclusive section took the cleanup.
+	lifecycleCleanupPostponed
+)
+
+func (b *base) beginLifecycleCleanup(cleanup func()) lifecycleCleanupAdmission {
 	b.lifecycleCleanupMu.Lock()
 	defer b.lifecycleCleanupMu.Unlock()
 	if b.lifecycleCleanupSealed {
-		return false
+		return lifecycleCleanupUntracked
+	}
+	if section := b.activeSection; section != nil {
+		section.postpone(cleanup)
+		return lifecycleCleanupPostponed
 	}
 	if b.lifecycleCleanupCount == 0 {
 		b.lifecycleCleanupDone = make(chan struct{})
 	}
 	b.lifecycleCleanupCount++
-	return true
+	return lifecycleCleanupTracked
 }
 
 func (b *base) endLifecycleCleanup() {
@@ -817,14 +890,15 @@ func (b *base) signalStopOnce() {
 	})
 }
 
-// admitTask reserves lane capacity for a task about to enter q.ch. It runs
-// before the send so idle cleanup cannot see a false-idle queue and mandatory
-// cleanup cannot run ahead of a task already on its way in.
-func (b *base) admitTask(q *keyQueue) {
-	q.admitted.Add(1)
+// admitTask returns the ticket of a task about to enter q.ch. Reserving before
+// the send prevents false-idle retirement and orders abandonment against each
+// mandatory entry's admission cutoff.
+func (b *base) admitTask(q *keyQueue) int64 {
+	ticket := q.admitted.Add(1)
 	if b.tracksIdle {
 		q.pending.Add(1)
 	}
+	return ticket
 }
 
 // markSent records that a task was accepted into q after a successful send.
@@ -839,11 +913,26 @@ func (b *base) markSent(q *keyQueue) {
 // unmarkSent settles the admission when the send did not place a task into
 // q.ch (ctx expiry, stop, or queue retirement). Dynamic callers invoke it
 // under q.gate.RLock so the q.pending decrement is ordered against cleanup's
-// WLock read; Sharded does not track q.pending.
-func (b *base) unmarkSent(q *keyQueue) {
-	q.settle()
+// WLock read; Sharded does not track q.pending. Later abandonments raise each
+// entry's target together with settled, then wake a worker it may release.
+func (b *base) unmarkSent(q *keyQueue, ticket int64) {
+	q.mandatoryMu.Lock()
+	q.settled.Add(1)
+	for i := range q.mandatory {
+		if ticket > q.mandatory[i].admittedCutoff {
+			q.mandatory[i].settleTarget++
+		}
+	}
+	wake := len(q.mandatory) != 0
+	q.mandatoryMu.Unlock()
 	if b.tracksIdle {
 		q.pending.Add(-1)
+	}
+	if wake {
+		select {
+		case q.mandatoryWake <- struct{}{}:
+		default:
+		}
 	}
 }
 

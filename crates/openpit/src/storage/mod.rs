@@ -98,6 +98,7 @@
 
 mod builder;
 mod config_cell;
+mod engine_wide;
 mod index_flag;
 mod key_bound;
 mod policies;
@@ -110,6 +111,7 @@ mod tests;
 
 pub use builder::StorageBuilder;
 pub use config_cell::{ArcSwapConfigCell, ConfigCell, LocalConfigCell};
+pub(crate) use engine_wide::EngineWideStorage;
 pub use index_flag::IndexFlag;
 pub use key_bound::{AnyKey, CreateStorageFor, IndexKeyBound};
 pub use policies::{FullLocking, IndexLocking, NoLocking};

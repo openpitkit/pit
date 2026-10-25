@@ -26,6 +26,7 @@
 #include "openpit/model/model.hpp"
 #include "openpit/param/account_id.hpp"
 #include "openpit/pretrade/decision.hpp"
+#include "openpit/pretrade/policies.hpp"
 
 #include <openpit.h>
 
@@ -66,6 +67,15 @@
 // `AsyncDropCopyOperation`. Their follow-up calls (`Execute`, `Commit`,
 // `Rollback`, `Close`, ...) re-enter the same per-account queue, preserving the
 // AccountSync invariant across the start->execute->finalize boundary.
+//
+// EXCLUSIVE OPERATIONS. Account-group membership (`RegisterGroup`,
+// `UnregisterGroup`), group currency (`SetGroupCurrency`,
+// `ClearGroupCurrency`), and the SpotFunds retune (the `Configurator` methods
+// `SpotFunds`, `SpotFundsPnlBoundsKillSwitch`, `SpotFundsGlobalLimitMode`,
+// `SpotFundsAccountLimitMode`, `SpotFundsPositionLimit`, and
+// `SpotFundsAccountGroupLimitMode`) change state that every account reads.
+// They have no queue of their own: run them through the driver that
+// `Exclusive` hands its callback, while every lane is stopped.
 //
 // RESULT SHAPES. The futures carry the same values the synchronous engine
 // returns. Because `pretrade::Request`, `pretrade::Reservation`,
@@ -153,6 +163,10 @@ class EngineAdapter {
     return m_engine->Accounts();
   }
 
+  [[nodiscard]] ::openpit::Configurator Configure() const noexcept {
+    return m_engine->Configure();
+  }
+
  private:
   const ::openpit::Engine* m_engine;
 };
@@ -228,6 +242,34 @@ struct AdjustmentOutcome {
 };
 
 namespace detail {
+
+// The caller tests the native handle before entering this cold path.
+template <typename Handle, typename Driver, typename SerializationCheck>
+void ReleaseImplicitHandle(Handle& handle, AsyncEngine<Driver>& engine,
+                           ::openpit::param::AccountId accountId,
+                           SerializationCheck serializedHere) noexcept {
+  if (!RunningInlineCleanup() && serializedHere()) {
+    handle = Handle();
+    return;
+  }
+  const auto owned = std::make_shared<Handle>(std::move(handle));
+  try {
+    // Inside an inline cleanup, apply this rule again once that cleanup has
+    // dropped its fence.
+    if (RunningInlineCleanup()) {
+      InlineCleanupPending().routes.emplace_back(
+          [owned, &engine, accountId, serializedHere] {
+            ReleaseImplicitHandle(*owned, engine, accountId, serializedHere);
+          });
+      return;
+    }
+    // Keep our copy alive until hand-off succeeds or terminate is called.
+    (void)engine.ScheduleMandatoryCleanup(accountId,
+                                          [owned] { *owned = Handle(); });
+  } catch (...) {
+    std::terminate();
+  }
+}
 
 enum class AsyncHandleState { Open, Finalizing, Closed };
 
@@ -416,6 +458,15 @@ void CompleteMandatoryCleanup(PromiseType promise, Error originalError,
 // execution, so that finalization re-enters the same per-account queue as the
 // call that produced it, preserving AccountSync through finalization. Obtained
 // from an `ExecuteOutcome`; held by `shared_ptr`.
+// The non-null engine must outlive every reference, including the last
+// release; violating that lifetime is undefined behavior. An unclosed last
+// release rolls back inline on the section thread or its account's worker;
+// otherwise it queues behind accepted lane work, or runs under the account
+// fence when the account has no worker. A release made while the thread runs
+// an inline cleanup is routed on that thread after the enclosing cleanup has
+// dropped the fence it holds. Off-thread releases during a section wait until
+// its callback ends. Release never creates a lane or thread; a hand-off failure
+// terminates.
 //
 // Like the synchronous reservation, misuse (commit after close, double commit)
 // is a programmer error. The async layer does not invent a failure mode the
@@ -439,6 +490,20 @@ class AsyncReservation
         m_reservation(std::move(reservation)),
         m_engine(engine),
         m_accountId(accountId) {}
+
+  // The engine must be non-null and outlive the last reference's release.
+  // An unclosed handle rolls back inline if this thread serializes its
+  // account; otherwise cleanup is ordered through the engine, after any
+  // enclosing inline cleanup has dropped its fence. A failed hand-off
+  // terminates before the native handle can unwind off its lane.
+  ~AsyncReservation() {
+    if (m_reservation) {
+      detail::ReleaseImplicitHandle(m_reservation, *m_engine, m_accountId,
+                                    [engine = m_engine, account = m_accountId] {
+                                      return engine->SerializesAccount(account);
+                                    });
+    }
+  }
 
   [[nodiscard]] ::openpit::param::AccountId AccountId() const noexcept {
     return m_accountId;
@@ -563,6 +628,7 @@ class AsyncReservation
 // Wraps the operation lifecycle after `ApplyDropCopy`, so that finalization
 // re-enters the same per-account queue as the call that produced it. Obtained
 // from a `DropCopyOutcome`; held by `shared_ptr`.
+// The engine lifetime and implicit-release rules match `AsyncReservation`.
 //
 // Finalization is idempotent. Snapshot reads distinguish three states. While
 // open, an admitted read completes before native finalization starts. While
@@ -583,6 +649,17 @@ class AsyncDropCopyOperation
         m_operation(std::move(operation)),
         m_engine(engine),
         m_accountId(accountId) {}
+
+  // The engine must be non-null and outlive the last reference's release.
+  // Implicit rollback follows the same account-lane rules as a reservation.
+  ~AsyncDropCopyOperation() {
+    if (m_operation) {
+      detail::ReleaseImplicitHandle(m_operation, *m_engine, m_accountId,
+                                    [engine = m_engine, account = m_accountId] {
+                                      return engine->SerializesAccount(account);
+                                    });
+    }
+  }
 
   [[nodiscard]] ::openpit::param::AccountId AccountId() const noexcept {
     return m_accountId;
@@ -777,14 +854,15 @@ class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
 
 /// \brief Async account-administration view.
 //
-// Account-group and account/group-block administration bound to a
+// Account and account/group-block administration bound to a
 // `TypedAsyncEngine`. Carries no state of its own: every call routes through
-// the parent engine.
+// the parent engine. Account-group membership and group currency are exclusive
+// operations and are not here: run them through `TypedAsyncEngine::Exclusive`.
 //
 // Group-scoped ops carry no account, so they pin to a deterministic queue keyed
 // by the group id. Group ids share the numeric routing space with account ids,
-// which is benign because admin ops are rare and the native layer is
-// concurrency-safe regardless.
+// which is benign because admin ops are rare and under AccountSync the engine
+// keeps its block tables safe for concurrent callers.
 //
 // The engine-wide unblock names neither an account nor a group, so it pins to
 // its own deterministic queue for the same reason.
@@ -793,21 +871,6 @@ class AsyncAccounts {
  public:
   explicit AsyncAccounts(AsyncEngine<Driver>* engine) noexcept
       : m_engine(engine) {}
-
-  // Registers every account into `group`. Resolves with the optional
-  // `AccountGroupError` (set on a domain conflict / reserved group). Returns
-  // `MissingAccountId` when `accounts` is empty.
-  [[nodiscard]] Future<std::optional<::openpit::accounts::AccountGroupError>>
-  RegisterGroup(std::vector<::openpit::param::AccountId> accounts,
-                ::openpit::param::AccountGroupId group,
-                std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0));
-
-  // Removes every account from `group`. Mirrors `RegisterGroup`.
-  [[nodiscard]] Future<std::optional<::openpit::accounts::AccountGroupError>>
-  UnregisterGroup(
-      std::vector<::openpit::param::AccountId> accounts,
-      ::openpit::param::AccountGroupId group,
-      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0));
 
   // Looks up the account-group of `account`, empty when it belongs to none.
   [[nodiscard]] Future<std::optional<::openpit::param::AccountGroupId>> GroupOf(
@@ -916,13 +979,17 @@ class AsyncAccounts {
 // so moving this facade does not invalidate follow-up `AsyncRequest` or
 // `AsyncReservation` wrappers. Move assignment is disabled because replacing a
 // live target could invalidate wrappers produced by that target. The engine
-// must still outlive every wrapper it produced.
+// must still outlive every wrapper it produced, including its last reference's
+// release. Violating that lifetime is undefined behavior. Moving the generic
+// dispatch engine itself invalidates its wrappers; moving this facade keeps
+// that dispatch engine at its stable address.
 //
 // SERIALIZATION. This facade adds whole-pipeline isolation beyond a fully
 // synchronized direct engine. Every operation is routed by account id to one
 // queue drained by one worker, so two complete pipelines for the same account
 // never overlap, and follow-up calls on `AsyncRequest` and `AsyncReservation`
-// re-enter that same queue. Callers need no locking of their own on top.
+// re-enter that same queue. Callers need no locking of their own on top; the
+// exclusive operations run through `Exclusive` instead of a queue.
 template <typename Driver>
 class TypedAsyncEngine {
  public:
@@ -1253,6 +1320,18 @@ class TypedAsyncEngine {
   }
 
   //----------------------------------------------------------------------------
+  // Exclusive sections
+
+  // Runs `fn(driver)` while every lane of this engine is stopped. Mirrors the
+  // generic `AsyncEngine::Exclusive`; the exclusive operations listed at the
+  // top of this header run here.
+  [[nodiscard]] std::optional<Error> Exclusive(
+      const std::function<void(Driver&)>& fn,
+      std::chrono::nanoseconds timeout) {
+    return m_engine->Exclusive(fn, timeout);
+  }
+
+  //----------------------------------------------------------------------------
   // Lifecycle
 
   [[nodiscard]] bool StopGraceful(
@@ -1430,48 +1509,6 @@ template <typename Driver>
           return;
         }
         detail::DetachMandatoryCleanup(*engine, accountId, std::move(cleanup));
-      },
-      timeout);
-}
-
-template <typename Driver>
-[[nodiscard]] Future<std::optional<::openpit::accounts::AccountGroupError>>
-AsyncAccounts<Driver>::RegisterGroup(
-    std::vector<::openpit::param::AccountId> accounts,
-    ::openpit::param::AccountGroupId group, std::chrono::nanoseconds timeout) {
-  using Out = std::optional<::openpit::accounts::AccountGroupError>;
-  if (accounts.empty()) {
-    Promise<Out> promise;
-    Future<Out> future = promise.GetFuture();
-    promise.Fail(detail::MissingAccountId());
-    return future;
-  }
-  const ::openpit::param::AccountId pinned = accounts.front();
-  return m_engine->Call(
-      pinned,
-      [accounts = std::move(accounts), group](Driver& driver) {
-        return driver.Accounts().RegisterGroup(accounts, group);
-      },
-      timeout);
-}
-
-template <typename Driver>
-[[nodiscard]] Future<std::optional<::openpit::accounts::AccountGroupError>>
-AsyncAccounts<Driver>::UnregisterGroup(
-    std::vector<::openpit::param::AccountId> accounts,
-    ::openpit::param::AccountGroupId group, std::chrono::nanoseconds timeout) {
-  using Out = std::optional<::openpit::accounts::AccountGroupError>;
-  if (accounts.empty()) {
-    Promise<Out> promise;
-    Future<Out> future = promise.GetFuture();
-    promise.Fail(detail::MissingAccountId());
-    return future;
-  }
-  const ::openpit::param::AccountId pinned = accounts.front();
-  return m_engine->Call(
-      pinned,
-      [accounts = std::move(accounts), group](Driver& driver) {
-        return driver.Accounts().UnregisterGroup(accounts, group);
       },
       timeout);
 }
@@ -1807,6 +1844,12 @@ class OwnedTypedAsyncEngine {
       ::openpit::param::AccountId accountId, std::function<void()> fn,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     return m_engine.Submit(accountId, std::move(fn), timeout);
+  }
+
+  [[nodiscard]] std::optional<Error> Exclusive(
+      const std::function<void(Driver&)>& fn,
+      std::chrono::nanoseconds timeout) {
+    return m_engine.Exclusive(fn, timeout);
   }
 
   [[nodiscard]] bool StopGraceful(

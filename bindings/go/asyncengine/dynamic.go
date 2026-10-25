@@ -162,6 +162,12 @@ func (s *dynamicStrategy) getOrCreate(
 		q = newKeyQueue(s.cfg.queueCapacity)
 		s.queues[key] = q
 		total = len(s.queues)
+		// A lane created during an Exclusive section starts stopped: its
+		// barrier is the first thing the new worker runs, so creation never
+		// waits for the section.
+		if section := s.activeSection; section != nil && s.enqueueBarrier(q, section) {
+			section.expected.Add(1)
+		}
 		s.workersWG.Add(1)
 		s.mu.Unlock()
 		go s.worker(q)
@@ -320,6 +326,14 @@ func (s *dynamicStrategy) cleanupWithoutLiveLane(
 		s.mu.Unlock()
 		return false
 	}
+	if section := s.activeSection; section != nil {
+		// The release must not run beside the section. The section runs it
+		// before it releases the lanes, so a lane created for this key in the
+		// meantime starts with the barrier and runs its work after it.
+		section.postpone(cleanup)
+		s.mu.Unlock()
+		return true
+	}
 	barrier := make(chan struct{})
 	s.cleanupBarriers[key] = barrier
 	s.mu.Unlock()
@@ -407,6 +421,10 @@ func (s *dynamicStrategy) retireIfIdle(
 ) (removed bool, remaining int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activeSection != nil {
+		// Every snapshotted lane must stay to take its barrier.
+		return false, 0
+	}
 	if cur, ok := s.queues[c.key]; !ok || cur != c.q {
 		return false, 0
 	}
@@ -461,6 +479,9 @@ func (s *dynamicStrategy) stopGraceful(ctx context.Context) error {
 	if err := s.waitWorkers(ctx); err != nil {
 		return err
 	}
+	if err := s.waitSections(ctx); err != nil {
+		return err
+	}
 	return s.finishLifecycleCleanups(ctx)
 }
 
@@ -475,7 +496,58 @@ func (s *dynamicStrategy) stopHard(ctx context.Context) error {
 	if err := s.waitWorkers(ctx); err != nil {
 		return err
 	}
+	if err := s.waitSections(ctx); err != nil {
+		return err
+	}
 	return s.finishLifecycleCleanups(ctx)
+}
+
+func (s *dynamicStrategy) exclusive(ctx context.Context, run func()) error {
+	return s.runExclusive(ctx, s, run)
+}
+
+// installExclusive takes s.mu and then lifecycleCleanupMu, the order every
+// Dynamic slow path that reads the section uses.
+func (s *dynamicStrategy) installExclusive(
+	section *exclusiveSection,
+) ([]*keyQueue, []<-chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lifecycleCleanupMu.Lock()
+	defer s.lifecycleCleanupMu.Unlock()
+	s.activeSection = section
+	// A queue retired before this point was verified empty under its gate,
+	// so its exiting worker makes no engine call and needs no barrier.
+	queues := make([]*keyQueue, 0, len(s.queues))
+	for _, q := range s.queues {
+		if !q.closed.Load() {
+			queues = append(queues, q)
+		}
+	}
+	running := make([]<-chan struct{}, 0, len(s.cleanupBarriers)+1)
+	for _, barrier := range s.cleanupBarriers {
+		running = append(running, barrier)
+	}
+	if s.lifecycleCleanupCount != 0 {
+		running = append(running, s.lifecycleCleanupDone)
+	}
+	return queues, running
+}
+
+func (s *dynamicStrategy) withdrawExclusive(
+	section *exclusiveSection,
+) ([]func(), bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lifecycleCleanupMu.Lock()
+	defer s.lifecycleCleanupMu.Unlock()
+	section.mu.Lock()
+	defer section.mu.Unlock()
+	if deferred := section.takeDeferredLocked(); len(deferred) != 0 {
+		return deferred, false
+	}
+	s.activeSection = nil
+	return nil, true
 }
 
 func (s *dynamicStrategy) stopCleanup() {

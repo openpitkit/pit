@@ -30,9 +30,7 @@ var ErrFinalizationInProgress = errors.New(
 // ErrMissingAccountID is returned when a call carries no account to route it
 // by: from StartPreTrade, ExecutePreTrade, ApplyDropCopy, and
 // ApplyExecutionReport when the supplied order or execution report has no
-// account identifier, and from AsyncAccounts.RegisterGroup and
-// AsyncAccounts.UnregisterGroup or their chain-step counterparts when the
-// accounts slice is empty.
+// account identifier.
 var ErrMissingAccountID = errors.New(
 	"openpit/asyncengine: no account ID to route the call by",
 )
@@ -110,10 +108,17 @@ var ErrChainResultUnavailable = errors.New(
 )
 
 // ErrReentrantLane is returned when an AsyncEngine operation is submitted with
-// a context whose marker stack contains an active chain lane for the target
-// engine, at any stack depth. It avoids waiting on that lane. An unrelated
-// context carries no marker and bypasses this diagnostic.
-var ErrReentrantLane = errors.New("openpit/asyncengine: reentrant chain lane")
+// a context whose marker stack contains an active chain lane or Exclusive
+// section for the target engine, at any stack depth. It avoids waiting on that
+// lane or section. An unrelated context carries no marker and bypasses this
+// diagnostic.
+var ErrReentrantLane = errors.New("openpit/asyncengine: reentrant chain lane or exclusive section")
+
+// ErrExclusiveContext is returned by AsyncEngine.Exclusive for a context that
+// can never be cancelled: the wait for every lane to stop must be bounded.
+var ErrExclusiveContext = errors.New(
+	"openpit/asyncengine: exclusive section needs a cancellable context",
+)
 
 // errQueueRetired is an internal signal that submit should retry against
 // a freshly created queue. Never returned to callers.

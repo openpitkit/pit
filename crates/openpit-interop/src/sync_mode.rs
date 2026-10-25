@@ -66,12 +66,16 @@ impl<T: ?Sized> std::ops::Deref for EngineHandle<T> {
 //   observing `&EngineInner` concurrently see data-race-free state at
 //   runtime even though the Rust type system would conservatively reject
 //   `T: !Sync` shared across threads.
-// - Under `SyncMode::None` and `SyncMode::Account`, the binding caller
-//   serialises per-handle invocation per the SDK threading contract
-//   documented in https://wiki.openpit.dev/Threading-Contract/
-//   and the `SyncMode` enum's variant
-//   docs. Only one binding thread observes `&EngineInner` at a time; no
-//   Sync is needed in practice.
+// - Under `SyncMode::None`, the binding caller keeps the handle on one
+//   thread, so only one binding thread observes `&EngineInner`.
+// - Under `SyncMode::Account`, binding threads may observe `&EngineInner`
+//   concurrently, under the SDK threading contract documented in
+//   https://wiki.openpit.dev/Threading-Contract/ and the `SyncMode` enum's
+//   variant docs: calls for distinct accounts run in parallel, calls for one
+//   account never overlap, and an exclusive operation runs with no other
+//   call in flight. The storage index domain is synchronized; each value is
+//   touched only by its own account's call or by an exclusive operation,
+//   and engine-wide tables write only under the exclusive index.
 //
 // Each engine method takes `&self`; FFI dispatch takes a shared borrow of
 // the handle, so multiple sequential threads observe the same inner state
@@ -197,10 +201,13 @@ pub enum SyncMode {
     /// Sequential cross-thread access is also safe. Use this when the engine
     /// is shared across threads.
     Full = 1,
-    /// Sequential cross-thread access on the same handle is safe; the caller
-    /// pins each account to a single processing chain (one queue or one
-    /// worker at a time). Concurrent invocation on the same handle is not
-    /// supported in this mode.
+    /// Calls for distinct accounts may run concurrently on the same handle;
+    /// the caller pins each account to a single processing chain (one queue
+    /// or one worker at a time), so calls for one account never overlap.
+    /// Exclusive operations - account-group membership, group currency, the
+    /// Spot Funds retune and account retirement - run with no other call on
+    /// the handle in flight; the engine takes no lock for them, so ordinary
+    /// calls pay nothing.
     Account = 2,
 }
 
@@ -334,6 +341,10 @@ impl LockingPolicyFactory for StorageLockingPolicyFactory {
             }
         };
         StorageLockingPolicy { inner }
+    }
+
+    fn serializes_state_transitions(&self) -> bool {
+        self.mode == SyncMode::Full
     }
 
     fn new_config<T: Clone + 'static>(value: T) -> ArcSwapConfigCell<T> {

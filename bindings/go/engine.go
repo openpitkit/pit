@@ -28,8 +28,17 @@
 //   - AccountSync - concurrent invocation on the same handle is safe when the
 //     caller pins each account to a single chain (one queue or one worker at a
 //     time), so calls for the same account are never concurrent. The
-//     asyncengine subpackage provides a ready-made dispatcher; see
+//     exclusive operations - account-group membership, group currency, the
+//     SpotFunds retune, and account retirement - run with no other call on
+//     the handle in flight; the engine takes no lock for them. Custom policy
+//     hooks for distinct accounts may run concurrently, so a custom policy
+//     synchronizes any state of its own that is not keyed by account. The
+//     asyncengine subpackage provides a ready-made dispatcher, with
+//     AsyncEngine.Exclusive for the exclusive operations; see
 //     AccountSyncReadyEngineBuilder.BuildAsync.
+//
+// Under NoSync the exclusive operations need nothing extra; under FullSync
+// the engine orders them after the account-state writes already in flight.
 //
 // Goroutine migration between OS threads during one SDK call is supported.
 // Callbacks invoked by the SDK back into Go may run on a different OS thread
@@ -333,10 +342,12 @@ func (e *Engine) ApplyAccountAdjustment(
 // refusal is still the returned error.
 //
 // Finalize or close every request, reservation, and drop-copy operation for
-// this account first. Do not run operations, configuration, or administration
-// for it concurrently. A pending unexecuted request can be invisible to this
-// call; executing it later acts on the account as new and, after ID reuse, on
-// someone else's account. Do not reuse the ID before this method succeeds.
+// this account first, and submit no new work for it. This is an exclusive
+// operation: under NoSync and AccountSync no other call on the engine may be
+// in flight, as asyncengine.AsyncEngine.Exclusive ensures; retire several
+// accounts in one exclusive stretch. A pending unexecuted request can be
+// invisible to this call; executing it later acts on the account as new and,
+// after ID reuse, on someone else's account. Do not reuse the ID before this method succeeds.
 // After a finalizer failure, never reuse it, even after a later success.
 //
 // A domain failure is a *reject.AccountRetirementError. A finalizer failure

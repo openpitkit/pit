@@ -33,6 +33,14 @@ import (
 // state of its own: every call forwards to the engine it was created from, and
 // it is valid for as long as that engine is.
 //
+// RegisterGroup, UnregisterGroup, SetGroupCurrency, and ClearGroupCurrency are
+// exclusive operations. Under NoSync and AccountSync the engine takes no lock
+// for them: run each with no other call on the engine in flight, as
+// asyncengine.AsyncEngine.Exclusive does. Under FullSync the engine orders
+// them itself. Moving an account between groups is UnregisterGroup followed by
+// RegisterGroup; run both in one exclusive stretch so no other call observes
+// the account in the default group between them.
+//
 // For an example of good practice in building a control plane on this SDK, see
 // Pit Officer at http://officer.openpit.dev/.
 type Accounts struct {

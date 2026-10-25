@@ -193,6 +193,12 @@ class Gate {
     m_cv.notify_all();
   }
 
+  template <typename Rep, typename Period>
+  [[nodiscard]] bool WaitFor(std::chrono::duration<Rep, Period> timeout) {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    return m_cv.wait_for(lock, timeout, [this] { return m_open; });
+  }
+
  private:
   std::mutex m_mutex;
   std::condition_variable m_cv;
@@ -696,6 +702,669 @@ TEST(AsyncEngineSubmit, RunsClosureAndResolvesVoidFuture) {
   EXPECT_EQ(sideEffect.load(), 99);
 
   EXPECT_TRUE(engine.StopGraceful());
+}
+
+//------------------------------------------------------------------------------
+// Exclusive sections
+
+// Generous so a slow machine never turns a positive-direction test into a
+// timeout; the tests that need the timeout to expire pass their own.
+constexpr seconds kSectionTimeout{30};
+
+// One engine per strategy. A Sharded engine has fewer shards than the tests use
+// accounts, so shards carry several accounts.
+[[nodiscard]] ae::AsyncEngine<MockDriver> BuildExclusiveEngine(
+    MockDriver& driver, bool dynamic) {
+  if (dynamic) {
+    return ae::Builder<MockDriver>(driver)
+        .Dynamic()
+        .IdleCleanupAfter(std::chrono::nanoseconds(0))
+        .Build();
+  }
+  return ae::Builder<MockDriver>(driver).Sharded(3).Build();
+}
+
+// Occupies a lane with a task until `release` opens.
+struct BlockedLane {
+  Gate entered;
+  Gate release;
+  ae::Future<std::monostate> done;
+};
+
+void BlockLane(ae::AsyncEngine<MockDriver>& engine, AccountId account,
+               BlockedLane& lane) {
+  lane.done = engine.Submit(account, [&lane] {
+    lane.entered.Open();
+    lane.release.Wait();
+  });
+  ASSERT_TRUE(lane.entered.WaitFor(kAwaitCap));
+}
+
+TEST(AsyncEngineExclusive, RunsWithEveryLaneStopped) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    auto engine = BuildExclusiveEngine(driver, dynamic);
+    std::atomic<int> inFlight{0};
+    std::atomic<int> overlaps{0};
+    std::atomic<int> failures{0};
+    std::atomic<bool> sectionActive{false};
+    std::atomic<bool> stop{false};
+    std::vector<std::thread> submitters;
+    for (std::uint64_t account = 1; account <= 8; ++account) {
+      submitters.emplace_back([&, account] {
+        while (!stop.load()) {
+          const ae::Future<std::monostate> task =
+              engine.Submit(AccountId::FromUint64(account), [&] {
+                inFlight.fetch_add(1);
+                if (sectionActive.load()) {
+                  overlaps.fetch_add(1);
+                }
+                std::this_thread::yield();
+                inFlight.fetch_sub(1);
+              });
+          if (!task.Await(kAwaitCap).has_value()) {
+            failures.fetch_add(1);
+            return;
+          }
+        }
+      });
+    }
+    for (int i = 0; i < 50; ++i) {
+      const std::optional<ae::Error> err = engine.Exclusive(
+          [&](MockDriver&) {
+            sectionActive.store(true);
+            if (inFlight.load() != 0) {
+              overlaps.fetch_add(1);
+            }
+            std::this_thread::yield();
+            sectionActive.store(false);
+          },
+          kSectionTimeout);
+      if (err.has_value()) {
+        ADD_FAILURE() << err->what();
+        break;
+      }
+    }
+    stop.store(true);
+    for (std::thread& submitter : submitters) {
+      submitter.join();
+    }
+    EXPECT_EQ(overlaps.load(), 0) << "lane tasks overlapped a section";
+    EXPECT_EQ(failures.load(), 0);
+    EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+  }
+}
+
+TEST(AsyncEngineExclusive, RunsOnTheCallingThreadWithTheDriver) {
+  MockDriver driver;
+  auto engine = BuildExclusiveEngine(driver, /*dynamic=*/true);
+  const std::thread::id caller = std::this_thread::get_id();
+  bool sameThread = false;
+  MockDriver* seen = nullptr;
+  const std::optional<ae::Error> err = engine.Exclusive(
+      [&](MockDriver& d) {
+        sameThread = std::this_thread::get_id() == caller;
+        seen = &d;
+      },
+      kSectionTimeout);
+  EXPECT_FALSE(err.has_value());
+  EXPECT_TRUE(sameThread);
+  EXPECT_EQ(seen, &driver);
+  EXPECT_TRUE(engine.StopGraceful());
+}
+
+TEST(AsyncEngineExclusive, RefusesANonPositiveTimeout) {
+  MockDriver driver;
+  auto engine = BuildExclusiveEngine(driver, /*dynamic=*/true);
+  bool called = false;
+  EXPECT_THROW((void)engine.Exclusive([&](MockDriver&) { called = true; },
+                                      std::chrono::nanoseconds(0)),
+               openpit::Error);
+  EXPECT_FALSE(called);
+  EXPECT_TRUE(engine.StopGraceful());
+}
+
+TEST(AsyncEngineExclusive, PropagatesTheCallbackExceptionAfterTheLanesResume) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    auto engine = BuildExclusiveEngine(driver, dynamic);
+    ASSERT_TRUE(engine.Submit(kAccountA, [] {}).Await(kAwaitCap).has_value());
+    EXPECT_THROW(
+        (void)engine.Exclusive(
+            [](MockDriver&) { throw std::runtime_error("section failed"); },
+            kSectionTimeout),
+        std::runtime_error);
+    EXPECT_TRUE(engine.Submit(kAccountA, [] {}).Await(kAwaitCap).has_value());
+    EXPECT_TRUE(engine.Submit(kAccountB, [] {}).Await(kAwaitCap).has_value());
+    EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+  }
+}
+
+TEST(AsyncEngineExclusive, RefusesALaneAndASectionOfTheSameEngine) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    auto engine = BuildExclusiveEngine(driver, dynamic);
+
+    std::optional<ae::Error> fromLane;
+    ASSERT_TRUE(engine
+                    .Submit(kAccountA,
+                            [&] {
+                              fromLane = engine.Exclusive(
+                                  [](MockDriver&) {
+                                    ADD_FAILURE() << "a section ran on a lane";
+                                  },
+                                  kSectionTimeout);
+                            })
+                    .Await(kAwaitCap)
+                    .has_value());
+    ASSERT_TRUE(fromLane.has_value());
+    EXPECT_EQ(fromLane->Code(), ae::ErrorCode::ReentrantLane);
+
+    std::optional<ae::Error> nested;
+    const std::optional<ae::Error> outer = engine.Exclusive(
+        [&](MockDriver&) {
+          nested = engine.Exclusive(
+              [](MockDriver&) { ADD_FAILURE() << "a nested section ran"; },
+              kSectionTimeout);
+        },
+        kSectionTimeout);
+    EXPECT_FALSE(outer.has_value());
+    ASSERT_TRUE(nested.has_value());
+    EXPECT_EQ(nested->Code(), ae::ErrorCode::ReentrantLane);
+
+    // The marks end with the section.
+    EXPECT_FALSE(
+        engine.Exclusive([](MockDriver&) {}, kSectionTimeout).has_value());
+    EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+  }
+}
+
+TEST(AsyncEngineExclusive, AllowsASectionOfAnotherEngineFromALane) {
+  MockDriver driver;
+  auto engine = BuildExclusiveEngine(driver, /*dynamic=*/true);
+  auto other = BuildExclusiveEngine(driver, /*dynamic=*/false);
+  bool ran = false;
+  std::optional<ae::Error> err;
+  ASSERT_TRUE(engine
+                  .Submit(kAccountA,
+                          [&] {
+                            err = other.Exclusive(
+                                [&](MockDriver&) {
+                                  ran = true;
+                                  // The lane mark under this section still
+                                  // refuses the first engine.
+                                  const std::optional<ae::Error> inner =
+                                      engine.Exclusive([](MockDriver&) {},
+                                                       kSectionTimeout);
+                                  ASSERT_TRUE(inner.has_value());
+                                  EXPECT_EQ(inner->Code(),
+                                            ae::ErrorCode::ReentrantLane);
+                                },
+                                kSectionTimeout);
+                          })
+                  .Await(kAwaitCap)
+                  .has_value());
+  EXPECT_FALSE(err.has_value());
+  EXPECT_TRUE(ran);
+  EXPECT_TRUE(other.StopGraceful(seconds(10)));
+  EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+}
+
+TEST(AsyncEngineExclusive, HoldsWorkSubmittedDuringTheSection) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    auto engine = BuildExclusiveEngine(driver, dynamic);
+    ASSERT_TRUE(engine.Submit(kAccountA, [] {}).Await(kAwaitCap).has_value());
+    std::atomic<int> ran{0};
+    std::vector<ae::Future<std::monostate>> queued;
+    const std::optional<ae::Error> err = engine.Exclusive(
+        [&](MockDriver&) {
+          // A Dynamic lane created during the section (account C) starts
+          // stopped as well.
+          std::thread submitter([&] {
+            for (const AccountId account : {kAccountA, kAccountC}) {
+              queued.push_back(
+                  engine.Submit(account, [&] { ran.fetch_add(1); }));
+            }
+          });
+          submitter.join();
+          std::this_thread::sleep_for(milliseconds(20));
+          EXPECT_EQ(ran.load(), 0) << "tasks ran during the section";
+        },
+        kSectionTimeout);
+    EXPECT_FALSE(err.has_value());
+    for (const ae::Future<std::monostate>& task : queued) {
+      EXPECT_TRUE(task.Await(kAwaitCap).has_value());
+    }
+    EXPECT_EQ(ran.load(), 2);
+    EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+  }
+}
+
+TEST(AsyncEngineExclusive, TimeoutBeforeEveryLaneStopsReleasesTheLanes) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    auto engine = BuildExclusiveEngine(driver, dynamic);
+    BlockedLane busy;
+    BlockLane(engine, kAccountA, busy);
+    const std::optional<ae::Error> err = engine.Exclusive(
+        [](MockDriver&) { ADD_FAILURE() << "the section ran beside a task"; },
+        milliseconds(50));
+    ASSERT_TRUE(err.has_value());
+    EXPECT_EQ(err->Code(), ae::ErrorCode::SubmitCancelled);
+    if (dynamic) {
+      // The abandoned section left no other lane stopped. A Sharded shard may
+      // carry the busy account too, so only Dynamic gives the other account a
+      // lane of its own.
+      EXPECT_TRUE(engine.Submit(kAccountB, [] {}).Await(kAwaitCap).has_value());
+    }
+    busy.release.Open();
+    EXPECT_TRUE(busy.done.Await(kAwaitCap).has_value());
+    EXPECT_FALSE(
+        engine.Exclusive([](MockDriver&) {}, kSectionTimeout).has_value());
+    EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+  }
+}
+
+TEST(AsyncEngineExclusive, StopDuringPreparationEndsTheSection) {
+  for (const bool dynamic : {false, true}) {
+    for (const bool hard : {false, true}) {
+      SCOPED_TRACE(std::string(dynamic ? "dynamic" : "sharded") +
+                   (hard ? " hard" : " graceful"));
+      MockDriver driver;
+      auto engine = BuildExclusiveEngine(driver, dynamic);
+      BlockedLane busy;
+      BlockLane(engine, kAccountA, busy);
+      std::atomic<bool> called{false};
+      std::optional<ae::Error> sectionErr;
+      std::thread section([&] {
+        sectionErr = engine.Exclusive([&](MockDriver&) { called.store(true); },
+                                      kSectionTimeout);
+      });
+      std::this_thread::sleep_for(milliseconds(20));
+      std::atomic<bool> stopped{false};
+      std::thread stopper([&] {
+        stopped.store(hard ? engine.StopHard(seconds(10))
+                           : engine.StopGraceful(seconds(10)));
+      });
+      section.join();
+      ASSERT_TRUE(sectionErr.has_value());
+      EXPECT_EQ(sectionErr->Code(), ae::ErrorCode::Stopped);
+      EXPECT_FALSE(called.load());
+      busy.release.Open();
+      stopper.join();
+      EXPECT_TRUE(stopped.load());
+      const std::optional<ae::Error> afterStop =
+          engine.Exclusive([](MockDriver&) {}, kSectionTimeout);
+      ASSERT_TRUE(afterStop.has_value());
+      EXPECT_EQ(afterStop->Code(), ae::ErrorCode::Stopped);
+    }
+  }
+}
+
+TEST(AsyncEngineExclusive, StopWaitsForARunningSection) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    std::atomic<bool> released{false};
+    ae::Builder<MockDriver> builder(driver);
+    builder.WithStopUnderlying([&released] { released.store(true); });
+    auto engine =
+        dynamic ? builder.Dynamic().Build() : builder.Sharded(2).Build();
+    Gate inSection;
+    Gate leave;
+    std::optional<ae::Error> sectionErr;
+    std::thread section([&] {
+      sectionErr = engine.Exclusive(
+          [&](MockDriver&) {
+            inSection.Open();
+            leave.Wait();
+            EXPECT_FALSE(released.load())
+                << "the engine was released under a running section";
+          },
+          kSectionTimeout);
+    });
+    ASSERT_TRUE(inSection.WaitFor(kAwaitCap));
+    std::atomic<bool> stopReturned{false};
+    std::thread stopper([&] {
+      EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+      stopReturned.store(true);
+    });
+    std::this_thread::sleep_for(milliseconds(50));
+    EXPECT_FALSE(stopReturned.load());
+    leave.Open();
+    section.join();
+    stopper.join();
+    EXPECT_FALSE(sectionErr.has_value());
+    EXPECT_TRUE(released.load());
+  }
+}
+
+TEST(AsyncEngineExclusive, SectionsRunOneAtATime) {
+  MockDriver driver;
+  auto engine = BuildExclusiveEngine(driver, /*dynamic=*/true);
+  std::atomic<int> active{0};
+  std::atomic<int> overlaps{0};
+  std::atomic<int> failures{0};
+  std::vector<std::thread> sections;
+  for (int i = 0; i < 8; ++i) {
+    sections.emplace_back([&] {
+      for (int j = 0; j < 20; ++j) {
+        const std::optional<ae::Error> err = engine.Exclusive(
+            [&](MockDriver&) {
+              if (active.fetch_add(1) != 0) {
+                overlaps.fetch_add(1);
+              }
+              std::this_thread::yield();
+              active.fetch_sub(1);
+            },
+            kSectionTimeout);
+        if (err.has_value()) {
+          failures.fetch_add(1);
+        }
+      }
+    });
+  }
+  for (std::thread& section : sections) {
+    section.join();
+  }
+  EXPECT_EQ(overlaps.load(), 0);
+  EXPECT_EQ(failures.load(), 0);
+  EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+}
+
+TEST(AsyncEngineExclusive, StopsALaneWithAFullQueue) {
+  MockDriver driver;
+  auto engine = ae::Builder<MockDriver>(driver)
+                    .WithQueueCapacity(1)
+                    .Dynamic()
+                    .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                    .Build();
+  BlockedLane busy;
+  BlockLane(engine, kAccountA, busy);
+  std::atomic<int> ran{0};
+  const ae::Future<std::monostate> queued =
+      engine.Submit(kAccountA, [&] { ran.fetch_add(1); });
+  // The queue is full, so this producer waits for room.
+  ae::Future<std::monostate> blocked;
+  std::thread producer(
+      [&] { blocked = engine.Submit(kAccountA, [&] { ran.fetch_add(1); }); });
+  std::optional<ae::Error> sectionErr;
+  std::thread section([&] {
+    sectionErr = engine.Exclusive(
+        [&](MockDriver&) {
+          EXPECT_GE(ran.load(), 1)
+              << "a task accepted before the section had not run";
+        },
+        kSectionTimeout);
+  });
+  std::this_thread::sleep_for(milliseconds(20));
+  busy.release.Open();
+  section.join();
+  producer.join();
+  EXPECT_FALSE(sectionErr.has_value());
+  EXPECT_TRUE(queued.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(blocked.Await(kAwaitCap).has_value());
+  EXPECT_EQ(ran.load(), 2);
+  EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+}
+
+TEST(AsyncEngineExclusive, PostponesALaneFreeCleanupUntilAfterTheSection) {
+  MockDriver driver;
+  auto engine = ae::Builder<MockDriver>(driver)
+                    .Dynamic()
+                    .MaxQueues(1)
+                    .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                    .Build();
+  ASSERT_TRUE(engine.Submit(kAccountA, [] {}).Await(kAwaitCap).has_value());
+  std::atomic<bool> cleaned{false};
+  ae::Future<std::monostate> cleanup;
+  const std::optional<ae::Error> err = engine.Exclusive(
+      [&](MockDriver&) {
+        // The only queue slot is taken, so this release has no lane.
+        std::thread releaser([&] {
+          cleanup = engine.ScheduleMandatoryCleanup(
+              kAccountB, [&] { cleaned.store(true); });
+        });
+        releaser.join();
+        EXPECT_FALSE(cleaned.load()) << "a lane-free cleanup ran in a section";
+      },
+      kSectionTimeout);
+  EXPECT_FALSE(err.has_value());
+  EXPECT_TRUE(cleaned.load());
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+}
+
+TEST(AsyncEngineExclusive, PostponesAStoppedLaneCleanupUntilAfterTheSection) {
+  MockDriver driver;
+  auto engine = BuildExclusiveEngine(driver, /*dynamic=*/true);
+  std::atomic<bool> cleaned{false};
+  ae::Future<std::monostate> cleanup;
+  std::atomic<bool> stopped{false};
+  std::thread stopper;
+  const std::optional<ae::Error> err = engine.Exclusive(
+      [&](MockDriver&) {
+        stopper = std::thread(
+            [&] { stopped.store(engine.StopGraceful(seconds(10))); });
+        // A refused submit shows the stop was signalled.
+        const auto until = std::chrono::steady_clock::now() + kAwaitCap;
+        bool refused = false;
+        while (!refused && std::chrono::steady_clock::now() < until) {
+          const ae::Future<std::monostate> probe =
+              engine.Submit(kAccountA, [] {});
+          if (probe.Done()) {
+            try {
+              (void)probe.Await();
+            } catch (const ae::Error& error) {
+              refused = error.Code() == ae::ErrorCode::Stopped;
+            }
+          }
+          std::this_thread::sleep_for(milliseconds(1));
+        }
+        ASSERT_TRUE(refused);
+        // No lane exists for account B, so the release would run inline.
+        std::thread releaser([&] {
+          cleanup = engine.ScheduleMandatoryCleanup(
+              kAccountB, [&] { cleaned.store(true); });
+        });
+        releaser.join();
+        EXPECT_FALSE(cleaned.load())
+            << "a stopped-lane cleanup ran in a section";
+      },
+      kSectionTimeout);
+  EXPECT_FALSE(err.has_value());
+  EXPECT_TRUE(cleaned.load());
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+  stopper.join();
+  EXPECT_TRUE(stopped.load());
+}
+
+TEST(AsyncEngineExclusive, RefusesAnExpiredDeadlineOnAnIdleEngine) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    auto engine = BuildExclusiveEngine(driver, dynamic);
+    // Nothing needs waiting for, so the waits return at once; the section
+    // must still refuse once its deadline has passed.
+    bool called = false;
+    const std::optional<ae::Error> err = engine.Exclusive(
+        [&](MockDriver&) { called = true; }, std::chrono::nanoseconds(1));
+    ASSERT_TRUE(err.has_value());
+    EXPECT_EQ(err->Code(), ae::ErrorCode::SubmitCancelled);
+    EXPECT_FALSE(called);
+    EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+  }
+}
+
+TEST(AsyncEngineExclusive, HoldsALaneCreatedWhileLanesStop) {
+  MockDriver driver;
+  auto engine = BuildExclusiveEngine(driver, /*dynamic=*/true);
+  BlockedLane busy;
+  BlockLane(engine, kAccountA, busy);
+  std::atomic<int> ran{0};
+  std::atomic<int> ranAtSection{-1};
+  std::optional<ae::Error> sectionErr;
+  std::thread section([&] {
+    sectionErr = engine.Exclusive(
+        [&](MockDriver&) { ranAtSection.store(ran.load()); }, kSectionTimeout);
+  });
+  std::this_thread::sleep_for(milliseconds(20));
+  // The section is waiting for the busy lane; this lane is born stopped.
+  const ae::Future<std::monostate> created =
+      engine.Submit(kAccountC, [&] { ran.fetch_add(1); });
+  std::this_thread::sleep_for(milliseconds(20));
+  EXPECT_EQ(ran.load(), 0) << "a lane created during preparation ran early";
+  busy.release.Open();
+  section.join();
+  EXPECT_FALSE(sectionErr.has_value());
+  EXPECT_EQ(ranAtSection.load(), 0)
+      << "a lane created during preparation ran beside the section";
+  EXPECT_TRUE(created.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(busy.done.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+}
+
+TEST(AsyncEngineExclusive,
+     AbandonedSectionRunsPostponedReleasesBeforeTheLanes) {
+  MockDriver driver;
+  auto engine = ae::Builder<MockDriver>(driver)
+                    .Dynamic()
+                    .MaxQueues(2)
+                    .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                    .Build();
+  BlockedLane busy;
+  BlockLane(engine, kAccountA, busy);
+  ASSERT_TRUE(engine.Submit(kAccountC, [] {}).Await(kAwaitCap).has_value());
+  std::mutex orderMutex;
+  std::vector<std::string> order;
+  const auto record = [&](std::string event) {
+    const std::lock_guard<std::mutex> lock(orderMutex);
+    order.push_back(std::move(event));
+  };
+  std::optional<ae::Error> sectionErr;
+  std::thread section([&] {
+    sectionErr = engine.Exclusive(
+        [](MockDriver&) { ADD_FAILURE() << "the section ran beside a task"; },
+        milliseconds(300));
+  });
+  std::this_thread::sleep_for(milliseconds(30));
+  const ae::Future<std::monostate> later =
+      engine.Submit(kAccountC, [&] { record("later work"); });
+  Gate releaseStarted;
+  Gate releaseGate;
+  ae::Future<std::monostate> cleanup;
+  std::thread releaser([&] {
+    // Both queue slots are taken, so this release has no lane.
+    cleanup = engine.ScheduleMandatoryCleanup(kAccountB, [&] {
+      record("release");
+      releaseStarted.Open();
+      releaseGate.Wait();
+    });
+  });
+  releaser.join();
+  EXPECT_TRUE(releaseStarted.WaitFor(kAwaitCap))
+      << "the abandoned section did not run its postponed release";
+  // The lanes stay stopped while the release runs.
+  std::this_thread::sleep_for(milliseconds(50));
+  EXPECT_FALSE(later.Done())
+      << "later lane work ran beside a postponed release";
+  releaseGate.Open();
+  section.join();
+  ASSERT_TRUE(sectionErr.has_value());
+  EXPECT_EQ(sectionErr->Code(), ae::ErrorCode::SubmitCancelled);
+  EXPECT_TRUE(later.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+  {
+    const std::lock_guard<std::mutex> lock(orderMutex);
+    EXPECT_EQ(order, (std::vector<std::string>{"release", "later work"}));
+  }
+  busy.release.Open();
+  EXPECT_TRUE(busy.done.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+}
+
+TEST(AsyncEngineExclusive, HardStopKeepsAnAbortedLaneUntilTheSectionEnds) {
+  MockDriver driver;
+  auto engine = ae::Builder<MockDriver>(driver)
+                    .Dynamic()
+                    .MaxQueues(2)
+                    .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                    .Build();
+  BlockedLane busy;
+  BlockLane(engine, kAccountA, busy);
+  ASSERT_TRUE(engine.Submit(kAccountC, [] {}).Await(kAwaitCap).has_value());
+  std::optional<ae::Error> sectionErr;
+  std::thread section([&] {
+    sectionErr = engine.Exclusive(
+        [](MockDriver&) { ADD_FAILURE() << "the section ran beside a task"; },
+        kSectionTimeout);
+  });
+  std::this_thread::sleep_for(milliseconds(30));
+  // Queued behind the busy lane's barrier; the hard stop aborts it.
+  const ae::Future<std::monostate> later = engine.Submit(kAccountA, [] {});
+  Gate releaseStarted;
+  Gate releaseGate;
+  ae::Future<std::monostate> cleanup;
+  std::thread releaser([&] {
+    // Both queue slots are taken, so this release has no lane.
+    cleanup = engine.ScheduleMandatoryCleanup(kAccountB, [&] {
+      releaseStarted.Open();
+      releaseGate.Wait();
+    });
+  });
+  releaser.join();
+  std::atomic<bool> stopped{false};
+  std::thread stopper([&] { stopped.store(engine.StopHard(seconds(10))); });
+  EXPECT_TRUE(releaseStarted.WaitFor(kAwaitCap))
+      << "the stopped section did not run its postponed release";
+  // The busy lane now reaches its barrier, which the hard stop aborts. The
+  // lane must stay held while the section still runs the release.
+  busy.release.Open();
+  std::this_thread::sleep_for(milliseconds(50));
+  EXPECT_FALSE(later.Done()) << "an aborted lane went on beside a release";
+  releaseGate.Open();
+  section.join();
+  stopper.join();
+  ASSERT_TRUE(sectionErr.has_value());
+  EXPECT_EQ(sectionErr->Code(), ae::ErrorCode::Stopped);
+  try {
+    (void)later.Await(kAwaitCap);
+    ADD_FAILURE() << "expected the aborted task to fail with Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(stopped.load());
+}
+
+TEST(AsyncEngineExclusive, BarriersStayOutOfObserverMetrics) {
+  for (const bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic ? "dynamic" : "sharded");
+    MockDriver driver;
+    CountingObserver observer;
+    ae::Builder<MockDriver> builder(driver);
+    builder.WithObserver(observer);
+    auto engine = dynamic ? builder.Dynamic()
+                                .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                                .Build()
+                          : builder.Sharded(2).Build();
+    ASSERT_TRUE(engine.Submit(kAccountA, [] {}).Await(kAwaitCap).has_value());
+    const std::size_t enqueues = observer.Enqueues();
+    const std::size_t completes = observer.Completes();
+    const std::size_t created = observer.Created();
+    EXPECT_FALSE(
+        engine.Exclusive([](MockDriver&) {}, kSectionTimeout).has_value());
+    EXPECT_EQ(observer.Enqueues(), enqueues);
+    EXPECT_EQ(observer.Completes(), completes);
+    EXPECT_EQ(observer.Created(), created);
+    EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+  }
 }
 
 }  // namespace

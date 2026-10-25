@@ -65,11 +65,10 @@
 //     thread boundary through the future; user code observing the future may
 //     run on any thread, so it must not rely on thread-local OS state.
 //
-// No exception escapes a worker thread: `Task::Run`/`Task::Abort` are the only
-// things a worker invokes, and every concrete task contains its exceptions at
-// that boundary - it resolves its future instead of throwing, and swallows
-// whatever a future continuation raises after that resolution. A worker thread
-// therefore never terminates the process via an uncaught exception.
+// Engine closures report callback exceptions through their promises. A failure
+// to report, or any exception escaping the worker, terminates the process.
+// Cleanup scheduling failures before publication propagate to the caller;
+// reporting failures after publication terminate the process.
 //
 // STOP AND BLOCKED PRODUCERS. A graceful stop keeps every worker draining, so a
 // producer blocked on a full queue still makes progress and is allowed to
@@ -78,6 +77,14 @@
 // producers with `ErrorCode::Stopped`. Queues themselves are closed only after
 // every registered producer has left, which is a separate concern from waking
 // them: closing earlier would race a queue one of those producers is creating.
+//
+// EXCLUSIVE SECTIONS. A few engine operations change state that every account
+// reads, and under AccountSync the engine takes no lock for them: they must run
+// with nothing else in flight. `Strategy::Exclusive` provides that. It stops
+// each lane with a barrier task queued behind the work the lane already
+// accepted, keeps off-lane handle releases out of the way, runs the caller's
+// callback on the calling thread, and then lets the lanes continue. Ordinary
+// tasks pay nothing for it: a section touches only slow paths.
 
 namespace openpit::asyncengine {
 
@@ -139,14 +146,12 @@ class ClosureTask final : public Task {
   }
 
  private:
-  // Containment sits at the task boundary the threading contract names rather
-  // than above it, so it holds for every closure the strategy is handed and not
-  // only for the ones a caller happened to wrap. Both closures resolve their
-  // future before returning, so anything still escaping was raised by a
-  // continuation that ran after that resolution and must take down neither the
-  // account lane nor the process.
+  // Future has no continuations. Contain closures that did not handle their
+  // own exceptions; engine closures terminate if their error reporting fails.
   template <typename Body>
   static void Contain(Body&& body) noexcept {
+    // Containment keeps the lane usable for closures without their own handler.
+    // nosemgrep: async-cpp-dropped-exception
     try {
       body();
     } catch (...) {
@@ -158,8 +163,9 @@ class ClosureTask final : public Task {
   AbortFn m_abort;
 };
 
-inline void ResolveMandatoryCleanup(Promise<std::monostate> promise,
-                                    const std::function<void()>& cleanup) {
+inline void ResolveMandatoryCleanup(
+    Promise<std::monostate> promise,
+    const std::function<void()>& cleanup) noexcept {
   try {
     cleanup();
   } catch (const std::exception& ex) {
@@ -198,6 +204,83 @@ struct QueuedTask {
   TaskPtr task;
   OpenPitParamAccountId accountId = 0;
   std::chrono::steady_clock::time_point enqueuedAt{};
+};
+
+// Stamped on an exclusive-section barrier in place of its enqueue time. No
+// regular task carries it, so the worker tells a barrier apart without a field
+// or a call of its own, and keeps barriers out of observer metrics.
+inline constexpr std::chrono::steady_clock::time_point kSectionBarrierStamp =
+    std::chrono::steady_clock::time_point::min();
+
+class Base;
+struct KeyQueue;
+
+// Marks the threads that must not open an exclusive section on a strategy: its
+// lane workers, inline account cleanup, and a section's own thread until its
+// lanes continue. Marks form a per-thread stack, so a section opened on a lane
+// of another engine, or inside another engine's section, keeps the outer marks
+// visible.
+enum class LaneMarkKind { Lane, InlineCleanup };
+
+struct LaneMark {
+  const Base* owner;
+  bool section;
+  const LaneMark* outer;
+  const KeyQueue* queue = nullptr;
+  LaneMarkKind kind = LaneMarkKind::Lane;
+};
+
+[[nodiscard]] inline const LaneMark*& CurrentLaneMark() noexcept {
+  static thread_local const LaneMark* mark = nullptr;
+  return mark;
+}
+
+[[nodiscard]] inline bool RunningInlineCleanup() noexcept {
+  for (const LaneMark* mark = CurrentLaneMark(); mark != nullptr;
+       mark = mark->outer) {
+    if (mark->kind == LaneMarkKind::InlineCleanup) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Implicit handle releases made on a thread while it runs an inline cleanup.
+// They are routed on that thread once the enclosing cleanup has released its
+// account fence, so no release waits for a fence while its thread holds one.
+struct PendingInlineCleanups {
+  std::vector<std::function<void()>> routes;
+  bool draining = false;
+};
+
+[[nodiscard]] inline PendingInlineCleanups& InlineCleanupPending() noexcept {
+  static thread_local PendingInlineCleanups pending;
+  return pending;
+}
+
+// An off-lane handle release that arrived while an exclusive section was
+// installed. Whether or not the callback ran, the section runs it on its own
+// thread before it releases the lanes: its account had no lane when it
+// arrived, and a lane created for it since starts with the section's barrier.
+struct PostponedCleanup {
+  Promise<std::monostate> promise;
+  std::function<void()> cleanup;
+};
+
+// One `Exclusive` call in progress. A lane stops by running a barrier task
+// queued behind the work it already accepted: the barrier counts itself in
+// `parked` and then waits for `released`, so a stopped worker runs nothing else
+// until the section ends. `expected` counts the barriers that must park before
+// the callback runs: one per lane present when the section was installed, plus
+// every Dynamic lane created while it is installed, which starts with its
+// barrier. These fields are guarded by `Base::m_sectionMutex`; `postponed` is
+// guarded by the owning strategy's routing mutex instead.
+struct ExclusiveSection {
+  std::size_t expected = 0;
+  std::size_t parked = 0;
+  bool aborted = false;
+  bool released = false;
+  std::vector<PostponedCleanup> postponed;
 };
 
 // A single per-account-or-shard FIFO queue drained by its own worker thread.
@@ -243,7 +326,8 @@ struct KeyQueue {
   bool closed = false;
   bool retired = false;
   bool workerExited = false;
-  bool deferredWakeRegistered = false;
+  // Guarded by the owning strategy's deferred-registry mutex.
+  bool deferredRegistered = false;
   std::atomic<std::int64_t> lastActive{0};
   std::atomic<std::int64_t> pending{0};
   std::thread worker;
@@ -265,8 +349,14 @@ struct BaseConfig {
 struct WorkerSeams {
   // Runs under the lane mutex, immediately before the worker waits.
   std::function<void()> beforeWorkerWait;
-  // Runs after deferred cleanup publication, before its registration.
-  std::function<void()> afterDeferredPublication;
+  // Runs after deferred queue registration, before cleanup publication.
+  std::function<void()> afterDeferredRegistrationBeforePublication;
+
+  // Cold teardown seam on the joining thread, before a worker is joined.
+  static std::function<void()>& BeforeJoin() {
+    static thread_local std::function<void()> seam;
+    return seam;
+  }
 };
 
 // Outcome of a single `SendToQueue` attempt.
@@ -289,6 +379,61 @@ struct SendResult {
 // skips entirely.
 class Base {
  public:
+  class InlineCleanupMark {
+   public:
+    explicit InlineCleanupMark(const Base& base) noexcept
+        : m_mark{&base, false, CurrentLaneMark(), nullptr,
+                 LaneMarkKind::InlineCleanup} {
+      CurrentLaneMark() = &m_mark;
+    }
+    // A route that fails here has no caller left to report to: terminate.
+    ~InlineCleanupMark() noexcept {
+      CurrentLaneMark() = m_mark.outer;
+      auto& pending = InlineCleanupPending();
+      if (RunningInlineCleanup() || pending.draining) {
+        return;
+      }
+      pending.draining = true;
+      while (!pending.routes.empty()) {
+        std::vector<std::function<void()>> routes;
+        routes.swap(pending.routes);
+        for (auto& route : routes) {
+          route();
+        }
+      }
+      pending.draining = false;
+    }
+    InlineCleanupMark(const InlineCleanupMark&) = delete;
+    InlineCleanupMark& operator=(const InlineCleanupMark&) = delete;
+
+   private:
+    LaneMark m_mark;
+  };
+
+  // True on this strategy's section thread, or on the worker of `queue`.
+  [[nodiscard]] bool SerializesQueueOnThisThread(
+      const KeyQueue* queue) const noexcept {
+    for (const LaneMark* mark = CurrentLaneMark(); mark != nullptr;
+         mark = mark->outer) {
+      if (mark->owner == this &&
+          (mark->section || (queue != nullptr && mark->queue == queue))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // The lane this thread works for this strategy, or null off its workers.
+  [[nodiscard]] const KeyQueue* WorkerQueueOnThisThread() const noexcept {
+    for (const LaneMark* mark = CurrentLaneMark(); mark != nullptr;
+         mark = mark->outer) {
+      if (mark->owner == this && mark->queue != nullptr) {
+        return mark->queue;
+      }
+    }
+    return nullptr;
+  }
+
   Base(const BaseConfig& cfg, bool tracksIdle, WorkerSeams seams)
       : m_observer(cfg.observer != nullptr ? cfg.observer : SharedNoop()),
         m_queueCapacity(cfg.queueCapacity > 0 ? cfg.queueCapacity
@@ -305,6 +450,47 @@ class Base {
   Base& operator=(const Base&) = delete;
 
  protected:
+  // The account fence of every cleanup run on its caller's thread, in both
+  // strategies; Dynamic also guards its lane routing with this mutex.
+  std::mutex m_mutex;
+  std::condition_variable m_routeCv;
+  std::unordered_set<OpenPitParamAccountId> m_cleanupAccounts;
+
+  struct CleanupAccountRelease {
+    Base& strategy;
+    OpenPitParamAccountId accountId;
+
+    ~CleanupAccountRelease() noexcept {
+      {
+        std::lock_guard<std::mutex> lock(strategy.m_mutex);
+        strategy.m_cleanupAccounts.erase(accountId);
+      }
+      strategy.m_routeCv.notify_all();
+    }
+  };
+
+  void ResolveFencedCleanup(OpenPitParamAccountId accountId,
+                            Promise<std::monostate> promise,
+                            const std::function<void()>& cleanup) {
+    // Release the fence before the mark drains nested implicit releases.
+    const InlineCleanupMark mark{*this};
+    const CleanupAccountRelease release{*this, accountId};
+    ResolveMandatoryCleanup(std::move(promise), cleanup);
+  }
+
+  void CleanupAfterWorkerExit(OpenPitParamAccountId accountId,
+                              Promise<std::monostate> promise,
+                              const std::function<void()>& cleanup) {
+    {
+      std::unique_lock<std::mutex> lock(m_mutex);
+      m_routeCv.wait(lock, [this, accountId] {
+        return m_cleanupAccounts.find(accountId) == m_cleanupAccounts.end();
+      });
+      m_cleanupAccounts.insert(accountId);
+    }
+    ResolveFencedCleanup(accountId, std::move(promise), cleanup);
+  }
+
   class ProducerGuard {
    public:
     explicit ProducerGuard(Base& base)
@@ -359,6 +545,8 @@ class Base {
 
   template <typename Callback>
   void Notify(Callback&& callback) const noexcept {
+    // Observer failures cannot change dispatch.
+    // nosemgrep: async-cpp-dropped-exception
     try {
       callback(*m_observer);
     } catch (...) {
@@ -371,7 +559,94 @@ class Base {
   }
 
   [[nodiscard]] bool HardStopped() const {
-    return m_hardStop.load(std::memory_order_acquire);
+    return (m_slowPaths.load(std::memory_order_acquire) & kHardStopBit) != 0;
+  }
+
+  // Implements `Strategy::Exclusive` for both strategies. `Host` is the
+  // concrete strategy, which supplies the part that depends on its routing:
+  //   - `InstallExclusive(section)` publishes the section to the strategy's
+  //     slow paths and returns the lanes that need a barrier;
+  //   - `AwaitRunningCleanups(deadline)` waits for the off-lane handle releases
+  //     that started before the section was installed;
+  //   - `WithdrawExclusive(section, postponed)` unpublishes the section unless
+  //     it holds postponed releases; then it moves them into `postponed` and
+  //     keeps the section published, so none can slip past the drain.
+  template <typename Host>
+  [[nodiscard]] std::optional<Error> RunExclusive(
+      Host& host, std::chrono::steady_clock::time_point deadline,
+      const std::function<void()>& run) {
+    if (MarkedOnThisThread(/*sectionOnly=*/false)) {
+      return Error(ErrorCode::ReentrantLane,
+                   "async exclusive section requested from a lane or a section "
+                   "of the same engine");
+    }
+    if (std::optional<Error> refused = TakeSectionTurn(deadline)) {
+      return refused;
+    }
+    const SectionTurn turn(*this);
+    // A section is a producer: stop refuses it once signalled, and otherwise
+    // waits for it before closing any lane.
+    const ProducerGuard producer(*this);
+    if (!producer) {
+      return Error(ErrorCode::Stopped, "async engine is stopped");
+    }
+    const auto section = std::make_shared<ExclusiveSection>();
+    const std::vector<KeyQueuePtr> queues = host.InstallExclusive(section);
+    // Declared before `mark`, so the mark is cleared before the lanes go.
+    const SectionRelease release(*this, *section);
+    std::optional<SectionMark> mark;
+    std::optional<Error> error;
+    std::exception_ptr failure;
+    try {
+      error = StopLanes(host, section, queues, deadline);
+      if (!error.has_value()) {
+        mark.emplace(*this);
+        run();
+      }
+    } catch (...) {
+      failure = std::current_exception();
+    }
+    // Whether or not the callback ran, the postponed releases run here while
+    // no lane can start later work for their accounts, and new ones keep
+    // landing in the section until it can be withdrawn empty. The lanes go
+    // only then. Reporting or withdrawal failures terminate.
+    std::vector<PostponedCleanup> postponed;
+    while (!host.WithdrawExclusive(*section, postponed)) {
+      for (PostponedCleanup& entry : postponed) {
+        ResolveMandatoryCleanup(std::move(entry.promise), entry.cleanup);
+      }
+      postponed.clear();
+    }
+    if (failure) {
+      std::rethrow_exception(failure);
+    }
+    return error;
+  }
+
+  // Gives a lane created during a section its barrier before its worker
+  // starts, so the lane starts stopped and creation never waits for the
+  // section. The count is raised before the worker can park, keeping the
+  // section from running its callback while an older lane still works.
+  // Returns whether the barrier was counted.
+  [[nodiscard]] bool BarrierNewLane(
+      const KeyQueuePtr& q, const std::shared_ptr<ExclusiveSection>& section) {
+    if (!AppendBarrier(q, section)) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(m_sectionMutex);
+    ++section->expected;
+    return true;
+  }
+
+  // Undoes a counted `BarrierNewLane` for a lane whose worker failed to start;
+  // the lane goes away with the barrier never handled.
+  void ForgetNewLaneBarrier(ExclusiveSection& section) {
+    m_slowPaths.fetch_sub(kBarrierUnit, std::memory_order_acq_rel);
+    {
+      std::lock_guard<std::mutex> lock(m_sectionMutex);
+      --section.expected;
+    }
+    m_sectionCv.notify_all();
   }
 
   // Sends `task` into `q`, blocking with periodic slow-submit notifications
@@ -484,7 +759,7 @@ class Base {
   // Outcome of appending mandatory cleanup to one lane.
   enum class CleanupAppend {
     Queued,    // the lane worker runs it after the work it already accepted.
-    Retired,   // Dynamic only: recreate the lane and retry there.
+    Retired,   // Dynamic only: retry routing without creating a lane.
     NoWorker,  // the lane has no worker left; the caller must run it itself.
   };
 
@@ -531,8 +806,7 @@ class Base {
   }
 
   // Queues cleanup on `q`. Returns true when the lane retired and the caller
-  // must retry against a fresh one. Once the worker no longer accepts lane
-  // work, no operation can overlap the immediate caller-thread cleanup.
+  // must retry routing. Without a worker, cleanup runs under the account fence.
   [[nodiscard]] bool ScheduleMandatoryCleanupOn(
       const KeyQueuePtr& q, OpenPitParamAccountId accountId,
       Promise<std::monostate> promise, const std::function<void()>& cleanup) {
@@ -540,7 +814,7 @@ class Base {
       case CleanupAppend::Retired:
         return true;
       case CleanupAppend::NoWorker:
-        ResolveMandatoryCleanup(std::move(promise), cleanup);
+        CleanupAfterWorkerExit(accountId, std::move(promise), cleanup);
         break;
       case CleanupAppend::Queued:
         break;
@@ -562,9 +836,13 @@ class Base {
       queued.enqueuedAt = std::chrono::steady_clock::now();
     }
 
+    // Register once before publication; the registry precedes the lane lock.
+    RegisterDeferredQueue(q);
+    if (m_seams.afterDeferredRegistrationBeforePublication) {
+      m_seams.afterDeferredRegistrationBeforePublication();
+    }
     std::size_t depth = 0;
     bool workerExited = false;
-    bool registerDeferredWake = false;
     {
       std::lock_guard<std::mutex> lock(q->mutex);
       if (q->workerExited) {
@@ -576,32 +854,22 @@ class Base {
           q->pending.fetch_add(1, std::memory_order_relaxed);
           q->Touch();
         }
-        if (!q->deferredWakeRegistered) {
-          q->deferredWakeRegistered = true;
-          registerDeferredWake = true;
-        }
       }
     }
     if (workerExited) {
-      ResolveMandatoryCleanup(std::move(promise), cleanup);
+      CleanupAfterWorkerExit(accountId, std::move(promise), cleanup);
       return;
     }
-    if (m_seams.afterDeferredPublication) {
-      m_seams.afterDeferredPublication();
-    }
-    if (registerDeferredWake) {
-      RegisterDeferredQueue(q);
-    }
-    // RegisterDeferredQueue has released m_deferredMutex before this lock, so
-    // publication and producer-zero wakes share the lane mutex without a
-    // deferred-registry -> lane lock inversion.
-    {
-      std::lock_guard<std::mutex> lock(q->mutex);
-      q->notEmpty.notify_one();
-    }
-    Notify([&](Observer& observer) {
-      observer.OnEnqueue(PublicAccountId(accountId), depth);
-    });
+    [&]() noexcept {
+      // Publication and producer-zero wakes share the lane mutex.
+      {
+        std::lock_guard<std::mutex> lock(q->mutex);
+        q->notEmpty.notify_one();
+      }
+      Notify([&](Observer& observer) {
+        observer.OnEnqueue(PublicAccountId(accountId), depth);
+      });
+    }();
   }
 
   [[nodiscard]] bool ProducersDrained() {
@@ -611,7 +879,10 @@ class Base {
 
   void RegisterDeferredQueue(const KeyQueuePtr& q) {
     std::lock_guard<std::mutex> lock(m_deferredMutex);
-    m_deferredQueues.emplace_back(q);
+    if (!q->deferredRegistered) {
+      m_deferredQueues.emplace_back(q);
+      q->deferredRegistered = true;
+    }
   }
 
   // Wakes every lane that parked cleanup behind the producer fence. Runs on a
@@ -708,12 +979,8 @@ class Base {
       }
     } guard{q.get(), m_tracksIdle};
 
-    if (HardStopped()) {
-      qt.task->Abort(Error(ErrorCode::Stopped, "async engine is stopped"));
-      Notify([&](Observer& observer) {
-        observer.OnComplete(PublicAccountId(qt.accountId),
-                            std::chrono::nanoseconds(0));
-      });
+    const std::uint64_t slowPaths = m_slowPaths.load(std::memory_order_acquire);
+    if (slowPaths != 0 && HandleSlowTask(q, qt, slowPaths)) {
       return;
     }
     if (!m_observerActive) {
@@ -738,16 +1005,61 @@ class Base {
     }
   }
 
+  // Handles a task while a hard stop or a section barrier is outstanding. The
+  // one load of `m_slowPaths` per task in `HandleTask` decides both, as the
+  // hard-stop check alone did before sections existed, so ordinary tasks pay
+  // nothing for sections. Returns false when `qt` takes the regular path.
+  [[nodiscard]] bool HandleSlowTask(const KeyQueuePtr& q, QueuedTask& qt,
+                                    std::uint64_t slowPaths) {
+    const bool barrier = qt.enqueuedAt == kSectionBarrierStamp;
+    if (barrier) {
+      m_slowPaths.fetch_sub(kBarrierUnit, std::memory_order_acq_rel);
+    }
+    if ((slowPaths & kHardStopBit) != 0) {
+      [&]() noexcept {
+        qt.task->Abort(Error(ErrorCode::Stopped, "async engine is stopped"));
+      }();
+      if (!barrier) {
+        Notify([&](Observer& observer) {
+          observer.OnComplete(PublicAccountId(qt.accountId),
+                              std::chrono::nanoseconds(0));
+        });
+      }
+      return true;
+    }
+    if (!barrier) {
+      return false;
+    }
+    // A barrier stays out of observer metrics.
+    qt.task->Run();
+    if (m_tracksIdle) {
+      q->Touch();
+    }
+    return true;
+  }
+
   // Marks the strategy stopped under the producer gate. A producer is either
-  // fully registered before this point or observes stop and never enters.
+  // fully registered before this point or observes stop and never enters. An
+  // exclusive section still preparing is woken to end itself.
   void SignalStop() {
-    std::lock_guard<std::mutex> lock(m_producerMutex);
-    m_stopRequested.store(true, std::memory_order_release);
+    {
+      std::lock_guard<std::mutex> lock(m_producerMutex);
+      m_stopRequested.store(true, std::memory_order_release);
+    }
+    {
+      // A section checks for stop under this mutex, so passing through it
+      // after the store means the check either sees the stop or is already
+      // waiting for the notify below.
+      std::lock_guard<std::mutex> lock(m_sectionMutex);
+    }
+    m_sectionCv.notify_all();
   }
 
   // Marks a hard stop so workers abort rather than run dequeued tasks.
   // Idempotent.
-  void SignalHardStop() { m_hardStop.store(true, std::memory_order_release); }
+  void SignalHardStop() {
+    m_slowPaths.fetch_or(kHardStopBit, std::memory_order_release);
+  }
 
   // Starts the dedicated worker thread for `q`, wrapping `Worker` so the live
   // count is incremented before the thread runs and decremented (with a
@@ -757,11 +1069,13 @@ class Base {
     m_liveWorkers.fetch_add(1, std::memory_order_relaxed);
     try {
       q->worker = std::thread([this, q] {
+        // Set once per worker thread, so tasks pay nothing for it.
+        const LaneMark lane{this, /*section=*/false, nullptr, q.get()};
+        CurrentLaneMark() = &lane;
         try {
           Worker(q);
         } catch (...) {
-          SignalHardStop();
-          SignalStop();
+          std::terminate();
         }
         {
           std::lock_guard<std::mutex> lock(q->mutex);
@@ -867,8 +1181,15 @@ class Base {
   // a hard stop signalled). Safe to call on already-exited threads.
   static void JoinAll(const std::vector<KeyQueuePtr>& queues) {
     for (const KeyQueuePtr& q : queues) {
-      q->Join();
+      JoinLane(q);
     }
+  }
+
+  static void JoinLane(const KeyQueuePtr& q) {
+    if (q->worker.joinable() && WorkerSeams::BeforeJoin()) {
+      WorkerSeams::BeforeJoin()();
+    }
+    q->Join();
   }
 
   // The process-wide shared no-op observer; identity-compared to detect that
@@ -928,6 +1249,197 @@ class Base {
     }
   }
 
+  // Stops one lane worker for a section; see `ExclusiveSection`.
+  class SectionBarrierTask final : public Task {
+   public:
+    SectionBarrierTask(Base& base, std::shared_ptr<ExclusiveSection> section)
+        : m_base(&base), m_section(std::move(section)) {}
+
+    void Run() override { m_base->ParkLane(*m_section); }
+
+    // Runs instead of `Run` under a hard stop; see `AbortBarrier`.
+    void Abort(Error /*error*/) override { m_base->AbortBarrier(*m_section); }
+
+   private:
+    Base* m_base;
+    std::shared_ptr<ExclusiveSection> m_section;
+  };
+
+  // Holds the one-at-a-time section turn taken by `TakeSectionTurn`.
+  class SectionTurn {
+   public:
+    explicit SectionTurn(Base& base) noexcept : m_base(&base) {}
+
+    ~SectionTurn() {
+      {
+        std::lock_guard<std::mutex> lock(m_base->m_sectionMutex);
+        m_base->m_sectionTurnTaken = false;
+      }
+      m_base->m_sectionCv.notify_all();
+    }
+
+    SectionTurn(const SectionTurn&) = delete;
+    SectionTurn& operator=(const SectionTurn&) = delete;
+
+   private:
+    Base* m_base;
+  };
+
+  // Lets a section's lanes continue when it goes out of scope.
+  class SectionRelease {
+   public:
+    SectionRelease(Base& base, ExclusiveSection& section) noexcept
+        : m_base(&base), m_section(&section) {}
+
+    ~SectionRelease() { m_base->ReleaseSection(*m_section); }
+
+    SectionRelease(const SectionRelease&) = delete;
+    SectionRelease& operator=(const SectionRelease&) = delete;
+
+   private:
+    Base* m_base;
+    ExclusiveSection* m_section;
+  };
+
+  // Marks the section thread until its lanes continue.
+  class SectionMark {
+   public:
+    explicit SectionMark(Base& base) noexcept
+        : m_mark{&base, /*section=*/true, CurrentLaneMark()} {
+      CurrentLaneMark() = &m_mark;
+    }
+    ~SectionMark() { CurrentLaneMark() = m_mark.outer; }
+    SectionMark(const SectionMark&) = delete;
+    SectionMark& operator=(const SectionMark&) = delete;
+
+   private:
+    LaneMark m_mark;
+  };
+
+  [[nodiscard]] bool MarkedOnThisThread(bool sectionOnly) const noexcept {
+    for (const LaneMark* mark = CurrentLaneMark(); mark != nullptr;
+         mark = mark->outer) {
+      if (mark->owner == this && (mark->section || !sectionOnly)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  [[nodiscard]] static Error SectionDeadline() {
+    return Error(ErrorCode::SubmitCancelled,
+                 "async exclusive section deadline expired before its callback "
+                 "started");
+  }
+
+  [[nodiscard]] std::optional<Error> TakeSectionTurn(
+      std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock<std::mutex> lock(m_sectionMutex);
+    (void)m_sectionCv.wait_until(
+        lock, deadline, [this] { return !m_sectionTurnTaken || IsStopped(); });
+    if (IsStopped()) {
+      return Error(ErrorCode::Stopped, "async engine is stopped");
+    }
+    if (m_sectionTurnTaken) {
+      return SectionDeadline();
+    }
+    m_sectionTurnTaken = true;
+    return std::nullopt;
+  }
+
+  // Waits out the off-lane releases already running, then stops every lane
+  // in `queues`, and every lane created meanwhile, behind its accepted work.
+  // A stop signal, a hard stop that aborts a barrier, or the deadline ends
+  // the section before the callback; each is checked once more after the
+  // waits, which return at once when there is nothing to wait for.
+  template <typename Host>
+  [[nodiscard]] std::optional<Error> StopLanes(
+      Host& host, const std::shared_ptr<ExclusiveSection>& section,
+      const std::vector<KeyQueuePtr>& queues,
+      std::chrono::steady_clock::time_point deadline) {
+    if (!host.AwaitRunningCleanups(deadline)) {
+      return SectionDeadline();
+    }
+    std::size_t barriers = 0;
+    for (const KeyQueuePtr& q : queues) {
+      if (AppendBarrier(q, section)) {
+        ++barriers;
+      }
+    }
+    std::unique_lock<std::mutex> lock(m_sectionMutex);
+    section->expected += barriers;
+    (void)m_sectionCv.wait_until(lock, deadline, [&] {
+      return section->parked >= section->expected || section->aborted ||
+             IsStopped();
+    });
+    if (section->aborted || IsStopped()) {
+      return Error(ErrorCode::Stopped, "async engine is stopped");
+    }
+    if (section->parked < section->expected ||
+        std::chrono::steady_clock::now() >= deadline) {
+      return SectionDeadline();
+    }
+    return std::nullopt;
+  }
+
+  // Appends a section barrier to `q` past its capacity, behind everything the
+  // lane has already accepted, without ever blocking. Observers never see it.
+  // The barrier is counted in `m_slowPaths` once it is in the buffer, under
+  // the lane mutex the worker takes to dequeue it, so its worker sends it down
+  // the slow path. Returns false for a lane that takes no more work.
+  [[nodiscard]] bool AppendBarrier(
+      const KeyQueuePtr& q, const std::shared_ptr<ExclusiveSection>& section) {
+    QueuedTask queued;
+    queued.task = std::make_unique<SectionBarrierTask>(*this, section);
+    queued.enqueuedAt = kSectionBarrierStamp;
+    {
+      std::lock_guard<std::mutex> lock(q->mutex);
+      if (q->closed || q->retired || q->workerExited) {
+        return false;
+      }
+      q->buffer.push_back(std::move(queued));
+      m_slowPaths.fetch_add(kBarrierUnit, std::memory_order_acq_rel);
+      if (m_tracksIdle) {
+        q->pending.fetch_add(1, std::memory_order_relaxed);
+        q->Touch();
+      }
+    }
+    q->notEmpty.notify_one();
+    return true;
+  }
+
+  // Runs on a lane worker: counts the lane as stopped and holds it until the
+  // section ends. A barrier that reaches its worker after the section ended
+  // returns at once.
+  void ParkLane(ExclusiveSection& section) {
+    std::unique_lock<std::mutex> lock(m_sectionMutex);
+    if (section.released) {
+      return;
+    }
+    ++section.parked;
+    m_sectionCv.notify_all();
+    m_sectionCv.wait(lock, [&section] { return section.released; });
+  }
+
+  // Runs on a lane worker under a hard stop: the section cannot stop every
+  // lane and fails. The worker still holds its lane until the section ends,
+  // so the releases the section runs before it lets the lanes go cannot
+  // overlap this lane's aborted work.
+  void AbortBarrier(ExclusiveSection& section) {
+    std::unique_lock<std::mutex> lock(m_sectionMutex);
+    section.aborted = true;
+    m_sectionCv.notify_all();
+    m_sectionCv.wait(lock, [&section] { return section.released; });
+  }
+
+  void ReleaseSection(ExclusiveSection& section) {
+    {
+      std::lock_guard<std::mutex> lock(m_sectionMutex);
+      section.released = true;
+    }
+    m_sectionCv.notify_all();
+  }
+
   Observer* m_observer;
   std::size_t m_queueCapacity;
   std::chrono::nanoseconds m_slowSubmitThreshold;
@@ -945,7 +1457,18 @@ class Base {
   std::condition_variable m_doneCv;
   std::atomic<std::size_t> m_liveWorkers{0};
   std::atomic_bool m_stopRequested{false};
-  std::atomic_bool m_hardStop{false};
+  // `kHardStopBit` marks a hard stop; the rest counts, in `kBarrierUnit`
+  // steps, the section barriers queued but not yet handled. One word lets the
+  // worker's per-task hard-stop check also tell it when a barrier may come
+  // next, so ordinary tasks pay nothing for sections.
+  static constexpr std::uint64_t kHardStopBit = 1;
+  static constexpr std::uint64_t kBarrierUnit = 2;
+  std::atomic<std::uint64_t> m_slowPaths{0};
+  // Exclusive sections: the turn, every section's counters, and the wakes of
+  // section threads and stopped lane workers share one mutex and condition.
+  std::mutex m_sectionMutex;
+  std::condition_variable m_sectionCv;
+  bool m_sectionTurnTaken = false;
 };
 
 // The internal dispatch interface the engine drives. Owns its worker threads;
@@ -980,6 +1503,22 @@ class Strategy {
   // for the in-flight task per worker to finish. Returns false on deadline.
   [[nodiscard]] virtual bool StopHard(
       std::chrono::steady_clock::time_point deadline) = 0;
+
+  // Runs `run` on the calling thread while every lane is stopped behind the
+  // work it already accepted; see `AsyncEngine::Exclusive`. `deadline` bounds
+  // only the wait before `run` starts. An exception from `run` propagates
+  // after the lanes continue.
+  [[nodiscard]] virtual std::optional<Error> Exclusive(
+      std::chrono::steady_clock::time_point deadline,
+      const std::function<void()>& run) = 0;
+
+  // True on the section thread or the worker of the account's lane. Used only
+  // by implicit handle release.
+  [[nodiscard]] virtual bool SerializesAccount(
+      OpenPitParamAccountId accountId) noexcept = 0;
+
+  // Hard-stops and joins workers while the engine's cleanup route is alive.
+  virtual void Terminate() noexcept = 0;
 };
 
 //------------------------------------------------------------------------------
@@ -1016,7 +1555,7 @@ class ShardedStrategy final : public Strategy, private Base {
     }
   }
 
-  ~ShardedStrategy() override { StopInDestructor(); }
+  ~ShardedStrategy() override { Terminate(); }
 
   void Submit(OpenPitParamAccountId accountId, TaskPtr task,
               std::chrono::steady_clock::time_point deadline,
@@ -1039,14 +1578,7 @@ class ShardedStrategy final : public Strategy, private Base {
     cleanup = TrackMandatoryCleanup(std::move(cleanup));
     Promise<std::monostate> promise;
     Future<std::monostate> future = promise.GetFuture();
-    ProducerGuard producer(*this);
-    if (!producer) {
-      EnqueueMandatoryCleanupAfterProducerFenceOn(
-          ShardFor(accountId), accountId, std::move(promise), cleanup);
-      return future;
-    }
-    (void)ScheduleMandatoryCleanupOn(ShardFor(accountId), accountId,
-                                     std::move(promise), cleanup);
+    RouteMandatoryCleanup(accountId, std::move(promise), cleanup);
     return future;
   }
 
@@ -1082,7 +1614,53 @@ class ShardedStrategy final : public Strategy, private Base {
     return true;
   }
 
+  [[nodiscard]] std::optional<Error> Exclusive(
+      std::chrono::steady_clock::time_point deadline,
+      const std::function<void()>& run) override {
+    return RunExclusive(*this, deadline, run);
+  }
+
+  [[nodiscard]] bool SerializesAccount(
+      OpenPitParamAccountId accountId) noexcept override {
+    return SerializesQueueOnThisThread(ShardFor(accountId).get());
+  }
+
  private:
+  friend class Base;
+
+  void RouteMandatoryCleanup(OpenPitParamAccountId accountId,
+                             Promise<std::monostate> promise,
+                             const std::function<void()>& cleanup) {
+    ProducerGuard producer(*this);
+    if (!producer) {
+      EnqueueMandatoryCleanupAfterProducerFenceOn(
+          ShardFor(accountId), accountId, std::move(promise), cleanup);
+      return;
+    }
+    (void)ScheduleMandatoryCleanupOn(ShardFor(accountId), accountId,
+                                     std::move(promise), cleanup);
+  }
+
+  // Exclusive-section host; see `Base::RunExclusive`. Every shard takes a
+  // barrier: a shard carries many accounts, and one barrier stops them all.
+  // No Sharded release runs off-lane while every worker lives, so nothing is
+  // running or postponed.
+  [[nodiscard]] std::vector<KeyQueuePtr> InstallExclusive(
+      const std::shared_ptr<ExclusiveSection>& /*section*/) const {
+    return m_shards;
+  }
+
+  [[nodiscard]] static bool AwaitRunningCleanups(
+      std::chrono::steady_clock::time_point /*deadline*/) noexcept {
+    return true;
+  }
+
+  [[nodiscard]] static bool WithdrawExclusive(
+      ExclusiveSection& /*section*/,
+      std::vector<PostponedCleanup>& /*postponed*/) noexcept {
+    return true;
+  }
+
   // 2^64 / phi rounded to the nearest odd integer (Knuth, TAOCP vol. 3).
   static constexpr std::uint64_t kFibonacciMultiplier = 11400714819323198485ULL;
 
@@ -1115,12 +1693,10 @@ class ShardedStrategy final : public Strategy, private Base {
     return hiHi + (hiLo >> 32U) + (loHi >> 32U) + (cross >> 32U);
   }
 
-  void StopInDestructor() {
+  void Terminate() noexcept override {
     // RAII backstop: if the owner never stopped us, hard-stop now so no worker
     // thread outlives this object. After a hard stop every worker exits and
     // every blocked producer is released, so both waits below terminate.
-    // Nothing on this path allocates - a destructor has no way to report a
-    // failed allocation.
     SignalHardStop();
     SignalStop();
     WakeBlockedProducers(m_shards);
@@ -1180,7 +1756,7 @@ class DynamicStrategy final : public Strategy, private Base {
     }
   }
 
-  ~DynamicStrategy() override { StopInDestructor(); }
+  ~DynamicStrategy() override { Terminate(); }
 
   void Submit(OpenPitParamAccountId accountId, TaskPtr task,
               std::chrono::steady_clock::time_point deadline,
@@ -1226,48 +1802,8 @@ class DynamicStrategy final : public Strategy, private Base {
     cleanup = TrackMandatoryCleanup(std::move(cleanup));
     Promise<std::monostate> promise;
     Future<std::monostate> future = promise.GetFuture();
-    ProducerGuard producer(*this);
-    if (!producer) {
-      CleanupAfterStoppedLane(accountId, std::move(promise), cleanup);
-      return future;
-    }
-    // Every iteration makes progress: a retried lane is one that has just been
-    // recreated, and the two error paths below either return or wait for a
-    // routing fence to clear. No branch loops on a condition that cannot
-    // change, so the loop cannot spin.
-    while (true) {
-      bool created = false;
-      std::size_t total = 0;
-      std::optional<Error> err;
-      KeyQueuePtr q = GetOrCreate(accountId, created, total, err);
-      if (err.has_value()) {
-        // Stop is terminal for lane creation: retrying would never see a
-        // different answer, so hand cleanup to the stopped-lane path, which
-        // either finds the surviving lane or runs cleanup itself.
-        if (err->Code() == ErrorCode::Stopped) {
-          CleanupAfterStoppedLane(accountId, std::move(promise), cleanup);
-          return future;
-        }
-        // The queue cap is transient: retry only after the routing fence
-        // confirms an account lane exists to queue behind.
-        if (err->Code() == ErrorCode::QueueLimit) {
-          if (CleanupWithoutLiveLane(accountId, promise, cleanup)) {
-            return future;
-          }
-          continue;
-        }
-        ResolveMandatoryCleanup(std::move(promise), cleanup);
-        return future;
-      }
-      if (created) {
-        Notify([&](Observer& observer) {
-          observer.OnQueueCreated(PublicAccountId(accountId), total);
-        });
-      }
-      if (!ScheduleMandatoryCleanupOn(q, accountId, promise, cleanup)) {
-        return future;
-      }
-    }
+    RouteMandatoryCleanup(accountId, std::move(promise), cleanup);
+    return future;
   }
 
   [[nodiscard]] bool StopGraceful(
@@ -1306,7 +1842,103 @@ class DynamicStrategy final : public Strategy, private Base {
     return true;
   }
 
+  [[nodiscard]] std::optional<Error> Exclusive(
+      std::chrono::steady_clock::time_point deadline,
+      const std::function<void()>& run) override {
+    return RunExclusive(*this, deadline, run);
+  }
+
+  [[nodiscard]] bool SerializesAccount(
+      OpenPitParamAccountId accountId) noexcept override {
+    if (SerializesQueueOnThisThread(nullptr)) {
+      return true;
+    }
+    // Only a worker of this strategy can own the account's lane: other
+    // threads answer without the routing lock.
+    const KeyQueue* own = WorkerQueueOnThisThread();
+    if (own == nullptr) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_queues.find(accountId);
+    return it != m_queues.end() && it->second.get() == own;
+  }
+
  private:
+  friend class Base;
+
+  void RouteMandatoryCleanup(OpenPitParamAccountId accountId,
+                             Promise<std::monostate> promise,
+                             const std::function<void()>& cleanup) {
+    ProducerGuard producer(*this);
+    if (!producer) {
+      CleanupAfterStoppedLane(accountId, std::move(promise), cleanup);
+      return;
+    }
+    while (true) {
+      KeyQueuePtr q;
+      bool stopping;
+      {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        stopping = m_stopping;
+        const auto it = m_queues.find(accountId);
+        if (it != m_queues.end()) {
+          q = it->second;
+        }
+      }
+      if (stopping) {
+        CleanupAfterStoppedLane(accountId, std::move(promise), cleanup);
+        return;
+      }
+      if (!q) {
+        if (CleanupWithoutLiveLane(accountId, promise, cleanup)) {
+          return;
+        }
+      } else if (!ScheduleMandatoryCleanupOn(q, accountId, promise, cleanup)) {
+        return;
+      }
+      // A retired lane or a changed routing fence requires a fresh lookup.
+    }
+  }
+
+  // Exclusive-section host; see `Base::RunExclusive`. The section is
+  // published under `m_mutex`, the mutex every Dynamic slow path that reads it
+  // holds: lane creation and the two off-lane release paths. Idle retirement
+  // needs no check: a lane that holds a barrier is not idle, and a lane
+  // retired first refuses its barrier and runs nothing more.
+  [[nodiscard]] std::vector<KeyQueuePtr> InstallExclusive(
+      const std::shared_ptr<ExclusiveSection>& section) {
+    std::vector<KeyQueuePtr> queues;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    queues.reserve(m_queues.size());
+    for (const auto& entry : m_queues) {
+      queues.push_back(entry.second);
+    }
+    m_activeSection = section;
+    return queues;
+  }
+
+  // An off-lane release that passed its section check before the section was
+  // installed holds its account in `m_cleanupAccounts` while it runs.
+  [[nodiscard]] bool AwaitRunningCleanups(
+      std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    return m_routeCv.wait_until(lock, deadline,
+                                [this] { return m_cleanupAccounts.empty(); });
+  }
+
+  [[nodiscard]] bool WithdrawExclusive(
+      ExclusiveSection& section,
+      std::vector<PostponedCleanup>& postponed) noexcept {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    postponed.swap(section.postponed);
+    if (!postponed.empty()) {
+      return false;
+    }
+    m_activeSection.reset();
+    return true;
+  }
+
   void CleanupAfterStoppedLane(OpenPitParamAccountId accountId,
                                Promise<std::monostate> promise,
                                const std::function<void()>& cleanup) {
@@ -1319,6 +1951,13 @@ class DynamicStrategy final : public Strategy, private Base {
       auto it = m_queues.find(accountId);
       if (it != m_queues.end()) {
         q = it->second;
+      } else if (m_activeSection) {
+        // Stop was signalled while a section still runs: the release must
+        // not run beside it, so the section runs it before it lets the lanes
+        // go.
+        m_activeSection->postponed.push_back(
+            PostponedCleanup{std::move(promise), cleanup});
+        return;
       } else {
         m_cleanupAccounts.insert(accountId);
       }
@@ -1328,12 +1967,7 @@ class DynamicStrategy final : public Strategy, private Base {
                                                   std::move(promise), cleanup);
       return;
     }
-    ResolveMandatoryCleanup(std::move(promise), cleanup);
-    {
-      std::lock_guard<std::mutex> lock(m_mutex);
-      m_cleanupAccounts.erase(accountId);
-    }
-    m_routeCv.notify_all();
+    ResolveFencedCleanup(accountId, std::move(promise), cleanup);
   }
 
   [[nodiscard]] bool CleanupWithoutLiveLane(
@@ -1351,14 +1985,17 @@ class DynamicStrategy final : public Strategy, private Base {
         });
         return false;
       }
+      if (m_activeSection) {
+        // The release must not run beside the section. The section runs it
+        // before it releases the lanes, so a lane created for this account in
+        // the meantime starts with the barrier and runs its work after it.
+        m_activeSection->postponed.push_back(
+            PostponedCleanup{std::move(promise), cleanup});
+        return true;
+      }
       m_cleanupAccounts.insert(accountId);
     }
-    ResolveMandatoryCleanup(std::move(promise), cleanup);
-    {
-      std::lock_guard<std::mutex> lock(m_mutex);
-      m_cleanupAccounts.erase(accountId);
-    }
-    m_routeCv.notify_all();
+    ResolveFencedCleanup(accountId, std::move(promise), cleanup);
     return true;
   }
 
@@ -1385,9 +2022,17 @@ class DynamicStrategy final : public Strategy, private Base {
     }
     auto q = std::make_shared<KeyQueue>(queueCapacity());
     m_queues.emplace(accountId, q);
+    bool barrier = false;
     try {
+      // A lane created during an exclusive section starts stopped.
+      if (m_activeSection) {
+        barrier = BarrierNewLane(q, m_activeSection);
+      }
       StartWorker(q);
     } catch (...) {
+      if (barrier) {
+        ForgetNewLaneBarrier(*m_activeSection);
+      }
       m_queues.erase(accountId);
       throw;
     }
@@ -1421,16 +2066,22 @@ class DynamicStrategy final : public Strategy, private Base {
     m_routeCv.notify_all();
     while (true) {
       KeyQueuePtr q;
+      OpenPitParamAccountId accountId;
       {
         std::lock_guard<std::mutex> lock(m_mutex);
-        auto it = m_queues.begin();
+        const auto it = m_queues.begin();
         if (it == m_queues.end()) {
           return;
         }
-        q = std::move(it->second);
-        m_queues.erase(it);
+        accountId = it->first;
+        q = it->second;
       }
-      q->Join();
+      // Releases during join must still find this lane behind its work.
+      JoinLane(q);
+      {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_queues.erase(accountId);
+      }
     }
   }
 
@@ -1539,12 +2190,11 @@ class DynamicStrategy final : public Strategy, private Base {
     }
   }
 
-  void StopInDestructor() {
+  void Terminate() noexcept override {
     // RAII backstop: stop the cleanup thread first (it joins retired workers
     // inline), then hard-stop so every live worker exits and every blocked
     // producer is released, then close and join the lanes. No worker thread
-    // outlives this object, and nothing on this path allocates - a destructor
-    // has no way to report a failed allocation.
+    // outlives this object. A failed handle-release hand-off terminates.
     StopCleanup();
     SignalHardStop();
     SignalStop();
@@ -1554,11 +2204,9 @@ class DynamicStrategy final : public Strategy, private Base {
     (void)SealLifecycleDrained(std::chrono::steady_clock::time_point::max());
   }
 
-  std::mutex m_mutex;
-  std::condition_variable m_routeCv;
   bool m_stopping = false;
   std::unordered_map<OpenPitParamAccountId, KeyQueuePtr> m_queues;
-  std::unordered_set<OpenPitParamAccountId> m_cleanupAccounts;
+  std::shared_ptr<ExclusiveSection> m_activeSection;
   std::size_t m_maxQueues;
   bool m_capEnabled;
   std::chrono::nanoseconds m_idleCleanupAfter;

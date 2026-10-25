@@ -16115,6 +16115,73 @@ fn account_pnl_rollback_bypasses_a_queued_state_transition() {
 }
 
 #[test]
+fn retune_runs_its_closure_first_and_publishes_inside_the_state_transition() {
+    let builder =
+        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
+    let policy =
+        SpotFundsPolicy::<FullSync, FullSync>::new(settings(0), None, builder.storage_builder());
+    let cell = policy.settings.clone();
+    let writer_entered = Arc::new(std::sync::Barrier::new(2));
+    let writer_release = Arc::new(std::sync::Barrier::new(2));
+    let transition_queued = Arc::new(std::sync::Barrier::new(2));
+    let engine = Arc::new(
+        builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build"),
+    );
+    engine
+        .accounts()
+        .set_state_transition_wait_hook(Arc::clone(&transition_queued));
+    let before = format!("{:?}", cell.with(Clone::clone));
+
+    // An account-state writer holds the state lease.
+    let writer = {
+        let engine = Arc::clone(&engine);
+        let writer_entered = Arc::clone(&writer_entered);
+        let writer_release = Arc::clone(&writer_release);
+        std::thread::spawn(move || {
+            engine.accounts().with_state_writer(|| {
+                writer_entered.wait();
+                writer_release.wait();
+            });
+        })
+    };
+    writer_entered.wait();
+
+    let (closure_ran_tx, closure_ran_rx) = std::sync::mpsc::sync_channel(1);
+    let transition = {
+        let engine = Arc::clone(&engine);
+        std::thread::spawn(move || {
+            engine.configure().spot_funds::<SpotFundsConfigError>(
+                SpotFundsPolicy::<FullSync, FullSync>::NAME,
+                |retuned| {
+                    closure_ran_tx
+                        .send(())
+                        .expect("the closure run must be observed");
+                    retuned.set_global_slippage_bps(77)
+                },
+            )
+        })
+    };
+    transition_queued.wait();
+    // The retune now waits for the writer. Its closure has already run, so it
+    // held no writer back, and the new settings are not visible yet.
+    closure_ran_rx
+        .try_recv()
+        .expect("the closure must run before the state transition");
+    assert_eq!(format!("{:?}", cell.with(Clone::clone)), before);
+
+    writer_release.wait();
+    writer.join().expect("writer thread must finish");
+    transition
+        .join()
+        .expect("retune thread must finish")
+        .expect("retune must publish");
+    assert_ne!(format!("{:?}", cell.with(Clone::clone)), before);
+}
+
+#[test]
 fn account_pnl_batch_continues_past_a_queued_state_transition() {
     let mut configured = settings(0);
     configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);

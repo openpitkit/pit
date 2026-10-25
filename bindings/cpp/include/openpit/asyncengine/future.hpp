@@ -74,13 +74,18 @@ enum class ErrorCode : std::uint8_t {
   // A Dynamic strategy with a positive queue cap rejected a new account
   QueueLimit,
   MissingAccountId,
-  // `ctx` cancellation on the submit path.
+  // `ctx` cancellation on the submit path, or an `Exclusive` timeout that
+  // expired before the section's callback started.
   SubmitCancelled,
   // A caller-supplied `Submit` closure threw. The closure exception never
   // crosses a thread boundary; its `what()` is captured here instead.
   TaskFailed,
   // A move-only future value was already returned to another consumer.
   ValueConsumed,
+  // `Exclusive` was called from a lane worker of the same engine, or from
+  // inside one of its exclusive sections, where it could never stop every
+  // lane.
+  ReentrantLane,
 };
 
 namespace detail {
@@ -286,7 +291,9 @@ class Promise {
   void Fail(Error error) const { ResolveResult(Result<T>(std::move(error))); }
 
  private:
-  void ResolveResult(Result<T> result) const {
+  // Past the latch the result can no longer be reported any other way, so a
+  // delivery failure terminates instead of leaving the future unresolved.
+  void ResolveResult(Result<T> result) const noexcept {
     if (m_state->done.exchange(true)) {
       return;
     }

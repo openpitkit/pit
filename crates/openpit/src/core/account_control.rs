@@ -40,7 +40,7 @@ use crate::core::mutation::MutationFailureScope;
 use crate::core::HasAccountId;
 use crate::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
-use crate::storage::{self, IndexFlag, LockingPolicy, Storage, StorageBuilder};
+use crate::storage::{self, EngineWideStorage, IndexFlag, LockingPolicy, StorageBuilder};
 
 // ─── AccountBlockError ───────────────────────────────────────────────────────
 
@@ -505,15 +505,14 @@ fn new_unverifiable_block_check_rejects(scope: RejectScope) -> Rejects {
 ///
 /// Under [`AccountSync`](crate::core::AccountSync) the per-key *value* domain
 /// (`read_values` / `write_values`) is a no-op; only the *index* domain is a
-/// real reader-writer lock. The insert/remove mutators take the index lock
-/// exclusively, so they already serialize against `check`'s shared index read.
-/// The reason-replacing mutators use
-/// `Storage::with_mut_if_present_exclusive_index`, so they also take the
-/// storage index lock exclusively before overwriting a `String`-bearing
-/// [`AccountBlock`]. `check` reads through `Storage::with`, which takes the
-/// same storage index lock in shared mode. That keeps admin replacement rare
-/// and serialized without adding a whole-structure lock to every blocked-set
-/// lookup.
+/// real reader-writer lock. `check` runs on every account's call path and
+/// reads all three tables, while blocks are recorded from any caller, so each
+/// table is an [`EngineWideStorage`]: `check` reads under the shared index,
+/// and every write - the first-wins insertion, the reason replacement over a
+/// `String`-bearing [`AccountBlock`], the removal - takes the index
+/// exclusively and never forms `&mut` beside a reader. That keeps the rare
+/// writes serialized without adding a whole-structure lock to every
+/// blocked-set lookup.
 ///
 /// The index flags are active-blocking indicators, not write-once latches: an
 /// `unblock_*` that empties its set flips the corresponding flag back to
@@ -541,9 +540,9 @@ where
     any_flag: <StorageFactory as storage::LockingPolicyFactory>::IndexFlag,
     all_flag: <StorageFactory as storage::LockingPolicyFactory>::IndexFlag,
     blocked_groups_any_flag: <StorageFactory as storage::LockingPolicyFactory>::IndexFlag,
-    accounts: Storage<AccountId, AccountBlock, StorageFactory::Policy>,
-    blocked_groups: Storage<AccountGroupId, AccountBlock, StorageFactory::Policy>,
-    global_block: Storage<(), AccountBlock, StorageFactory::Policy>,
+    accounts: EngineWideStorage<AccountId, AccountBlock, StorageFactory::Policy>,
+    blocked_groups: EngineWideStorage<AccountGroupId, AccountBlock, StorageFactory::Policy>,
+    global_block: EngineWideStorage<(), AccountBlock, StorageFactory::Policy>,
 }
 
 impl<StorageLockingPolicyFactory> BlockedAccounts<StorageLockingPolicyFactory>
@@ -568,15 +567,11 @@ where
                 <StorageLockingPolicyFactory as storage::LockingPolicyFactory>::IndexFlag::new(
                     false,
                 ),
-            accounts: builder.create_for_bound_key(),
-            // The group set is keyed by `AccountGroupId`, which is deliberately
-            // not an account key, so it bypasses the account-sync key gate via
-            // `create_for_any_key`. This table is engine-owned, never a
-            // policy storage, so the sharding guarantee does not apply.
-            blocked_groups: builder.create_for_any_key(),
+            accounts: builder.create_engine_wide(),
+            blocked_groups: builder.create_engine_wide(),
             // Single-slot table holding the global cause; keyed by the unit
             // type because an engine has exactly one global block.
-            global_block: builder.create_for_any_key(),
+            global_block: builder.create_engine_wide(),
         }
     }
 
@@ -668,7 +663,7 @@ where
     /// already-blocked account returns `false` without changing its cause.
     pub(crate) fn block_account(&self, id: AccountId, cause: AccountBlock) -> bool {
         let _guard = self.mutation_guard.write_index();
-        let inserted = self.accounts.with_mut(id, || cause, |_, inserted| inserted);
+        let inserted = self.accounts.insert_if_absent(id, || cause);
         self.any_flag.store(true);
         inserted
     }
@@ -725,7 +720,7 @@ where
     /// every account. The first cause wins, like a per-account block.
     pub(crate) fn block_all_with_cause(&self, cause: AccountBlock) {
         let _guard = self.mutation_guard.write_index();
-        self.global_block.with_mut((), || cause, |_, _| ());
+        self.global_block.insert_if_absent((), || cause);
         self.any_flag.store(true);
         self.all_flag.store(true);
     }
@@ -778,7 +773,7 @@ where
     ) -> Result<(), AccountBlockError> {
         let _guard = self.mutation_guard.write_index();
         self.accounts
-            .with_mut_if_present_exclusive_index(&id, |slot| *slot = block)
+            .with_mut_if_present(&id, |slot| *slot = block)
             .ok_or(AccountBlockError::AccountNotBlocked { account: id })
     }
 
@@ -799,7 +794,7 @@ where
             return Err(AccountBlockError::ReservedGroup);
         }
         let _guard = self.mutation_guard.write_index();
-        self.blocked_groups.with_mut(group, || cause, |_, _| ());
+        self.blocked_groups.insert_if_absent(group, || cause);
         self.blocked_groups_any_flag.store(true);
         Ok(())
     }
@@ -846,7 +841,7 @@ where
         }
         let _guard = self.mutation_guard.write_index();
         self.blocked_groups
-            .with_mut_if_present_exclusive_index(&group, |slot| *slot = block)
+            .with_mut_if_present(&group, |slot| *slot = block)
             .ok_or(AccountBlockError::GroupNotBlocked { group })
     }
 

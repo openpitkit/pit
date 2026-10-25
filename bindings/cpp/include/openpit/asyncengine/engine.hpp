@@ -31,6 +31,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -100,7 +101,7 @@ template <typename RunFn, typename AbortFn>
 
 template <typename PromiseType, typename AbortHandler>
 void InvokeAbortHandler(PromiseType promise, AbortHandler& handler, Error error,
-                        bool inAccountLane) {
+                        bool inAccountLane) noexcept {
   try {
     handler(promise, std::move(error), inAccountLane);
   } catch (const std::exception& ex) {
@@ -123,17 +124,24 @@ class DynamicBuilder;
 //
 // The concurrent engine facade. Construct via `Builder<Driver>(driver)` then a
 // strategy stage. Move-only: it uniquely owns the dispatcher and its threads.
+// It must outlive every wrapper it produced, including the last reference's
+// release. Moving this engine invalidates its existing wrappers. Using or
+// releasing a wrapper after either lifetime ends is undefined behavior.
 template <typename Driver>
 class AsyncEngine {
  public:
   AsyncEngine(const AsyncEngine&) = delete;
   AsyncEngine& operator=(const AsyncEngine&) = delete;
   AsyncEngine(AsyncEngine&&) noexcept = default;
-  AsyncEngine& operator=(AsyncEngine&&) noexcept = default;
+  AsyncEngine& operator=(AsyncEngine&&) = delete;
 
-  // RAII: the strategy's destructor hard-stops and joins every worker, so no
-  // thread outlives the engine even if the caller never called a stop method.
-  ~AsyncEngine() = default;
+  // Keep the cleanup route alive until every worker has finished releasing
+  // its handles. A moved-from engine has no strategy to terminate.
+  ~AsyncEngine() {
+    if (m_strategy) {
+      m_strategy->Terminate();
+    }
+  }
 
   // The borrowed driver. Exposed so a typed layer built on top of this generic
   // engine can invoke named driver methods inside a `Submit` closure that has
@@ -159,19 +167,23 @@ class AsyncEngine {
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     Promise<std::monostate> promise;
     Future<std::monostate> future = promise.GetFuture();
-    auto run = [promise, fn = std::move(fn)] {
+    auto run = [promise, fn = std::move(fn)]() noexcept {
       try {
         fn();
-        promise.Resolve(std::monostate{});
       } catch (const std::exception& ex) {
         promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
+        return;
       } catch (...) {
         promise.Fail(Error(ErrorCode::TaskFailed,
                            "async submit closure threw a non-standard "
                            "exception"));
+        return;
       }
+      promise.Resolve(std::monostate{});
     };
-    auto abort = [promise](Error error) { promise.Fail(std::move(error)); };
+    auto abort = [promise](Error error) noexcept {
+      promise.Fail(std::move(error));
+    };
     SubmitTask(accountId.Value(),
                detail::MakeTask(std::move(run), std::move(abort)), promise,
                timeout);
@@ -186,20 +198,23 @@ class AsyncEngine {
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     Promise<std::monostate> promise;
     Future<std::monostate> future = promise.GetFuture();
-    auto run = [promise, fn = std::move(fn)] {
+    auto run = [promise, fn = std::move(fn)]() noexcept {
       try {
         fn();
-        promise.Resolve(std::monostate{});
       } catch (const std::exception& ex) {
         promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
+        return;
       } catch (...) {
         promise.Fail(Error(ErrorCode::TaskFailed,
                            "async submit closure threw a non-standard "
                            "exception"));
+        return;
       }
+      promise.Resolve(std::monostate{});
     };
     SubmitAbortHandler submitAbort = onAbort;
-    auto abort = [promise, onAbort = std::move(onAbort)](Error error) mutable {
+    auto abort = [promise,
+                  onAbort = std::move(onAbort)](Error error) mutable noexcept {
       detail::InvokeAbortHandler(promise, onAbort, std::move(error), true);
     };
     m_strategy->Submit(
@@ -212,8 +227,12 @@ class AsyncEngine {
     return future;
   }
 
-  // Preserves account-lane ordering for cleanup after a synchronous submit
-  // failure. The strategy either queues it or waits for the retired lane.
+  // Preserves account-lane ordering for cleanup and implicit handle release.
+  // A live lane reports OnEnqueue, OnDequeue and OnComplete for the release.
+  // With no worker for the account, the cleanup runs on the calling thread
+  // under the account fence, or after the active section. No lane is created.
+  // A cleanup whose callback calls this engine for the same account then waits
+  // for that fence forever: callbacks must not call back into the engine.
   [[nodiscard]] Future<std::monostate> ScheduleMandatoryCleanup(
       ::openpit::param::AccountId accountId, std::function<void()> cleanup) {
     return m_strategy->ScheduleMandatoryCleanup(accountId.Value(),
@@ -232,7 +251,7 @@ class AsyncEngine {
     Future<R> future = promise.GetFuture();
     Driver* driver = m_driver;
     // Some operations move captured payloads, so `op` must be mutable.
-    auto run = [promise, driver, op = std::move(op)]() mutable {
+    auto run = [promise, driver, op = std::move(op)]() mutable noexcept {
       try {
         promise.Resolve(op(*driver));
       } catch (const std::exception& ex) {
@@ -242,7 +261,9 @@ class AsyncEngine {
                            "async engine call threw a non-standard exception"));
       }
     };
-    auto abort = [promise](Error error) { promise.Fail(std::move(error)); };
+    auto abort = [promise](Error error) noexcept {
+      promise.Fail(std::move(error));
+    };
     SubmitTask(accountId.Value(),
                detail::MakeTask(std::move(run), std::move(abort)), promise,
                timeout);
@@ -259,7 +280,7 @@ class AsyncEngine {
     PairPromise<A, B> promise;
     PairFuture<A, B> future = promise.GetFuture();
     Driver* driver = m_driver;
-    auto run = [promise, driver, op = std::move(op)]() mutable {
+    auto run = [promise, driver, op = std::move(op)]() mutable noexcept {
       try {
         std::pair<A, B> result = op(*driver);
         promise.Resolve(std::move(result.first), std::move(result.second));
@@ -270,7 +291,9 @@ class AsyncEngine {
                            "async engine call threw a non-standard exception"));
       }
     };
-    auto abort = [promise](Error error) { promise.Fail(std::move(error)); };
+    auto abort = [promise](Error error) noexcept {
+      promise.Fail(std::move(error));
+    };
     m_strategy->Submit(accountId.Value(),
                        detail::MakeTask(std::move(run), std::move(abort)),
                        Deadline(timeout), [promise](Error error) mutable {
@@ -292,7 +315,8 @@ class AsyncEngine {
     PairPromise<FirstValue, SecondValue> promise;
     PairFuture<FirstValue, SecondValue> future = promise.GetFuture();
     Driver* driver = m_driver;
-    auto run = [promise, driver, operation = std::move(operation)]() mutable {
+    auto run = [promise, driver,
+                operation = std::move(operation)]() mutable noexcept {
       try {
         std::pair<FirstValue, SecondValue> result = operation(*driver);
         promise.Resolve(std::move(result.first), std::move(result.second));
@@ -304,7 +328,8 @@ class AsyncEngine {
       }
     };
     AbortHandler submitAbort = onAbort;
-    auto abort = [promise, onAbort = std::move(onAbort)](Error error) mutable {
+    auto abort = [promise,
+                  onAbort = std::move(onAbort)](Error error) mutable noexcept {
       detail::InvokeAbortHandler(promise, onAbort, std::move(error), true);
     };
     m_strategy->Submit(
@@ -315,6 +340,59 @@ class AsyncEngine {
                                      false);
         });
     return future;
+  }
+
+  //----------------------------------------------------------------------------
+  // Exclusive sections
+
+  // Runs `fn(driver)` on the calling thread while no lane of this engine runs a
+  // task and no off-lane handle release of this engine is in progress, then
+  // lets the lanes continue. It is the way to run the driver's exclusive
+  // operations - for `openpit::Engine`, account-group membership, group
+  // currency, and the SpotFunds retune: under AccountSync the engine takes no
+  // lock for them, so nothing else may be in flight while they run.
+  //
+  // Ordinary tasks pay nothing for this method. Each lane is stopped by a
+  // barrier queued behind the work it already accepted; work submitted during
+  // the section waits behind the barrier, with the usual back-pressure on a
+  // full queue. Sections run one at a time.
+  //
+  // `timeout` bounds only the wait before `fn` starts, and must be positive:
+  // a non-positive timeout throws `openpit::Error`, because an unbounded wait
+  // could hang every lane. The timeout expiring first returns
+  // `ErrorCode::SubmitCancelled`; a stop requested before `fn` starts returns
+  // `ErrorCode::Stopped`. Neither calls `fn`, and the lanes continue. Once `fn`
+  // starts, the section holds until it returns or throws; an exception from
+  // `fn` propagates after the lanes continue. A stop requested meanwhile waits
+  // for the section to end. An off-lane handle release that has no lane to
+  // queue behind waits for the section, which runs it before the lanes
+  // continue.
+  //
+  // Calling this from a lane worker of this engine - a `Submit` or `Call`
+  // closure, or an observer callback on a worker - or from inside `fn` returns
+  // `ErrorCode::ReentrantLane` at once. Uses it cannot detect hang instead,
+  // until `timeout` before `fn` starts and for good after:
+  //   - `fn` must not wait for work of this engine: its tasks queue behind the
+  //     stopped lanes;
+  //   - a task that waits for a task of another lane keeps its own lane from
+  //     stopping;
+  //   - `fn` must not stop this engine.
+  //
+  // Requests, reservations, and drop-copy operations opened before the section
+  // stay open across it, and their next step sees the state `fn` left. While
+  // `fn` runs, a last release on its thread rolls back inline before the rest
+  // of `fn`; a release on another thread waits until after `fn`. Handles it
+  // opens through the driver must be finished before `fn` returns.
+  [[nodiscard]] std::optional<Error> Exclusive(
+      const std::function<void(Driver&)>& fn,
+      std::chrono::nanoseconds timeout) {
+    if (timeout <= std::chrono::nanoseconds(0)) {
+      throw ::openpit::Error(
+          "openpit::asyncengine: Exclusive requires a positive timeout");
+    }
+    Driver* driver = m_driver;
+    return m_strategy->Exclusive(Deadline(timeout),
+                                 [&fn, driver] { fn(*driver); });
   }
 
   //----------------------------------------------------------------------------
@@ -351,6 +429,16 @@ class AsyncEngine {
   friend class ShardedBuilder;
   template <typename D>
   friend class DynamicBuilder;
+  template <typename D>
+  friend class AsyncReservation;
+  template <typename D>
+  friend class AsyncDropCopyOperation;
+
+  // The calling thread already owns serialization for this account.
+  [[nodiscard]] bool SerializesAccount(
+      ::openpit::param::AccountId accountId) const noexcept {
+    return m_strategy->SerializesAccount(accountId.Value());
+  }
 
   AsyncEngine(Driver& driver, std::unique_ptr<detail::Strategy> strategy,
               StopUnderlying stopUnderlying)

@@ -1027,6 +1027,11 @@ func (*recordingStrategy) scheduleSubmitFailureCleanup(
 	cleanup()
 }
 
+func (*recordingStrategy) exclusive(_ context.Context, run func()) error {
+	run()
+	return nil
+}
+
 func (*recordingStrategy) stopGraceful(context.Context) error { return nil }
 
 func (*recordingStrategy) stopHard(context.Context) error { return nil }
@@ -1214,20 +1219,6 @@ func TestAsyncEngineAdministrativeRoutingKinds(t *testing.T) {
 		call func() *future.Future[struct{}]
 	}{
 		{
-			name: "register membership",
-			want: routingKey{kind: routingKeyAccount, id: 7},
-			call: func() *future.Future[struct{}] {
-				return accounts.RegisterGroup(ctx, []param.AccountID{account}, group)
-			},
-		},
-		{
-			name: "unregister membership",
-			want: routingKey{kind: routingKeyAccount, id: 7},
-			call: func() *future.Future[struct{}] {
-				return accounts.UnregisterGroup(ctx, []param.AccountID{account}, group)
-			},
-		},
-		{
 			name: "block account with cause",
 			want: routingKey{kind: routingKeyAccount, id: 7},
 			call: func() *future.Future[struct{}] {
@@ -1301,29 +1292,12 @@ func TestAsyncAccountsRejectsUninitializedAccountGroupID(t *testing.T) {
 	strategy := &recordingStrategy{}
 	engine := newAsyncEngine(newFakeDriver(), nil, strategy)
 	accounts := engine.Accounts()
-	account := param.NewAccountIDFromUint64(7)
 	ctx := context.Background()
 
 	tests := []struct {
 		name string
 		call func() *future.Future[struct{}]
 	}{
-		{
-			name: "register group",
-			call: func() *future.Future[struct{}] {
-				return accounts.RegisterGroup(
-					ctx, []param.AccountID{account}, param.AccountGroupID{},
-				)
-			},
-		},
-		{
-			name: "unregister group",
-			call: func() *future.Future[struct{}] {
-				return accounts.UnregisterGroup(
-					ctx, []param.AccountID{account}, param.AccountGroupID{},
-				)
-			},
-		},
 		{
 			name: "block group",
 			call: func() *future.Future[struct{}] {

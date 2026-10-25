@@ -84,27 +84,62 @@ pub(crate) enum ConfigEntry<Factory: LockingPolicyFactory> {
     OrderSizeLimit(Factory::Config<OrderSizeLimitSettings>),
 }
 
-fn update_serialized_transition<T, Cell, Error>(
-    transition: &parking_lot::Mutex<()>,
-    cell: &Cell,
-    update: impl FnOnce(&mut T) -> Result<(), Error>,
-    observe: impl FnOnce(&T, &T),
-) -> Result<(), Error>
+/// Settings computed under a serialized transition and not yet published. It
+/// holds the transition until it is published or dropped, so a caller can take
+/// a lease over the publication and its sweep without holding it over the
+/// computation.
+struct PreparedTransition<'a, T, Cell> {
+    _transition: parking_lot::MutexGuard<'a, ()>,
+    cell: &'a Cell,
+    previous: T,
+    current: T,
+}
+
+impl<T, Cell> PreparedTransition<'_, T, Cell>
 where
     T: Clone + 'static,
     Cell: ConfigCell<T>,
 {
-    let _transition = transition.lock();
+    /// Publishes the prepared settings, then passes the previous and the
+    /// published settings to `observe`.
+    fn publish<Error>(self, observe: impl FnOnce(&T, &T)) -> Result<(), Error> {
+        let Self {
+            _transition,
+            cell,
+            previous,
+            current,
+        } = self;
+        let published = current.clone();
+        cell.update(|stored| {
+            *stored = current;
+            Ok(())
+        })?;
+        observe(&previous, &published);
+        Ok(())
+    }
+}
+
+/// Applies `update` to a copy of the settings under `transition` and returns
+/// the result unpublished.
+fn prepare_serialized_transition<'a, T, Cell, Error>(
+    transition: &'a parking_lot::Mutex<()>,
+    cell: &'a Cell,
+    update: impl FnOnce(&mut T) -> Result<(), Error>,
+) -> Result<PreparedTransition<'a, T, Cell>, Error>
+where
+    T: Clone + 'static,
+    Cell: ConfigCell<T>,
+{
+    let transition = transition.lock();
     let previous = cell.with(Clone::clone);
     let mut current = previous.clone();
     update(&mut current)?;
-    let published = current.clone();
-    cell.update(|stored| {
-        *stored = current;
-        Ok(())
-    })?;
-    observe(&previous, &published);
-    Ok(())
+    Ok(PreparedTransition {
+        _transition: transition,
+        cell,
+        previous,
+        current,
+    })
 }
 
 fn active_holdings_accounts<Factory: LockingPolicyFactory>(
@@ -493,6 +528,15 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// [`SpotFundsSettings::set_position_limit`], apply from the next order,
     /// and do not re-evaluate open reservations.
     ///
+    /// # Concurrency
+    ///
+    /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
+    /// section. The retune reads the stored P&L and positions of every known
+    /// account, and the new settings become visible only together with that
+    /// sweep. Under [`FullSync`](crate::FullSync) the engine orders the
+    /// publication and the sweep after the account-state writes in flight;
+    /// `f` runs before that, without holding writers back.
+    ///
     /// # Errors
     ///
     /// Returns the same error variants as [`Self::rate_limit`].
@@ -516,44 +560,57 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                 >::from_inner(
                     self.inner.account_groups.clone()
                 );
+                // `f` runs before the state transition and holds no writer
+                // back. State writers must not see the new settings before the
+                // barrier sweep has run, so publication and the sweep share
+                // the transition. Lock order: the settings mutex, then the
+                // state transition.
+                let prepared =
+                    prepare_serialized_transition(transition, settings, f).map_err(|error| {
+                        ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
+                    })?;
                 let mut account_blocks = Vec::new();
-                update_serialized_transition(transition, settings, f, |previous, current| {
-                    self.inner.account_currencies.with_state_transition(|| {
-                        let blocks = account_pnl_barrier_change_blocks::<RegistryFactory<Trait>>(
-                            pnl,
-                            holdings,
-                            previous,
-                            current,
-                            &account_groups.memberships(),
-                            self.inner
-                                .account_currencies
-                                .known_account_keys()
-                                .into_iter()
-                                .chain(active_holdings_accounts::<RegistryFactory<Trait>>(
-                                    active_holdings_mutations,
-                                )),
-                            |account, group| {
-                                self.inner.account_currencies.currency_of(account, group)
-                            },
-                        );
-                        account_blocks.reserve(blocks.len());
-                        for (account, block) in blocks {
-                            if self
-                                .inner
-                                .blocked_accounts
-                                .block_account(account, block.clone())
-                            {
-                                account_blocks.push(AccountBlockOutcome {
-                                    account_id: account,
-                                    block,
-                                });
+                self.inner
+                    .account_currencies
+                    .with_state_transition(|| {
+                        prepared.publish::<Error>(|previous, current| {
+                            let blocks = account_pnl_barrier_change_blocks::<
+                                RegistryFactory<Trait>,
+                            >(
+                                pnl,
+                                holdings,
+                                previous,
+                                current,
+                                &account_groups.memberships(),
+                                self.inner
+                                    .account_currencies
+                                    .known_account_keys()
+                                    .into_iter()
+                                    .chain(active_holdings_accounts::<RegistryFactory<Trait>>(
+                                        active_holdings_mutations,
+                                    )),
+                                |account, group| {
+                                    self.inner.account_currencies.currency_of(account, group)
+                                },
+                            );
+                            account_blocks.reserve(blocks.len());
+                            for (account, block) in blocks {
+                                if self
+                                    .inner
+                                    .blocked_accounts
+                                    .block_account(account, block.clone())
+                                {
+                                    account_blocks.push(AccountBlockOutcome {
+                                        account_id: account,
+                                        block,
+                                    });
+                                }
                             }
-                        }
-                    });
-                })
-                .map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
-                })?;
+                        })
+                    })
+                    .map_err(|error| {
+                        ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
+                    })?;
                 Ok(AccountBlockOutcomes { account_blocks })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
@@ -665,7 +722,21 @@ mod tests {
     use crate::storage::{ConfigCell, FullLocking, StorageBuilder};
     use crate::{Engine, FullSyncEngine, Instrument, OrderOperation};
 
-    use super::{active_holdings_accounts, update_serialized_transition, ConfigureError};
+    use super::{active_holdings_accounts, prepare_serialized_transition, ConfigureError};
+
+    // Prepares and publishes in one step, as a caller without a lease does.
+    fn update_serialized_transition<T, Cell, Error>(
+        transition: &parking_lot::Mutex<()>,
+        cell: &Cell,
+        update: impl FnOnce(&mut T) -> Result<(), Error>,
+        observe: impl FnOnce(&T, &T),
+    ) -> Result<(), Error>
+    where
+        T: Clone + 'static,
+        Cell: ConfigCell<T>,
+    {
+        prepare_serialized_transition(transition, cell, update)?.publish(observe)
+    }
 
     #[derive(Clone)]
     struct BlockingReadConfigCell<T>(Arc<Mutex<T>>);

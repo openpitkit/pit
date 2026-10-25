@@ -288,6 +288,12 @@ unsafe impl<T: ?Sized + Send> Send for AccountSyncHandleWeak<T> {}
 /// threads sequentially, but concurrent invocation on the same handle is not
 /// supported. Registered policies must be `Send + 'static`.
 ///
+/// The engine takes no lock for its exclusive operations (see the threading
+/// section on [`Engine`](crate::Engine)): the caller runs each with no other
+/// call on the engine in flight. This handle's sequential contract already
+/// gives that; a binding layer that admits concurrent calls for distinct
+/// accounts passes the obligation on to its own caller.
+///
 /// Storage tables use
 /// [`IndexLocking<AccountKeyConstraint>`](crate::storage::IndexLocking),
 /// which requires every storage key to identify an account.

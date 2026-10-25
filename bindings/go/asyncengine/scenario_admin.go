@@ -40,31 +40,9 @@ type UnblockHooks[State any] struct {
 	OnUnblocked func(context.Context, State) error
 }
 
-// RetireAccountHooks handles successful retirement of the source account.
-type RetireAccountHooks[State any] struct {
-	// OnRetired runs after the driver has retired the account.
-	OnRetired func(context.Context, State) error
-}
-
-// RegisterAccountGroupHooks handles account-group registration.
-// A successful membership change can invalidate stored P&L and cost basis and
-// can latch account blocks before OnRegistered runs.
-type RegisterAccountGroupHooks[State any] struct {
-	// OnRegistered runs after all accounts are registered successfully and any
-	// resulting account blocks have been latched.
-	OnRegistered func(context.Context, State) error
-}
-
-// UnregisterAccountGroupHooks handles account-group removal.
-// A successful membership change can invalidate stored P&L and cost basis and
-// can latch account blocks before OnUnregistered runs.
-type UnregisterAccountGroupHooks[State any] struct {
-	// OnUnregistered runs after all accounts are unregistered successfully and
-	// any resulting account blocks have been latched.
-	OnUnregistered func(context.Context, State) error
-}
-
-// CurrencyHooks prepares and handles an account or account-group currency set.
+// CurrencyHooks prepares and handles an account currency set. A group's
+// currency is part of every member's effective currency, so it is set through
+// AsyncEngine.Exclusive, not in a chain.
 type CurrencyHooks[State any] struct {
 	// Currency prepares the currency from State inside the selected lane.
 	Currency func(context.Context, State) (param.Asset, error)
@@ -72,7 +50,7 @@ type CurrencyHooks[State any] struct {
 	OnSet func(context.Context, State) error
 }
 
-// ClearCurrencyHooks handles an account or account-group currency clear.
+// ClearCurrencyHooks handles an account currency clear.
 type ClearCurrencyHooks[State any] struct {
 	// OnCleared runs after the currency is cleared successfully.
 	OnCleared func(context.Context, State) error
@@ -153,131 +131,6 @@ func (c *ChainBuilder[State]) UnblockAccount(
 		return false, task.unblockAccount(ctx, state, hooks)
 	}
 	c.steps = append(c.steps, newChainStep(validate, execute))
-	return c
-}
-
-// RetireAccount retires the source account and runs its result hook. It forgets
-// zero, unused policy state, explicit currency, group membership, and the own
-// block. An unknown or already retired account succeeds unchanged. A policy
-// can refuse for configuration, non-zero state, an operation in progress, or
-// failed evaluation. A refusal removes nothing; only a failing rollback
-// callback still arms the engine kill switch, and the refusal is still the
-// returned error.
-//
-// Finalize or close every request, reservation, and drop-copy operation for
-// this account before running the chain. Do not run operations, configuration,
-// or administration for it concurrently. The source account lane does not
-// serialize administration routed through another account's lane, a group
-// lane, or the engine-wide lane, nor work submitted directly to the underlying
-// engine or driver. A pending unexecuted request may be invisible to retirement
-// and can act on a newly reused ID. Do not reuse the ID before the chain
-// succeeds.
-//
-// A domain failure wraps *reject.AccountRetirementError. A finalizer failure
-// may leave policy state partly removed and arms the engine kill switch. Never
-// reuse the ID after a finalizer failure, even after a later success. An
-// OnRetired error fails the chain after the account has already been retired.
-func (c *ChainBuilder[State]) RetireAccount(
-	hooks RetireAccountHooks[State],
-) *ChainBuilder[State] {
-	validate := func(sourceKind chainSourceKind) error {
-		if err := requireAccountSource(sourceKind); err != nil {
-			return err
-		}
-		if hooks.OnRetired == nil {
-			return incompleteAdministrativeHook("RetireAccount.OnRetired")
-		}
-		return nil
-	}
-	execute := func(
-		ctx context.Context,
-		task *chainTask[State],
-		state State,
-		_ *pendingFinalizer,
-	) (bool, error) {
-		return false, task.retireAccount(ctx, state, hooks)
-	}
-	c.steps = append(c.steps, newChainStep(validate, execute))
-	return c
-}
-
-// RegisterAccountGroup registers accounts with the source account group. The
-// whole chain runs in the first account's lane, matching AsyncAccounts, and
-// cannot contain operations routed by the group's administrative key.
-//
-// A membership change that changes effective currency can invalidate stored
-// P&L and cost basis. A changed effective P&L barrier can latch account blocks
-// before OnRegistered runs.
-func (c *ChainBuilder[State]) RegisterAccountGroup(
-	accountIDs []param.AccountID,
-	hooks RegisterAccountGroupHooks[State],
-) *ChainBuilder[State] {
-	accountIDs = append([]param.AccountID(nil), accountIDs...)
-	validate := func(sourceKind chainSourceKind) error {
-		if err := requireAccountGroupMembershipSource(sourceKind); err != nil {
-			return err
-		}
-		if len(accountIDs) == 0 {
-			return ErrMissingAccountID
-		}
-		if hooks.OnRegistered == nil {
-			return incompleteAdministrativeHook("RegisterAccountGroup.OnRegistered")
-		}
-		return nil
-	}
-	execute := func(
-		ctx context.Context,
-		task *chainTask[State],
-		state State,
-		_ *pendingFinalizer,
-	) (bool, error) {
-		return false, task.registerAccountGroup(ctx, state, accountIDs, hooks)
-	}
-	c.steps = append(
-		c.steps,
-		newAccountGroupMembershipStep(accountIDs, validate, execute),
-	)
-	return c
-}
-
-// UnregisterAccountGroup unregisters accounts from the source account group.
-// The whole chain runs in the first account's lane, matching AsyncAccounts,
-// and cannot contain operations routed by the group's administrative key.
-//
-// A membership change that changes effective currency can invalidate stored
-// P&L and cost basis. A changed effective P&L barrier can latch account blocks
-// before OnUnregistered runs.
-func (c *ChainBuilder[State]) UnregisterAccountGroup(
-	accountIDs []param.AccountID,
-	hooks UnregisterAccountGroupHooks[State],
-) *ChainBuilder[State] {
-	accountIDs = append([]param.AccountID(nil), accountIDs...)
-	validate := func(sourceKind chainSourceKind) error {
-		if err := requireAccountGroupMembershipSource(sourceKind); err != nil {
-			return err
-		}
-		if len(accountIDs) == 0 {
-			return ErrMissingAccountID
-		}
-		if hooks.OnUnregistered == nil {
-			return incompleteAdministrativeHook(
-				"UnregisterAccountGroup.OnUnregistered",
-			)
-		}
-		return nil
-	}
-	execute := func(
-		ctx context.Context,
-		task *chainTask[State],
-		state State,
-		_ *pendingFinalizer,
-	) (bool, error) {
-		return false, task.unregisterAccountGroup(ctx, state, accountIDs, hooks)
-	}
-	c.steps = append(
-		c.steps,
-		newAccountGroupMembershipStep(accountIDs, validate, execute),
-	)
 	return c
 }
 
@@ -389,61 +242,6 @@ func (c *ChainBuilder[State]) ClearAccountCurrency(
 	return c
 }
 
-// SetAccountGroupCurrency sets the source account group's currency.
-func (c *ChainBuilder[State]) SetAccountGroupCurrency(
-	hooks CurrencyHooks[State],
-) *ChainBuilder[State] {
-	validate := func(sourceKind chainSourceKind) error {
-		if err := requireAccountGroupSource(sourceKind); err != nil {
-			return err
-		}
-		if hooks.Currency == nil {
-			return incompleteAdministrativeHook("SetAccountGroupCurrency.Currency")
-		}
-		if hooks.OnSet == nil {
-			return incompleteAdministrativeHook("SetAccountGroupCurrency.OnSet")
-		}
-		return nil
-	}
-	execute := func(
-		ctx context.Context,
-		task *chainTask[State],
-		state State,
-		_ *pendingFinalizer,
-	) (bool, error) {
-		return false, task.setAccountGroupCurrency(ctx, state, hooks)
-	}
-	c.steps = append(c.steps, newChainStep(validate, execute))
-	return c
-}
-
-// ClearAccountGroupCurrency clears the source account group's currency.
-func (c *ChainBuilder[State]) ClearAccountGroupCurrency(
-	hooks ClearCurrencyHooks[State],
-) *ChainBuilder[State] {
-	validate := func(sourceKind chainSourceKind) error {
-		if err := requireAccountGroupSource(sourceKind); err != nil {
-			return err
-		}
-		if hooks.OnCleared == nil {
-			return incompleteAdministrativeHook(
-				"ClearAccountGroupCurrency.OnCleared",
-			)
-		}
-		return nil
-	}
-	execute := func(
-		ctx context.Context,
-		task *chainTask[State],
-		state State,
-		_ *pendingFinalizer,
-	) (bool, error) {
-		return false, task.clearAccountGroupCurrency(ctx, state, hooks)
-	}
-	c.steps = append(c.steps, newChainStep(validate, execute))
-	return c
-}
-
 // SetSpotFundsAccountPnl sets the source account's absolute SpotFunds P&L
 // state and returns every account block latched by that assignment to its hook.
 func (c *ChainBuilder[State]) SetSpotFundsAccountPnl(
@@ -476,8 +274,7 @@ func (c *ChainBuilder[State]) SetSpotFundsAccountPnl(
 }
 
 func requireAccountSource(sourceKind chainSourceKind) error {
-	if sourceKind == chainSourceAccountGroup ||
-		sourceKind == chainSourceAccountGroupMembership {
+	if sourceKind == chainSourceAccountGroup {
 		return ErrChainAccountRequired
 	}
 	return nil
@@ -488,29 +285,6 @@ func requireAccountGroupSource(sourceKind chainSourceKind) error {
 		return ErrChainAccountGroupRequired
 	}
 	return nil
-}
-
-func requireAccountGroupMembershipSource(sourceKind chainSourceKind) error {
-	if sourceKind != chainSourceAccountGroupMembership {
-		return ErrChainAccountGroupRequired
-	}
-	return nil
-}
-
-func newAccountGroupMembershipStep[State any](
-	accountIDs []param.AccountID,
-	validate func(chainSourceKind) error,
-	execute func(
-		context.Context, *chainTask[State], State, *pendingFinalizer,
-	) (bool, error),
-) chainStep[State] {
-	step := newChainStep(validate, execute)
-	step.accountGroupMembership = true
-	if len(accountIDs) != 0 {
-		routingAccountID := accountIDs[0]
-		step.routingAccountID = &routingAccountID
-	}
-	return step
 }
 
 func incompleteAdministrativeHook(name string) error {
@@ -543,65 +317,6 @@ func (t *chainTask[State]) unblockAccount(
 	t.engine.driver.Accounts().Unblock(t.plan.accountID)
 	if err := hooks.OnUnblocked(ctx, state); err != nil {
 		return fmt.Errorf("async chain account unblocked hook: %w", err)
-	}
-	return nil
-}
-
-func (t *chainTask[State]) retireAccount(
-	ctx context.Context,
-	state State,
-	hooks RetireAccountHooks[State],
-) error {
-	t.retryUnsafe = true
-	if err := t.engine.driver.RetireAccount(t.plan.accountID); err != nil {
-		return fmt.Errorf("async chain retire account: %w", err)
-	}
-	if err := hooks.OnRetired(ctx, state); err != nil {
-		return fmt.Errorf("async chain account retired hook: %w", err)
-	}
-	return nil
-}
-
-func (t *chainTask[State]) registerAccountGroup(
-	ctx context.Context,
-	state State,
-	accountIDs []param.AccountID,
-	hooks RegisterAccountGroupHooks[State],
-) error {
-	if len(accountIDs) == 0 {
-		return ErrMissingAccountID
-	}
-	t.retryUnsafe = true
-	if err := t.engine.driver.Accounts().RegisterGroup(
-		accountIDs,
-		*t.plan.groupID,
-	); err != nil {
-		return fmt.Errorf("async chain register account group: %w", err)
-	}
-	if err := hooks.OnRegistered(ctx, state); err != nil {
-		return fmt.Errorf("async chain account group registered hook: %w", err)
-	}
-	return nil
-}
-
-func (t *chainTask[State]) unregisterAccountGroup(
-	ctx context.Context,
-	state State,
-	accountIDs []param.AccountID,
-	hooks UnregisterAccountGroupHooks[State],
-) error {
-	if len(accountIDs) == 0 {
-		return ErrMissingAccountID
-	}
-	t.retryUnsafe = true
-	if err := t.engine.driver.Accounts().UnregisterGroup(
-		accountIDs,
-		*t.plan.groupID,
-	); err != nil {
-		return fmt.Errorf("async chain unregister account group: %w", err)
-	}
-	if err := hooks.OnUnregistered(ctx, state); err != nil {
-		return fmt.Errorf("async chain account group unregistered hook: %w", err)
 	}
 	return nil
 }
@@ -674,45 +389,6 @@ func (t *chainTask[State]) clearAccountCurrency(
 	t.engine.driver.Accounts().ClearCurrency(t.plan.accountID)
 	if err := hooks.OnCleared(ctx, state); err != nil {
 		return fmt.Errorf("async chain account currency cleared hook: %w", err)
-	}
-	return nil
-}
-
-func (t *chainTask[State]) setAccountGroupCurrency(
-	ctx context.Context,
-	state State,
-	hooks CurrencyHooks[State],
-) error {
-	currency, err := hooks.Currency(ctx, state)
-	if err != nil {
-		return fmt.Errorf("async chain account-group currency input: %w", err)
-	}
-	t.retryUnsafe = true
-	if err := t.engine.driver.Accounts().SetGroupCurrency(
-		*t.plan.groupID,
-		currency,
-	); err != nil {
-		return fmt.Errorf("async chain set account-group currency: %w", err)
-	}
-	if err := hooks.OnSet(ctx, state); err != nil {
-		return fmt.Errorf("async chain account-group currency set hook: %w", err)
-	}
-	return nil
-}
-
-func (t *chainTask[State]) clearAccountGroupCurrency(
-	ctx context.Context,
-	state State,
-	hooks ClearCurrencyHooks[State],
-) error {
-	t.retryUnsafe = true
-	if err := t.engine.driver.Accounts().ClearGroupCurrency(
-		*t.plan.groupID,
-	); err != nil {
-		return fmt.Errorf("async chain clear account-group currency: %w", err)
-	}
-	if err := hooks.OnCleared(ctx, state); err != nil {
-		return fmt.Errorf("async chain account-group currency cleared hook: %w", err)
 	}
 	return nil
 }

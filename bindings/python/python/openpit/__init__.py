@@ -61,7 +61,9 @@ selected at builder time:
   engine.
 - `account_sync()` - concurrent invocation on the same handle is safe when
   the caller pins each account to a single chain (one queue or one worker at a
-  time), so calls for the same account are never concurrent.
+  time), so calls for the same account are never concurrent. The exclusive
+  operations - account-group membership, group currency, and the Spot Funds
+  retune - run with no other call on the handle in flight.
 """
 
 from contextlib import suppress
@@ -113,8 +115,8 @@ Prefer `no_sync()` when you do not explicitly work with multiple threads
 yourself: it has zero synchronization overhead and is the right default for
 embeddings that drive the engine from a single thread (synchronous code or one
 asyncio loop). Use `full_sync()` when sharing the engine across threads
-concurrently. Use `account_sync()` for sharded sequential workloads where
-each account is pinned to one processing chain. Storage owned by built-in or
+concurrently. Use `account_sync()` for sharded workloads where each account
+is pinned to one processing chain. Storage owned by built-in or
 custom policies is always account-keyed regardless of sync mode.
 """
 

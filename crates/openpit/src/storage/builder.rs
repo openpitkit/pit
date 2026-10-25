@@ -108,22 +108,31 @@ where
         Storage::with_locking_policy(self.locking_policy_factory.create_policy())
     }
 
-    /// Creates an empty storage configured by this builder's policy factory,
-    /// bypassing the [`CreateStorageFor<Key>`](super::CreateStorageFor) key
-    /// gate.
+    /// Creates an empty engine-owned table that calls for any account may
+    /// read concurrently, bypassing the
+    /// [`CreateStorageFor<Key>`](super::CreateStorageFor) key gate.
     ///
     /// Unlike [`create_for_bound_key`](Self::create_for_bound_key), this does
-    /// **not** require the factory to admit `Key`. Any key type may be used,
-    /// including those that
-    /// [`CreateStorageFor<Key>`](super::CreateStorageFor) would reject under a
-    /// stricter bound. [`AnyKey`](super::AnyKey) is the loosest bound and
-    /// admits every key; this method bypasses the
-    /// [`CreateStorageFor<Key>`](super::CreateStorageFor) gate entirely.
+    /// **not** require the factory to admit `Key`: such a table is never a
+    /// policy storage, so the per-account sharding guarantee the gate encodes
+    /// does not apply to it. The returned
+    /// [`EngineWideStorage`](super::EngineWideStorage) only writes with the
+    /// index held exclusively.
     #[inline]
-    pub(crate) fn create_for_any_key<Key, Value>(
+    pub(crate) fn create_engine_wide<Key, Value>(
         &self,
-    ) -> Storage<Key, Value, LockingPolicyFactory::Policy> {
-        Storage::with_locking_policy(self.locking_policy_factory.create_policy())
+    ) -> super::EngineWideStorage<Key, Value, LockingPolicyFactory::Policy> {
+        super::EngineWideStorage::new(Storage::with_locking_policy(
+            self.locking_policy_factory.create_policy(),
+        ))
+    }
+
+    /// Reports whether the engine serializes its rare account-state
+    /// transitions itself; see
+    /// [`LockingPolicyFactory::serializes_state_transitions`](super::LockingPolicyFactory::serializes_state_transitions).
+    #[inline]
+    pub(crate) fn serializes_state_transitions(&self) -> bool {
+        self.locking_policy_factory.serializes_state_transitions()
     }
 
     /// Creates a fresh standalone [`LockingPolicy`](super::LockingPolicy)

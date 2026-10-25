@@ -35,6 +35,13 @@ import (
 // an engine. Obtain it from an engine's Configure accessor. It carries no
 // state of its own: every call forwards to the engine it was created from,
 // and it is valid for as long as that engine is.
+//
+// The SpotFunds retune methods - SpotFunds, SpotFundsPnlBoundsKillSwitch,
+// SpotFundsGlobalLimitMode, SpotFundsAccountLimitMode, SpotFundsPositionLimit,
+// and SpotFundsAccountGroupLimitMode - are exclusive operations. Under NoSync
+// and AccountSync the engine takes no lock for them: run each with no other
+// call on the engine in flight, as asyncengine.AsyncEngine.Exclusive does.
+// Under FullSync the engine orders them itself.
 type Configurator struct {
 	engine native.Engine
 }

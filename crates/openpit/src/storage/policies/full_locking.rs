@@ -63,6 +63,12 @@ impl LockingPolicyFactory for FullLocking {
         }
     }
 
+    /// Calls may run concurrently with no caller guarantee, so the engine
+    /// serializes transitions itself.
+    fn serializes_state_transitions(&self) -> bool {
+        true
+    }
+
     fn new_shared<T: 'static>(value: T) -> std::sync::Arc<T> {
         std::sync::Arc::new(value)
     }

@@ -26,10 +26,10 @@ import (
 // Observer receives diagnostic callbacks from the dispatcher.
 //
 // All callbacks are invoked synchronously from worker or submitter
-// goroutines; implementations must be thread-safe and must not block for
-// long. To export metrics into Prometheus, OpenTelemetry, or a logging
-// pipeline, accumulate counters and dispatch the heavy work to a separate
-// goroutine.
+// goroutines; implementations must be thread-safe, must not panic, and must
+// not block for long. To export metrics into Prometheus, OpenTelemetry, or a
+// logging pipeline, accumulate counters and dispatch the heavy work to a
+// separate goroutine.
 //
 // Every callback carries the routing key's numeric id projected into an
 // AccountID. For account lanes it is the account id, for account-group lanes it

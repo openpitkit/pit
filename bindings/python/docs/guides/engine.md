@@ -25,8 +25,9 @@ engine = (
 Policy names must be unique within one engine configuration.
 
 Use `full_sync()` when the same engine is called concurrently from multiple
-OS threads. Use `account_sync()` only when calls are serialized on one
-engine handle and each account is pinned to one processing chain.
+OS threads. Use `account_sync()` only when each account is pinned to one
+processing chain and the exclusive operations run with no other call in
+flight; see the threading guide.
 
 ## Run the explicit two-stage flow
 

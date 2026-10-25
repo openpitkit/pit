@@ -434,7 +434,6 @@ const (
 	chainSourceAccount chainSourceKind = iota
 	chainSourceOrder
 	chainSourceAccountGroup
-	chainSourceAccountGroupMembership
 )
 
 func (p chainPlan[State]) validate() (
@@ -463,44 +462,18 @@ func (p chainPlan[State]) validate() (
 		}
 		sourceKind = chainSourceAccountGroup
 		key = groupRoutingKey(*p.groupID)
-		var membershipRoutingKey *param.AccountID
-		for _, step := range p.steps {
-			if !step.accountGroupMembership {
-				continue
-			}
-			sourceKind = chainSourceAccountGroupMembership
-			if step.routingAccountID == nil {
-				continue
-			}
-			if membershipRoutingKey == nil {
-				routingAccountID := *step.routingAccountID
-				membershipRoutingKey = &routingAccountID
-				continue
-			}
-			if *membershipRoutingKey != *step.routingAccountID {
-				err = ErrChainAccountMismatch
-			}
-		}
-		if membershipRoutingKey != nil {
-			key = accountRoutingKey(*membershipRoutingKey)
-		}
 	}
 	for _, step := range p.steps {
 		if validateErr := step.validate(sourceKind); validateErr != nil {
 			return routingKey{}, param.AccountID{}, validateErr
 		}
 	}
-	if err != nil {
-		return routingKey{}, param.AccountID{}, err
-	}
 	return key, accountID, nil
 }
 
 type chainStep[State any] struct {
-	validate               func(chainSourceKind) error
-	accountGroupMembership bool
-	routingAccountID       *param.AccountID
-	execute                func(
+	validate func(chainSourceKind) error
+	execute  func(
 		context.Context, *chainTask[State], State, *pendingFinalizer,
 	) (bool, error)
 }
@@ -625,9 +598,8 @@ type executionReportStep[State any] struct {
 }
 
 func (s executionReportStep[State]) validate(sourceKind chainSourceKind) error {
-	if sourceKind == chainSourceAccountGroup ||
-		sourceKind == chainSourceAccountGroupMembership {
-		return ErrChainAccountRequired
+	if err := requireAccountSource(sourceKind); err != nil {
+		return err
 	}
 	if s.hooks.Report == nil {
 		return fmt.Errorf(
@@ -656,9 +628,8 @@ type accountAdjustmentStep[State any] struct {
 }
 
 func (s accountAdjustmentStep[State]) validate(sourceKind chainSourceKind) error {
-	if sourceKind == chainSourceAccountGroup ||
-		sourceKind == chainSourceAccountGroupMembership {
-		return ErrChainAccountRequired
+	if err := requireAccountSource(sourceKind); err != nil {
+		return err
 	}
 	if s.hooks.Adjustments == nil {
 		return fmt.Errorf(

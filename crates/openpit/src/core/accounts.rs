@@ -22,13 +22,13 @@ use crate::core::account_groups::{AccountGroupError, AccountGroupsHandle};
 use crate::core::ConfigRegistry;
 use crate::param::{AccountGroupId, AccountId, Asset, DEFAULT_ACCOUNT_GROUP};
 use crate::pretrade::{AccountBlock, RejectCode};
-use crate::storage::{self, LockingPolicyFactory, Storage, StorageBuilder};
+use crate::storage::{self, EngineWideStorage, Storage, StorageBuilder};
 
 #[derive(Default)]
 struct StateTransitionAccess {
     readers: usize,
-    writer: bool,
     waiting_writers: usize,
+    writer: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -37,173 +37,146 @@ enum StateTransitionAccessKind {
     Exclusive,
 }
 
-struct StateTransitionAccessGuard<'a, StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    accesses: &'a Storage<
-        AccountId,
-        StateTransitionAccess,
-        <StorageFactory as LockingPolicyFactory>::Policy,
-    >,
-    account: AccountId,
+struct StateTransitionAccessGuard<'a> {
+    access: &'a parking_lot::Mutex<StateTransitionAccess>,
     kind: StateTransitionAccessKind,
 }
 
-impl<StorageFactory> Drop for StateTransitionAccessGuard<'_, StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
+impl Drop for StateTransitionAccessGuard<'_> {
     fn drop(&mut self) {
-        self.accesses
-            .with_mut_if_present(&self.account, |access| match self.kind {
-                StateTransitionAccessKind::Shared => {
-                    access.readers = access.readers.saturating_sub(1);
-                }
-                StateTransitionAccessKind::Exclusive => {
-                    access.writer = false;
-                }
-            });
+        let mut access = self.access.lock();
+        match self.kind {
+            StateTransitionAccessKind::Shared => {
+                access.readers = access.readers.saturating_sub(1);
+            }
+            StateTransitionAccessKind::Exclusive => {
+                access.writer = false;
+            }
+        }
     }
 }
 
-/// Serializes account-state writes against barrier and membership transitions.
+/// Serializes account-state writes against the engine's rare transitions:
+/// group membership, group currency, barrier retunes and account retirement.
 ///
-/// All ordinary state writers share one global lease, so they remain parallel
-/// with each other under `FullSync`. Barrier retunes and membership changes
-/// take the single global exclusive lease. While one runs, account-state writes
-/// for every account pause until the transition completes. The pause includes
-/// the spin-and-sleep wait while an exclusive writer is queued behind readers.
-struct StateTransitionCoordinator<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    access:
-        Storage<AccountId, StateTransitionAccess, <StorageFactory as LockingPolicyFactory>::Policy>,
+/// Whether the engine takes the lease at all is the storage factory's answer
+/// to [`serializes_state_transitions`].
+///
+/// - Serialized (`FullSync`): all ordinary state writers share one global
+///   lease, so they remain parallel with each other, and a transition takes
+///   it exclusively. A queued transition is preferred over later writers;
+///   while it runs, account-state writes for every account pause, including
+///   the spin-and-sleep wait while it is queued behind writers. The counters
+///   sit under a mutex held only for their update, never across the
+///   operation or a wait.
+/// - Not serialized (`LocalSync`, `AccountSync`): the threading contract
+///   makes the caller run every transition with no other call on the engine
+///   in flight, so the operation runs directly. Debug builds check that
+///   contract with `ContractCheck`.
+///
+/// [`serializes_state_transitions`]: crate::storage::LockingPolicyFactory::serializes_state_transitions
+struct StateTransitionCoordinator {
+    access: parking_lot::Mutex<StateTransitionAccess>,
     #[cfg(test)]
-    exclusive_wait_hooks: Storage<
-        AccountId,
-        Option<std::sync::Arc<std::sync::Barrier>>,
-        <StorageFactory as LockingPolicyFactory>::Policy,
-    >,
+    exclusive_wait_hook: parking_lot::Mutex<Option<std::sync::Arc<std::sync::Barrier>>>,
+    #[cfg(debug_assertions)]
+    contract: ContractCheck,
+    serialized: bool,
 }
 
-impl<StorageFactory> StateTransitionCoordinator<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    fn new(builder: &StorageBuilder<StorageFactory>) -> Self {
+impl StateTransitionCoordinator {
+    fn new(serialized: bool) -> Self {
         Self {
-            access: builder.create_for_bound_key(),
+            access: parking_lot::Mutex::new(StateTransitionAccess::default()),
             #[cfg(test)]
-            exclusive_wait_hooks: builder.create_for_bound_key(),
+            exclusive_wait_hook: parking_lot::Mutex::new(None),
+            #[cfg(debug_assertions)]
+            contract: ContractCheck::new(),
+            serialized,
         }
     }
 
     fn with_shared<R>(&self, operation: impl FnOnce() -> R) -> R {
-        let _access = Self::acquire_shared(&self.access, Self::access_key(), false);
+        if !self.serialized {
+            #[cfg(debug_assertions)]
+            let _mark = self.contract.enter_shared();
+            return operation();
+        }
+        let _access = self.acquire_shared(false);
         operation()
     }
 
     fn with_rollback_shared<R>(&self, operation: impl FnOnce() -> R) -> R {
+        if !self.serialized {
+            #[cfg(debug_assertions)]
+            let _mark = self.contract.enter_shared();
+            return operation();
+        }
         // Rollback can already own the account-PnL assertion lease. It must be
         // allowed to finish even when a transition is queued behind another
         // state reader that is waiting for that lease.
-        let _access = Self::acquire_shared(&self.access, Self::access_key(), true);
+        let _access = self.acquire_shared(true);
         operation()
     }
 
     fn with_exclusive<R>(&self, operation: impl FnOnce() -> R) -> R {
-        let _access = self.acquire_exclusive(&self.access, Self::access_key());
+        if !self.serialized {
+            #[cfg(debug_assertions)]
+            let _mark = self.contract.enter_exclusive();
+            return operation();
+        }
+        let _access = self.acquire_exclusive();
         operation()
     }
 
     #[cfg(test)]
     fn set_exclusive_wait_hook(&self, hook: std::sync::Arc<std::sync::Barrier>) {
-        self.exclusive_wait_hooks.with_mut(
-            Self::access_key(),
-            || None,
-            |slot, _| {
-                *slot = Some(hook);
-            },
-        );
+        *self.exclusive_wait_hook.lock() = Some(hook);
     }
 
-    fn access_key() -> AccountId {
-        AccountId::from_u64(0)
-    }
-
-    fn acquire_shared(
-        accesses: &Storage<
-            AccountId,
-            StateTransitionAccess,
-            <StorageFactory as LockingPolicyFactory>::Policy,
-        >,
-        account: AccountId,
-        bypass_waiting_writer: bool,
-    ) -> StateTransitionAccessGuard<'_, StorageFactory> {
+    fn acquire_shared(&self, bypass_waiting_writer: bool) -> StateTransitionAccessGuard<'_> {
         let mut attempts = 0_u32;
         loop {
-            let acquired =
-                accesses.with_mut(account, StateTransitionAccess::default, |access, _| {
-                    if access.writer || (!bypass_waiting_writer && access.waiting_writers != 0) {
-                        return false;
+            {
+                let mut access = self.access.lock();
+                if !access.writer && (bypass_waiting_writer || access.waiting_writers == 0) {
+                    if let Some(readers) = access.readers.checked_add(1) {
+                        access.readers = readers;
+                        return StateTransitionAccessGuard {
+                            access: &self.access,
+                            kind: StateTransitionAccessKind::Shared,
+                        };
                     }
-                    let Some(readers) = access.readers.checked_add(1) else {
-                        return false;
-                    };
-                    access.readers = readers;
-                    true
-                });
-            if acquired {
-                return StateTransitionAccessGuard {
-                    accesses,
-                    account,
-                    kind: StateTransitionAccessKind::Shared,
-                };
+                }
             }
             Self::back_off(&mut attempts);
         }
     }
 
-    fn acquire_exclusive<'a>(
-        &self,
-        accesses: &'a Storage<
-            AccountId,
-            StateTransitionAccess,
-            <StorageFactory as LockingPolicyFactory>::Policy,
-        >,
-        account: AccountId,
-    ) -> StateTransitionAccessGuard<'a, StorageFactory> {
-        accesses.with_mut(account, StateTransitionAccess::default, |access, _| {
+    fn acquire_exclusive(&self) -> StateTransitionAccessGuard<'_> {
+        {
+            let mut access = self.access.lock();
             access.waiting_writers = access.waiting_writers.saturating_add(1);
-        });
+        }
         #[cfg(test)]
         {
-            let hook = self
-                .exclusive_wait_hooks
-                .with_mut(account, || None, |slot, _| slot.take());
+            let hook = self.exclusive_wait_hook.lock().take();
             if let Some(hook) = hook {
                 hook.wait();
             }
         }
         let mut attempts = 0_u32;
         loop {
-            let acquired =
-                accesses.with_mut(account, StateTransitionAccess::default, |access, _| {
-                    if access.writer || access.readers != 0 {
-                        return false;
-                    }
+            {
+                let mut access = self.access.lock();
+                if !access.writer && access.readers == 0 {
                     access.waiting_writers = access.waiting_writers.saturating_sub(1);
                     access.writer = true;
-                    true
-                });
-            if acquired {
-                return StateTransitionAccessGuard {
-                    accesses,
-                    account,
-                    kind: StateTransitionAccessKind::Exclusive,
-                };
+                    return StateTransitionAccessGuard {
+                        access: &self.access,
+                        kind: StateTransitionAccessKind::Exclusive,
+                    };
+                }
             }
             Self::back_off(&mut attempts);
         }
@@ -219,6 +192,91 @@ where
     }
 }
 
+/// Debug-only check of the caller's half of the transition contract when the
+/// engine takes no lease.
+///
+/// One word per coordinator: the low bits count state writers in flight, the
+/// top bit marks an exclusive transition. Each side changes the word with a
+/// single read-modify-write, so an overlap is caught under any interleaving.
+/// Only calls under the lease are seen: a read at the entry of a call, before
+/// its first state write, is not.
+#[cfg(debug_assertions)]
+struct ContractCheck {
+    state: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(debug_assertions)]
+const CONTRACT_EXCLUSIVE: usize = !(usize::MAX >> 1);
+
+#[cfg(debug_assertions)]
+impl ContractCheck {
+    fn new() -> Self {
+        Self {
+            state: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn enter_shared(&self) -> ContractSharedMark<'_> {
+        let previous = self.state.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        // The mark exists before the assert so that unwinding takes the count
+        // back and leaves the word clean for later calls.
+        let mark = ContractSharedMark { check: self };
+        assert!(
+            previous & CONTRACT_EXCLUSIVE == 0,
+            "openpit: an account-state write ran during an exclusive engine \
+             operation; without the engine-side transition lease the caller \
+             must run group membership, group currency, Spot Funds retune and \
+             account retirement with no other engine call in flight"
+        );
+        mark
+    }
+
+    fn enter_exclusive(&self) -> ContractExclusiveMark<'_> {
+        let entered = self.state.compare_exchange(
+            0,
+            CONTRACT_EXCLUSIVE,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        );
+        assert!(
+            entered.is_ok(),
+            "openpit: an exclusive engine operation overlapped another engine \
+             call; without the engine-side transition lease the caller must \
+             run group membership, group currency, Spot Funds retune and \
+             account retirement with no other engine call in flight"
+        );
+        ContractExclusiveMark { check: self }
+    }
+}
+
+#[cfg(debug_assertions)]
+struct ContractSharedMark<'a> {
+    check: &'a ContractCheck,
+}
+
+#[cfg(debug_assertions)]
+impl Drop for ContractSharedMark<'_> {
+    fn drop(&mut self) {
+        self.check
+            .state
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+#[cfg(debug_assertions)]
+struct ContractExclusiveMark<'a> {
+    check: &'a ContractCheck,
+}
+
+#[cfg(debug_assertions)]
+impl Drop for ContractExclusiveMark<'_> {
+    fn drop(&mut self) {
+        self.check
+            .state
+            .fetch_and(!CONTRACT_EXCLUSIVE, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 // ─── AccountCurrencies ──────────────────────────────────────────────────────
 
 pub(crate) struct AccountCurrencies<StorageFactory>
@@ -226,8 +284,8 @@ where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
     accounts: Storage<AccountId, Asset, StorageFactory::Policy>,
-    groups: Storage<AccountGroupId, Asset, StorageFactory::Policy>,
-    state_transition: StateTransitionCoordinator<StorageFactory>,
+    groups: EngineWideStorage<AccountGroupId, Asset, StorageFactory::Policy>,
+    state_transition: StateTransitionCoordinator,
 }
 
 impl<StorageFactory> AccountCurrencies<StorageFactory>
@@ -239,8 +297,10 @@ where
     pub(crate) fn new(builder: &StorageBuilder<StorageFactory>) -> Self {
         Self {
             accounts: builder.create_for_bound_key(),
-            groups: builder.create_for_any_key(),
-            state_transition: StateTransitionCoordinator::new(builder),
+            groups: builder.create_engine_wide(),
+            state_transition: StateTransitionCoordinator::new(
+                builder.serializes_state_transitions(),
+            ),
         }
     }
 
@@ -279,14 +339,21 @@ where
         self.accounts.with(&account, |currency| currency.clone())
     }
 
+    /// Group currency is part of every member's effective currency, so it
+    /// changes as an exclusive transition: no member's state write sees two
+    /// currencies within one lease.
     fn set_group_currency(&self, group: AccountGroupId, currency: Asset) {
-        let initial_currency = currency.clone();
-        self.groups
-            .with_mut(group, || initial_currency, |slot, _| *slot = currency);
+        self.state_transition.with_exclusive(|| {
+            let initial_currency = currency.clone();
+            self.groups
+                .upsert(group, || initial_currency, |slot, _| *slot = currency);
+        });
     }
 
     fn clear_group_currency(&self, group: AccountGroupId) {
-        self.groups.remove(&group);
+        self.state_transition.with_exclusive(|| {
+            self.groups.remove(&group);
+        });
     }
 
     fn group_currency(&self, group: AccountGroupId) -> Option<Asset> {
@@ -343,6 +410,9 @@ where
 ///
 /// `Accounts` inherits the engine's synchronization mode through its inner
 /// handles; see [`Engine`](crate::Engine)'s threading section for the contract.
+/// Group membership and group currency are exclusive operations there: under
+/// [`LocalSync`](crate::LocalSync) and [`AccountSync`](crate::AccountSync) the
+/// caller runs them with no other engine call in flight.
 ///
 /// # Examples
 ///
@@ -433,6 +503,14 @@ where
     /// basis accumulated under the previous one lose their meaning; the SDK
     /// guarantees nothing about them.
     ///
+    /// # Concurrency
+    ///
+    /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
+    /// section. Moving an account between groups is
+    /// [`unregister_group`](Self::unregister_group) followed by this call; run
+    /// both in one exclusive stretch so no other call observes the account in
+    /// the default group in between.
+    ///
     /// # Errors
     ///
     /// Returns [`AccountGroupError::ReservedGroup`] when `group` is the reserved
@@ -474,6 +552,11 @@ where
     /// If leaving `group` changes effective currency, stored PnL and cost
     /// basis accumulated under the previous one lose their meaning; the SDK
     /// guarantees nothing about them.
+    ///
+    /// # Concurrency
+    ///
+    /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
+    /// section.
     ///
     /// # Errors
     ///
@@ -554,6 +637,12 @@ where
     /// detect, or report the change. Barrier selection itself stays
     /// deterministic: the next policy access re-resolves the cascade with the
     /// new effective currency.
+    ///
+    /// # Concurrency
+    ///
+    /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
+    /// section. The group's currency is part of the effective currency of
+    /// every member, so no member's call may run beside it.
     pub fn set_group_currency(&self, group: AccountGroupId, currency: Asset) {
         self.currencies.set_group_currency(group, currency);
     }
@@ -574,6 +663,11 @@ where
     /// detect, or report the change. Barrier selection itself stays
     /// deterministic: the next policy access re-resolves the cascade with the
     /// new effective currency.
+    ///
+    /// # Concurrency
+    ///
+    /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
+    /// section.
     pub fn clear_group_currency(&self, group: AccountGroupId) {
         self.currencies.clear_group_currency(group);
     }
@@ -797,7 +891,9 @@ mod tests {
     use crate::core::account_control::BlockedAccounts;
     use crate::core::account_groups::AccountGroups;
     use crate::pretrade::RejectScope;
-    use crate::storage::{FullLocking, LockingPolicyFactory, NoLocking, StorageBuilder};
+    use crate::storage::{
+        FullLocking, IndexLocking, LockingPolicyFactory, NoLocking, StorageBuilder,
+    };
 
     fn account(id: u64) -> AccountId {
         AccountId::from_u64(id)
@@ -841,9 +937,9 @@ mod tests {
         use std::thread;
         use std::time::Duration;
 
-        let coordinator = Arc::new(StateTransitionCoordinator::new(&StorageBuilder::new(
-            FullLocking,
-        )));
+        let coordinator = Arc::new(StateTransitionCoordinator::new(
+            StorageBuilder::new(FullLocking).serializes_state_transitions(),
+        ));
         let timeout = Duration::from_secs(1);
         let blocked_timeout = Duration::from_millis(50);
 
@@ -931,6 +1027,118 @@ mod tests {
         rollback_reader.join().expect("rollback reader must finish");
         writer.join().expect("transition must finish");
         ordinary_reader.join().expect("ordinary reader must finish");
+    }
+
+    #[test]
+    fn serialized_state_transition_excludes_concurrent_writers() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::thread;
+
+        const WRITERS: usize = 4;
+        const LEASES_PER_WRITER: usize = 2_000;
+        const TRANSITIONS: usize = 500;
+
+        let coordinator = StateTransitionCoordinator::new(
+            StorageBuilder::new(FullLocking).serializes_state_transitions(),
+        );
+        let live_writers = AtomicUsize::new(0);
+        let transition_active = AtomicBool::new(false);
+        let overlapped = AtomicBool::new(false);
+        let write_section = || {
+            live_writers.fetch_add(1, Ordering::SeqCst);
+            // Stay inside the lease a while, so that a transition admitted
+            // beside it overlaps this section instead of slipping past it.
+            thread::yield_now();
+            if transition_active.load(Ordering::SeqCst) {
+                overlapped.store(true, Ordering::SeqCst);
+            }
+            live_writers.fetch_sub(1, Ordering::SeqCst);
+        };
+        thread::scope(|scope| {
+            for writer in 0..WRITERS {
+                let coordinator = &coordinator;
+                scope.spawn(move || {
+                    for _ in 0..LEASES_PER_WRITER {
+                        if writer % 2 == 0 {
+                            coordinator.with_shared(write_section);
+                        } else {
+                            coordinator.with_rollback_shared(write_section);
+                        }
+                    }
+                });
+            }
+            scope.spawn(|| {
+                for _ in 0..TRANSITIONS {
+                    coordinator.with_exclusive(|| {
+                        transition_active.store(true, Ordering::SeqCst);
+                        if live_writers.load(Ordering::SeqCst) != 0 {
+                            overlapped.store(true, Ordering::SeqCst);
+                        }
+                        thread::yield_now();
+                        transition_active.store(false, Ordering::SeqCst);
+                    });
+                }
+            });
+        });
+        assert!(
+            !overlapped.load(Ordering::SeqCst),
+            "a serialized transition ran beside a live state write"
+        );
+    }
+
+    #[test]
+    fn only_full_locking_serializes_state_transitions() {
+        assert!(StorageBuilder::new(FullLocking).serializes_state_transitions());
+        assert!(!StorageBuilder::new(NoLocking).serializes_state_transitions());
+        assert!(
+            !StorageBuilder::new(IndexLocking::<crate::AccountKeyConstraint>::default())
+                .serializes_state_transitions()
+        );
+    }
+
+    #[test]
+    fn unserialized_leases_run_the_operation_and_nest() {
+        let coordinator = StateTransitionCoordinator::new(false);
+        assert_eq!(coordinator.with_shared(|| 1), 1);
+        assert_eq!(
+            coordinator.with_shared(|| coordinator.with_rollback_shared(|| 2)),
+            2
+        );
+        assert_eq!(coordinator.with_exclusive(|| 3), 3);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "an exclusive engine operation overlapped another engine call")]
+    fn unserialized_exclusive_during_state_write_is_reported_in_debug() {
+        let coordinator = StateTransitionCoordinator::new(false);
+        coordinator.with_shared(|| coordinator.with_exclusive(|| ()));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "an account-state write ran during an exclusive engine operation")]
+    fn unserialized_state_write_during_exclusive_is_reported_in_debug() {
+        let coordinator = StateTransitionCoordinator::new(false);
+        coordinator.with_exclusive(|| coordinator.with_rollback_shared(|| ()));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn unserialized_contract_check_is_clean_after_a_reported_overlap() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let coordinator = StateTransitionCoordinator::new(false);
+        let reported = catch_unwind(AssertUnwindSafe(|| {
+            coordinator.with_shared(|| coordinator.with_exclusive(|| ()))
+        }));
+        assert!(reported.is_err());
+        let reported = catch_unwind(AssertUnwindSafe(|| {
+            coordinator.with_exclusive(|| coordinator.with_shared(|| ()))
+        }));
+        assert!(reported.is_err());
+        coordinator.with_exclusive(|| ());
+        coordinator.with_shared(|| ());
     }
 
     #[test]

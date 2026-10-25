@@ -218,71 +218,6 @@ func administrativeChainCases() []administrativeChainCase {
 			verify: verifyAdministrativeAccountUnblocked,
 		},
 		{
-			name:        "register account group",
-			groupSource: true,
-			accountLane: true,
-			add: func(builder *ChainBuilder[*administrativeChainState]) {
-				builder.RegisterAccountGroup(
-					administrativeChainAccounts(),
-					RegisterAccountGroupHooks[*administrativeChainState]{
-						OnRegistered: func(
-							_ context.Context,
-							state *administrativeChainState,
-						) error {
-							return state.completeResult()
-						},
-					},
-				)
-			},
-			verify: func(
-				t *testing.T,
-				driver *administrativeChainDriver,
-				state *administrativeChainState,
-			) {
-				t.Helper()
-				group, ok := driver.Accounts().GroupOf(state.accountIDs[0]).Get()
-				if !ok || group != administrativeChainGroup() {
-					t.Errorf("GroupOf() = (%v, %v), want source group", group, ok)
-				}
-				if other := driver.Accounts().GroupOf(state.otherAccount); other.IsSet() {
-					t.Errorf("other GroupOf() = %v, want empty option", other)
-				}
-			},
-		},
-		{
-			name:        "unregister account group",
-			groupSource: true,
-			accountLane: true,
-			setup:       registerAdministrativeChainGroups,
-			add: func(builder *ChainBuilder[*administrativeChainState]) {
-				builder.UnregisterAccountGroup(
-					administrativeChainAccounts(),
-					UnregisterAccountGroupHooks[*administrativeChainState]{
-						OnUnregistered: func(
-							_ context.Context,
-							state *administrativeChainState,
-						) error {
-							return state.completeResult()
-						},
-					},
-				)
-			},
-			verify: func(
-				t *testing.T,
-				driver *administrativeChainDriver,
-				state *administrativeChainState,
-			) {
-				t.Helper()
-				if group := driver.Accounts().GroupOf(state.accountIDs[0]); group.IsSet() {
-					t.Errorf("GroupOf() = %v, want empty option", group)
-				}
-				other, ok := driver.Accounts().GroupOf(state.otherAccount).Get()
-				if !ok || other != administrativeChainOtherGroup() {
-					t.Errorf("other GroupOf() = (%v, %v), want other group", other, ok)
-				}
-			},
-		},
-		{
 			name:        "block account group",
 			groupSource: true,
 			hasInput:    true,
@@ -395,69 +330,6 @@ func administrativeChainCases() []administrativeChainCase {
 				)
 			},
 			verify: verifyAdministrativeAccountCurrencyCleared,
-		},
-		{
-			name:        "set account-group currency",
-			groupSource: true,
-			hasInput:    true,
-			newNative:   newAdministrativeCurrencyChainNativeEngine,
-			setup:       registerAdministrativeChainGroups,
-			add: func(builder *ChainBuilder[*administrativeChainState]) {
-				builder.SetAccountGroupCurrency(
-					CurrencyHooks[*administrativeChainState]{
-						Currency: func(
-							ctx context.Context,
-							state *administrativeChainState,
-						) (param.Asset, error) {
-							return state.inputCurrency(ctx)
-						},
-						OnSet: func(
-							_ context.Context,
-							state *administrativeChainState,
-						) error {
-							return state.completeResult()
-						},
-					},
-				)
-			},
-			verify: verifyAdministrativeAccountGroupCurrencySet,
-		},
-		{
-			name:        "clear account-group currency",
-			groupSource: true,
-			newNative:   newAdministrativeCurrencyChainNativeEngine,
-			setup: func(
-				t *testing.T,
-				driver *administrativeChainDriver,
-				state *administrativeChainState,
-			) {
-				registerAdministrativeChainGroups(t, driver, state)
-				if err := driver.Accounts().SetGroupCurrency(
-					administrativeChainGroup(),
-					state.currency,
-				); err != nil {
-					t.Fatalf("SetGroupCurrency() error = %v", err)
-				}
-				if err := driver.Accounts().SetGroupCurrency(
-					administrativeChainOtherGroup(),
-					state.currency,
-				); err != nil {
-					t.Fatalf("SetGroupCurrency(other) error = %v", err)
-				}
-			},
-			add: func(builder *ChainBuilder[*administrativeChainState]) {
-				builder.ClearAccountGroupCurrency(
-					ClearCurrencyHooks[*administrativeChainState]{
-						OnCleared: func(
-							_ context.Context,
-							state *administrativeChainState,
-						) error {
-							return state.completeResult()
-						},
-					},
-				)
-			},
-			verify: verifyAdministrativeAccountGroupCurrencyCleared,
 		},
 		{
 			name:      "set SpotFunds account P&L",
@@ -581,37 +453,6 @@ func TestAdministrativeChainStepsReturnResultsAndSerializeTheirLane(t *testing.T
 	}
 }
 
-func TestRetireAccountChainStep(t *testing.T) {
-	driver := &administrativeChainDriver{engine: newChainNativeEngine(t)}
-	engine := newChainEngine(t, driver)
-	accountID := administrativeChainAccount()
-	group := administrativeChainGroup()
-	if err := driver.Accounts().RegisterGroup([]param.AccountID{accountID}, group); err != nil {
-		t.Fatal(err)
-	}
-	hookCalled := false
-	begin := func(context.Context) (struct{}, error) { return struct{}{}, nil }
-	hooks := RetireAccountHooks[struct{}]{
-		OnRetired: func(context.Context, struct{}) error {
-			hookCalled = true
-			return nil
-		},
-	}
-	outcome, err := Chain(accountID, begin).RetireAccount(hooks).
-		Run(context.Background(), engine).Await(context.Background())
-	if err != nil || outcome.Status != ChainOutcomeCompleted || !outcome.RetryUnsafe {
-		t.Fatalf("RetireAccount chain = (%+v, %v)", outcome, err)
-	}
-	if !hookCalled || driver.Accounts().GroupOf(accountID).IsSet() {
-		t.Fatal("retirement hook did not run or account membership survived")
-	}
-	_, err = Chain(group, begin).RetireAccount(hooks).
-		Run(context.Background(), engine).Await(context.Background())
-	if !errors.Is(err, ErrChainAccountRequired) {
-		t.Fatalf("group-sourced RetireAccount error = %v, want ErrChainAccountRequired", err)
-	}
-}
-
 func TestAdministrativeChainResultHookFailureIsRetryUnsafe(t *testing.T) {
 	errHook := errors.New("persist administrative result")
 	for _, test := range administrativeChainCases() {
@@ -672,150 +513,7 @@ func TestAdministrativeChainInputHookFailureIsRetrySafe(t *testing.T) {
 	}
 }
 
-func TestAdministrativeChainMembershipRejectsMissingAccounts(t *testing.T) {
-	tests := []struct {
-		name     string
-		accounts []param.AccountID
-		add      func(
-			*ChainBuilder[*administrativeChainState],
-			[]param.AccountID,
-			func(context.Context, *administrativeChainState) error,
-		)
-	}{
-		{
-			name: "register nil",
-			add: func(
-				builder *ChainBuilder[*administrativeChainState],
-				accounts []param.AccountID,
-				onResult func(context.Context, *administrativeChainState) error,
-			) {
-				builder.RegisterAccountGroup(
-					accounts,
-					RegisterAccountGroupHooks[*administrativeChainState]{
-						OnRegistered: onResult,
-					},
-				)
-			},
-		},
-		{
-			name:     "register empty",
-			accounts: []param.AccountID{},
-			add: func(
-				builder *ChainBuilder[*administrativeChainState],
-				accounts []param.AccountID,
-				onResult func(context.Context, *administrativeChainState) error,
-			) {
-				builder.RegisterAccountGroup(
-					accounts,
-					RegisterAccountGroupHooks[*administrativeChainState]{
-						OnRegistered: onResult,
-					},
-				)
-			},
-		},
-		{
-			name: "unregister nil",
-			add: func(
-				builder *ChainBuilder[*administrativeChainState],
-				accounts []param.AccountID,
-				onResult func(context.Context, *administrativeChainState) error,
-			) {
-				builder.UnregisterAccountGroup(
-					accounts,
-					UnregisterAccountGroupHooks[*administrativeChainState]{
-						OnUnregistered: onResult,
-					},
-				)
-			},
-		},
-		{
-			name:     "unregister empty",
-			accounts: []param.AccountID{},
-			add: func(
-				builder *ChainBuilder[*administrativeChainState],
-				accounts []param.AccountID,
-				onResult func(context.Context, *administrativeChainState) error,
-			) {
-				builder.UnregisterAccountGroup(
-					accounts,
-					UnregisterAccountGroupHooks[*administrativeChainState]{
-						OnUnregistered: onResult,
-					},
-				)
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			state := newAdministrativeChainState(t)
-			driver := &administrativeChainDriver{engine: newChainNativeEngine(t)}
-			engine := newChainEngine(t, driver)
-			beginSeen := false
-			resultSeen := false
-			finallySeen := false
-			builder := Chain(
-				administrativeChainGroup(),
-				func(context.Context) (*administrativeChainState, error) {
-					beginSeen = true
-					return state, nil
-				},
-			)
-			test.add(
-				builder,
-				test.accounts,
-				func(context.Context, *administrativeChainState) error {
-					resultSeen = true
-					return nil
-				},
-			)
-			outcome, err := builder.Finally(func(
-				context.Context,
-				*administrativeChainState,
-				ChainOutcome,
-			) error {
-				finallySeen = true
-				return nil
-			}).Run(context.Background(), engine).Await(context.Background())
-			if !errors.Is(err, ErrMissingAccountID) {
-				t.Fatalf("Await() error = %v, want ErrMissingAccountID", err)
-			}
-			if outcome.Status != ChainOutcomeFailed || outcome.RetryUnsafe {
-				t.Errorf("outcome = %+v, want failed retry-safe", outcome)
-			}
-			if beginSeen || resultSeen || finallySeen {
-				t.Errorf(
-					"callbacks = (begin %v, result %v, finally %v), want none",
-					beginSeen,
-					resultSeen,
-					finallySeen,
-				)
-			}
-			if group := driver.Accounts().GroupOf(state.accountIDs[0]); group.IsSet() {
-				t.Errorf("GroupOf() = %v, want no mutation", group)
-			}
-		})
-	}
-}
-
-func TestAdministrativeChainSurfacesDomainAndConfigurationErrors(t *testing.T) {
-	t.Run("account-group domain error", func(t *testing.T) {
-		chainCase := administrativeChainCaseByName(t, "register account group")
-		state, driver, engine := newAdministrativeChainTest(t, chainCase)
-		if err := driver.Accounts().RegisterGroup(
-			state.accountIDs,
-			administrativeChainOtherGroup(),
-		); err != nil {
-			t.Fatalf("RegisterGroup(other) error = %v", err)
-		}
-		outcome, err := runAdministrativeChainCase(chainCase, state, engine).
-			Await(context.Background())
-		var groupErr *reject.AccountGroupError
-		if !errors.As(err, &groupErr) {
-			t.Fatalf("Await() error = %T %v, want *reject.AccountGroupError", err, err)
-		}
-		verifyAdministrativeFailedMutation(t, outcome, state)
-	})
-
+func TestAdministrativeChainSurfacesConfigurationErrors(t *testing.T) {
 	t.Run("configuration error", func(t *testing.T) {
 		chainCase := administrativeChainCaseByName(t, "set SpotFunds account P&L")
 		state, _, engine := newAdministrativeChainTest(t, chainCase)
@@ -964,26 +662,6 @@ func TestAdministrativeChainSourceValidation(t *testing.T) {
 		Await(context.Background()); !errors.Is(err, ErrChainAccountGroupRequired) {
 		t.Errorf(
 			"group-only step error = %v, want ErrChainAccountGroupRequired",
-			err,
-		)
-	}
-
-	mixedGroupLanes := Chain(group, begin).RegisterAccountGroup(
-		administrativeChainAccounts(),
-		RegisterAccountGroupHooks[*administrativeChainState]{
-			OnRegistered: func(context.Context, *administrativeChainState) error {
-				return nil
-			},
-		},
-	).UnblockAccountGroup(UnblockHooks[*administrativeChainState]{
-		OnUnblocked: func(context.Context, *administrativeChainState) error {
-			return nil
-		},
-	})
-	if _, err := mixedGroupLanes.Run(context.Background(), engine).
-		Await(context.Background()); !errors.Is(err, ErrChainAccountGroupRequired) {
-		t.Errorf(
-			"mixed group lane error = %v, want ErrChainAccountGroupRequired",
 			err,
 		)
 	}
@@ -1399,22 +1077,6 @@ func verifyAdministrativeAccountCurrencySet(
 }
 
 func verifyAdministrativeAccountCurrencyCleared(
-	t *testing.T,
-	driver *administrativeChainDriver,
-	state *administrativeChainState,
-) {
-	verifyAdministrativeCurrencyMutation(t, driver, state, false)
-}
-
-func verifyAdministrativeAccountGroupCurrencySet(
-	t *testing.T,
-	driver *administrativeChainDriver,
-	state *administrativeChainState,
-) {
-	verifyAdministrativeCurrencyMutation(t, driver, state, true)
-}
-
-func verifyAdministrativeAccountGroupCurrencyCleared(
 	t *testing.T,
 	driver *administrativeChainDriver,
 	state *administrativeChainState,

@@ -20,6 +20,8 @@ installing `requirements.txt` as described in the
   --metrics=off --disable-version-check checks/semgrep/tests/financial-types-rust.rs
 .venv/bin/semgrep --test --config checks/semgrep/fallbacks-rust.yml \
   --metrics=off --disable-version-check checks/semgrep/tests/fallbacks-rust.rs
+.venv/bin/semgrep --test --config checks/semgrep/async-exceptions-cpp.yml \
+  --metrics=off --disable-version-check checks/semgrep/tests/async-exceptions-cpp.cpp
 ```
 
 With optional [Just](https://just.systems/), `just check-semgrep` runs the same
@@ -68,10 +70,13 @@ a test is the message a user sees.
   domain enum, no panic on a reachable path.
 - `semgrep/errors-go.yml` - no discarded error, no error checked and then
   dropped.
+- `semgrep/async-exceptions-cpp.yml` - no unreported or unpropagated catch-all
+  exceptions in the C++ async engine without explicit approved containment.
 - `semgrep/ci-versions.yml` - workflows and composite actions load CI pins
   through `load-ci-versions`, which rejects missing or empty required pins.
-- `semgrep/tests/` - regression fixtures for `financial-types-rust.yml` and
-  `fallbacks-rust.yml`; `errors-go.yml` has no fixture.
+- `semgrep/tests/` - regression fixtures for `financial-types-rust.yml`,
+  `fallbacks-rust.yml` and `async-exceptions-cpp.yml`; `errors-go.yml` has no
+  fixture.
   `just check-semgrep` runs `semgrep --test` over them after the repository
   scan; they hold deliberate violations.
 

@@ -380,6 +380,7 @@ check-semgrep: _ensure-python-env
     {{ semgrep_path }} scan --config checks/semgrep --error --quiet --metrics=off --disable-version-check .
     {{ semgrep_path }} --test --config checks/semgrep/financial-types-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/financial-types-rust.rs
     {{ semgrep_path }} --test --config checks/semgrep/fallbacks-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/fallbacks-rust.rs
+    {{ semgrep_path }} --test --config checks/semgrep/async-exceptions-cpp.yml --metrics=off --disable-version-check checks/semgrep/tests/async-exceptions-cpp.cpp
 
 # Lint JS (type-check, eslint, prettier --check).
 lint-js: build-js

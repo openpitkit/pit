@@ -63,7 +63,7 @@ rules:
     languages: [generic]
     pattern-regex: >-
       (?i)(//|#|\*)[ \t]+(note that|it'?s important to|it is important to|it is
-      worth noting|this ensures that|let'?s |in summary|overall,|as we can
+      worth noting|this ensures that|let's |in summary|overall,|as we can
       see|i cannot|i'?m sorry|i apologize)
 
 # The style contract also fixes the vocabulary of log messages (qty, px, sz,

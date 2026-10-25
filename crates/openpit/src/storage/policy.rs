@@ -191,6 +191,21 @@ pub trait LockingPolicyFactory {
     /// Builds a fresh policy for a new storage instance.
     fn create_policy(&self) -> Self::Policy;
 
+    /// Reports whether the engine itself serializes its rare account-state
+    /// transitions (group membership, group currency, barrier retunes,
+    /// account retirement) against account-state writers.
+    ///
+    /// `true` when public calls may run concurrently with no caller-side
+    /// guarantee, as under [`FullLocking`](super::FullLocking): the engine
+    /// then takes its own transition lease around every state write.
+    ///
+    /// `false` when the threading contract makes the caller run each such
+    /// transition with no other call on the engine in flight, as under
+    /// [`NoLocking`](super::NoLocking) and
+    /// [`IndexLocking`](super::IndexLocking): the engine takes no lease, and
+    /// state writes pay nothing for the transitions.
+    fn serializes_state_transitions(&self) -> bool;
+
     /// Wraps `value` in the sync-mode-appropriate shared handle.
     fn new_shared<T: 'static>(value: T) -> Self::Shared<T>;
 

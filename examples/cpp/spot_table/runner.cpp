@@ -619,34 +619,51 @@ struct AsyncSubmission {
   }
 };
 
-// Registers groups before submitting rows. The deadline is not applied because
-// registration completes promptly.
+// Registers groups before submitting rows. Group membership is an exclusive
+// operation, so every registration runs in one section with every lane
+// stopped.
 [[nodiscard]] std::optional<Failure>
-RegisterGroupsAsync([[maybe_unused]] Deadline deadline, AsyncEngine &engine,
+RegisterGroupsAsync(Deadline deadline, AsyncEngine &engine,
                     const GroupMembership &groups, Report &report) {
   groups.CountInReport(report);
-  ae::AsyncAccounts<ae::EngineAdapter> accountsView = engine.Accounts();
-  for (const std::string &label : groups.order) {
-    std::optional<param::AccountGroupId> groupId;
-    try {
-      groupId.emplace(AccountGroupIdOf(label));
-    } catch (const std::exception &err) {
-      return Failure{groups.FirstRow(label), err.what()};
-    }
-    try {
-      const std::optional<openpit::accounts::AccountGroupError> groupErr =
-          accountsView.RegisterGroup(groups.members.at(label), *groupId)
-              .Await();
-      if (groupErr.has_value()) {
-        return Failure{groups.FirstRow(label),
-                       "register group: " + groupErr->message};
-      }
-    } catch (const ae::Error &err) {
-      return Failure{groups.FirstRow(label),
-                     std::string("register group: ") + err.what()};
-    }
+  const auto timeout = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      deadline - std::chrono::steady_clock::now());
+  if (timeout <= std::chrono::nanoseconds(0)) {
+    return Failure{Row{}, "register groups: deadline expired"};
   }
-  return std::nullopt;
+  std::optional<Failure> failure;
+  const std::optional<ae::Error> sectionErr = engine.Exclusive(
+      [&](ae::EngineAdapter &driver) {
+        const openpit::accounts::Accounts accountsView = driver.Accounts();
+        for (const std::string &label : groups.order) {
+          std::optional<param::AccountGroupId> groupId;
+          try {
+            groupId.emplace(AccountGroupIdOf(label));
+          } catch (const std::exception &err) {
+            failure = Failure{groups.FirstRow(label), err.what()};
+            return;
+          }
+          try {
+            const std::optional<openpit::accounts::AccountGroupError> groupErr =
+                accountsView.RegisterGroup(groups.members.at(label), *groupId);
+            if (groupErr.has_value()) {
+              failure = Failure{groups.FirstRow(label),
+                                "register group: " + groupErr->message};
+              return;
+            }
+          } catch (const std::exception &err) {
+            failure = Failure{groups.FirstRow(label),
+                              std::string("register group: ") + err.what()};
+            return;
+          }
+        }
+      },
+      timeout);
+  if (sectionErr.has_value()) {
+    return Failure{Row{},
+                   std::string("register groups: ") + sectionErr->what()};
+  }
+  return failure;
 }
 
 // Commits a passing reservation or rolls back any other reservation.

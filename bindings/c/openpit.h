@@ -1165,10 +1165,12 @@ typedef uint8_t OpenPitSyncPolicy;
  */
 #define OpenPitSyncPolicy_Full ((OpenPitSyncPolicy) 1)
 /**
- * Sequential cross-thread access on the same handle is safe; the caller pins
- * each account to a single processing chain (one queue or one worker at a
- * time). Concurrent invocation on the same handle is not supported in this
- * mode.
+ * Calls for distinct accounts may run concurrently on the same handle; the
+ * caller pins each account to a single processing chain (one queue or one
+ * worker at a time), so calls for one account never overlap. Exclusive
+ * operations - account-group membership, group currency, the Spot Funds retune
+ * and account retirement - run with no other call on the handle in flight; the
+ * engine takes no lock for them, so ordinary calls pay nothing.
  */
 #define OpenPitSyncPolicy_Account ((OpenPitSyncPolicy) 2)
 
@@ -6349,8 +6351,11 @@ bool openpit_account_retirement_error_get_refusal_kind(
  * - `engine` must be a valid non-null engine pointer;
  * - before this call, finalize or destroy every pre-trade request,
  *   reservation, and drop-copy handle for `account_id`;
- * - do not run operations, configuration, or administration for that account
- *   concurrently with this call;
+ * - this is an exclusive operation: under `OpenPitSyncPolicy_None` and
+ *   `OpenPitSyncPolicy_Account` the engine takes no lock for it, so no other
+ *   call on `engine` may be in flight on any thread; under
+ *   `OpenPitSyncPolicy_Full` submit no new work for `account_id` during this
+ *   call;
  * - a pending request that has not been executed and holds no policy state
  *   is invisible to retirement. Executing it later acts on the account as
  *   new and, after id reuse, may act on someone else's account;
@@ -6452,6 +6457,12 @@ bool openpit_account_group_error_get_current_group(
  * breach, and latches any resulting account block before returning. An
  * unchanged effective barrier is not checked again.
  *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
+ *
  * Contract:
  * - `engine` must be a valid non-null engine pointer;
  * - `accounts` must point to an array of at least `accounts_len` account
@@ -6498,6 +6509,12 @@ bool openpit_engine_register_account_group(
  * current account P&L, treating an unset ledger as zero and `Halted` as a
  * breach, and latches any resulting account block before returning. An
  * unchanged effective barrier is not checked again.
+ *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer;
@@ -6618,6 +6635,12 @@ void openpit_engine_clear_account_currency(
  * change. Barrier selection itself stays deterministic: the next policy access
  * re-resolves the cascade with the new effective currency.
  *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
+ *
  * Contract:
  * - passing null for `engine` returns `false` and writes `out_error`;
  * - `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
@@ -6649,6 +6672,12 @@ bool openpit_engine_set_account_group_currency(
  * guarantees nothing about them and does not convert, detect, or report the
  * change. Barrier selection itself stays deterministic: the next policy access
  * re-resolves the cascade with the new effective currency.
+ *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer;
@@ -7733,6 +7762,12 @@ bool openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
  * cannot be changed here; this function only tunes the slippage / pricing
  * cascade that lives in the settings cell.
  *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
+ *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
  * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
@@ -7777,6 +7812,12 @@ bool openpit_engine_configure_spot_funds(
 /**
  * Retunes the P&L-bounds axis of the built-in spot-funds policy registered
  * under `name`.
+ *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
@@ -7876,6 +7917,12 @@ openpit_engine_configure_spot_funds_set_account_pnl(
  * The global mode applies to every order that resolves to neither a
  * per-account nor a per-account-group override.
  *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
+ *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
  * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
@@ -7910,6 +7957,12 @@ bool openpit_engine_configure_spot_funds_global_limit_mode(
  *
  * The per-account override wins over the account-group and global tiers.
  *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
+ *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
  * - `name` selects the policy; see
@@ -7935,6 +7988,12 @@ bool openpit_engine_configure_spot_funds_account_limit_mode(
 /**
  * Pins or clears the spot-funds position limit for one account and asset on
  * the policy registered under `name`.
+ *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
@@ -7976,6 +8035,12 @@ bool openpit_engine_configure_spot_funds_position_limit(
  *
  * The override applies to every account in the group that has no per-account
  * override.
+ *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.

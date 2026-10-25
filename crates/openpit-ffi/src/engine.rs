@@ -93,9 +93,10 @@ pub use openpit_interop::SyncMode as OpenPitSyncPolicy;
 // The SDK never spawns OS threads: each public call executes on the OS thread
 // that invoked it. Full sync permits concurrent public calls on the same
 // handle. No-sync keeps the handle on the OS thread that created it. Account
-// sync permits sequential cross-thread access, but the caller must pin each
-// account to a single processing chain and must not invoke public methods on
-// the same handle concurrently. In Go bindings, goroutine migration during one
+// sync permits concurrent calls for distinct accounts; the caller pins each
+// account to a single processing chain, so calls for one account never
+// overlap, and runs every exclusive operation with no other call on the handle
+// in flight. In Go bindings, goroutine migration during one
 // SDK call is supported, and callbacks into Go may run on a different OS thread
 // than the goroutine that initiated the call; callback code must not rely on
 // thread-local OS state.
@@ -1994,8 +1995,11 @@ pub extern "C" fn openpit_account_retirement_error_get_refusal_kind(
 /// - `engine` must be a valid non-null engine pointer;
 /// - before this call, finalize or destroy every pre-trade request,
 ///   reservation, and drop-copy handle for `account_id`;
-/// - do not run operations, configuration, or administration for that account
-///   concurrently with this call;
+/// - this is an exclusive operation: under `OpenPitSyncPolicy_None` and
+///   `OpenPitSyncPolicy_Account` the engine takes no lock for it, so no other
+///   call on `engine` may be in flight on any thread; under
+///   `OpenPitSyncPolicy_Full` submit no new work for `account_id` during this
+///   call;
 /// - a pending request that has not been executed and holds no policy state is
 ///   invisible to retirement. Executing it later acts on the account as new
 ///   and, after id reuse, may act on someone else's account;
@@ -2185,6 +2189,12 @@ pub extern "C" fn openpit_account_group_error_get_current_group(
 /// breach, and latches any resulting account block before returning. An
 /// unchanged effective barrier is not checked again.
 ///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
+///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer;
 /// - `accounts` must point to an array of at least `accounts_len` account
@@ -2275,6 +2285,12 @@ pub extern "C" fn openpit_engine_register_account_group(
 /// current account P&L, treating an unset ledger as zero and `Halted` as a
 /// breach, and latches any resulting account block before returning. An
 /// unchanged effective barrier is not checked again.
+///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer;
@@ -2484,6 +2500,12 @@ pub extern "C" fn openpit_engine_clear_account_currency(
 /// the change. Barrier selection itself stays deterministic: the next policy
 /// access re-resolves the cascade with the new effective currency.
 ///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
+///
 /// Contract:
 /// - passing null for `engine` returns `false` and writes `out_error`;
 /// - `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
@@ -2538,6 +2560,12 @@ pub extern "C" fn openpit_engine_set_account_group_currency(
 /// SDK guarantees nothing about them and does not convert, detect, or report
 /// the change. Barrier selection itself stays deterministic: the next policy
 /// access re-resolves the cascade with the new effective currency.
+///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer;

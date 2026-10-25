@@ -282,6 +282,16 @@ struct AccountGroupError {
 // every call forwards to the engine it was created from and is valid for as
 // long as that engine is. Non-owning; copyable.
 //
+// `RegisterGroup`, `UnregisterGroup`, `SetGroupCurrency`, and
+// `ClearGroupCurrency` are exclusive operations. Under `SyncPolicy::None` and
+// `SyncPolicy::Account` the engine takes no lock for them: run each with no
+// other call on the engine in flight on any thread, as
+// `asyncengine::AsyncEngine::Exclusive` does. Under `SyncPolicy::Full` the
+// engine orders them itself. Moving an account between groups is
+// `UnregisterGroup` followed by `RegisterGroup`; run both in one exclusive
+// stretch so no other call observes the account in the default group between
+// them.
+//
 // For an example of good practice in building a control plane on this SDK,
 // see Pit Officer at <http://officer.openpit.dev/>.
 class Accounts {

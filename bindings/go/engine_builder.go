@@ -71,11 +71,12 @@ func (*EngineBuilder) NoSync() *SyncedEngineBuilder {
 // AccountSyncedEngineBuilder ready to accept policies. The resulting engine
 // handle is safe for concurrent invocation when the caller pins each account
 // to a single processing chain (one queue or one worker at a time), so calls
-// for the same account are never concurrent.
+// for the same account are never concurrent, and runs each exclusive
+// operation with no other call in flight; see the package documentation.
 //
 // The AccountSync chain exposes an extra terminal method BuildAsync that
 // wraps the engine into an asyncengine.AsyncEngine, which serializes calls
-// per account internally.
+// per account internally and runs exclusive operations through Exclusive.
 func (*EngineBuilder) AccountSync() *AccountSyncedEngineBuilder {
 	return &AccountSyncedEngineBuilder{
 		SyncedEngineBuilder: SyncedEngineBuilder{

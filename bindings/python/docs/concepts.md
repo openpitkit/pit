@@ -14,7 +14,8 @@ and reuse it under the matching call pattern.
 - `no_sync()` keeps the handle on the OS thread that created it.
 - `account_sync()` allows concurrent calls when the caller pins each
   account to one processing chain, so calls for the same account are
-  never concurrent.
+  never concurrent. Exclusive operations, such as group membership, run
+  with no other call in flight; see the threading guide.
 
 ## Start stage
 

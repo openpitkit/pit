@@ -117,6 +117,27 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 ///   is `Send + !Sync`. Ownership may move between OS threads sequentially, but
 ///   concurrent invocation on the same handle is not supported.
 ///
+/// ## Exclusive operations
+///
+/// A few rare operations change state that calls for every account read:
+/// [`Accounts::register_group`], [`Accounts::unregister_group`],
+/// [`Accounts::set_group_currency`], [`Accounts::clear_group_currency`],
+/// [`Configurator::spot_funds`] and [`Engine::retire_account`].
+///
+/// - Under [`FullSync`] the engine orders each of them after the
+///   account-state writes already in flight and holds new ones until it
+///   returns. The lease covers the state-write scope of a built-in policy,
+///   not a whole engine call: an exclusive operation may land between two
+///   such scopes of one call, and a custom policy that takes no lease is not
+///   paused by it.
+/// - Under [`LocalSync`] and [`AccountSync`] the engine takes no lock for
+///   them, so ordinary calls pay nothing for them. The caller must run each
+///   one with no other call on this engine in flight on any thread,
+///   including policy hooks and callbacks of the operation itself. Breaking
+///   that rule is undefined behavior, like concurrent calls for one account
+///   under [`AccountSync`]; debug builds detect an overlap with an
+///   account-state write and panic.
+///
 /// # Examples
 ///
 /// ```rust
@@ -807,18 +828,19 @@ impl<Trait: EngineTrait> Engine<Trait> {
     ///
     /// A refusal removes nothing; only a failing rollback finalizer still arms
     /// the kill switch, per the finalizer contract on
-    /// [`Mutation`](crate::Mutation). The check and removal run under the
-    /// engine's exclusive account-state transition, pausing writers for every
-    /// account, so retirement never erases non-zero financial state or a
+    /// [`Mutation`](crate::Mutation). The check and removal run as an
+    /// exclusive operation, with no account-state write of a built-in policy in
+    /// flight, so retirement never erases non-zero financial state or a
     /// tracked operation still in flight. Custom policy state is covered only
     /// when that policy implements [`PreTradePolicy::retire_account`].
     ///
     /// # Caller contract
     ///
-    /// Before retiring, finalize (commit or roll back) or drop every pre-trade
-    /// request, reservation, and drop-copy operation of the account. Do not run
-    /// operations, configuration, or account administration for the same
-    /// account concurrently with this call. The engine cannot see a request
+    /// This is an exclusive operation; see the threading section on
+    /// [`Engine`]. Retire several accounts in one exclusive stretch rather
+    /// than one at a time. Before retiring, finalize (commit or roll back) or
+    /// drop every pre-trade request, reservation, and drop-copy operation of
+    /// the account, and submit no new work for it. The engine cannot see a request
     /// that holds no policy state, such as a [`PreTradeRequest`] returned by
     /// [`Self::start_pre_trade`] but not yet executed. Executing such a handle
     /// after retirement acts on the account as if it were new and, after the

@@ -2229,6 +2229,80 @@ func TestExampleWikiAsyncEngine(t *testing.T) {
 	}
 }
 
+// Source: https://wiki.openpit.dev/Async-Engine/ - Exclusive Operations
+// Keep the shared user-code flow in sync with the wiki. The engine, the group
+// set-up, and the membership check are test harness.
+func TestExampleWikiAsyncEngineExclusive(t *testing.T) {
+	asyncBuilder, err := NewEngineBuilder().
+		AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		BuildAsync()
+	if err != nil {
+		t.Fatalf("BuildAsync() error = %v", err)
+	}
+	async, err := asyncBuilder.Dynamic().Build()
+	if err != nil {
+		t.Fatalf("Dynamic Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+	hedgeBook, err := param.NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatalf("NewAccountGroupIDFromUint32(7) error = %v", err)
+	}
+	riskBook, err := param.NewAccountGroupIDFromUint32(8)
+	if err != nil {
+		t.Fatalf("NewAccountGroupIDFromUint32(8) error = %v", err)
+	}
+	members := []param.AccountID{
+		param.NewAccountIDFromUint64(10),
+		param.NewAccountIDFromUint64(11),
+	}
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer setupCancel()
+	if err := async.Exclusive(
+		setupCtx,
+		func(_ context.Context, driver asyncengine.Driver) error {
+			return driver.Accounts().RegisterGroup(members, hedgeBook)
+		},
+	); err != nil {
+		t.Fatalf("set-up Exclusive() error = %v", err)
+	}
+
+	// Move two accounts from one group to another in one section, so no other
+	// call sees them in the default group in between.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = async.Exclusive(
+		ctx,
+		func(_ context.Context, driver asyncengine.Driver) error {
+			accounts := driver.Accounts()
+			if err := accounts.UnregisterGroup(members, hedgeBook); err != nil {
+				return err
+			}
+			return accounts.RegisterGroup(members, riskBook)
+		},
+	)
+	if err != nil {
+		t.Fatalf("Exclusive() error = %v", err)
+	}
+
+	for _, member := range members {
+		group, err := async.Accounts().GroupOf(context.Background(), member).
+			Await(context.Background())
+		if err != nil {
+			t.Fatalf("GroupOf(%v) error = %v", member, err)
+		}
+		got, ok := group.Get()
+		if !ok || got.String() != riskBook.String() {
+			t.Fatalf("GroupOf(%v) = (%v, %v), want (%v, true)", member, got, ok, riskBook)
+		}
+	}
+}
+
 // Source: https://wiki.openpit.dev/Async-Engine/ - Chains
 // Keep the shared user-code flow in sync with the wiki.
 func TestExampleWikiAsyncEngineChains(t *testing.T) {

@@ -123,6 +123,9 @@ func (s *shardedStrategy) stopGraceful(ctx context.Context) error {
 	if err := s.waitWorkers(ctx); err != nil {
 		return err
 	}
+	if err := s.waitSections(ctx); err != nil {
+		return err
+	}
 	return s.finishLifecycleCleanups(ctx)
 }
 
@@ -136,5 +139,41 @@ func (s *shardedStrategy) stopHard(ctx context.Context) error {
 	if err := s.waitWorkers(ctx); err != nil {
 		return err
 	}
+	if err := s.waitSections(ctx); err != nil {
+		return err
+	}
 	return s.finishLifecycleCleanups(ctx)
+}
+
+func (s *shardedStrategy) exclusive(ctx context.Context, run func()) error {
+	return s.runExclusive(ctx, s, run)
+}
+
+// installExclusive gives every shard a barrier: a shard carries many routing
+// keys, and one barrier stops all of them.
+func (s *shardedStrategy) installExclusive(
+	section *exclusiveSection,
+) ([]*keyQueue, []<-chan struct{}) {
+	s.lifecycleCleanupMu.Lock()
+	defer s.lifecycleCleanupMu.Unlock()
+	s.activeSection = section
+	var running []<-chan struct{}
+	if s.lifecycleCleanupCount != 0 {
+		running = append(running, s.lifecycleCleanupDone)
+	}
+	return s.shards, running
+}
+
+func (s *shardedStrategy) withdrawExclusive(
+	section *exclusiveSection,
+) ([]func(), bool) {
+	s.lifecycleCleanupMu.Lock()
+	defer s.lifecycleCleanupMu.Unlock()
+	section.mu.Lock()
+	defer section.mu.Unlock()
+	if deferred := section.takeDeferredLocked(); len(deferred) != 0 {
+		return deferred, false
+	}
+	s.activeSection = nil
+	return nil, true
 }

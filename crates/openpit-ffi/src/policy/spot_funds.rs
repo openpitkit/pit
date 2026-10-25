@@ -664,6 +664,12 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
 /// cannot be changed here; this function only tunes the slippage / pricing
 /// cascade that lives in the settings cell.
 ///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
+///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
 /// - `name` selects the policy; it is interpreted as UTF-8. A built-in
@@ -795,6 +801,12 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
 #[no_mangle]
 /// Retunes the P&L-bounds axis of the built-in spot-funds policy registered
 /// under `name`.
+///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
@@ -1047,6 +1059,12 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_set_account_pnl(
 /// The global mode applies to every order that resolves to neither a
 /// per-account nor a per-account-group override.
 ///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
+///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
 /// - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
@@ -1097,6 +1115,12 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_global_limit_mode(
 ///
 /// The per-account override wins over the account-group and global tiers.
 ///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
+///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
 /// - `name` selects the policy; see
@@ -1144,6 +1168,12 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_limit_mode(
 
 /// Pins or clears the spot-funds position limit for one account and asset on
 /// the policy registered under `name`.
+///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
@@ -1222,6 +1252,12 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
 ///
 /// The override applies to every account in the group that has no per-account
 /// override.
+///
+/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+/// runs it with no other call on `engine` in flight on any thread, policy
+/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+/// after the account-state writes already in flight.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.

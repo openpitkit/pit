@@ -102,7 +102,13 @@ enum class SyncPolicy : std::uint8_t {
   None = 0,
   // Fully synchronized: concurrent calls on one handle are safe.
   Full = 1,
-  // Account-sharded: sequential cross-thread access with per-account pinning.
+  // Account-sharded: calls for distinct accounts may run concurrently, calls
+  // for one account never overlap. The exclusive operations - account-group
+  // membership, group currency, and the SpotFunds retune - run with no other
+  // call on the engine in flight; the engine takes no lock for them.
+  // `asyncengine::AsyncEngine` provides both, the latter through `Exclusive`.
+  // Custom policy hooks for distinct accounts may run concurrently, so a custom
+  // policy synchronizes any state of its own that is not keyed by account.
   Account = 2,
 };
 

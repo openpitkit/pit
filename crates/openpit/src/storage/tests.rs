@@ -427,6 +427,93 @@ fn with_mut_if_present_exclusive_index_mutates_existing_entry() {
 }
 
 #[test]
+fn with_mut_exclusive_index_inserts_then_mutates() {
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, u32>();
+    let inserted = storage.with_mut_exclusive_index(
+        "k",
+        || 10u32,
+        |v, inserted| {
+            *v += 1;
+            inserted
+        },
+    );
+    assert!(inserted);
+    let inserted = storage.with_mut_exclusive_index(
+        "k",
+        || 0u32,
+        |v, inserted| {
+            *v += 1;
+            inserted
+        },
+    );
+    assert!(!inserted);
+    assert_eq!(storage.with(&"k", |v| *v), Some(12));
+}
+
+#[test]
+fn insert_if_absent_inserts_only_on_miss() {
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, u32>();
+    assert!(storage.insert_if_absent("k", || 1));
+    assert!(!storage.insert_if_absent("k", || 2));
+    assert_eq!(storage.with(&"k", |v| *v), Some(1));
+    assert_eq!(storage.len(), 1);
+}
+
+#[test]
+fn engine_wide_storage_writes_never_tear_concurrent_readers() {
+    use super::EngineWideStorage;
+
+    struct SharedTable(
+        EngineWideStorage<u32, String, <IndexLocking as LockingPolicyFactory>::Policy>,
+    );
+
+    // SAFETY: emulates the claim the binding layer makes for account sync:
+    // calls for distinct accounts run in parallel and all read this one
+    // engine-wide table. Whether its writes stay sound under that claim is
+    // what this test checks.
+    unsafe impl Sync for SharedTable {}
+
+    const READERS: usize = 3;
+    const READS_PER_READER: usize = 20_000;
+    const WRITES: usize = 20_000;
+
+    let table = SharedTable(
+        StorageBuilder::new(IndexLocking::<AnyKey>::default()).create_engine_wide::<u32, String>(),
+    );
+    assert!(table.0.insert_if_absent(1, || "USD".to_owned()));
+    let table = &table;
+    thread::scope(|scope| {
+        for _ in 0..READERS {
+            scope.spawn(move || {
+                for _ in 0..READS_PER_READER {
+                    let value = table
+                        .0
+                        .with(&1, Clone::clone)
+                        .expect("the entry is never removed");
+                    assert!(
+                        value == "USD" || value == "EURUSD-SETTLEMENT",
+                        "a reader saw a torn value: {value:?}"
+                    );
+                }
+            });
+        }
+        scope.spawn(move || {
+            for write in 0..WRITES {
+                let next = if write % 2 == 0 {
+                    "EURUSD-SETTLEMENT"
+                } else {
+                    "USD"
+                };
+                table
+                    .0
+                    .upsert(1, || next.to_owned(), |slot, _| *slot = next.to_owned());
+                assert!(!table.0.insert_if_absent(1, || "first wins".to_owned()));
+            }
+        });
+    });
+}
+
+#[test]
 fn with_mut_round_trip() {
     let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, Vec<u32>>();
     storage.with_mut("v", Vec::new, |entry, _| {

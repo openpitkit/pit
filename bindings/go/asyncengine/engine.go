@@ -39,12 +39,13 @@ import (
 //
 // The facade adds whole-pipeline isolation beyond a fully synchronized direct
 // engine. Operations routed by the same account ID share one queue drained by
-// one worker, so their complete pipelines never overlap. Account-group
-// membership changes use the first supplied account ID. Group blocking and
-// group currency operations instead use an account-group key and do not join
-// member-account lanes. Engine-wide operations use a third key kind. Follow-up
-// calls on AsyncRequest, AsyncReservation, and AsyncDropCopyOperation re-enter
-// their original account queue. Callers need no locking of their own on top.
+// one worker, so their complete pipelines never overlap. Group blocking uses
+// an account-group key and does not join member-account lanes. Engine-wide
+// operations use a third key kind. Follow-up calls on AsyncRequest,
+// AsyncReservation, and AsyncDropCopyOperation re-enter their original account
+// queue. The engine's exclusive operations - group membership, group currency,
+// the SpotFunds retune, and account retirement - run through Exclusive, which
+// stops every lane while they run. Callers need no locking of their own on top.
 type AsyncEngine struct {
 	driver         Driver
 	strategy       strategy
@@ -402,51 +403,6 @@ func (t *applyAdjustmentTask) abort(err error) {
 	t.f.Resolve(accountadjustment.BatchResult{}, err)
 }
 
-// RetireAccount enqueues retirement in accountID's lane. It forgets the
-// account's zero, unused policy state, explicit currency, group membership,
-// and own block. An unknown or already retired account succeeds unchanged.
-// A policy can refuse while configuration names the account, state is non-zero,
-// an operation is in progress, or evaluation fails. A refusal removes nothing;
-// only a failing rollback callback still arms the engine kill switch, and the
-// refusal is still the returned error.
-//
-// Finalize or close every request, reservation, and drop-copy operation for
-// this account before submission. Do not run operations, configuration, or
-// administration for it concurrently. The account lane does not serialize
-// administration routed through another account's lane, a group lane, or the
-// engine-wide lane, nor work submitted directly to the underlying engine or
-// driver.
-// A pending unexecuted request can be invisible to retirement; executing it
-// later acts on the account as new and, after ID reuse, on someone else's
-// account. Do not reuse the ID before the future succeeds.
-//
-// A domain failure is a *reject.AccountRetirementError. A finalizer failure
-// may leave policy state partly removed and arms the engine kill switch.
-// Never reuse the ID after a finalizer failure, even after a later success.
-func (e *AsyncEngine) RetireAccount(
-	ctx context.Context,
-	accountID param.AccountID,
-) *future.Future[struct{}] {
-	f := future.New[struct{}]()
-	task := &retireAccountTask{f: f, engine: e, accountID: accountID}
-	if err := e.submit(ctx, accountRoutingKey(accountID), task); err != nil {
-		f.Resolve(struct{}{}, err)
-	}
-	return f
-}
-
-type retireAccountTask struct {
-	f         *future.Future[struct{}]
-	engine    *AsyncEngine
-	accountID param.AccountID
-}
-
-func (t *retireAccountTask) run() {
-	t.f.Resolve(struct{}{}, t.engine.driver.RetireAccount(t.accountID))
-}
-
-func (t *retireAccountTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
-
 // Submit enqueues an arbitrary caller-supplied function into the queue
 // for accountID. Use it to run client-side work atomically with respect
 // to engine calls on the same account (for example, "execute this start,
@@ -471,103 +427,22 @@ func (e *AsyncEngine) Submit(
 	return f
 }
 
-// Accounts returns an accessor for account-group management bound to this
-// engine. Each accessor method queues behind the routing key selected for its
-// account, account group, or engine-wide lane and returns a Future, mirroring
-// the rest of the AsyncEngine surface.
+// Accounts returns an accessor for account blocking and group lookup bound to
+// this engine. Each accessor method queues behind the routing key selected for
+// its account, account group, or engine-wide lane and returns a Future,
+// mirroring the rest of the AsyncEngine surface. Group membership is an
+// exclusive operation and goes through Exclusive instead.
 func (e *AsyncEngine) Accounts() AsyncAccounts {
 	return AsyncAccounts{engine: e}
 }
 
-// AsyncAccounts manages account-group membership for an AsyncEngine. Obtain it
-// from AsyncEngine.Accounts. It carries no state of its own: every call routes
-// through the engine it was created from.
+// AsyncAccounts blocks and unblocks accounts and account groups and looks up
+// group membership for an AsyncEngine. Obtain it from AsyncEngine.Accounts. It
+// carries no state of its own: every call routes through the engine it was
+// created from.
 type AsyncAccounts struct {
 	engine *AsyncEngine
 }
-
-// RegisterGroup enqueues a group-registration call routed through the queue of
-// the first account in accounts. Returns ErrMissingAccountID when accounts is
-// empty and param.ErrUninitializedAccountGroupID when group is uninitialized.
-//
-// The future resolves with a non-nil error on a domain conflict
-// (*reject.AccountGroupError) or a transport failure.
-func (a AsyncAccounts) RegisterGroup(
-	ctx context.Context,
-	accounts []param.AccountID,
-	group param.AccountGroupID,
-) *future.Future[struct{}] {
-	f := future.New[struct{}]()
-	if len(accounts) == 0 {
-		f.Resolve(struct{}{}, ErrMissingAccountID)
-		return f
-	}
-	if err := validateAccountGroupID(group); err != nil {
-		f.Resolve(struct{}{}, err)
-		return f
-	}
-	task := &registerGroupTask{f: f, engine: a.engine, accounts: accounts, group: group}
-	if err := a.engine.submit(ctx, accountRoutingKey(accounts[0]), task); err != nil {
-		f.Resolve(struct{}{}, err)
-	}
-	return f
-}
-
-// registerGroupTask carries one RegisterGroup call to its worker.
-type registerGroupTask struct {
-	f        *future.Future[struct{}]
-	engine   *AsyncEngine
-	accounts []param.AccountID
-	group    param.AccountGroupID
-}
-
-func (t *registerGroupTask) run() {
-	t.f.Resolve(struct{}{}, t.engine.driver.Accounts().RegisterGroup(t.accounts, t.group))
-}
-
-func (t *registerGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
-
-// UnregisterGroup enqueues a group-unregistration call routed through the queue
-// of the first account in accounts. Returns ErrMissingAccountID when accounts
-// is empty and param.ErrUninitializedAccountGroupID when group is
-// uninitialized.
-//
-// The future resolves with a non-nil error on a domain conflict
-// (*reject.AccountGroupError) or a transport failure.
-func (a AsyncAccounts) UnregisterGroup(
-	ctx context.Context,
-	accounts []param.AccountID,
-	group param.AccountGroupID,
-) *future.Future[struct{}] {
-	f := future.New[struct{}]()
-	if len(accounts) == 0 {
-		f.Resolve(struct{}{}, ErrMissingAccountID)
-		return f
-	}
-	if err := validateAccountGroupID(group); err != nil {
-		f.Resolve(struct{}{}, err)
-		return f
-	}
-	task := &unregisterGroupTask{f: f, engine: a.engine, accounts: accounts, group: group}
-	if err := a.engine.submit(ctx, accountRoutingKey(accounts[0]), task); err != nil {
-		f.Resolve(struct{}{}, err)
-	}
-	return f
-}
-
-// unregisterGroupTask carries one UnregisterGroup call to its worker.
-type unregisterGroupTask struct {
-	f        *future.Future[struct{}]
-	engine   *AsyncEngine
-	accounts []param.AccountID
-	group    param.AccountGroupID
-}
-
-func (t *unregisterGroupTask) run() {
-	t.f.Resolve(struct{}{}, t.engine.driver.Accounts().UnregisterGroup(t.accounts, t.group))
-}
-
-func (t *unregisterGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 
 // GroupOf enqueues an account-group lookup routed through the queue of account.
 // The future resolves with the group id wrapped in an option, empty when the

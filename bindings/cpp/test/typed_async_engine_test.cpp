@@ -42,6 +42,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <memory>
@@ -51,6 +52,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -626,10 +628,12 @@ class CountingRollbackPolicy {
   explicit CountingRollbackPolicy(
       std::atomic<std::size_t>* rollbacks,
       std::atomic<bool>* producerRan = nullptr,
-      std::atomic<bool>* cleanupOvertookProducer = nullptr)
+      std::atomic<bool>* cleanupOvertookProducer = nullptr,
+      std::function<void()> onRollback = {})
       : m_rollbacks(rollbacks),
         m_producerRan(producerRan),
-        m_cleanupOvertookProducer(cleanupOvertookProducer) {}
+        m_cleanupOvertookProducer(cleanupOvertookProducer),
+        m_onRollback(std::move(onRollback)) {}
 
   void PerformPreTradeCheck(
       const openpit::pretrade::Context& /*context*/,
@@ -638,15 +642,19 @@ class CountingRollbackPolicy {
     std::atomic<std::size_t>* rollbacks = m_rollbacks;
     std::atomic<bool>* producerRan = m_producerRan;
     std::atomic<bool>* cleanupOvertookProducer = m_cleanupOvertookProducer;
+    const auto onRollback = m_onRollback;
     mutations.Push(
         [] {},
-        [rollbacks, producerRan, cleanupOvertookProducer] {
+        [rollbacks, producerRan, cleanupOvertookProducer, onRollback] {
           if (producerRan != nullptr && cleanupOvertookProducer != nullptr) {
             cleanupOvertookProducer->store(
                 !producerRan->load(std::memory_order_acquire),
                 std::memory_order_release);
           }
           rollbacks->fetch_add(1, std::memory_order_relaxed);
+          if (onRollback) {
+            onRollback();
+          }
         });
   }
 
@@ -654,6 +662,7 @@ class CountingRollbackPolicy {
   std::atomic<std::size_t>* m_rollbacks;
   std::atomic<bool>* m_producerRan;
   std::atomic<bool>* m_cleanupOvertookProducer;
+  std::function<void()> m_onRollback;
 };
 
 // Accounts stub: records block/unblock so admin routing is observable.
@@ -2209,7 +2218,7 @@ TEST(TypedAsyncShutdown, DynamicStopWaitsForRegisteredProducer) {
   EXPECT_TRUE(producerResolved.load(std::memory_order_relaxed));
 }
 
-TEST(TypedAsyncCleanup, DynamicRetriesCleanupAfterLaneRetires) {
+TEST(TypedAsyncCleanup, DynamicCleanupAfterLaneRetiresDoesNotCreateLane) {
   MockEngineAdapter driver;
   Gate firstCreated;
   Gate releaseFirstCreate;
@@ -2222,15 +2231,22 @@ TEST(TypedAsyncCleanup, DynamicRetriesCleanupAfterLaneRetires) {
                    .IdleCleanupAfter(seconds(5))
                    .Build();
 
-  std::thread cleanup([&] {
-    (void)async.Generic().ScheduleMandatoryCleanup(
-        AccountId::FromUint64(kAccountA), [&] { cleanupRan.Open(); });
+  std::thread producer([&] {
+    EXPECT_TRUE(async.Submit(AccountId::FromUint64(kAccountA), [] {})
+                    .Await(kAwaitCap)
+                    .has_value());
   });
   const bool created = firstCreated.WaitFor(kAwaitCap);
   const bool retired = removed.WaitFor(kIdleRetireCap);
+  EXPECT_TRUE(async.Generic()
+                  .ScheduleMandatoryCleanup(AccountId::FromUint64(kAccountA),
+                                            [&] { cleanupRan.Open(); })
+                  .Await(kAwaitCap)
+                  .has_value());
+  EXPECT_EQ(observer.Creates(), 1u);
   releaseFirstCreate.Open();
   const bool ran = cleanupRan.WaitFor(kAwaitCap);
-  cleanup.join();
+  producer.join();
 
   EXPECT_TRUE(created);
   EXPECT_TRUE(retired);
@@ -2672,22 +2688,16 @@ void ExpectDeferredCleanupCannotLoseProducerWake(bool dynamic, bool hardStop,
   Gate workerAtWaitGap;
   Gate allowProducerFinish;
   Gate producerReturned;
-  Gate deferredPublished;
-  Gate allowDeferredRegistration;
+  Gate deferredRegistered;
   Gate cleanupScheduled;
   std::atomic<bool> armWaitGap{false};
   std::atomic<bool> armPublicationGap{false};
   std::atomic<bool> producerReturnedBeforeWait{false};
+  std::atomic<bool> producerReturnedBeforePublication{false};
   std::atomic<bool> cleanupScheduledBeforeWait{false};
 
   ae::detail::BaseConfig config;
   config.queueCapacity = 1;
-  // Without the publication race the producer is expected NOT to return while
-  // the worker holds the lane, so a short probe is the whole point; with it the
-  // producer is expected to return, so that direction gets the full cap.
-  const std::chrono::milliseconds producerProbe =
-      publicationRace ? std::chrono::milliseconds(kAwaitCap) : kNegativeProbe;
-
   ae::detail::WorkerSeams seams;
   seams.beforeWorkerWait = [&] {
     if (!armWaitGap.exchange(false, std::memory_order_acq_rel)) {
@@ -2695,20 +2705,20 @@ void ExpectDeferredCleanupCannotLoseProducerWake(bool dynamic, bool hardStop,
     }
     workerAtWaitGap.Open();
     allowProducerFinish.Open();
-    producerReturnedBeforeWait.store(producerReturned.WaitFor(producerProbe),
+    producerReturnedBeforeWait.store(producerReturned.WaitFor(kNegativeProbe),
                                      std::memory_order_release);
     if (publicationRace) {
-      allowDeferredRegistration.Open();
       cleanupScheduledBeforeWait.store(cleanupScheduled.WaitFor(kNegativeProbe),
                                        std::memory_order_release);
     }
   };
-  seams.afterDeferredPublication = [&] {
+  seams.afterDeferredRegistrationBeforePublication = [&] {
     if (!armPublicationGap.exchange(false, std::memory_order_acq_rel)) {
       return;
     }
-    deferredPublished.Open();
-    allowDeferredRegistration.Wait();
+    deferredRegistered.Open();
+    producerReturnedBeforePublication.store(producerReturned.WaitFor(kAwaitCap),
+                                            std::memory_order_release);
   };
 
   std::unique_ptr<ae::detail::Strategy> strategy;
@@ -2770,7 +2780,7 @@ void ExpectDeferredCleanupCannotLoseProducerWake(bool dynamic, bool hardStop,
           account, [&] { cleanupRan.Open(); }));
       cleanupScheduled.Open();
     });
-    ASSERT_TRUE(deferredPublished.WaitFor(kAwaitCap));
+    ASSERT_TRUE(deferredRegistered.WaitFor(kAwaitCap));
   } else {
     cleanup.emplace(strategy->ScheduleMandatoryCleanup(
         account, [&] { cleanupRan.Open(); }));
@@ -2806,11 +2816,11 @@ void ExpectDeferredCleanupCannotLoseProducerWake(bool dynamic, bool hardStop,
   EXPECT_EQ(producerError, ae::ErrorCode::SubmitCancelled);
   EXPECT_TRUE(partialStop);
   EXPECT_TRUE(workerAtWaitGap.WaitFor(kAwaitCap));
+  EXPECT_FALSE(producerReturnedBeforeWait.load(std::memory_order_acquire));
   if (publicationRace) {
-    EXPECT_TRUE(producerReturnedBeforeWait.load(std::memory_order_acquire));
+    EXPECT_TRUE(
+        producerReturnedBeforePublication.load(std::memory_order_acquire));
     EXPECT_FALSE(cleanupScheduledBeforeWait.load(std::memory_order_acquire));
-  } else {
-    EXPECT_FALSE(producerReturnedBeforeWait.load(std::memory_order_acquire));
   }
   EXPECT_TRUE(retrySucceeded.load(std::memory_order_relaxed));
   EXPECT_TRUE(recoverySucceeded);
@@ -3522,26 +3532,597 @@ TEST(TypedAsyncAccounts, BlockWithCauseRestoresCauseAndRejectsMalformedCause) {
 }
 
 //------------------------------------------------------------------------------
-// RegisterGroup with empty accounts -> MissingAccountId value error (real
-// engine, so the driver's Accounts().RegisterGroup signature is satisfied).
+// Exclusive sections over a real engine
 
-TEST(TypedAsyncAccounts, RegisterGroupEmptyAccountsMissingId) {
+constexpr seconds kSectionTimeout{30};
+
+static_assert(std::is_same_v<decltype(std::declval<const ae::EngineAdapter&>()
+                                          .Configure()),
+                             openpit::Configurator>,
+              "the SpotFunds retune runs through the section driver");
+
+// Opens a reservation and leaves the returned pointer as its only owner once
+// the lane that produced it moves on.
+[[nodiscard]] std::shared_ptr<ae::AsyncReservation<ae::EngineAdapter>>
+OpenReservation(ae::TypedAsyncEngine<ae::EngineAdapter>& async) {
+  ae::ExecuteOutcome<ae::EngineAdapter> exec =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  return std::move(exec.reservation);
+}
+
+TEST(TypedAsyncExclusive, RegistersAGroupAndItsCurrency) {
   Engine engine = OrderValidationEngine();
   ae::EngineAdapter driver(engine);
-  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Sharded(1).Build();
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Sharded(2).Build();
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  const auto group = openpit::param::AccountGroupId::FromUint32(7);
 
-  ae::AsyncAccounts<ae::EngineAdapter> accounts = async.Accounts();
-  ae::Future<std::optional<openpit::accounts::AccountGroupError>> future =
-      accounts.RegisterGroup(/*accounts=*/{},
-                             openpit::param::AccountGroupId::FromUint32(7));
-  try {
-    (void)future.Await(kAwaitCap);
-    FAIL() << "expected MissingAccountId";
-  } catch (const ae::Error& err) {
-    EXPECT_EQ(err.Code(), ae::ErrorCode::MissingAccountId);
-  }
+  std::optional<openpit::accounts::AccountGroupError> groupErr;
+  const std::optional<ae::Error> err = async.Exclusive(
+      [&](ae::EngineAdapter& d) {
+        const openpit::accounts::Accounts accounts = d.Accounts();
+        groupErr = accounts.RegisterGroup({account}, group);
+        accounts.SetGroupCurrency(group, openpit::param::Asset("USD"));
+      },
+      kSectionTimeout);
+  EXPECT_FALSE(err.has_value());
+  EXPECT_FALSE(groupErr.has_value());
 
+  const std::optional<std::optional<openpit::param::AccountGroupId>> groupOf =
+      async.Accounts().GroupOf(account).Await(kAwaitCap);
+  ASSERT_TRUE(groupOf.has_value());
+  ASSERT_TRUE(groupOf->has_value());
+  EXPECT_EQ(**groupOf, group);
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
+
+TEST(TypedAsyncExclusive, KeepsAReservationOpenAcrossTheSection) {
+  Engine engine = SingleOrderEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Dynamic().Build();
+  const auto reservation = OpenReservation(async);
+  ASSERT_TRUE(reservation);
+  EXPECT_FALSE(
+      async.Exclusive([](ae::EngineAdapter&) {}, kSectionTimeout).has_value());
+  EXPECT_TRUE(reservation->CommitAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncExclusive, ReleasingAnUnclosedReservationInTheSectionIsAllowed) {
+  Engine engine = SingleOrderEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Sharded(1).Build();
+  auto reservation = OpenReservation(async);
+  ASSERT_TRUE(reservation);
+  // The section thread rolls it back inline while every lane is stopped.
+  EXPECT_FALSE(async
+                   .Exclusive([&](ae::EngineAdapter&) { reservation.reset(); },
+                              kSectionTimeout)
+                   .has_value());
+  EXPECT_FALSE(reservation);
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncExclusive, OwnedEngineForwardsTheSection) {
+  Engine engine = OrderValidationEngine();
+  ae::OwnedTypedAsyncEngine async = ae::MakeTypedAsyncEngine(engine, 2);
+  bool ran = false;
+  EXPECT_FALSE(
+      async.Exclusive([&](ae::EngineAdapter&) { ran = true; }, kSectionTimeout)
+          .has_value());
+  EXPECT_TRUE(ran);
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+class ImplicitReleaseTrace {
+ public:
+  void Add(std::string name) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_events.emplace_back(std::move(name), std::this_thread::get_id());
+  }
+
+  [[nodiscard]] std::vector<std::string> Names() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<std::string> names;
+    for (const auto& event : m_events) {
+      names.push_back(event.first);
+    }
+    return names;
+  }
+
+  [[nodiscard]] std::thread::id Thread(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& event : m_events) {
+      if (event.first == name) {
+        return event.second;
+      }
+    }
+    throw std::logic_error("missing trace event: " + name);
+  }
+
+ private:
+  mutable std::mutex m_mutex;
+  std::vector<std::pair<std::string, std::thread::id>> m_events;
+};
+
+class TypedAsyncImplicitRelease
+    : public testing::TestWithParam<std::tuple<bool, bool>> {
+ protected:
+  [[nodiscard]] bool Dynamic() const { return std::get<0>(GetParam()); }
+
+  [[nodiscard]] Engine MakeEngine() {
+    EngineBuilder builder(SyncPolicy::Account);
+    builder.Add(openpit::pretrade::CustomPolicy<CountingRollbackPolicy>(
+        "CountingRollbackPolicy",
+        CountingRollbackPolicy(&rollbacks, nullptr, nullptr, [this] {
+          trace.Add("rollback");
+          if (onRollback) {
+            onRollback();
+          }
+        })));
+    return builder.Build();
+  }
+
+  [[nodiscard]] ae::TypedAsyncEngine<ae::EngineAdapter> MakeAsync(
+      ae::EngineAdapter& driver) const {
+    if (Dynamic()) {
+      return ae::TypedBuilder(driver)
+          .Dynamic()
+          .IdleCleanupAfter(std::chrono::nanoseconds(0))
+          .Build();
+    }
+    return ae::TypedBuilder(driver).Sharded(1).Build();
+  }
+
+  template <typename Action>
+  void WithHandle(ae::TypedAsyncEngine<ae::EngineAdapter>& async,
+                  const Action& action, bool native = false,
+                  OpenPitParamAccountId account = kAccountA) {
+    if (std::get<1>(GetParam())) {
+      std::shared_ptr<ae::AsyncDropCopyOperation<ae::EngineAdapter>> handle;
+      if (native) {
+        auto result = async.Generic().DriverRef().ApplyDropCopy(
+            std::make_unique<openpit::model::Order>(TestOrder(account)));
+        ASSERT_TRUE(result.operation);
+        handle =
+            std::make_shared<ae::AsyncDropCopyOperation<ae::EngineAdapter>>(
+                std::move(*result.operation), &async.Generic(),
+                AccountId::FromUint64(account));
+      } else {
+        auto result =
+            async.ApplyDropCopy(TestOrder(account)).Await(kAwaitCap).value();
+        handle = std::move(result.operation);
+      }
+      ASSERT_TRUE(handle);
+      if (!native) {
+        Flush(async, account);
+      }
+      action(handle);
+    } else {
+      std::shared_ptr<ae::AsyncReservation<ae::EngineAdapter>> handle;
+      if (native) {
+        auto result = async.Generic().DriverRef().ExecutePreTrade(
+            std::make_unique<openpit::model::Order>(TestOrder(account)));
+        ASSERT_TRUE(result.reservation);
+        handle = std::make_shared<ae::AsyncReservation<ae::EngineAdapter>>(
+            std::move(*result.reservation), &async.Generic(),
+            AccountId::FromUint64(account));
+      } else {
+        auto result =
+            async.ExecutePreTrade(TestOrder(account)).Await(kAwaitCap).value();
+        handle = std::move(result.reservation);
+      }
+      ASSERT_TRUE(handle);
+      if (!native) {
+        Flush(async, account);
+      }
+      action(handle);
+    }
+  }
+
+  static void Flush(ae::TypedAsyncEngine<ae::EngineAdapter>& async,
+                    OpenPitParamAccountId account) {
+    EXPECT_TRUE(async.Submit(AccountId::FromUint64(account), [] {})
+                    .Await(kAwaitCap)
+                    .has_value());
+  }
+
+  std::atomic<std::size_t> rollbacks{0};
+  ImplicitReleaseTrace trace;
+  std::function<void()> onRollback;
+};
+
+TEST_P(TypedAsyncImplicitRelease, AnotherThreadQueuesBehindAcceptedWork) {
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = MakeAsync(driver);
+  WithHandle(async, [&](auto& handle) {
+    Gate entered;
+    Gate release;
+    auto running = async.Submit(AccountId::FromUint64(kAccountA), [&] {
+      trace.Add("lane-start");
+      entered.Open();
+      release.Wait();
+      trace.Add("lane-end");
+    });
+    EXPECT_TRUE(entered.WaitFor(kAwaitCap));
+    handle.reset();
+    trace.Add("reset-returned");
+    EXPECT_EQ(rollbacks.load(), 0u);
+    release.Open();
+    EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+    EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+    EXPECT_EQ(trace.Names(),
+              (std::vector<std::string>{"lane-start", "reset-returned",
+                                        "lane-end", "rollback"}));
+    EXPECT_EQ(trace.Thread("rollback"), trace.Thread("lane-end"));
+    EXPECT_NE(trace.Thread("rollback"), std::this_thread::get_id());
+  });
+}
+
+TEST_P(TypedAsyncImplicitRelease, AnotherThreadDuringSectionRollsBackAfterFn) {
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = MakeAsync(driver);
+  WithHandle(async, [&](auto& handle) {
+    EXPECT_FALSE(async
+                     .Exclusive(
+                         [&](ae::EngineAdapter&) {
+                           std::thread releaser([&] { handle.reset(); });
+                           releaser.join();
+                           trace.Add("reset-returned");
+                           EXPECT_EQ(rollbacks.load(), 0u);
+                           trace.Add("fn-end");
+                         },
+                         kAwaitCap)
+                     .has_value());
+    EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+    EXPECT_EQ(trace.Names(), (std::vector<std::string>{"reset-returned",
+                                                       "fn-end", "rollback"}));
+  });
+}
+
+TEST_P(TypedAsyncImplicitRelease, SectionThreadRollsBackBeforeExclusiveOp) {
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = MakeAsync(driver);
+  const auto account = AccountId::FromUint64(kAccountA);
+  const auto group = openpit::param::AccountGroupId::FromUint32(7);
+  onRollback = [&] {
+    EXPECT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
+  };
+  WithHandle(async, [&](auto& handle) {
+    EXPECT_FALSE(async
+                     .Exclusive(
+                         [&](ae::EngineAdapter& sectionDriver) {
+                           handle.reset();
+                           EXPECT_EQ(rollbacks.load(), 1u);
+                           sectionDriver.Accounts().SetGroupCurrency(
+                               group, openpit::param::Asset("USD"));
+                           trace.Add("exclusive-op");
+                         },
+                         kAwaitCap)
+                     .has_value());
+    EXPECT_EQ(trace.Names(),
+              (std::vector<std::string>{"rollback", "exclusive-op"}));
+    EXPECT_EQ(trace.Thread("rollback"), std::this_thread::get_id());
+  });
+  EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+}
+
+TEST_P(TypedAsyncImplicitRelease, OwnWorkerRollsBackInline) {
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = MakeAsync(driver);
+  WithHandle(async, [&](auto& handle) {
+    auto running = async.Submit(AccountId::FromUint64(kAccountA), [&] {
+      handle.reset();
+      trace.Add("after-reset");
+      EXPECT_EQ(rollbacks.load(), 1u);
+    });
+    EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+    EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+    EXPECT_EQ(trace.Names(),
+              (std::vector<std::string>{"rollback", "after-reset"}));
+    EXPECT_EQ(trace.Thread("rollback"), trace.Thread("after-reset"));
+  });
+}
+
+TEST_P(TypedAsyncImplicitRelease, StoppedEngineRollsBackInline) {
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = MakeAsync(driver);
+  WithHandle(async, [&](auto& handle) {
+    EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+    handle.reset();
+    EXPECT_EQ(rollbacks.load(), 1u);
+    EXPECT_EQ(trace.Thread("rollback"), std::this_thread::get_id());
+  });
+}
+
+TEST_P(TypedAsyncImplicitRelease, RetiredLaneIsNotRecreated) {
+  if (!Dynamic()) {
+    GTEST_SKIP() << "idle retirement belongs to Dynamic";
+  }
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  Gate created;
+  Gate releaseCreate;
+  Gate removed;
+  releaseCreate.Open();
+  RetiringCreateObserver observer(&created, &releaseCreate, &removed);
+  auto async = ae::TypedBuilder(driver)
+                   .WithObserver(observer)
+                   .Dynamic()
+                   .IdleCleanupAfter(seconds(5))
+                   .Build();
+  WithHandle(async, [&](auto& handle) {
+    ASSERT_TRUE(removed.WaitFor(kIdleRetireCap));
+    const auto creates = observer.Creates();
+    handle.reset();
+    EXPECT_EQ(rollbacks.load(), 1u);
+    EXPECT_EQ(trace.Thread("rollback"), std::this_thread::get_id());
+    EXPECT_EQ(observer.Creates(), creates);
+  });
+  EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+}
+
+TEST_P(TypedAsyncImplicitRelease, QueueLimitReleaseWaitsForSection) {
+  if (!Dynamic()) {
+    GTEST_SKIP() << "the queue limit belongs to Dynamic";
+  }
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder(driver)
+                   .Dynamic()
+                   .MaxQueues(1)
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+  EXPECT_TRUE(async.Submit(AccountId::FromUint64(kAccountA + 1), [] {})
+                  .Await(kAwaitCap)
+                  .has_value());
+  WithHandle(
+      async,
+      [&](auto& handle) {
+        EXPECT_FALSE(async
+                         .Exclusive(
+                             [&](ae::EngineAdapter&) {
+                               std::thread releaser([&] { handle.reset(); });
+                               releaser.join();
+                               EXPECT_EQ(rollbacks.load(), 0u);
+                               trace.Add("fn-end");
+                             },
+                             kAwaitCap)
+                         .has_value());
+        EXPECT_EQ(rollbacks.load(), 1u);
+        EXPECT_EQ(trace.Names(),
+                  (std::vector<std::string>{"fn-end", "rollback"}));
+      },
+      /*native=*/true);
+  EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+}
+
+TEST_P(TypedAsyncImplicitRelease, LaneFreeRollbackCanReleaseSameAccount) {
+  if (!Dynamic()) {
+    GTEST_SKIP() << "lane-free cleanup belongs to Dynamic";
+  }
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = MakeAsync(driver);
+  WithHandle(
+      async,
+      [&](auto& first) {
+        WithHandle(
+            async,
+            [&](auto& second) {
+              onRollback = [&] { second.reset(); };
+              first.reset();
+              onRollback = {};
+              EXPECT_EQ(rollbacks.load(), 2u);
+              EXPECT_EQ(trace.Thread("rollback"), std::this_thread::get_id());
+            },
+            /*native=*/true);
+      },
+      /*native=*/true);
+  EXPECT_TRUE(async.StopGraceful(kAwaitCap));
+}
+
+TEST_P(TypedAsyncImplicitRelease, CrosswiseLaneFreeReleasesDoNotNestFences) {
+  if (!Dynamic()) {
+    GTEST_SKIP() << "lane-free cleanup belongs to Dynamic";
+  }
+  EXPECT_EXIT(
+      {
+        Engine engine = MakeEngine();
+        ae::EngineAdapter driver(engine);
+        auto async = MakeAsync(driver);
+        Gate bothEntered;
+        Gate done;
+        std::atomic<int> arrivals{0};
+        static thread_local std::function<void()>* releaseOther = nullptr;
+        static thread_local bool insideOuter = false;
+        static thread_local std::size_t callbacks = 0;
+        onRollback = [&] {
+          ++callbacks;
+          auto* release = std::exchange(releaseOther, nullptr);
+          if (!release) {
+            if (insideOuter) {
+              std::_Exit(87);
+            }
+            return;
+          }
+          if (arrivals.fetch_add(1) == 1) {
+            bothEntered.Open();
+          }
+          if (!bothEntered.WaitFor(kAwaitCap)) {
+            std::_Exit(88);
+          }
+          insideOuter = true;
+          (*release)();
+          insideOuter = false;
+        };
+        std::thread watchdog([&] {
+          if (!done.WaitFor(kAwaitCap * 2)) {
+            std::_Exit(89);
+          }
+        });
+        WithHandle(
+            async,
+            [&](auto& firstA) {
+              WithHandle(
+                  async,
+                  [&](auto& nestedA) {
+                    WithHandle(
+                        async,
+                        [&](auto& firstB) {
+                          WithHandle(
+                              async,
+                              [&](auto& nestedB) {
+                                std::thread a([&] {
+                                  std::function<void()> release = [&] {
+                                    nestedB.reset();
+                                  };
+                                  releaseOther = &release;
+                                  firstA.reset();
+                                  if (callbacks != 2u) {
+                                    std::_Exit(91);
+                                  }
+                                });
+                                std::thread b([&] {
+                                  std::function<void()> release = [&] {
+                                    nestedA.reset();
+                                  };
+                                  releaseOther = &release;
+                                  firstB.reset();
+                                  if (callbacks != 2u) {
+                                    std::_Exit(92);
+                                  }
+                                });
+                                a.join();
+                                b.join();
+                              },
+                              true, kAccountA + 1);
+                        },
+                        true, kAccountA + 1);
+                  },
+                  true);
+            },
+            true);
+        done.Open();
+        watchdog.join();
+        std::_Exit(rollbacks.load() == 4u ? 0 : 90);
+      },
+      testing::ExitedWithCode(0), "");
+}
+
+TEST_P(TypedAsyncImplicitRelease, StoppedSameAccountRollbacksDoNotOverlap) {
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = MakeAsync(driver);
+  WithHandle(async, [&](auto& first) {
+    WithHandle(async, [&](auto& second) {
+      ASSERT_TRUE(async.StopGraceful(kAwaitCap));
+      Gate entered;
+      Gate secondEntered;
+      Gate release;
+      std::atomic<int> calls{0};
+      onRollback = [&] {
+        if (calls.fetch_add(1) == 0) {
+          entered.Open();
+          release.Wait();
+        } else {
+          secondEntered.Open();
+        }
+      };
+      std::thread a([&] { first.reset(); });
+      EXPECT_TRUE(entered.WaitFor(kAwaitCap));
+      Gate attempting;
+      std::thread b([&] {
+        attempting.Open();
+        second.reset();
+      });
+      EXPECT_TRUE(attempting.WaitFor(kAwaitCap));
+      const bool overlapped = secondEntered.WaitFor(kNegativeProbe);
+      release.Open();
+      a.join();
+      b.join();
+      EXPECT_FALSE(overlapped);
+      EXPECT_EQ(rollbacks.load(), 2u);
+    });
+  });
+}
+
+TEST_P(TypedAsyncImplicitRelease, TeardownAbortedCommitReleasesBeforeNextTask) {
+  Engine engine = MakeEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = std::make_unique<ae::TypedAsyncEngine<ae::EngineAdapter>>(
+      MakeAsync(driver));
+  WithHandle(*async, [&](auto& handle) {
+    Gate entered;
+    Gate release;
+    auto running = async->Submit(AccountId::FromUint64(kAccountA), [&] {
+      entered.Open();
+      release.Wait();
+      trace.Add("running-end");
+    });
+    EXPECT_TRUE(entered.WaitFor(kAwaitCap));
+    auto commit = handle->Commit();
+    handle.reset();
+    auto second = async->Generic().Submit(
+        AccountId::FromUint64(kAccountA), [] {},
+        [&](auto promise, ae::Error error, bool) {
+          trace.Add("second-abort");
+          promise.Fail(std::move(error));
+        });
+    ae::detail::WorkerSeams::BeforeJoin() = [&] { release.Open(); };
+    async.reset();
+    ae::detail::WorkerSeams::BeforeJoin() = {};
+    EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+    EXPECT_THROW((void)commit.Await(kAwaitCap), ae::Error);
+    EXPECT_THROW((void)second.Await(kAwaitCap), ae::Error);
+    EXPECT_EQ(trace.Names(), (std::vector<std::string>{
+                                 "running-end", "rollback", "second-abort"}));
+    EXPECT_EQ(trace.Thread("rollback"), trace.Thread("running-end"));
+    EXPECT_EQ(rollbacks.load(), 1u);
+  });
+}
+
+TEST(TypedAsyncImplicitReleaseTeardown, DynamicJoinsBeforeErasingLane) {
+  ImplicitReleaseTrace trace;
+  Gate entered;
+  Gate release;
+  ae::detail::BaseConfig config;
+  auto strategy = std::make_unique<ae::detail::DynamicStrategy>(
+      config, 1, std::chrono::nanoseconds(0), false);
+  auto* route = strategy.get();
+  route->Submit(kAccountA,
+                ae::detail::MakeTask(
+                    [&] {
+                      entered.Open();
+                      release.Wait();
+                      trace.Add("lane-end");
+                    },
+                    [](ae::Error) {}),
+                std::chrono::steady_clock::time_point::max(),
+                [](ae::Error) { FAIL() << "initial task was refused"; });
+  EXPECT_TRUE(entered.WaitFor(kAwaitCap));
+  ae::detail::WorkerSeams::BeforeJoin() = [&] {
+    (void)route->ScheduleMandatoryCleanup(kAccountA,
+                                          [&] { trace.Add("cleanup"); });
+    release.Open();
+  };
+  strategy.reset();
+  ae::detail::WorkerSeams::BeforeJoin() = {};
+  EXPECT_EQ(trace.Names(), (std::vector<std::string>{"lane-end", "cleanup"}));
+  EXPECT_EQ(trace.Thread("cleanup"), trace.Thread("lane-end"));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    StrategiesAndHandles, TypedAsyncImplicitRelease,
+    testing::Combine(testing::Bool(), testing::Bool()),
+    [](const testing::TestParamInfo<std::tuple<bool, bool>>& info) {
+      return std::string(std::get<0>(info.param) ? "Dynamic" : "Sharded") +
+             (std::get<1>(info.param) ? "DropCopy" : "Reservation");
+    });
 
 }  // namespace
