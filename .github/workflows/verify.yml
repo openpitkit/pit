@@ -77,7 +77,7 @@ jobs:
       - name: Load CI versions
         uses: ./.github/actions/load-ci-versions
         with:
-          required: CI_RUST
+          required: CI_RUST CI_CARGO_RELEASE
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -113,6 +113,11 @@ jobs:
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
+
+      - name: Install cargo-release
+        run: |
+          cargo install cargo-release --version "$CI_CARGO_RELEASE" --locked --root "$GITHUB_WORKSPACE/target/cargo-release"
+          echo "$GITHUB_WORKSPACE/target/cargo-release/bin" >> "$GITHUB_PATH"
 
       - name: Check Python
         run: just --justfile "$JUSTFILE" check-python-full
