@@ -540,6 +540,10 @@ test-python-integration-full: test-python-integration-debug test-python-integrat
 test-python-scripts: _ensure-python-env
     {{ python_path }} -m pytest -q --no-header -c {{ python_config }} scripts/tests
 
+# Test release-note validation and publication without publishing artifacts.
+test-release-notes:
+    {{ python_path }} -m pytest -q --no-header -c {{ python_config }} scripts/tests/test_release_notes.py
+
 # Run a workspace Python example from examples/python against local sources (debug).
 run-examples-python-debug: python-develop-debug
     {{ binding_python_path }} examples/python/rate_pnl_killswitch/main.py
@@ -862,9 +866,78 @@ fmt-go:
 fmt-js:
     cd bindings/js && npm run format
 
-# Prepare new release (kind is patch, minor or major).
-release kind: check-full
-    cargo release {{ kind }} --execute --no-confirm
+# Prepare a release with notes from an absolute path outside the repository.
+[unix]
+release kind notes_file: check-full
+    OPENPIT_RELEASE_NOTES_FILE="{{ notes_file }}" cargo release {{ kind }} --execute --no-confirm
+[windows]
+release kind notes_file: check-full
+    set "OPENPIT_RELEASE_NOTES_FILE={{ notes_file }}" && cargo release {{ kind }} --execute --no-confirm
+
+# Require nonempty release notes committed for the exact production version.
+check-release-notes version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION="{{ version }}"
+    NOTES="RELEASE_NOTES.md"
+    if ! git cat-file -e "HEAD:${NOTES}" 2>/dev/null; then
+      echo "Commit ${NOTES} before preparing or publishing this release" >&2
+      exit 1
+    fi
+    if [[ ! -f "${NOTES}" ]] || ! git diff --quiet HEAD -- "${NOTES}"; then
+      echo "${NOTES} must match the committed release notes" >&2
+      exit 1
+    fi
+    just --justfile "{{ repo_dir }}/justfile" --working-directory "$PWD" _check-release-notes-content "${VERSION}" "${NOTES}"
+
+[private]
+_check-release-notes-content version notes_file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION="{{ version }}"
+    NOTES="{{ notes_file }}"
+    if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "Release notes require a version in MAJOR.MINOR.PATCH format" >&2
+      exit 1
+    fi
+    if [[ ! -f "${NOTES}" ]]; then
+      echo "Release notes file ${NOTES} is required" >&2
+      exit 1
+    fi
+    if [[ "$(head -n 1 "${NOTES}")" != "<!-- release-version: ${VERSION} -->" ]]; then
+      echo "${NOTES} must start with <!-- release-version: ${VERSION} -->" >&2
+      exit 1
+    fi
+    if ! LC_ALL=C awk 'NR > 1 && /[^[:space:]]/ { found = 1 } END { exit !found }' "${NOTES}"; then
+      echo "${NOTES} must contain release notes, not just whitespace" >&2
+      exit 1
+    fi
+
+[private]
+_prepare-release-notes version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${OPENPIT_RELEASE_NOTES_FILE:?Set OPENPIT_RELEASE_NOTES_FILE to the prepared notes file}"
+    : "${DRY_RUN:?cargo release must set DRY_RUN}"
+    case "${OPENPIT_RELEASE_NOTES_FILE}" in
+      /*|[A-Za-z]:/*) ;;
+      *)
+        echo "OPENPIT_RELEASE_NOTES_FILE must be an absolute path" >&2
+        exit 1
+        ;;
+    esac
+    just --justfile "{{ repo_dir }}/justfile" --working-directory "$PWD" _check-release-notes-content "{{ version }}" "${OPENPIT_RELEASE_NOTES_FILE}"
+    case "${DRY_RUN}" in
+      true) ;;
+      false)
+        cp "${OPENPIT_RELEASE_NOTES_FILE}" RELEASE_NOTES.md
+        git add -- RELEASE_NOTES.md
+        ;;
+      *)
+        echo "Unexpected cargo release DRY_RUN value: ${DRY_RUN}" >&2
+        exit 1
+        ;;
+    esac
 
 # Push the current HEAD to the dry-run branch and start the staging release workflow.
 release-dry:

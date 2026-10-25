@@ -117,6 +117,13 @@ jobs:
         shell: bash
         run: just --justfile "$JUSTFILE" check-version-bump "$GITHUB_REF_NAME"
 
+      - name: Verify committed release notes
+        if: ${{ steps.resolve-context.outputs.release_mode == 'production' }}
+        shell: bash
+        env:
+          VERSION: ${{ steps.resolve-context.outputs.version }}
+        run: just --justfile "$JUSTFILE" check-release-notes "$VERSION"
+
   verify:
     name: Verify (Rust + Python)
     needs: verify-tag
@@ -1362,7 +1369,9 @@ jobs:
           It must not be published or treated as a package release.
           EOF
           else
-            cat <<EOF > "${BODY_FILE}"
+            tail -n +2 RELEASE_NOTES.md > "${BODY_FILE}"
+            printf '\n\n' >> "${BODY_FILE}"
+            cat <<EOF >> "${BODY_FILE}"
           Install from package registries:
 
           - crates.io: https://crates.io/crates/openpit
@@ -1416,7 +1425,6 @@ jobs:
           else
             GH_TOKEN="${{ github.token }}" gh release create "${release_tag}" \
               --title "${release_tag}" \
-              --generate-notes \
               --notes-file "${BODY_FILE}" \
               --latest \
               "${ASSETS[@]}"

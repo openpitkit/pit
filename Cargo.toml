@@ -11,6 +11,7 @@ members = [
 
 [workspace.metadata.release]
 shared-version = true
+consolidate-commits = true
 tag-prefix = ""
 tag-message = "Release {{version}}"
 pre-release-commit-message = "Release {{version}}"
