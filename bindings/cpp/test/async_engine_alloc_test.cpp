@@ -160,7 +160,9 @@ struct CallbackFailure : std::exception {
   }
 };
 
-void FailReporting(bool standard) {
+[[noreturn]] void FailReporting(bool standard) {
+  // MSVC keeps terminate handlers per thread, including these worker callbacks.
+  std::set_terminate(Terminated);
   allocation_fault::remaining = 0;
   if (standard) {
     throw CallbackFailure();
@@ -281,6 +283,7 @@ TEST_P(AsyncAllocDeathTest, HardStopAbortErrorAllocationTerminates) {
         Gate entered;
         Gate release;
         Submit(*strategy, [&] {
+          std::set_terminate(Terminated);
           entered.Open();
           release.Wait();
           allocation_fault::remaining = 0;
@@ -303,6 +306,7 @@ TEST_P(AsyncAllocDeathTest, EscapingWorkerExceptionTerminates) {
         Gate entered;
         ae::detail::WorkerSeams seams;
         seams.beforeWorkerWait = [&] {
+          std::set_terminate(Terminated);
           entered.Open();
           throw 7;
         };
@@ -337,24 +341,18 @@ void RunEngineFailure(int operation, bool standard) {
                           });
       break;
     case 2:
-      (void)engine.Call(account, [=](Driver&) {
-        fail();
-        return 0;
-      });
+      (void)engine.Call(account,
+                        [=](Driver&) -> int { FailReporting(standard); });
       break;
     case 3:
-      (void)engine.Call2<int, int>(account, [=](Driver&) {
-        fail();
-        return std::pair<int, int>{};
-      });
+      (void)engine.Call2<int, int>(
+          account,
+          [=](Driver&) -> std::pair<int, int> { FailReporting(standard); });
       break;
     case 4:
       (void)engine.Call2<int, int>(
           account,
-          [=](Driver&) {
-            fail();
-            return std::pair<int, int>{};
-          },
+          [=](Driver&) -> std::pair<int, int> { FailReporting(standard); },
           [](auto promise, ae::Error error, bool) {
             promise.Fail(std::move(error));
           },
@@ -409,6 +407,7 @@ TEST_P(AsyncAllocDeathTest, MoveOnlyResultDeliveryFailureTerminates) {
                                    : ae::Builder(driver).Sharded(1).Build();
           const auto account = openpit::param::AccountId::FromUint64(kAccount);
           auto value = [](Driver&) {
+            std::set_terminate(Terminated);
             auto result = std::make_unique<int>(42);
             allocation_fault::remaining = 0;
             return result;

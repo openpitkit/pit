@@ -2943,11 +2943,14 @@ void ExpectStopWaitsForSynchronousAbortHandoff(bool hardStop) {
   Gate producerBlocked;
   QueueFullGateObserver observer(&producerBlocked);
   Gate underlyingReleased;
+  // The graceful submit expires before its observer can report a full queue.
+  const auto slowSubmitThreshold =
+      std::chrono::milliseconds(hardStop ? 1 : 100);
   auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
                    .WithStopUnderlying([&] { underlyingReleased.Open(); })
                    .WithObserver(observer)
                    .WithQueueCapacity(1)
-                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .WithSlowSubmitThreshold(slowSubmitThreshold)
                    .Sharded(1)
                    .Build();
 
@@ -2996,7 +2999,11 @@ void ExpectStopWaitsForSynchronousAbortHandoff(bool hardStop) {
         submitTimeout);
     submitReturned.Open();
   });
-  ASSERT_TRUE(producerBlocked.WaitFor(kAwaitCap));
+  if (hardStop) {
+    ASSERT_TRUE(producerBlocked.WaitFor(kAwaitCap));
+  } else {
+    ASSERT_TRUE(abortHandlerEntered.WaitFor(kAwaitCap));
+  }
 
   Gate stopReturned;
   std::atomic<bool> stopSucceeded{false};
