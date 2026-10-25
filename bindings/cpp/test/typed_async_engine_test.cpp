@@ -3783,13 +3783,15 @@ TEST_P(TypedAsyncImplicitRelease, AnotherThreadDuringSectionRollsBackAfterFn) {
 }
 
 TEST_P(TypedAsyncImplicitRelease, SectionThreadRollsBackBeforeExclusiveOp) {
+  Engine callbackEngine = MakeEngine();
   Engine engine = MakeEngine();
   ae::EngineAdapter driver(engine);
   auto async = MakeAsync(driver);
   const auto account = AccountId::FromUint64(kAccountA);
   const auto group = openpit::param::AccountGroupId::FromUint32(7);
   onRollback = [&] {
-    EXPECT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
+    EXPECT_FALSE(
+        callbackEngine.Accounts().RegisterGroup({account}, group).has_value());
   };
   WithHandle(async, [&](auto& handle) {
     EXPECT_FALSE(async
@@ -3902,18 +3904,114 @@ TEST_P(TypedAsyncImplicitRelease, QueueLimitReleaseWaitsForSection) {
   EXPECT_TRUE(async.StopGraceful(kAwaitCap));
 }
 
-TEST_P(TypedAsyncImplicitRelease, LaneFreeRollbackCanReleaseSameAccount) {
-  if (!Dynamic()) {
-    GTEST_SKIP() << "lane-free cleanup belongs to Dynamic";
-  }
-  Engine engine = MakeEngine();
-  ae::EngineAdapter driver(engine);
-  auto async = MakeAsync(driver);
-  WithHandle(
-      async,
-      [&](auto& first) {
+TEST_P(TypedAsyncImplicitRelease, LaneFreeRollbackMustNotReleaseSameEngine) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "callback reentry is asserted only in debug builds";
+#else
+  EXPECT_DEATH(
+      {
+        Engine engine = MakeEngine();
+        ae::EngineAdapter driver(engine);
+        auto async = MakeAsync(driver);
+        if (!Dynamic()) {
+          ASSERT_TRUE(async.StopGraceful(kAwaitCap));
+        }
         WithHandle(
             async,
+            [&](auto& first) {
+              WithHandle(
+                  async,
+                  [&](auto& second) {
+                    onRollback = [&] { second.reset(); };
+                    first.reset();
+                    onRollback = {};
+                  },
+                  /*native=*/true);
+            },
+            /*native=*/true);
+      },
+      "callbacks must not call or release handles of the same engine");
+#endif
+}
+
+TEST_P(TypedAsyncImplicitRelease, LaneFreeRollbackMustNotCloseSameEngine) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "callback reentry is asserted only in debug builds";
+#else
+  EXPECT_DEATH(
+      {
+        Engine engine = MakeEngine();
+        ae::EngineAdapter driver(engine);
+        auto async = MakeAsync(driver);
+        if (!Dynamic()) {
+          ASSERT_TRUE(async.StopGraceful(kAwaitCap));
+        }
+        WithHandle(
+            async,
+            [&](auto& first) {
+              WithHandle(
+                  async,
+                  [&](auto& second) {
+                    bool closing = false;
+                    onRollback = [&] {
+                      if (!std::exchange(closing, true)) {
+                        (void)second->Close().Await(kAwaitCap);
+                      }
+                    };
+                    first.reset();
+                    onRollback = {};
+                  },
+                  true, kAccountA + 1);
+            },
+            /*native=*/true);
+      },
+      "callbacks must not call or release handles of the same engine");
+#endif
+}
+
+TEST_P(TypedAsyncImplicitRelease, LaneFreeRollbackMustNotSubmitToSameEngine) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "callback reentry is asserted only in debug builds";
+#else
+  EXPECT_DEATH(
+      {
+        Engine engine = MakeEngine();
+        ae::EngineAdapter driver(engine);
+        auto async = MakeAsync(driver);
+        if (!Dynamic()) {
+          ASSERT_TRUE(async.StopGraceful(kAwaitCap));
+        }
+        WithHandle(
+            async,
+            [&](auto& handle) {
+              onRollback = [&] {
+                (void)async.Submit(AccountId::FromUint64(kAccountA + 1), [] {});
+              };
+              handle.reset();
+              onRollback = {};
+            },
+            /*native=*/true);
+      },
+      "callbacks must not call or release handles of the same engine");
+#endif
+}
+
+TEST_P(TypedAsyncImplicitRelease, LaneFreeRollbackCanReleaseDifferentEngine) {
+  Engine firstEngine = MakeEngine();
+  Engine secondEngine = MakeEngine();
+  ae::EngineAdapter firstDriver(firstEngine);
+  ae::EngineAdapter secondDriver(secondEngine);
+  auto firstAsync = MakeAsync(firstDriver);
+  auto secondAsync = MakeAsync(secondDriver);
+  if (!Dynamic()) {
+    ASSERT_TRUE(firstAsync.StopGraceful(kAwaitCap));
+    ASSERT_TRUE(secondAsync.StopGraceful(kAwaitCap));
+  }
+  WithHandle(
+      firstAsync,
+      [&](auto& first) {
+        WithHandle(
+            secondAsync,
             [&](auto& second) {
               onRollback = [&] { second.reset(); };
               first.reset();
@@ -3924,95 +4022,8 @@ TEST_P(TypedAsyncImplicitRelease, LaneFreeRollbackCanReleaseSameAccount) {
             /*native=*/true);
       },
       /*native=*/true);
-  EXPECT_TRUE(async.StopGraceful(kAwaitCap));
-}
-
-TEST_P(TypedAsyncImplicitRelease, CrosswiseLaneFreeReleasesDoNotNestFences) {
-  if (!Dynamic()) {
-    GTEST_SKIP() << "lane-free cleanup belongs to Dynamic";
-  }
-  EXPECT_EXIT(
-      {
-        Engine engine = MakeEngine();
-        ae::EngineAdapter driver(engine);
-        auto async = MakeAsync(driver);
-        Gate bothEntered;
-        Gate done;
-        std::atomic<int> arrivals{0};
-        static thread_local std::function<void()>* releaseOther = nullptr;
-        static thread_local bool insideOuter = false;
-        static thread_local std::size_t callbacks = 0;
-        onRollback = [&] {
-          ++callbacks;
-          auto* release = std::exchange(releaseOther, nullptr);
-          if (!release) {
-            if (insideOuter) {
-              std::_Exit(87);
-            }
-            return;
-          }
-          if (arrivals.fetch_add(1) == 1) {
-            bothEntered.Open();
-          }
-          if (!bothEntered.WaitFor(kAwaitCap)) {
-            std::_Exit(88);
-          }
-          insideOuter = true;
-          (*release)();
-          insideOuter = false;
-        };
-        std::thread watchdog([&] {
-          if (!done.WaitFor(kAwaitCap * 2)) {
-            std::_Exit(89);
-          }
-        });
-        WithHandle(
-            async,
-            [&](auto& firstA) {
-              WithHandle(
-                  async,
-                  [&](auto& nestedA) {
-                    WithHandle(
-                        async,
-                        [&](auto& firstB) {
-                          WithHandle(
-                              async,
-                              [&](auto& nestedB) {
-                                std::thread a([&] {
-                                  std::function<void()> release = [&] {
-                                    nestedB.reset();
-                                  };
-                                  releaseOther = &release;
-                                  firstA.reset();
-                                  if (callbacks != 2u) {
-                                    std::_Exit(91);
-                                  }
-                                });
-                                std::thread b([&] {
-                                  std::function<void()> release = [&] {
-                                    nestedA.reset();
-                                  };
-                                  releaseOther = &release;
-                                  firstB.reset();
-                                  if (callbacks != 2u) {
-                                    std::_Exit(92);
-                                  }
-                                });
-                                a.join();
-                                b.join();
-                              },
-                              true, kAccountA + 1);
-                        },
-                        true, kAccountA + 1);
-                  },
-                  true);
-            },
-            true);
-        done.Open();
-        watchdog.join();
-        std::_Exit(rollbacks.load() == 4u ? 0 : 90);
-      },
-      testing::ExitedWithCode(0), "");
+  EXPECT_TRUE(firstAsync.StopGraceful(kAwaitCap));
+  EXPECT_TRUE(secondAsync.StopGraceful(kAwaitCap));
 }
 
 TEST_P(TypedAsyncImplicitRelease, StoppedSameAccountRollbacksDoNotOverlap) {

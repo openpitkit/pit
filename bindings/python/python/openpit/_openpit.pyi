@@ -130,8 +130,6 @@ class ConfigureErrorKind:
     """The named policy exists but its settings type differs from the target."""
     VALIDATION: typing.ClassVar[ConfigureErrorKind]
     """The update was rejected; the prior value still applies."""
-    NESTED_CONFIGURATION: typing.ClassVar[ConfigureErrorKind]
-    """Configuration was re-entered on the same thread."""
 
 class PolicyConfigureError(Exception):
     """Runtime policy reconfiguration failed.

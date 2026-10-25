@@ -408,8 +408,6 @@ fn configure_error_kind_str(error: &openpit::ConfigureError) -> &'static str {
         openpit::ConfigureError::UnknownPolicy { .. } => "UNKNOWN",
         openpit::ConfigureError::PolicyTypeMismatch { .. } => "TYPE_MISMATCH",
         openpit::ConfigureError::Validation { .. } => "VALIDATION",
-        openpit::ConfigureError::NestedConfiguration => "NESTED_CONFIGURATION",
-        _ => "VALIDATION",
     }
 }
 
@@ -458,8 +456,6 @@ pub fn configure_error_to_js(error: openpit::ConfigureError) -> JsValue {
                 &JsValue::from_str(message),
             );
         }
-        openpit::ConfigureError::NestedConfiguration => {}
-        _ => {}
     }
     make_error_with(
         ErrorKind::PolicyConfigure,

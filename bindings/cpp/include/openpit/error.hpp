@@ -59,7 +59,6 @@ enum class ConfigureErrorKind : std::uint32_t {
   Unknown = 0,
   TypeMismatch = 1,
   Validation = 2,
-  NestedConfiguration = 3,
 };
 
 class Error : public std::exception {

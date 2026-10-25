@@ -54,13 +54,21 @@ impl<Order> RequestHandle<Order> for RequestHandleImpl<Order> {
 pub(crate) struct ReservationHandleImpl {
     mutations: Mutations,
     kill_switch: MutationFailureKillSwitch,
+    #[cfg(debug_assertions)]
+    engine_calls: crate::core::configure::EngineCallTracker,
 }
 
 impl ReservationHandleImpl {
-    pub(crate) fn new(mutations: Mutations, kill_switch: MutationFailureKillSwitch) -> Self {
+    pub(crate) fn new(
+        mutations: Mutations,
+        kill_switch: MutationFailureKillSwitch,
+        #[cfg(debug_assertions)] engine_calls: crate::core::configure::EngineCallTracker,
+    ) -> Self {
         Self {
             mutations,
             kill_switch,
+            #[cfg(debug_assertions)]
+            engine_calls,
         }
     }
 }
@@ -70,7 +78,11 @@ impl ReservationHandle for ReservationHandleImpl {
         let Self {
             mutations,
             kill_switch,
+            #[cfg(debug_assertions)]
+            engine_calls,
         } = *self;
+        #[cfg(debug_assertions)]
+        let _call = engine_calls.enter();
         kill_switch.arm(&mutations.commit_all());
     }
 
@@ -78,7 +90,11 @@ impl ReservationHandle for ReservationHandleImpl {
         let Self {
             mutations,
             kill_switch,
+            #[cfg(debug_assertions)]
+            engine_calls,
         } = *self;
+        #[cfg(debug_assertions)]
+        let _call = engine_calls.enter();
         kill_switch.arm(mutations.rollback_all().failure());
     }
 }
@@ -122,7 +138,13 @@ mod tests {
         let mut mutations = Mutations::with_capacity(1);
         mutations.push(Mutation::new_fallible(always_fails, always_succeeds));
 
-        Box::new(ReservationHandleImpl::new(mutations, kill_switch)).commit();
+        Box::new(ReservationHandleImpl::new(
+            mutations,
+            kill_switch,
+            #[cfg(debug_assertions)]
+            crate::core::configure::EngineCallTracker::default(),
+        ))
+        .commit();
 
         assert_eq!(&*sink.borrow(), &[MutationFailureScope::Global]);
     }
@@ -133,7 +155,13 @@ mod tests {
         let mut mutations = Mutations::with_capacity(1);
         mutations.push(Mutation::new_fallible(always_succeeds, always_fails));
 
-        Box::new(ReservationHandleImpl::new(mutations, kill_switch)).rollback();
+        Box::new(ReservationHandleImpl::new(
+            mutations,
+            kill_switch,
+            #[cfg(debug_assertions)]
+            crate::core::configure::EngineCallTracker::default(),
+        ))
+        .rollback();
 
         assert_eq!(&*sink.borrow(), &[MutationFailureScope::Global]);
     }
@@ -144,7 +172,13 @@ mod tests {
         let mut mutations = Mutations::with_capacity(1);
         mutations.push(Mutation::new(noop_action, noop_action));
 
-        Box::new(ReservationHandleImpl::new(mutations, kill_switch)).commit();
+        Box::new(ReservationHandleImpl::new(
+            mutations,
+            kill_switch,
+            #[cfg(debug_assertions)]
+            crate::core::configure::EngineCallTracker::default(),
+        ))
+        .commit();
 
         assert!(sink.borrow().is_empty());
     }
@@ -166,6 +200,8 @@ mod tests {
         let handle = Box::new(ReservationHandleImpl::new(
             mutations,
             MutationFailureKillSwitch::inert(),
+            #[cfg(debug_assertions)]
+            crate::core::configure::EngineCallTracker::default(),
         ));
         handle.commit();
 
@@ -186,6 +222,8 @@ mod tests {
         let handle = Box::new(ReservationHandleImpl::new(
             mutations,
             MutationFailureKillSwitch::inert(),
+            #[cfg(debug_assertions)]
+            crate::core::configure::EngineCallTracker::default(),
         ));
         handle.rollback();
 

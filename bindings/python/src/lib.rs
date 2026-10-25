@@ -330,9 +330,6 @@ enum PyConfigureErrorKind {
     /// The update was rejected; the prior value still applies.
     #[pyo3(name = "VALIDATION")]
     Validation = 2,
-    /// Configuration was re-entered on the same thread.
-    #[pyo3(name = "NESTED_CONFIGURATION")]
-    NestedConfiguration = 3,
 }
 
 impl PyConfigureErrorKind {
@@ -341,10 +338,6 @@ impl PyConfigureErrorKind {
             ConfigureError::UnknownPolicy { .. } => Self::Unknown,
             ConfigureError::PolicyTypeMismatch { .. } => Self::TypeMismatch,
             ConfigureError::Validation { .. } => Self::Validation,
-            ConfigureError::NestedConfiguration => Self::NestedConfiguration,
-            // `ConfigureError` is `#[non_exhaustive]`; an unforeseen variant is
-            // reported as a validation failure, matching the C binding default.
-            _ => Self::Validation,
         }
     }
 }

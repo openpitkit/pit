@@ -145,8 +145,6 @@ export const ConfigureErrorKind = {
   TypeMismatch: "TYPE_MISMATCH",
   /** The policy rejected the proposed settings. */
   Validation: "VALIDATION",
-  /** Configuration was re-entered from a configuration callback. */
-  NestedConfiguration: "NESTED_CONFIGURATION",
 } as const;
 
 /** Runtime policy-configuration failure. */

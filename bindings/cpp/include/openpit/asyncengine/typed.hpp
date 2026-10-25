@@ -248,21 +248,12 @@ template <typename Handle, typename Driver, typename SerializationCheck>
 void ReleaseImplicitHandle(Handle& handle, AsyncEngine<Driver>& engine,
                            ::openpit::param::AccountId accountId,
                            SerializationCheck serializedHere) noexcept {
-  if (!RunningInlineCleanup() && serializedHere()) {
+  if (serializedHere()) {
     handle = Handle();
     return;
   }
   const auto owned = std::make_shared<Handle>(std::move(handle));
   try {
-    // Inside an inline cleanup, apply this rule again once that cleanup has
-    // dropped its fence.
-    if (RunningInlineCleanup()) {
-      InlineCleanupPending().routes.emplace_back(
-          [owned, &engine, accountId, serializedHere] {
-            ReleaseImplicitHandle(*owned, engine, accountId, serializedHere);
-          });
-      return;
-    }
     // Keep our copy alive until hand-off succeeds or terminate is called.
     (void)engine.ScheduleMandatoryCleanup(accountId,
                                           [owned] { *owned = Handle(); });
@@ -462,11 +453,12 @@ void CompleteMandatoryCleanup(PromiseType promise, Error originalError,
 // release; violating that lifetime is undefined behavior. An unclosed last
 // release rolls back inline on the section thread or its account's worker;
 // otherwise it queues behind accepted lane work, or runs under the account
-// fence when the account has no worker. A release made while the thread runs
-// an inline cleanup is routed on that thread after the enclosing cleanup has
-// dropped the fence it holds. Off-thread releases during a section wait until
-// its callback ends. Release never creates a lane or thread; a hand-off failure
-// terminates.
+// fence when the account has no worker. Off-thread releases during a section
+// wait until its callback ends. Release never creates a lane or thread; a
+// hand-off failure terminates. Mutation and rollback callbacks must not call
+// their engine or release its unclosed handles; debug builds assert on
+// inline-cleanup reentry. Calls and releases for another engine are allowed
+// while that engine's callbacks never call back into this one.
 //
 // Like the synchronous reservation, misuse (commit after close, double commit)
 // is a programmer error. The async layer does not invent a failure mode the
@@ -493,9 +485,8 @@ class AsyncReservation
 
   // The engine must be non-null and outlive the last reference's release.
   // An unclosed handle rolls back inline if this thread serializes its
-  // account; otherwise cleanup is ordered through the engine, after any
-  // enclosing inline cleanup has dropped its fence. A failed hand-off
-  // terminates before the native handle can unwind off its lane.
+  // account; otherwise cleanup is ordered through the engine. A failed
+  // hand-off terminates before the native handle can unwind off its lane.
   ~AsyncReservation() {
     if (m_reservation) {
       detail::ReleaseImplicitHandle(m_reservation, *m_engine, m_accountId,

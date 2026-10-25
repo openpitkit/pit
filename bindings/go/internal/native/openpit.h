@@ -1294,11 +1294,6 @@ typedef uint32_t OpenPitConfigureErrorKind;
  * prior configuration still applies.
  */
 #define OpenPitConfigureErrorKind_Validation ((OpenPitConfigureErrorKind) 2)
-/**
- * A configuration call re-entered configuration on the same thread.
- */
-#define OpenPitConfigureErrorKind_NestedConfiguration \
-    ((OpenPitConfigureErrorKind) 3)
 
 /**
  * Decision returned by a custom policy's account-retirement callback.

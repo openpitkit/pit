@@ -251,10 +251,9 @@ const (
 )
 
 const (
-	ConfigureErrorKindUnknown             ConfigureErrorKind = C.OpenPitConfigureErrorKind_Unknown
-	ConfigureErrorKindTypeMismatch        ConfigureErrorKind = C.OpenPitConfigureErrorKind_TypeMismatch
-	ConfigureErrorKindValidation          ConfigureErrorKind = C.OpenPitConfigureErrorKind_Validation
-	ConfigureErrorKindNestedConfiguration ConfigureErrorKind = C.OpenPitConfigureErrorKind_NestedConfiguration
+	ConfigureErrorKindUnknown      ConfigureErrorKind = C.OpenPitConfigureErrorKind_Unknown
+	ConfigureErrorKindTypeMismatch ConfigureErrorKind = C.OpenPitConfigureErrorKind_TypeMismatch
+	ConfigureErrorKindValidation   ConfigureErrorKind = C.OpenPitConfigureErrorKind_Validation
 )
 
 const (

@@ -49,18 +49,10 @@ import (
 // call runtime.Goexit: that ends the drain, leaves the section installed, and
 // later postponed releases are dropped.
 //
-// The ctx passed to fn marks the section. Any AsyncEngine method called with
-// it returns ErrReentrantLane, and so does Exclusive called with a chain hook
-// context of this engine. Calls the marker cannot catch hang instead:
-//
-//   - fn must not call AsyncEngine methods with another context, nor wait for
-//     a result of this engine's tasks: they queue behind the stopped lanes;
-//   - Exclusive must not be called from a lane task, such as a Submit
-//     closure, nor from an Observer callback: its own lane never stops, so
-//     the section waits until ctx ends;
-//   - a task that waits for a task of another lane delays the stop of its own
-//     lane until ctx ends;
-//   - fn must not stop the engine.
+// Hooks, Submit closures, observer callbacks, and fn must not synchronously
+// call back into this AsyncEngine. fn receives the caller's ctx and must not
+// wait for this engine's tasks, which queue behind the stopped lanes. A task
+// waiting for another lane's task delays its own lane's stop until ctx ends.
 //
 // Requests, reservations, and drop-copy operations opened before the section
 // stay open across it, and their next step sees the state fn left. Raw
@@ -72,19 +64,12 @@ func (e *AsyncEngine) Exclusive(
 	ctx context.Context,
 	fn func(ctx context.Context, driver Driver) error,
 ) error {
-	if e.reentrantLane(ctx) {
-		return ErrReentrantLane
-	}
 	if ctx.Done() == nil {
 		return ErrExclusiveContext
 	}
-	section := &chainLaneActivity{engine: e}
-	section.active.Store(true)
-	sectionCtx := withChainLaneContext(ctx, section)
 	var fnErr error
 	err := e.strategy.exclusive(ctx, func() {
-		defer section.active.Store(false)
-		fnErr = fn(sectionCtx, e.driver)
+		fnErr = fn(ctx, e.driver)
 	})
 	if err != nil {
 		return err

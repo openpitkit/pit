@@ -689,9 +689,7 @@ func (t *chainTask[State]) execute() {
 	var runErr error
 	var state State
 	stateReady := false
-	lane := &chainLaneActivity{engine: t.engine}
-	lane.active.Store(true)
-	laneContext := withChainLaneContext(context.WithoutCancel(t.ctx), lane)
+	hookContext := context.WithoutCancel(t.ctx)
 	status := ChainOutcomeCompleted
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -705,7 +703,7 @@ func (t *chainTask[State]) execute() {
 		}
 		outcome := t.resolvedOutcome(status, runErr)
 		if stateReady && t.plan.finally != nil {
-			finallyErr := t.callFinally(laneContext, state, outcome)
+			finallyErr := t.callFinally(hookContext, state, outcome)
 			if runErr == nil && finallyErr != nil && t.retryUnsafe {
 				finallyErr = errors.Join(finallyErr, ErrChainRetryUnsafe)
 			}
@@ -715,19 +713,18 @@ func (t *chainTask[State]) execute() {
 			// failure.
 			outcome = t.resolvedOutcome(status, runErr)
 		}
-		lane.active.Store(false)
 		t.f.Resolve(outcome, runErr)
 	}()
 
 	var err error
-	state, err = t.plan.begin(laneContext)
+	state, err = t.plan.begin(hookContext)
 	if err != nil {
 		runErr = fmt.Errorf("async chain begin: %w", err)
 		return
 	}
 	stateReady = true
 	for _, step := range t.plan.steps {
-		ended, err := step.execute(laneContext, t, state, &pending)
+		ended, err := step.execute(hookContext, t, state, &pending)
 		if err != nil {
 			runErr = err
 			return

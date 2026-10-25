@@ -79,7 +79,7 @@
 // facade intentionally has no direct dry-run methods; start-stage dry run
 // remains available only through the synchronous engine.
 //
-// Every hook receives the same lane-marked context plus caller State and any
+// Every hook receives the same context plus caller State and any
 // capability-limited result. Hooks never receive an engine, driver, queue,
 // future, or lifecycle object. Operation-backed reads are invalid outside
 // their hook. An OrderCheckResult's Passed and Rejects remain readable after
@@ -124,11 +124,8 @@
 // and Finally do not run. AsyncEngine observers remain independent and may
 // still be notified.
 //
-// Submitting another operation to an AsyncEngine with a context containing any
-// active chain-lane marker for that engine, at any marker-stack depth, resolves
-// its future with ErrReentrantLane instead of waiting on that lane. This is a
-// diagnostic only: caller code that supplies an unrelated context bypasses the
-// marker, so hooks must still not synchronously re-enter the engine.
+// Hooks, Submit closures, observer callbacks, and Exclusive callbacks must not
+// synchronously call back into the same AsyncEngine.
 //
 // # Stopping
 //

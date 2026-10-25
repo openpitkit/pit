@@ -235,6 +235,8 @@ mod tests {
             Box::new(ReservationHandleImpl::new(
                 mutations,
                 MutationFailureKillSwitch::inert(),
+                #[cfg(debug_assertions)]
+                crate::core::configure::EngineCallTracker::default(),
             )),
             lock,
             Vec::new(),
@@ -355,6 +357,8 @@ mod tests {
             Box::new(ReservationHandleImpl::new(
                 Mutations::new(),
                 MutationFailureKillSwitch::inert(),
+                #[cfg(debug_assertions)]
+                crate::core::configure::EngineCallTracker::default(),
             )),
             PreTradeLock::from_entries([(DEFAULT_POLICY_GROUP_ID, price)]),
             Vec::new(),

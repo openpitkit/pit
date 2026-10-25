@@ -256,6 +256,8 @@ mod tests {
             Box::new(ReservationHandleImpl::new(
                 mutations,
                 MutationFailureKillSwitch::inert(),
+                #[cfg(debug_assertions)]
+                crate::core::configure::EngineCallTracker::default(),
             )),
             PreTradeLock::default(),
             Vec::new(),
@@ -280,6 +282,8 @@ mod tests {
             Box::new(ReservationHandleImpl::new(
                 mutations,
                 MutationFailureKillSwitch::inert(),
+                #[cfg(debug_assertions)]
+                crate::core::configure::EngineCallTracker::default(),
             )),
             PreTradeLock::default(),
             Vec::new(),
@@ -368,6 +372,8 @@ mod tests {
             Box::new(ReservationHandleImpl::new(
                 mutations,
                 MutationFailureKillSwitch::inert(),
+                #[cfg(debug_assertions)]
+                crate::core::configure::EngineCallTracker::default(),
             )),
             PreTradeLock::default(),
             Vec::new(),
@@ -390,6 +396,8 @@ mod tests {
             Box::new(ReservationHandleImpl::new(
                 mutations,
                 MutationFailureKillSwitch::inert(),
+                #[cfg(debug_assertions)]
+                crate::core::configure::EngineCallTracker::default(),
             )),
             PreTradeLock::default(),
             Vec::new(),

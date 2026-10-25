@@ -26,7 +26,6 @@
 //! Runtime reconfiguration of custom policies is not supported in this
 //! release.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
@@ -176,7 +175,6 @@ impl<Factory: LockingPolicyFactory> ConfigEntry<Factory> {
 /// publication (the [`ConfigCell`](crate::storage::ConfigCell) update is
 /// transactional).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ConfigureError {
     /// No registered policy carries the requested name.
     UnknownPolicy {
@@ -201,16 +199,6 @@ pub enum ConfigureError {
         /// Rendered error returned by the closure.
         message: String,
     },
-    /// A configuration call was issued from within another configuration
-    /// callback on the same thread.
-    ///
-    /// Configuration callbacks are non-reentrant. Re-entering configuration
-    /// for the same engine from inside such a callback - whether for the same
-    /// policy or a different one - is rejected before the nested call takes a
-    /// serialization gate or settings-cell writer lock. Configuration from
-    /// other threads is unaffected and still serializes. The live settings are
-    /// left unchanged.
-    NestedConfiguration,
 }
 
 impl Display for ConfigureError {
@@ -230,11 +218,6 @@ impl Display for ConfigureError {
             Self::Validation { name, message } => {
                 write!(formatter, "policy {name} rejected the update: {message}")
             }
-            Self::NestedConfiguration => write!(
-                formatter,
-                "configuration is not reentrant: cannot configure from within \
-                 another configuration callback on the same thread"
-            ),
         }
     }
 }
@@ -246,18 +229,26 @@ impl std::error::Error for ConfigureError {}
 /// Per-engine map from policy name to its built-in settings cell.
 pub(crate) struct ConfigRegistry<Factory: LockingPolicyFactory> {
     entries: HashMap<String, ConfigEntry<Factory>>,
+    #[cfg(debug_assertions)]
+    pub(crate) engine_calls: EngineCallTracker,
 }
 
 impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
     /// Builds a registry from the builder's collected `(name, cell)` pairs.
     pub(crate) fn from_entries(entries: HashMap<String, ConfigEntry<Factory>>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            #[cfg(debug_assertions)]
+            engine_calls: EngineCallTracker::default(),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
             entries: HashMap::new(),
+            #[cfg(debug_assertions)]
+            engine_calls: EngineCallTracker::default(),
         }
     }
 
@@ -317,46 +308,52 @@ impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
     }
 }
 
-// ─── Re-entrancy guard ───────────────────────────────────────────────────────
+#[cfg(debug_assertions)]
+pub(crate) use engine_calls::EngineCallTracker;
 
-thread_local! {
-    static CONFIGURING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
-}
+#[cfg(debug_assertions)]
+mod engine_calls {
+    use std::cell::RefCell;
+    use std::sync::Arc;
 
-/// RAII marker that a configuration is in progress on the current thread.
-///
-/// [`Self::enter`] fails with [`ConfigureError::NestedConfiguration`] when a
-/// configuration for the same engine registry is already active on this
-/// thread, so a nested call returns before it can wait on configuration
-/// serialization or publish a settings value.
-/// The flag is cleared on drop - including on an early `?` return or a panic
-/// unwinding through the closure - so a single thread can configure again once
-/// the outer call completes.
-struct ConfiguringGuard {
-    identity: usize,
-}
-
-impl ConfiguringGuard {
-    fn enter(identity: usize) -> Result<Self, ConfigureError> {
-        CONFIGURING.with(|configuring| {
-            let mut active = configuring.borrow_mut();
-            if active.contains(&identity) {
-                return Err(ConfigureError::NestedConfiguration);
-            }
-            active.push(identity);
-            Ok(Self { identity })
-        })
+    std::thread_local! {
+        static ACTIVE_ENGINE_CALLS: RefCell<Vec<usize>> = const {
+            RefCell::new(Vec::new())
+        };
     }
-}
 
-impl Drop for ConfiguringGuard {
-    fn drop(&mut self) {
-        CONFIGURING.with(|configuring| {
-            let mut active = configuring.borrow_mut();
-            if let Some(pos) = active.iter().rposition(|id| *id == self.identity) {
-                active.swap_remove(pos);
-            }
-        });
+    #[derive(Clone, Default)]
+    pub(crate) struct EngineCallTracker {
+        identity: Arc<()>,
+    }
+
+    impl EngineCallTracker {
+        pub(crate) fn enter(&self) -> EngineCallGuard<'_> {
+            let identity = Arc::as_ptr(&self.identity) as usize;
+            ACTIVE_ENGINE_CALLS.with(|calls| {
+                let mut active = calls.borrow_mut();
+                assert!(
+                    !active.contains(&identity),
+                    "openpit: callback re-entry contract violated: a policy or \
+                     mutation callback must not re-enter the same engine"
+                );
+                active.push(identity);
+            });
+            EngineCallGuard { tracker: self }
+        }
+    }
+
+    pub(crate) struct EngineCallGuard<'a> {
+        tracker: &'a EngineCallTracker,
+    }
+
+    impl Drop for EngineCallGuard<'_> {
+        fn drop(&mut self) {
+            let identity = Arc::as_ptr(&self.tracker.identity) as usize;
+            ACTIVE_ENGINE_CALLS.with(|calls| {
+                assert_eq!(calls.borrow_mut().pop(), Some(identity));
+            });
+        }
     }
 }
 
@@ -373,6 +370,9 @@ type RegistryFactory<Trait> =
 /// are observed by the running engine on its next hot-path read because the
 /// registry shares each policy's settings cell rather than holding a copy.
 /// Custom-policy runtime reconfiguration is planned for a later release.
+///
+/// A callback must not re-enter the same engine through a stateful entry
+/// point. Debug builds panic on a violation; release builds do not check it.
 ///
 /// # Threading
 ///
@@ -404,10 +404,6 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         &self.inner.config_registry
     }
 
-    fn enter_configuration(&self) -> Result<ConfiguringGuard, ConfigureError> {
-        ConfiguringGuard::enter(std::ptr::from_ref(self.registry()) as usize)
-    }
-
     /// Retunes the [`RateLimitPolicy`](crate::pretrade::policies::RateLimitPolicy)
     /// registered under `name`.
     ///
@@ -416,20 +412,18 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// Returns [`ConfigureError::UnknownPolicy`] for an unknown name,
     /// [`ConfigureError::PolicyTypeMismatch`] when the name belongs to another
     /// built-in policy type, [`ConfigureError::Validation`] when `f` rejects
-    /// the update, or [`ConfigureError::NestedConfiguration`] when called from
-    /// within another configuration callback on the same thread.
+    /// the update.
     pub fn rate_limit<Error: std::fmt::Display>(
         &self,
         name: &str,
         f: impl FnOnce(&mut RateLimitSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         match self.registry().entry(name)? {
-            ConfigEntry::RateLimit(cell) => {
-                let _guard = self.enter_configuration()?;
-                cell.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
-                })
-            }
+            ConfigEntry::RateLimit(cell) => cell
+                .update(f)
+                .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),
             entry => Err(ConfigRegistry::<_>::type_mismatch::<RateLimitSettings>(
                 name, entry,
             )),
@@ -448,13 +442,12 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         name: &str,
         f: impl FnOnce(&mut PnlBoundsKillSwitchSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         match self.registry().entry(name)? {
-            ConfigEntry::PnlBoundsKillSwitch { settings, .. } => {
-                let _guard = self.enter_configuration()?;
-                settings.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
-                })
-            }
+            ConfigEntry::PnlBoundsKillSwitch { settings, .. } => settings
+                .update(f)
+                .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),
             entry => Err(ConfigRegistry::<_>::type_mismatch::<
                 PnlBoundsKillSwitchSettings,
             >(name, entry)),
@@ -472,10 +465,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// touches accumulated P&L. The new value is evaluated against the live
     /// bounds on the next hot-path read.
     ///
-    /// Unlike the settings retune, this does not take the configuration
-    /// re-entrancy guard and does not touch the settings writer mutex: it writes
-    /// the realized-P&L storage under the shared account-state writer lease and
-    /// runs no user closure.
+    /// This writes the realized-P&L storage under the shared account-state
+    /// writer lease without taking the settings writer mutex or running a
+    /// user closure.
     ///
     /// # Errors
     ///
@@ -490,6 +482,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         settlement_asset: Asset,
         pnl: Pnl,
     ) -> Result<(), ConfigureError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         match self.registry().entry(name)? {
             ConfigEntry::PnlBoundsKillSwitch { realized, .. } => {
                 self.inner.account_currencies.with_state_writer(|| {
@@ -545,6 +539,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         name: &str,
         f: impl FnOnce(&mut SpotFundsSettings) -> Result<(), Error>,
     ) -> Result<AccountBlockOutcomes, ConfigureError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         match self.registry().entry(name)? {
             ConfigEntry::SpotFunds {
                 settings,
@@ -554,7 +550,6 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                 active_holdings_mutations,
                 ..
             } => {
-                let _guard = self.enter_configuration()?;
                 let account_groups = AccountGroupsHandle::<
                     <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,
                 >::from_inner(
@@ -642,6 +637,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         account: AccountId,
         state: crate::PnlState,
     ) -> Result<PolicyConfigurationResult, ConfigureError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         match self.registry().entry(name)? {
             ConfigEntry::SpotFunds { .. } => {
                 let policy = self
@@ -695,13 +692,12 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         name: &str,
         f: impl FnOnce(&mut OrderSizeLimitSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         match self.registry().entry(name)? {
-            ConfigEntry::OrderSizeLimit(cell) => {
-                let _guard = self.enter_configuration()?;
-                cell.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
-                })
-            }
+            ConfigEntry::OrderSizeLimit(cell) => cell
+                .update(f)
+                .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),
             entry => Err(ConfigRegistry::<_>::type_mismatch::<OrderSizeLimitSettings>(name, entry)),
         }
     }
@@ -709,20 +705,24 @@ impl<Trait: EngineTrait> Configurator<Trait> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount};
+    #[cfg(debug_assertions)]
     use crate::pretrade::policies::{
         OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitPolicyError,
-        OrderSizeLimitSettings, RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
-        RateLimitPolicyError, RateLimitSettings,
+        OrderSizeLimitSettings,
+    };
+    use crate::pretrade::policies::{
+        RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
     };
     use crate::storage::{ConfigCell, FullLocking, StorageBuilder};
     use crate::{Engine, FullSyncEngine, Instrument, OrderOperation};
 
-    use super::{active_holdings_accounts, prepare_serialized_transition, ConfigureError};
+    #[cfg(debug_assertions)]
+    use super::ConfigureError;
+    use super::{active_holdings_accounts, prepare_serialized_transition};
 
     // Prepares and publishes in one step, as a caller without a lease does.
     fn update_serialized_transition<T, Cell, Error>(
@@ -778,6 +778,7 @@ mod tests {
         }
     }
 
+    #[cfg(debug_assertions)]
     fn order_size_broker(max_quantity: &str) -> OrderSizeBrokerBarrier {
         OrderSizeBrokerBarrier {
             limit: OrderSizeLimit {
@@ -800,6 +801,7 @@ mod tests {
             .expect("engine must build")
     }
 
+    #[cfg(debug_assertions)]
     fn build_engine_with_order_size(max_orders: usize) -> FullSyncEngine<OrderOperation> {
         let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
         let rate_settings = RateLimitSettings::new(Some(broker_barrier(max_orders)), [], [], [])
@@ -953,100 +955,56 @@ mod tests {
         assert!(active_holdings_accounts::<FullLocking>(&active).is_empty());
     }
 
-    // A configuration call issued from within another configuration callback on
-    // the same thread must be rejected with `NestedConfiguration` rather than
-    // recursively entering configuration serialization. The fact that this
-    // test terminates is itself the no-hang proof.
+    #[cfg(debug_assertions)]
     #[test]
-    fn nested_same_thread_configuration_is_rejected_without_deadlock() {
+    #[should_panic(expected = "callback re-entry contract violated")]
+    fn nested_same_thread_configuration_panics_in_debug() {
         let engine = build_engine(2);
         let name = RateLimitPolicy::<FullLocking>::NAME;
-
-        // Exhaust the broker limit of 2: the two orders pass (count 1..=2).
-        for account in 0..2 {
+        let _ = engine.configure().rate_limit::<ConfigureError>(name, |_| {
             engine
-                .execute_pre_trade(order(account))
-                .expect("order within the limit must pass");
-        }
-
-        // The closure captures the engine by `&` (configure takes `&self`).
-        // It first widens its private copy to 9, then re-enters configuration
-        // for the same policy. The nested call must fail fast; the captured
-        // error is asserted below. Returning the nested error rolls back the
-        // outer transaction, so neither the widening to 9 nor the nested 100
-        // is ever published.
-        let nested = RefCell::new(None);
-        let outer = engine
-            .configure()
-            .rate_limit::<ConfigureError>(name, |settings| {
-                settings
-                    .set_broker(Some(broker_barrier(9)))
-                    .expect("widening to 9 is a valid private-copy edit");
-                let inner = engine
-                    .configure()
-                    .rate_limit::<RateLimitPolicyError>(name, |settings| {
-                        settings.set_broker(Some(broker_barrier(100)))
-                    });
-                let error = inner.expect_err("nested configuration must be rejected");
-                *nested.borrow_mut() = Some(error.clone());
-                Err(error)
-            });
-
-        // The nested call returned the new variant directly.
-        assert_eq!(
-            nested.into_inner(),
-            Some(ConfigureError::NestedConfiguration)
-        );
-        // The outer call rolled back, surfacing the nested error through its
-        // own validation channel.
-        assert_eq!(
-            outer,
-            Err(ConfigureError::Validation {
-                name: name.to_owned(),
-                message: ConfigureError::NestedConfiguration.to_string(),
-            })
-        );
-
-        // Live settings are unchanged: the limit is still 2, so a third order
-        // (count 3) is rejected. A published widening would have admitted it.
-        let rejects = engine
-            .execute_pre_trade(order(2))
-            .err()
-            .expect("limit must still be 2 after the rejected retune");
-        assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
+                .configure()
+                .rate_limit::<RateLimitPolicyError>(name, |settings| {
+                    settings.set_broker(Some(broker_barrier(100)))
+                })?;
+            Ok(())
+        });
     }
 
+    #[cfg(debug_assertions)]
     #[test]
-    fn nested_configuration_of_different_policy_in_same_engine_is_rejected() {
+    #[should_panic(expected = "callback re-entry contract violated")]
+    fn nested_configuration_of_different_policy_panics_in_debug() {
         let engine = build_engine_with_order_size(2);
         let rate_name = RateLimitPolicy::<FullLocking>::NAME;
         let size_name = OrderSizeLimitPolicy::<FullLocking>::NAME;
-
-        let nested = RefCell::new(None);
-        let outer = engine
+        let _ = engine
             .configure()
-            .rate_limit::<ConfigureError>(rate_name, |_settings| {
-                let inner = engine
+            .rate_limit::<ConfigureError>(rate_name, |_| {
+                engine
                     .configure()
                     .order_size_limit::<OrderSizeLimitPolicyError>(size_name, |settings| {
                         settings.set_broker(Some(order_size_broker("200")))
-                    });
-                let error = inner.expect_err("nested configuration must be rejected");
-                *nested.borrow_mut() = Some(error.clone());
-                Err(error)
+                    })?;
+                Ok(())
             });
+    }
 
-        assert_eq!(
-            nested.into_inner(),
-            Some(ConfigureError::NestedConfiguration)
-        );
-        assert_eq!(
-            outer,
-            Err(ConfigureError::Validation {
-                name: rate_name.to_owned(),
-                message: ConfigureError::NestedConfiguration.to_string(),
+    #[test]
+    fn configuration_callback_allows_lease_free_calls_and_accessors() {
+        let engine = build_engine(2);
+        let account = AccountId::from_u64(1);
+        let group = engine.accounts().group_of(account);
+        engine
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(RateLimitPolicy::<FullLocking>::NAME, |_| {
+                engine.configure();
+                assert_eq!(engine.accounts().group_of(account), group);
+                engine.accounts().block(account, "maintenance".to_owned());
+                engine.accounts().unblock(account);
+                Ok(())
             })
-        );
+            .expect("lease-free calls must be allowed");
     }
 
     #[test]

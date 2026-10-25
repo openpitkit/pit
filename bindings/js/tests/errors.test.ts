@@ -32,7 +32,6 @@ import {
   AccountBlockError,
   AccountGroupRegistrationError,
   AccountGroupRegistrationErrorKind,
-  ConfigureErrorKind,
   EngineBuildError,
   EngineBuildErrorKind,
   LifecycleError,
@@ -43,7 +42,6 @@ import {
   makeError,
   OpenpitError as InternalOpenpitError,
   PolicyCallbackError as InternalPolicyCallbackError,
-  PolicyConfigureError as InternalPolicyConfigureError,
 } from "../src-ts/errors.js";
 // The reject subpath re-exports the same AccountBlockError class identity.
 import { AccountBlockError as RejectAccountBlockError } from "@openpit/engine/reject";
@@ -259,19 +257,5 @@ describe("typed error hierarchy", () => {
     expect(error).toBeInstanceOf(InternalPolicyCallbackError);
     expect((error as InternalPolicyCallbackError).cause).toBe(cause);
     expect((error as InternalPolicyCallbackError).result).toBeUndefined();
-  });
-
-  it("keeps nested configuration distinct from validation", () => {
-    const error = makeError(
-      "PolicyConfigureError",
-      "configuration is not reentrant",
-      ConfigureErrorKind.NestedConfiguration,
-      { kind: ConfigureErrorKind.NestedConfiguration },
-    );
-
-    expect(error).toBeInstanceOf(InternalPolicyConfigureError);
-    expect((error as InternalPolicyConfigureError).kind).toBe(
-      ConfigureErrorKind.NestedConfiguration,
-    );
   });
 });

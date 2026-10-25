@@ -202,11 +202,8 @@ impl<T: Clone + 'static> ConfigCell<T> for ArcSwapConfigCell<T> {
         // fail a legitimate cross-thread update merely because another thread
         // is mid-publish, turning benign contention into an error.
         //
-        // Re-entrancy is ruled out one level up: the `Configurator`
-        // (`core::configure`) installs a thread-local guard before reaching
-        // any cell, so the closure `f` can never re-enter configuration and
-        // retake this non-reentrant mutex on the same thread. This lock
-        // therefore only ever blocks for a *different* thread's update.
+        // Callbacks must not re-enter the same engine. Its debug-only tracker
+        // checks that contract before this non-reentrant mutex is acquired.
         let _writer = self.0.writer.lock();
         let mut next = (**self.0.value.load()).clone();
         f(&mut next)?;

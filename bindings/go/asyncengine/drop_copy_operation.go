@@ -220,16 +220,15 @@ func (o *AsyncDropCopyOperation) IsAccountBlocked() (bool, error) {
 // ErrStopped) the underlying operation is not released either, so the
 // caller must still Close it (or use CommitAndClose) to avoid leaking the
 // native handle.
-// With a chain hook context for this engine, the future resolves with
-// ErrReentrantLane; the caller retains the handle and must retry outside
-// the hook.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (o *AsyncDropCopyOperation) Commit(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationCommit, false)
 }
 
-// CommitAndClose enqueues Commit followed by Close. With a chain hook context
-// for this engine, the future resolves with ErrReentrantLane; the caller
-// retains the handle and must retry outside the hook.
+// CommitAndClose enqueues Commit followed by Close.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (o *AsyncDropCopyOperation) CommitAndClose(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationCommitAndClose, true)
 }
@@ -239,25 +238,23 @@ func (o *AsyncDropCopyOperation) CommitAndClose(ctx context.Context) *future.Fut
 // stop (the future resolves with ErrStopped) the underlying operation
 // is not released either, so the caller must still Close it (or use
 // RollbackAndClose) to avoid leaking the native handle.
-// With a chain hook context for this engine, the future resolves with
-// ErrReentrantLane; the caller retains the handle and must retry outside
-// the hook.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (o *AsyncDropCopyOperation) Rollback(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationRollback, false)
 }
 
-// RollbackAndClose enqueues Rollback followed by Close. With a chain hook
-// context for this engine, the future resolves with ErrReentrantLane; the
-// caller retains the handle and must retry outside the hook.
+// RollbackAndClose enqueues Rollback followed by Close.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (o *AsyncDropCopyOperation) RollbackAndClose(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationRollbackAndClose, true)
 }
 
 // Close enqueues Close on the underlying operation. If Commit was not
 // called first, the prepared state is rolled back implicitly.
-// With a chain hook context for this engine, the future resolves with
-// ErrReentrantLane; the caller retains the handle and must retry outside
-// the hook.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (o *AsyncDropCopyOperation) Close(ctx context.Context) *future.Future[struct{}] {
 	return o.runVoid(ctx, dropCopyOperationClose, true)
 }
@@ -284,10 +281,6 @@ func (o *AsyncDropCopyOperation) runVoid(
 	abortCloses bool,
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
-	if o.engine.reentrantLane(ctx) {
-		f.Resolve(struct{}{}, ErrReentrantLane)
-		return f
-	}
 	task := &dropCopyOperationTask{f: f, operation: o, op: op, abortCloses: abortCloses}
 	if abortCloses {
 		_ = o.engine.strategy.submitWithFailureHandoff(

@@ -107,13 +107,6 @@ var ErrChainResultUnavailable = errors.New(
 	"openpit/asyncengine: chain operation result is unavailable",
 )
 
-// ErrReentrantLane is returned when an AsyncEngine operation is submitted with
-// a context whose marker stack contains an active chain lane or Exclusive
-// section for the target engine, at any stack depth. It avoids waiting on that
-// lane or section. An unrelated context carries no marker and bypasses this
-// diagnostic.
-var ErrReentrantLane = errors.New("openpit/asyncengine: reentrant chain lane or exclusive section")
-
 // ErrExclusiveContext is returned by AsyncEngine.Exclusive for a context that
 // can never be cancelled: the wait for every lane to stop must be bounded.
 var ErrExclusiveContext = errors.New(

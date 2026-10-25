@@ -820,65 +820,18 @@ fn empty_policy_lifecycle_every_sync_mode() {
     );
 }
 
+#[cfg(debug_assertions)]
 #[test]
-fn nested_configuration_is_rejected_per_engine_without_poisoning_other_engines() {
+#[should_panic(expected = "callback re-entry contract violated")]
+fn nested_configuration_panics_in_debug() {
     let engine = build_engine(5);
-    let other = build_engine(5);
     let name = RateLimitPolicy::<FullLocking>::NAME;
-    let mut nested_error = None;
-
-    let outer = engine
-        .configure()
-        .rate_limit::<ConfigureError>(name, |settings| {
-            nested_error = Some(
-                engine
-                    .configure()
-                    .rate_limit::<RateLimitPolicyError>(name, |nested_settings| {
-                        nested_settings.set_broker(Some(RateLimitBrokerBarrier {
-                            limit: RateLimit {
-                                max_orders: 1,
-                                window: Duration::from_secs(60),
-                            },
-                        }))
-                    })
-                    .expect_err("same-engine nested configure must be rejected"),
-            );
-
-            other
-                .configure()
-                .rate_limit::<RateLimitPolicyError>(name, |other_settings| {
-                    other_settings.set_broker(Some(RateLimitBrokerBarrier {
-                        limit: RateLimit {
-                            max_orders: 1,
-                            window: Duration::from_secs(60),
-                        },
-                    }))
-                })?;
-
-            settings
-                .set_broker(Some(RateLimitBrokerBarrier {
-                    limit: RateLimit {
-                        max_orders: 2,
-                        window: Duration::from_secs(60),
-                    },
-                }))
-                .expect("valid outer retune");
-            Ok(())
-        });
-
-    assert!(
-        matches!(nested_error, Some(ConfigureError::NestedConfiguration)),
-        "expected NestedConfiguration, got {nested_error:?}"
-    );
-    assert!(outer.is_ok(), "outer configure must publish: {outer:?}");
-    assert!(
-        other.execute_pre_trade(order(0)).is_ok(),
-        "first order on other engine must pass"
-    );
-    assert!(
-        other.execute_pre_trade(order(1)).is_err(),
-        "other engine retune inside callback must take effect"
-    );
+    let _ = engine.configure().rate_limit::<ConfigureError>(name, |_| {
+        engine
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(name, |_| Ok(()))?;
+        Ok(())
+    });
 }
 
 #[test]

@@ -97,6 +97,13 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 /// Build the engine once during platform initialization using
 /// [`EngineBuilder::new`], then share it across order submissions.
 ///
+/// A policy or mutation callback must not re-enter the same engine through
+/// a stateful entry point. Debug builds panic on this contract violation;
+/// release builds do not check it. `group_of`, account blocking and
+/// unblocking, and the `accounts()` / `configure()` accessors are allowed, and
+/// so are calls on another engine as long as that engine's callbacks never
+/// call back into this one: such a cycle can deadlock across two threads.
+///
 /// Generic parameters:
 /// - `Trait`: aggregate of order, execution-report, account-adjustment, and
 ///   synchronization-mode choices.
@@ -288,6 +295,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         // The operation's clock is taken before any caller code runs: an order
         // accessor may be arbitrarily slow, and a policy measuring a window
         // must not have its timestamp moved by how long the caller took.
@@ -415,6 +424,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         let now = Instant::now();
         let account = order
             .account_id()
@@ -480,6 +491,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
             Box::new(ReservationHandleImpl::new(
                 all_mutations,
                 self.mutation_failure_kill_switch(Some(account)),
+                #[cfg(debug_assertions)]
+                self.inner.config_registry.engine_calls.clone(),
             )),
             lock,
             outcomes,
@@ -531,6 +544,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         // One read and one clock reading, as in `start_pre_trade`: a dry-run
         // reports the verdict the real pipeline would produce, so it must
         // resolve both the same way.
@@ -588,6 +603,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         // One read and one clock reading, as in `start_pre_trade`: a dry-run
         // reports the verdict the real pipeline would produce, so it must
         // resolve both the same way.
@@ -670,6 +687,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::ExecutionReport: HasAccountId,
     {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         let inner: &EngineInner<Trait> = &self.inner;
         let mut blocks: Vec<AccountBlock> = Vec::new();
         let mut account_pnls = Vec::new();
@@ -744,6 +763,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
         account_id: AccountId,
         adjustments: &[Trait::AccountAdjustment],
     ) -> Result<AccountAdjustmentBatchResult, AccountAdjustmentBatchError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         if adjustments.is_empty() {
             return Ok(AccountAdjustmentBatchResult::default());
         }
@@ -856,6 +877,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// failed: policy state may be partly removed, the kill switch is armed,
     /// and currency, membership, and the account block remain.
     pub fn retire_account(&self, account_id: AccountId) -> Result<(), AccountRetirementError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
         let inner = &self.inner;
         inner.account_currencies.with_state_transition(|| {
             let mut mutations = Mutations::new();
@@ -1138,6 +1161,8 @@ fn execute_pre_trade_request<Trait: EngineTrait>(
         )]));
     };
     let inner: &EngineInner<Trait> = &engine_ref;
+    #[cfg(debug_assertions)]
+    let _call = inner.config_registry.engine_calls.enter();
 
     // The account comes from the context: it is the value `start_pre_trade`
     // read from the order, and the whole point of re-checking here is that the
@@ -1181,6 +1206,8 @@ fn execute_pre_trade_request<Trait: EngineTrait>(
         MutationFailureKillSwitch::new(move |scope| {
             block_handle.record_mutation_failure(account, scope)
         }),
+        #[cfg(debug_assertions)]
+        inner.config_registry.engine_calls.clone(),
     );
     Ok(PreTradeReservation::from_handle(
         Box::new(reservation_handle),

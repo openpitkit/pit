@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -222,6 +223,8 @@ struct KeyQueue;
 // visible.
 enum class LaneMarkKind { Lane, InlineCleanup };
 
+// Same layout in every build: the thread-local stack is shared by translation
+// units that may differ in `NDEBUG`.
 struct LaneMark {
   const Base* owner;
   bool section;
@@ -235,28 +238,17 @@ struct LaneMark {
   return mark;
 }
 
-[[nodiscard]] inline bool RunningInlineCleanup() noexcept {
+#ifndef NDEBUG
+[[nodiscard]] inline bool RunningInlineCleanup(const Base& owner) noexcept {
   for (const LaneMark* mark = CurrentLaneMark(); mark != nullptr;
        mark = mark->outer) {
-    if (mark->kind == LaneMarkKind::InlineCleanup) {
+    if (mark->owner == &owner && mark->kind == LaneMarkKind::InlineCleanup) {
       return true;
     }
   }
   return false;
 }
-
-// Implicit handle releases made on a thread while it runs an inline cleanup.
-// They are routed on that thread once the enclosing cleanup has released its
-// account fence, so no release waits for a fence while its thread holds one.
-struct PendingInlineCleanups {
-  std::vector<std::function<void()>> routes;
-  bool draining = false;
-};
-
-[[nodiscard]] inline PendingInlineCleanups& InlineCleanupPending() noexcept {
-  static thread_local PendingInlineCleanups pending;
-  return pending;
-}
+#endif
 
 // An off-lane handle release that arrived while an exclusive section was
 // installed. Whether or not the callback ran, the section runs it on its own
@@ -379,6 +371,8 @@ struct SendResult {
 // skips entirely.
 class Base {
  public:
+  // Marks a cleanup running inline under its account fence. `Exclusive`
+  // refuses on it; debug builds also assert on calls back into this strategy.
   class InlineCleanupMark {
    public:
     explicit InlineCleanupMark(const Base& base) noexcept
@@ -386,23 +380,7 @@ class Base {
                  LaneMarkKind::InlineCleanup} {
       CurrentLaneMark() = &m_mark;
     }
-    // A route that fails here has no caller left to report to: terminate.
-    ~InlineCleanupMark() noexcept {
-      CurrentLaneMark() = m_mark.outer;
-      auto& pending = InlineCleanupPending();
-      if (RunningInlineCleanup() || pending.draining) {
-        return;
-      }
-      pending.draining = true;
-      while (!pending.routes.empty()) {
-        std::vector<std::function<void()>> routes;
-        routes.swap(pending.routes);
-        for (auto& route : routes) {
-          route();
-        }
-      }
-      pending.draining = false;
-    }
+    ~InlineCleanupMark() noexcept { CurrentLaneMark() = m_mark.outer; }
     InlineCleanupMark(const InlineCleanupMark&) = delete;
     InlineCleanupMark& operator=(const InlineCleanupMark&) = delete;
 
@@ -472,7 +450,6 @@ class Base {
   void ResolveFencedCleanup(OpenPitParamAccountId accountId,
                             Promise<std::monostate> promise,
                             const std::function<void()>& cleanup) {
-    // Release the fence before the mark drains nested implicit releases.
     const InlineCleanupMark mark{*this};
     const CleanupAccountRelease release{*this, accountId};
     ResolveMandatoryCleanup(std::move(promise), cleanup);
@@ -1560,6 +1537,8 @@ class ShardedStrategy final : public Strategy, private Base {
   void Submit(OpenPitParamAccountId accountId, TaskPtr task,
               std::chrono::steady_clock::time_point deadline,
               SubmitFailureHandler onFailure) override {
+    assert(!RunningInlineCleanup(*this) &&
+           "callbacks must not call or release handles of the same engine");
     ProducerGuard producer(*this);
     if (!producer) {
       onFailure(Error(ErrorCode::Stopped, "async engine is stopped"));
@@ -1575,6 +1554,8 @@ class ShardedStrategy final : public Strategy, private Base {
 
   [[nodiscard]] Future<std::monostate> ScheduleMandatoryCleanup(
       OpenPitParamAccountId accountId, std::function<void()> cleanup) override {
+    assert(!RunningInlineCleanup(*this) &&
+           "callbacks must not call or release handles of the same engine");
     cleanup = TrackMandatoryCleanup(std::move(cleanup));
     Promise<std::monostate> promise;
     Future<std::monostate> future = promise.GetFuture();
@@ -1761,6 +1742,8 @@ class DynamicStrategy final : public Strategy, private Base {
   void Submit(OpenPitParamAccountId accountId, TaskPtr task,
               std::chrono::steady_clock::time_point deadline,
               SubmitFailureHandler onFailure) override {
+    assert(!RunningInlineCleanup(*this) &&
+           "callbacks must not call or release handles of the same engine");
     // A queue can be retired by idle cleanup between lookup and send; the send
     // hands the task back and we loop to recreate a fresh queue. The loop is
     // bounded in practice: retirement requires an idle window, so a live
@@ -1799,6 +1782,8 @@ class DynamicStrategy final : public Strategy, private Base {
 
   [[nodiscard]] Future<std::monostate> ScheduleMandatoryCleanup(
       OpenPitParamAccountId accountId, std::function<void()> cleanup) override {
+    assert(!RunningInlineCleanup(*this) &&
+           "callbacks must not call or release handles of the same engine");
     cleanup = TrackMandatoryCleanup(std::move(cleanup));
     Promise<std::monostate> promise;
     Future<std::monostate> future = promise.GetFuture();

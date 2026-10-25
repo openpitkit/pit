@@ -171,49 +171,6 @@ func TestExclusiveRefusesAContextThatCannotEnd(t *testing.T) {
 	}
 }
 
-func TestExclusiveSectionContextRefusesReentry(t *testing.T) {
-	async := exclusiveTestBuilders()["dynamic"](t)
-	accountID := param.NewAccountIDFromUint64(31)
-	var saved context.Context
-	err := async.Exclusive(exclusiveTestContext(t), func(sectionCtx context.Context, _ Driver) error {
-		saved = sectionCtx
-		if _, err := async.Submit(sectionCtx, accountID, func() error { return nil }).
-			Await(context.Background()); !errors.Is(err, ErrReentrantLane) {
-			t.Errorf("Submit in section = %v, want ErrReentrantLane", err)
-		}
-		nested := async.Exclusive(sectionCtx, func(context.Context, Driver) error {
-			t.Error("a nested section ran")
-			return nil
-		})
-		if !errors.Is(nested, ErrReentrantLane) {
-			t.Errorf("nested Exclusive = %v, want ErrReentrantLane", nested)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The marker ends with the section.
-	if _, err := async.Submit(saved, accountID, func() error { return nil }).
-		Await(context.Background()); err != nil {
-		t.Fatalf("Submit after the section = %v", err)
-	}
-}
-
-func TestExclusiveRefusesAChainHookContext(t *testing.T) {
-	async := exclusiveTestBuilders()["dynamic"](t)
-	lane := &chainLaneActivity{engine: async}
-	lane.active.Store(true)
-	hookCtx := withChainLaneContext(exclusiveTestContext(t), lane)
-	err := async.Exclusive(hookCtx, func(context.Context, Driver) error {
-		t.Error("the section ran from a chain hook")
-		return nil
-	})
-	if !errors.Is(err, ErrReentrantLane) {
-		t.Fatalf("Exclusive from a hook = %v, want ErrReentrantLane", err)
-	}
-}
-
 func TestExclusiveHoldsWorkSubmittedDuringTheSection(t *testing.T) {
 	for name, build := range exclusiveTestBuilders() {
 		t.Run(name, func(t *testing.T) {
@@ -227,8 +184,6 @@ func TestExclusiveHoldsWorkSubmittedDuringTheSection(t *testing.T) {
 			}
 			var ran atomic.Int64
 			var queued [2]*future.Future[struct{}]
-			// A context that is not the section's, so the submits queue
-			// instead of being refused as re-entry.
 			outside := exclusiveTestContext(t)
 			err := async.Exclusive(exclusiveTestContext(t), func(context.Context, Driver) error {
 				submitted := make(chan struct{})

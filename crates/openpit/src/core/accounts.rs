@@ -521,6 +521,8 @@ where
         accounts: &[AccountId],
         group: AccountGroupId,
     ) -> Result<(), AccountGroupError> {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter();
         self.currencies.with_membership_transition(|| {
             let previous_groups = accounts
                 .iter()
@@ -568,6 +570,8 @@ where
         accounts: &[AccountId],
         group: AccountGroupId,
     ) -> Result<(), AccountGroupError> {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter();
         self.currencies.with_membership_transition(|| {
             let previous_groups = accounts
                 .iter()
@@ -601,6 +605,8 @@ where
     /// deterministic: the next policy access re-resolves the cascade with the
     /// new effective currency.
     pub fn set_currency(&self, account: AccountId, currency: Asset) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter();
         self.currencies.set_account_currency(account, currency);
     }
 
@@ -618,6 +624,8 @@ where
     /// deterministic: the next policy access re-resolves the cascade with the
     /// new effective currency.
     pub fn clear_currency(&self, account: AccountId) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter();
         self.currencies.clear_account_currency(account);
     }
 
@@ -644,6 +652,8 @@ where
     /// section. The group's currency is part of the effective currency of
     /// every member, so no member's call may run beside it.
     pub fn set_group_currency(&self, group: AccountGroupId, currency: Asset) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter();
         self.currencies.set_group_currency(group, currency);
     }
 
@@ -669,6 +679,8 @@ where
     /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
     /// section.
     pub fn clear_group_currency(&self, group: AccountGroupId) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter();
         self.currencies.clear_group_currency(group);
     }
 

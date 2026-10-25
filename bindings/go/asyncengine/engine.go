@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/model"
@@ -61,41 +60,12 @@ func newAsyncEngine(driver Driver, stopUnderlying func(), strategy strategy) *As
 	}
 }
 
-type chainLaneContextKey struct{}
-
-type chainLaneActivity struct {
-	engine   *AsyncEngine
-	previous *chainLaneActivity
-	active   atomic.Bool
-}
-
-func withChainLaneContext(
-	ctx context.Context,
-	lane *chainLaneActivity,
-) context.Context {
-	lane.previous, _ = ctx.Value(chainLaneContextKey{}).(*chainLaneActivity)
-	return context.WithValue(ctx, chainLaneContextKey{}, lane)
-}
-
 func (e *AsyncEngine) submit(
 	ctx context.Context,
 	key routingKey,
 	task pendingTask,
 ) error {
-	if e.reentrantLane(ctx) {
-		return ErrReentrantLane
-	}
 	return e.strategy.submit(ctx, key, task)
-}
-
-func (e *AsyncEngine) reentrantLane(ctx context.Context) bool {
-	lane, _ := ctx.Value(chainLaneContextKey{}).(*chainLaneActivity)
-	for ; lane != nil; lane = lane.previous {
-		if lane.engine == e && lane.active.Load() {
-			return true
-		}
-	}
-	return false
 }
 
 func validateDriverResult(
@@ -805,15 +775,13 @@ func (t *submitTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 // to run to completion. Returns ctx.Err() if ctx fires before workers
 // finish; in that case the engine is partially stopped and StopHard may
 // be called to complete the shutdown.
-// Returns ErrReentrantLane when ctx is a chain hook context for this engine.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 //
 // After a successful return the wrapped engine has been released (when
 // WithStopUnderlying was wired) and the AsyncEngine handle must not be
 // used for any further operation.
 func (e *AsyncEngine) StopGraceful(ctx context.Context) error {
-	if e.reentrantLane(ctx) {
-		return ErrReentrantLane
-	}
 	err := e.strategy.stopGraceful(ctx)
 	if err == nil {
 		e.releaseUnderlying()
@@ -825,11 +793,9 @@ func (e *AsyncEngine) StopGraceful(ctx context.Context) error {
 // started with ErrStopped, and waits for the currently running task in
 // each worker to finish. Returns ctx.Err() if ctx fires before the
 // in-flight tasks finish.
-// Returns ErrReentrantLane when ctx is a chain hook context for this engine.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (e *AsyncEngine) StopHard(ctx context.Context) error {
-	if e.reentrantLane(ctx) {
-		return ErrReentrantLane
-	}
 	err := e.strategy.stopHard(ctx)
 	if err == nil {
 		e.releaseUnderlying()

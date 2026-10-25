@@ -192,16 +192,15 @@ func (r *AsyncReservation) AccountAdjustments() ([]accountadjustment.Outcome, er
 // ErrStopped) the underlying reservation is not released either, so the
 // caller must still Close it (or use CommitAndClose) to avoid leaking the
 // native handle.
-// With a chain hook context for this engine, the future resolves with
-// ErrReentrantLane; the caller retains the handle and must retry outside
-// the hook.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (r *AsyncReservation) Commit(ctx context.Context) *future.Future[struct{}] {
 	return r.runVoid(ctx, reservationCommit, false)
 }
 
-// CommitAndClose enqueues Commit followed by Close. With a chain hook context
-// for this engine, the future resolves with ErrReentrantLane; the caller
-// retains the handle and must retry outside the hook.
+// CommitAndClose enqueues Commit followed by Close.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (r *AsyncReservation) CommitAndClose(ctx context.Context) *future.Future[struct{}] {
 	return r.runVoid(ctx, reservationCommitAndClose, true)
 }
@@ -211,25 +210,23 @@ func (r *AsyncReservation) CommitAndClose(ctx context.Context) *future.Future[st
 // stop (the future resolves with ErrStopped) the underlying reservation
 // is not released either, so the caller must still Close it (or use
 // RollbackAndClose) to avoid leaking the native handle.
-// With a chain hook context for this engine, the future resolves with
-// ErrReentrantLane; the caller retains the handle and must retry outside
-// the hook.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (r *AsyncReservation) Rollback(ctx context.Context) *future.Future[struct{}] {
 	return r.runVoid(ctx, reservationRollback, false)
 }
 
-// RollbackAndClose enqueues Rollback followed by Close. With a chain hook
-// context for this engine, the future resolves with ErrReentrantLane; the
-// caller retains the handle and must retry outside the hook.
+// RollbackAndClose enqueues Rollback followed by Close.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (r *AsyncReservation) RollbackAndClose(ctx context.Context) *future.Future[struct{}] {
 	return r.runVoid(ctx, reservationRollbackAndClose, true)
 }
 
 // Close enqueues Close on the underlying reservation. If Commit was not
 // called first, the reserved state is rolled back implicitly.
-// With a chain hook context for this engine, the future resolves with
-// ErrReentrantLane; the caller retains the handle and must retry outside
-// the hook.
+// The same engine's hooks, Submit closures, observer callbacks, and Exclusive
+// callbacks must not call this method synchronously.
 func (r *AsyncReservation) Close(ctx context.Context) *future.Future[struct{}] {
 	return r.runVoid(ctx, reservationClose, true)
 }
@@ -256,10 +253,6 @@ func (r *AsyncReservation) runVoid(
 	abortCloses bool,
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
-	if r.engine.reentrantLane(ctx) {
-		f.Resolve(struct{}{}, ErrReentrantLane)
-		return f
-	}
 	task := &reservationTask{f: f, res: r, op: op, abortCloses: abortCloses}
 	if abortCloses {
 		_ = r.engine.strategy.submitWithFailureHandoff(
