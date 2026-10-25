@@ -2218,6 +2218,110 @@ TEST(TypedAsyncShutdown, DynamicStopWaitsForRegisteredProducer) {
   EXPECT_TRUE(producerResolved.load(std::memory_order_relaxed));
 }
 
+// Submits refused after stop must not hold the producer drain open. A producer
+// blocked on the full lane keeps the stop in that drain while refused submits
+// keep arriving; once the producer leaves, the stop completes. The window
+// between a producer's two stop checks is reached only by chance: the submit
+// path carries no test seam.
+//
+// The gates are declared before the engine, so a lane task that a failed setup
+// leaves behind finishes before they are destroyed.
+struct RefusedSubmitGates {
+  Gate producerBlocked;
+  Gate started;
+  Gate release;
+};
+
+template <typename Async>
+void ExpectStopCompletesUnderRefusedSubmits(Async& async,
+                                            RefusedSubmitGates& gates) {
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  ae::Future<std::monostate> running = async.Submit(account, [&gates] {
+    gates.started.Open();
+    gates.release.Wait();
+  });
+  if (!gates.started.WaitFor(kAwaitCap)) {
+    ADD_FAILURE() << "the lane task did not start";
+    gates.release.Open();
+    return;
+  }
+  ae::Future<std::monostate> queued = async.Submit(account, [] {});
+  std::thread producer([&async, account] {
+    EXPECT_TRUE(async.Submit(account, [] {}).Await(kAwaitCap).has_value());
+  });
+  if (!gates.producerBlocked.WaitFor(kAwaitCap)) {
+    ADD_FAILURE() << "the producer did not block on the full lane";
+    gates.release.Open();
+    producer.join();
+    return;
+  }
+
+  std::atomic<bool> stopped{false};
+  std::thread stopper(
+      [&async, &stopped] { stopped.store(async.StopGraceful(seconds(10))); });
+  std::atomic<bool> submitting{true};
+  std::atomic<int> refused{0};
+  std::vector<std::thread> stream;
+  for (int i = 0; i != 4; ++i) {
+    stream.emplace_back([&async, account, &submitting, &refused] {
+      while (submitting.load(std::memory_order_relaxed)) {
+        try {
+          (void)async.Submit(
+                         account, [] {}, std::chrono::milliseconds(1))
+              .Await(kAwaitCap);
+        } catch (const ae::Error& error) {
+          if (error.Code() == ae::ErrorCode::Stopped) {
+            refused.fetch_add(1, std::memory_order_relaxed);
+          }
+        }
+      }
+    });
+  }
+  const auto refusing = std::chrono::steady_clock::now() + kAwaitCap;
+  while (refused.load(std::memory_order_relaxed) < 100 &&
+         std::chrono::steady_clock::now() < refusing) {
+    std::this_thread::yield();
+  }
+  EXPECT_GE(refused.load(std::memory_order_relaxed), 100);
+
+  gates.release.Open();
+  stopper.join();
+  EXPECT_TRUE(stopped.load());
+  submitting.store(false, std::memory_order_relaxed);
+  for (std::thread& thread : stream) {
+    thread.join();
+  }
+  producer.join();
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(queued.Await(kAwaitCap).has_value());
+}
+
+TEST(TypedAsyncShutdown, ShardedStopCompletesUnderRefusedSubmits) {
+  MockEngineAdapter driver;
+  RefusedSubmitGates gates;
+  QueueFullGateObserver observer(&gates.producerBlocked);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Sharded(1)
+                   .Build();
+  ExpectStopCompletesUnderRefusedSubmits(async, gates);
+}
+
+TEST(TypedAsyncShutdown, DynamicStopCompletesUnderRefusedSubmits) {
+  MockEngineAdapter driver;
+  RefusedSubmitGates gates;
+  QueueFullGateObserver observer(&gates.producerBlocked);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Dynamic()
+                   .Build();
+  ExpectStopCompletesUnderRefusedSubmits(async, gates);
+}
+
 TEST(TypedAsyncCleanup, DynamicCleanupAfterLaneRetiresDoesNotCreateLane) {
   MockEngineAdapter driver;
   Gate firstCreated;

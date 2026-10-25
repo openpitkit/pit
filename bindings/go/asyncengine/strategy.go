@@ -118,13 +118,18 @@ type keyQueue struct {
 	// and replaced whenever an entry leaves it, so a producer fenced by an
 	// entry re-checks instead of waiting for the whole backlog to drain.
 	mandatoryProgress chan struct{}
-	retired           bool
-	workerExited      bool
-	closed            atomic.Bool
-	lastActive        atomic.Int64
-	pending           atomic.Int64
-	admitted          atomic.Int64
-	settled           atomic.Int64
+	// mandatoryQueued mirrors len(mandatory) != 0 and is written under
+	// mandatoryMu, so producers and the worker skip that mutex while the
+	// backlog is empty. A concurrent enqueue may land on either side of an
+	// in-flight submit, and it wakes the worker through mandatoryWake.
+	mandatoryQueued atomic.Bool
+	retired         bool
+	workerExited    bool
+	closed          atomic.Bool
+	lastActive      atomic.Int64
+	pending         atomic.Int64
+	admitted        atomic.Int64
+	settled         atomic.Int64
 }
 
 func newKeyQueue(capacity int) *keyQueue {
@@ -478,6 +483,9 @@ func (b *base) waitForMandatoryCleanup(
 	quit <-chan struct{},
 ) error {
 	for {
+		if !q.mandatoryQueued.Load() {
+			return nil
+		}
 		q.mandatoryMu.Lock()
 		entry, fenced := q.pendingCleanupForLocked(key)
 		if !fenced {
@@ -630,6 +638,7 @@ func (b *base) enqueueMandatory(
 		settleTarget:    cutoff,
 		waitSubmitFence: waitSubmitFence,
 	})
+	q.mandatoryQueued.Store(true)
 	q.mandatoryMu.Unlock()
 	b.markSent(q)
 	select {
@@ -660,6 +669,9 @@ func (*base) finishWorker(q *keyQueue) bool {
 func (b *base) takeMandatoryCleanup(
 	q *keyQueue,
 ) (task queuedTask, ready bool, waitingForSubmitFence bool) {
+	if !q.mandatoryQueued.Load() {
+		return queuedTask{}, false, false
+	}
 	q.mandatoryMu.Lock()
 	defer q.mandatoryMu.Unlock()
 	if len(q.mandatory) == 0 {
@@ -686,6 +698,7 @@ func (b *base) takeMandatoryCleanup(
 	}
 	q.mandatory[0] = submitFailureCleanupEntry{}
 	q.mandatory = q.mandatory[1:]
+	q.mandatoryQueued.Store(len(q.mandatory) != 0)
 	q.noteMandatoryProgressLocked()
 	return entry.task, true, false
 }

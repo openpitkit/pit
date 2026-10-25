@@ -265,3 +265,54 @@ func TestMandatoryFenceAbandonmentWakesParkedBarrier(t *testing.T) {
 		})
 	}
 }
+
+// TestMandatoryQueuedMirrorsBacklogAcrossPops pins the mutex-free empty-backlog
+// check: while the first of two queued cleanups runs, the second is still in
+// the backlog, so producers and the worker must still see it queued.
+func TestMandatoryQueuedMirrorsBacklogAcrossPops(t *testing.T) {
+	b := newBase(baseConfig{queueCapacity: 1}, false)
+	q := newKeyQueue(1)
+	key := accountRoutingKey(param.NewAccountIDFromUint64(1))
+	firstRunning := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondRan := make(chan struct{})
+	if !b.enqueueSubmitFailureCleanup(q, key, func() {
+		close(firstRunning)
+		<-releaseFirst
+	}, false) {
+		t.Fatal("live lane refused the first cleanup")
+	}
+	if !b.enqueueSubmitFailureCleanup(q, key, func() {
+		close(secondRan)
+	}, false) {
+		t.Fatal("live lane refused the second cleanup")
+	}
+	b.workersWG.Add(1)
+	go b.worker(q)
+
+	select {
+	case <-firstRunning:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first cleanup did not run")
+	}
+	if !q.mandatoryQueued.Load() {
+		t.Error("backlog reads empty while the second cleanup is queued")
+	}
+	close(releaseFirst)
+	select {
+	case <-secondRan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second cleanup did not run")
+	}
+	mandatoryFenceWait(t, "empty backlog", func() bool {
+		return !q.mandatoryQueued.Load()
+	})
+
+	b.closeQueueChannels([]*keyQueue{q})
+	select {
+	case <-q.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not exit")
+	}
+	b.workersWG.Wait()
+}

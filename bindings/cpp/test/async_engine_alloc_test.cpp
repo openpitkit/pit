@@ -504,4 +504,86 @@ TEST(AsyncAlloc, DeferredRegistrationFailurePublishesNothing) {
     }
   }
 }
+
+class AcceptPolicy {
+ public:
+  void PerformPreTradeCheck(const openpit::pretrade::Context&,
+                            openpit::tx::Mutations&, openpit::pretrade::Result&,
+                            openpit::pretrade::PolicyDecision&) const {}
+};
+
+// A Close aborted by stop whose release cannot be handed over fails with
+// TaskFailed and leaves the reservation open. Close is safe to repeat, and the
+// next one releases the reservation, whatever the first did.
+TEST(AsyncAlloc, FailedCloseHandoffLeavesReservationForNextClose) {
+  for (bool dynamic : {false, true}) {
+    std::size_t allocationCount = 0;
+    bool reachedOpenFailure = false;
+    for (std::ptrdiff_t fault = -1;
+         fault < static_cast<std::ptrdiff_t>(allocationCount); ++fault) {
+      openpit::EngineBuilder builder(openpit::SyncPolicy::Account);
+      builder.Add(openpit::pretrade::CustomPolicy<AcceptPolicy>(
+          "AcceptPolicy", AcceptPolicy{}));
+      auto native = builder.Build();
+      ae::EngineAdapter driver(native);
+      auto engine = dynamic ? ae::Builder(driver).Dynamic().Build()
+                            : ae::Builder(driver).Sharded(1).Build();
+      const auto account = openpit::param::AccountId::FromUint64(kAccount);
+      openpit::model::Order order;
+      order.operation.emplace();
+      order.operation->accountId = account;
+      auto result = driver.ExecutePreTrade(
+          std::make_unique<openpit::model::Order>(order));
+      auto handle = std::make_shared<ae::AsyncReservation<ae::EngineAdapter>>(
+          std::move(*result.reservation), &engine, account);
+      ASSERT_TRUE(engine.StopGraceful(kCap));
+      // A released wrapper refuses snapshot reads as closed.
+      const auto open = [&handle] {
+        try {
+          (void)handle->AccountAdjustments();
+          return true;
+        } catch (const openpit::Error&) {
+          return false;
+        }
+      };
+
+      std::optional<ae::Future<std::monostate>> closing;
+      allocation_fault::allocations = 0;
+      allocation_fault::remaining = fault;
+      try {
+        closing.emplace(handle->Close());
+      } catch (const std::bad_alloc&) {
+      }
+      allocation_fault::remaining = -1;
+      if (fault == -1) {
+        allocationCount = allocation_fault::allocations;
+        EXPECT_GT(allocationCount, 0U);
+      }
+      if (closing) {
+        try {
+          (void)closing->Await(kCap);
+          ADD_FAILURE() << "allocation index " << fault;
+        } catch (const ae::Error& error) {
+          if (error.Code() == ae::ErrorCode::TaskFailed) {
+            reachedOpenFailure = reachedOpenFailure || open();
+          } else {
+            EXPECT_EQ(error.Code(), ae::ErrorCode::Stopped)
+                << "allocation index " << fault;
+            EXPECT_FALSE(open()) << "allocation index " << fault;
+          }
+        }
+      }
+
+      try {
+        (void)handle->Close().Await(kCap);
+        ADD_FAILURE() << "allocation index " << fault;
+      } catch (const ae::Error& error) {
+        EXPECT_EQ(error.Code(), ae::ErrorCode::Stopped)
+            << "allocation index " << fault;
+      }
+      EXPECT_FALSE(open()) << "allocation index " << fault;
+    }
+    EXPECT_TRUE(reachedOpenFailure) << (dynamic ? "dynamic" : "sharded");
+  }
+}
 }  // namespace

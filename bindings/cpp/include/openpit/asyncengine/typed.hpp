@@ -804,7 +804,10 @@ class AsyncDropCopyOperation
 // a `StartOutcome`; held by `shared_ptr`.
 //
 // As in the synchronous contract, a request may be executed at most once;
-// reusing it after Execute/Close is a programmer error.
+// executing it again is a programmer error. `Close` stays allowed after a
+// failed `Execute` and on a released request. A request dropped without
+// `Execute` or `Close` is released on the thread that drops the last
+// reference, outside its account lane.
 template <typename Driver>
 class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
  public:
@@ -821,8 +824,10 @@ class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
 
   // Enqueues the main stage. The future mirrors `ExecutePreTrade`: a non-null
   // reservation on accept, populated rejects on a policy reject. The underlying
-  // request is always released once the main stage has been issued (or the task
-  // aborted), so the native handle never leaks.
+  // request is released once the main stage has been issued or the task
+  // aborted. The one exception is an aborted task whose release cannot be
+  // handed to the account lane (allocation failure): the future fails with
+  // `ErrorCode::TaskFailed` and the request stays open until `Close`.
   [[nodiscard]] PairFuture<std::shared_ptr<AsyncReservation<Driver>>,
                            std::vector<::openpit::pretrade::Reject>>
   Execute(std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0));

@@ -849,9 +849,8 @@ class Base {
     }();
   }
 
-  [[nodiscard]] bool ProducersDrained() {
-    std::lock_guard<std::mutex> lock(m_producerMutex);
-    return m_liveProducers == 0;
+  [[nodiscard]] bool ProducersDrained() const noexcept {
+    return m_liveProducers.load(std::memory_order_seq_cst) == 0;
   }
 
   void RegisterDeferredQueue(const KeyQueuePtr& q) {
@@ -869,9 +868,8 @@ class Base {
   //
   // WorkerReady reads the producer count while holding the lane mutex, so
   // notifying under that mutex closes the false-check/wait window. The lock
-  // order is deferred registry -> lane mutex -> producer mutex; nothing takes
-  // them in the opposite order (registration holds the registry alone, and
-  // FinishProducer releases the producer mutex before calling this).
+  // order is deferred registry -> lane mutex; nothing takes them in the
+  // opposite order (registration holds the registry alone).
   void WakeDeferredQueues() {
     std::lock_guard<std::mutex> lock(m_deferredMutex);
     auto it = m_deferredQueues.begin();
@@ -1015,14 +1013,12 @@ class Base {
     return true;
   }
 
-  // Marks the strategy stopped under the producer gate. A producer is either
-  // fully registered before this point or observes stop and never enters. An
-  // exclusive section still preparing is woken to end itself.
+  // Marks the strategy stopped. The store pairs with `RegisterProducer`: a
+  // producer is either counted before any drain that follows this point or
+  // observes stop and never enters. An exclusive section still preparing is
+  // woken to end itself.
   void SignalStop() {
-    {
-      std::lock_guard<std::mutex> lock(m_producerMutex);
-      m_stopRequested.store(true, std::memory_order_release);
-    }
+    m_stopRequested.store(true, std::memory_order_seq_cst);
     {
       // A section checks for stop under this mutex, so passing through it
       // after the store means the check either sees the stop or is already
@@ -1126,7 +1122,7 @@ class Base {
       std::chrono::steady_clock::time_point deadline) {
     std::unique_lock<std::mutex> lock(m_producerMutex);
     const auto drained = [this] {
-      return m_liveProducers == 0 && m_liveMandatoryCleanups == 0;
+      return ProducersDrained() && m_liveMandatoryCleanups == 0;
     };
     if (deadline == std::chrono::steady_clock::time_point::max()) {
       m_producerCv.wait(lock, drained);
@@ -1142,7 +1138,7 @@ class Base {
       std::chrono::steady_clock::time_point deadline) {
     std::unique_lock<std::mutex> lock(m_producerMutex);
     const auto drained = [this] {
-      return m_liveProducers == 0 && m_liveMandatoryCleanups == 0;
+      return ProducersDrained() && m_liveMandatoryCleanups == 0;
     };
     if (deadline == std::chrono::steady_clock::time_point::max()) {
       m_producerCv.wait(lock, drained);
@@ -1177,19 +1173,34 @@ class Base {
   }
 
  private:
+  // The count and the stop flag pair up seq_cst: a producer either observes
+  // stop and backs out, or its count is visible to the drain after the stop.
+  // The check before the increment keeps producers refused after stop from
+  // holding the count above zero.
   [[nodiscard]] bool RegisterProducer() {
-    std::lock_guard<std::mutex> lock(m_producerMutex);
-    if (m_stopRequested.load(std::memory_order_relaxed)) {
+    if (m_stopRequested.load(std::memory_order_seq_cst)) {
       return false;
     }
-    ++m_liveProducers;
+    m_liveProducers.fetch_add(1, std::memory_order_seq_cst);
+    if (m_stopRequested.load(std::memory_order_seq_cst)) {
+      FinishProducer();
+      return false;
+    }
     return true;
   }
 
+  // Only the last producer leaving after stop has anyone to wake: every drain
+  // wait and every deferred cleanup starts after `SignalStop`.
   void FinishProducer() {
+    if (m_liveProducers.fetch_sub(1, std::memory_order_seq_cst) != 1 ||
+        !m_stopRequested.load(std::memory_order_seq_cst)) {
+      return;
+    }
     {
+      // A drain waiter checks the count under this mutex, so passing through
+      // it after the decrement means the check either sees zero or is already
+      // waiting for the notify below.
       std::lock_guard<std::mutex> lock(m_producerMutex);
-      --m_liveProducers;
     }
     m_producerCv.notify_all();
     WakeDeferredQueues();
@@ -1427,7 +1438,7 @@ class Base {
   std::vector<std::weak_ptr<KeyQueue>> m_deferredQueues;
   std::mutex m_producerMutex;
   std::condition_variable m_producerCv;
-  std::size_t m_liveProducers = 0;
+  std::atomic<std::size_t> m_liveProducers{0};
   std::size_t m_liveMandatoryCleanups = 0;
   bool m_lifecycleSealed = false;
   std::mutex m_doneMutex;
