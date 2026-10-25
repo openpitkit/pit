@@ -293,7 +293,7 @@ where
                 || operation.holdings().realized_pnl_is_halted()
                 || operation
                     .realized_delta()
-                    .map_or(true, |delta| delta.is_zero())
+                    .is_none_or(|delta| delta.is_zero())
         );
         let leg = &mut deltas.underlying;
         let mut overflowed = false;

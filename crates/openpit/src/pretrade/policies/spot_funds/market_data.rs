@@ -480,7 +480,7 @@ impl SpotFundsSettings {
             return Some(&barrier.barrier);
         }
         let matches_currency = |barrier: &&SpotFundsPnlBoundsBarrier| {
-            account_currency.map_or(true, |currency| &barrier.currency == currency)
+            account_currency.is_none_or(|currency| &barrier.currency == currency)
         };
         account_group_id
             .and_then(|group| self.pnl_account_group_barriers.get(&group))

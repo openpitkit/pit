@@ -128,7 +128,7 @@ fn apply_report(policy: &TestPolicy, report: &TestReport) -> bool {
         &PostTradeContext::<FullLocking>::new(),
         report,
     )
-    .map_or(true, |r| r.is_empty())
+    .is_none_or(|r| r.is_empty())
 }
 
 // Verifies that apply_execution_report does not lose or duplicate updates when

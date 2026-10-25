@@ -955,7 +955,7 @@ impl Holdings {
         lower: Option<PositionSize>,
         upper: Option<PositionSize>,
     ) -> bool {
-        !lower.is_some_and(|b| self.available < b) && !upper.is_some_and(|b| self.available > b)
+        lower.is_none_or(|b| self.available >= b) && upper.is_none_or(|b| self.available <= b)
     }
 
     /// Returns `true` if `held` is within the given inclusive bounds.
@@ -966,7 +966,7 @@ impl Holdings {
         lower: Option<PositionSize>,
         upper: Option<PositionSize>,
     ) -> bool {
-        !lower.is_some_and(|b| self.held < b) && !upper.is_some_and(|b| self.held > b)
+        lower.is_none_or(|b| self.held >= b) && upper.is_none_or(|b| self.held <= b)
     }
 
     /// Returns `true` if `incoming` is within the given inclusive bounds.
@@ -977,7 +977,7 @@ impl Holdings {
         lower: Option<PositionSize>,
         upper: Option<PositionSize>,
     ) -> bool {
-        !lower.is_some_and(|b| self.incoming < b) && !upper.is_some_and(|b| self.incoming > b)
+        lower.is_none_or(|b| self.incoming >= b) && upper.is_none_or(|b| self.incoming <= b)
     }
 }
 
