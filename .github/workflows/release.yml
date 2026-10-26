@@ -1358,7 +1358,6 @@ jobs:
         env:
           RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
           VERSION: ${{ needs.verify-tag.outputs.version }}
-          VCPKG_REGISTRY_BASELINE: ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
         run: |
           set -euo pipefail
 
@@ -1370,24 +1369,6 @@ jobs:
           EOF
           else
             tail -n +2 RELEASE_NOTES.md > "${BODY_FILE}"
-            printf '\n\n' >> "${BODY_FILE}"
-            cat <<EOF >> "${BODY_FILE}"
-          Install from package registries:
-
-          - crates.io: https://crates.io/crates/openpit
-          - PyPI: https://pypi.org/project/openpit/${VERSION}/
-
-          Runtime artifacts for SDK delivery are attached to this release
-          (\`.so\`, \`.dylib\`, \`.dll\`, Windows \`.dll.lib\`, and
-          \`.sha256\` files per target).
-
-          The C++ distributable (\`openpit-cpp--${VERSION}.tar.gz\`)
-          contains the public headers and CMake config-file package.
-
-          vcpkg users can consume OpenPit from
-          https://github.com/openpitkit/vcpkg-registry.git at baseline
-          \`${VCPKG_REGISTRY_BASELINE}\`.
-          EOF
           fi
 
           mapfile -t ASSETS < <(find release-assets -type f | sort)

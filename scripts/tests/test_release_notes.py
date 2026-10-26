@@ -167,24 +167,29 @@ def assemble_body(repo, mode):
             TMPDIR=str(repo),
             RELEASE_MODE=mode,
             VERSION=VERSION,
-            VCPKG_REGISTRY_BASELINE="abc123",
         ),
         capture_output=True,
         text=True,
     )
 
 
-def test_production_body_contains_authored_notes_and_installation_metadata(tmp_path):
+@pytest.mark.parametrize(
+    "body",
+    [
+        BODY,
+        "Fix for position updates without a trailing newline.",
+        "Adds portfolio controls.\n\n- Support for grouped accounts\n\n"
+        "### Breaking changes\n\n- Renamed setting - use the new name\n",
+    ],
+)
+def test_production_body_is_exactly_authored_notes(tmp_path, body):
     path = tmp_path / NOTES
-    path.write_text(MARKER + BODY, encoding="utf-8")
+    path.write_text(MARKER + body, encoding="utf-8")
 
     result = assemble_body(tmp_path, "production")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith(BODY + "\n\n")
-    assert "release-version:" not in result.stdout
-    assert f"https://pypi.org/project/openpit/{VERSION}/" in result.stdout
-    assert "abc123" in result.stdout
+    assert result.stdout == body
 
 
 def test_production_body_cannot_be_built_without_notes(tmp_path):
