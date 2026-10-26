@@ -16,6 +16,10 @@ order reaches a venue, it passes through a deterministic risk pipeline that
 can reject the request, reserve state, and later absorb post-trade outcomes
 back into the same control system.
 
+**See OpenPit in a real product.** [Pit Officer](https://officer.openpit.dev/video-guides)
+uses OpenPit as pre-trade risk engine. [Watch the Pit Officer video guides](https://officer.openpit.dev/video-guides)
+to see the SDK used for trading risk controls.
+
 The engine is in-memory and deterministic, designed to be embedded into a
 larger trading system rather than replace one. The pipeline itself is
 described on the [wiki](https://wiki.openpit.dev/Pre-trade-Pipeline/).
