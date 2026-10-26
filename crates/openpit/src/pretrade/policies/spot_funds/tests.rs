@@ -19,6 +19,7 @@
 
 mod position_limit;
 mod properties;
+mod unrealized;
 
 use super::execution::single_lock_price;
 use super::rollback::AccountPnlAssertionRollback;

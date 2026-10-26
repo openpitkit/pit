@@ -35,9 +35,10 @@ use super::engine_trait::EngineTrait;
 use super::sync_mode::SyncMode;
 use crate::param::{AccountId, Asset, Pnl};
 use crate::pretrade::policies::{
-    account_pnl_barrier_change_blocks, account_pnl_membership_change_block, AccountPnlStorage,
-    ActiveHoldingsMutationStorage, OrderSizeLimitSettings, PnlBoundsKillSwitchSettings,
-    RateLimitSettings, RealizedPnlStorage, SpotFundsHoldingsStorage, SpotFundsSettings,
+    account_pnl_barrier_change_blocks, account_pnl_membership_change_block,
+    pnl_axis_barrier_changes, AccountPnlStorage, ActiveHoldingsMutationStorage,
+    OrderSizeLimitSettings, PnlBoundsKillSwitchSettings, RateLimitSettings, RealizedPnlStorage,
+    SpotFundsHoldingsStorage, SpotFundsSettings,
 };
 use crate::pretrade::{
     AccountBlockOutcome, AccountBlockOutcomes, PolicyConfigurationResult,
@@ -518,6 +519,11 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// evaluated normally and can record a block. Neither operation releases a
     /// previously recorded block.
     ///
+    /// The same rule applies independently to each P&L bound axis: only a
+    /// changed, still-effective barrier is evaluated. Realized P&L is checked
+    /// first for each account; if it gives no block, changed axes are checked
+    /// in their defined order and the first block wins.
+    ///
     /// Position limits are retuned through this method via
     /// [`SpotFundsSettings::set_position_limit`], apply from the next order,
     /// and do not re-evaluate open reservations.
@@ -525,10 +531,12 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// # Concurrency
     ///
     /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
-    /// section. The retune reads the stored P&L and positions of every known
-    /// account, and the new settings become visible only together with that
-    /// sweep. Under [`FullSync`](crate::FullSync) the engine orders the
-    /// publication and the sweep after the account-state writes in flight;
+    /// section. The exclusive section reads the stored P&L and positions of
+    /// every known account for the realized barrier, and holdings and market
+    /// data of each account evaluated on a changed axis. The new settings
+    /// become visible only together with those sweeps. Under
+    /// [`FullSync`](crate::FullSync) the engine orders publication and the
+    /// sweeps after account-state writes in flight;
     /// `f` runs before that, without holding writers back.
     ///
     /// # Errors
@@ -550,6 +558,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                 active_holdings_mutations,
                 ..
             } => {
+                let policy = self.pre_trade_policy(name)?;
                 let account_groups = AccountGroupsHandle::<
                     <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,
                 >::from_inner(
@@ -559,50 +568,90 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                 // back. State writers must not see the new settings before the
                 // barrier sweep has run, so publication and the sweep share
                 // the transition. Lock order: the settings mutex, then the
-                // state transition.
+                // state transition. Under the transition, the realized sweep
+                // reads stored P&L and positions of every known account;
+                // changed axes read evaluated accounts' holdings and market
+                // data.
                 let prepared =
                     prepare_serialized_transition(transition, settings, f).map_err(|error| {
                         ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
                     })?;
                 let mut account_blocks = Vec::new();
+                let observe = |previous: &SpotFundsSettings, current: &SpotFundsSettings| {
+                    let memberships = account_groups.memberships();
+                    let known_accounts = self
+                        .inner
+                        .account_currencies
+                        .known_account_keys()
+                        .into_iter()
+                        .chain(active_holdings_accounts::<RegistryFactory<Trait>>(
+                            active_holdings_mutations,
+                        ))
+                        .collect::<Vec<_>>();
+                    let mut currencies = HashMap::new();
+                    let mut resolve_currency = |account, group| {
+                        currencies
+                            .entry(account)
+                            .or_insert_with(|| {
+                                self.inner.account_currencies.currency_of(account, group)
+                            })
+                            .clone()
+                    };
+                    let blocks = account_pnl_barrier_change_blocks::<RegistryFactory<Trait>>(
+                        pnl,
+                        holdings,
+                        previous,
+                        current,
+                        &memberships,
+                        known_accounts.iter().copied(),
+                        &mut resolve_currency,
+                    );
+                    let realized_blocks = blocks
+                        .iter()
+                        .map(|(account, _)| *account)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    account_blocks.reserve(blocks.len());
+                    let mut record_block = |account, block: crate::pretrade::AccountBlock| {
+                        if self
+                            .inner
+                            .blocked_accounts
+                            .block_account(account, block.clone())
+                        {
+                            account_blocks.push(AccountBlockOutcome {
+                                account_id: account,
+                                block,
+                            });
+                        }
+                    };
+                    for (account, block) in blocks {
+                        record_block(account, block);
+                    }
+                    let changes = pnl_axis_barrier_changes::<RegistryFactory<Trait>>(
+                        pnl,
+                        holdings,
+                        previous,
+                        current,
+                        &memberships,
+                        &known_accounts,
+                        &mut resolve_currency,
+                        &realized_blocks,
+                    );
+                    for (account, (group, currency, barriers)) in changes {
+                        let configuration = PolicyRuntimeConfiguration::CheckSpotFundsPnlAxes {
+                            account_id: account,
+                            account_group_id: group,
+                            account_currency: currency,
+                            barriers,
+                        };
+                        let result = policy.apply_runtime_configuration(configuration);
+                        for block in result.account_blocks {
+                            record_block(account, block);
+                        }
+                    }
+                };
                 self.inner
                     .account_currencies
-                    .with_state_transition(|| {
-                        prepared.publish::<Error>(|previous, current| {
-                            let blocks = account_pnl_barrier_change_blocks::<
-                                RegistryFactory<Trait>,
-                            >(
-                                pnl,
-                                holdings,
-                                previous,
-                                current,
-                                &account_groups.memberships(),
-                                self.inner
-                                    .account_currencies
-                                    .known_account_keys()
-                                    .into_iter()
-                                    .chain(active_holdings_accounts::<RegistryFactory<Trait>>(
-                                        active_holdings_mutations,
-                                    )),
-                                |account, group| {
-                                    self.inner.account_currencies.currency_of(account, group)
-                                },
-                            );
-                            account_blocks.reserve(blocks.len());
-                            for (account, block) in blocks {
-                                if self
-                                    .inner
-                                    .blocked_accounts
-                                    .block_account(account, block.clone())
-                                {
-                                    account_blocks.push(AccountBlockOutcome {
-                                        account_id: account,
-                                        block,
-                                    });
-                                }
-                            }
-                        })
-                    })
+                    .with_state_transition(|| prepared.publish::<Error>(observe))
                     .map_err(|error| {
                         ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
                     })?;
@@ -614,23 +663,47 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         }
     }
 
+    fn pre_trade_policy(
+        &self,
+        name: &str,
+    ) -> Result<
+        &(impl PreTradePolicy<
+            Trait::Order,
+            Trait::ExecutionReport,
+            Trait::AccountAdjustment,
+            Trait::Sync,
+        > + ?Sized),
+        ConfigureError,
+    > {
+        self.inner
+            .pre_trade_policies
+            .iter()
+            .find(|policy| policy.name() == name)
+            .map(Box::as_ref)
+            .ok_or_else(|| ConfigureError::UnknownPolicy {
+                name: name.to_owned(),
+            })
+    }
+
     /// Force-sets the live accumulated account P&L state for a spot-funds policy.
     ///
     /// This updates only the account-scoped current P&L ledger. It does not
     /// retune bounds and does not reset any other accumulator. The policy
-    /// reports an account block when the replacement violates an effective P&L
-    /// barrier, either by exceeding a bound or by being halted. The engine
-    /// processes that block before returning it. If the account is already
-    /// blocked, its first stored cause remains unchanged and the result still
-    /// contains the policy-reported block.
+    /// reports an account block when the replacement violates an effective
+    /// realized P&L barrier, either by exceeding a bound or by being halted.
+    /// When realized P&L gives no block, the policy also evaluates the P&L
+    /// bound axes, so the result can contain an axis block the replacement
+    /// did not cause. The engine processes that block before returning it. If
+    /// the account is already blocked, its first stored cause remains unchanged
+    /// and the result still contains the policy-reported block.
     ///
     /// # Errors
     ///
     /// Returns [`ConfigureError::UnknownPolicy`] for an unknown name or
     /// [`ConfigureError::PolicyTypeMismatch`] when the name belongs to another
     /// built-in policy type. On success returns the policy-reported account
-    /// blocks, including an empty list when the replacement does not violate an
-    /// effective barrier.
+    /// blocks, including an empty list when neither the realized barrier nor
+    /// any axis produces a block.
     pub fn set_spot_funds_account_pnl(
         &self,
         name: &str,
@@ -641,14 +714,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         let _call = self.inner.config_registry.engine_calls.enter();
         match self.registry().entry(name)? {
             ConfigEntry::SpotFunds { .. } => {
-                let policy = self
-                    .inner
-                    .pre_trade_policies
-                    .iter()
-                    .find(|policy| policy.name() == name)
-                    .ok_or_else(|| ConfigureError::UnknownPolicy {
-                        name: name.to_owned(),
-                    })?;
+                let policy = self.pre_trade_policy(name)?;
                 self.inner.account_currencies.with_state_writer(|| {
                     let account_groups = AccountGroupsHandle::<
                         <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,

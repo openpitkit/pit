@@ -105,6 +105,10 @@ pub struct PolicyConfigurationResult {
 /// Runtime configuration operation dispatched to a built-in policy.
 #[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Retunes carry four selected barriers without an allocation."
+)]
 pub enum PolicyRuntimeConfiguration {
     /// Sets the account-scoped SpotFunds realized-PnL state.
     SetSpotFundsAccountPnl {
@@ -116,5 +120,16 @@ pub enum PolicyRuntimeConfiguration {
         account_currency: Option<Asset>,
         /// Replacement account PnL state.
         state: PnlState,
+    },
+    /// Checks only axes whose effective barrier changed during a retune.
+    CheckSpotFundsPnlAxes {
+        /// Account affected by the barrier change.
+        account_id: AccountId,
+        /// Account-group membership observed for this transition.
+        account_group_id: Option<AccountGroupId>,
+        /// Effective account currency observed for this transition.
+        account_currency: Option<Asset>,
+        /// Selected effective barriers in `SpotFundsPnlBoundsAxis::ALL` order.
+        barriers: [Option<crate::pretrade::policies::SpotFundsPnlBoundsBarrier>; 4],
     },
 }

@@ -42,12 +42,13 @@ pub use rate_limit::{
 };
 pub use spot_funds::SpotFundsPolicy;
 pub(crate) use spot_funds::{
-    account_pnl_barrier_change_blocks, account_pnl_membership_change_block, AccountPnlStorage,
-    ActiveHoldingsMutationStorage, SpotFundsHoldingsStorage,
+    account_pnl_barrier_change_blocks, account_pnl_membership_change_block,
+    pnl_axis_barrier_changes, AccountPnlStorage, ActiveHoldingsMutationStorage,
+    SpotFundsHoldingsStorage,
 };
 pub use spot_funds::{
     SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
     SpotFundsOverrideTarget, SpotFundsPnlBoundsAccountBarrier,
-    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPricingSource,
-    SpotFundsSettings,
+    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsAxis, SpotFundsPnlBoundsBarrier,
+    SpotFundsPricingSource, SpotFundsSettings,
 };

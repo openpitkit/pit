@@ -98,6 +98,7 @@ type ParamKind = C.OpenPitParamKind
 type ParamRoundingStrategy = C.uint8_t
 type ParamSide = C.OpenPitParamSide
 type PretradePoliciesSpotFundsLimitMode = C.OpenPitPretradePoliciesSpotFundsLimitMode
+type PretradePoliciesSpotFundsPnlBoundsAxis = C.OpenPitPretradePoliciesSpotFundsPnlBoundsAxis
 type ParamTradeAmount = C.OpenPitParamTradeAmount
 type ParamTradeAmountKind = C.OpenPitParamTradeAmountKind
 type ParamVolume = C.OpenPitParamVolume
@@ -377,6 +378,13 @@ const (
 const (
 	PretradePoliciesSpotFundsLimitModeEnforce   = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE
 	PretradePoliciesSpotFundsLimitModeTrackOnly = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY
+)
+
+const (
+	PretradePoliciesSpotFundsPnlBoundsAxisAccountUnrealized  = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_ACCOUNT_UNREALIZED
+	PretradePoliciesSpotFundsPnlBoundsAxisAccountTotal       = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_ACCOUNT_TOTAL
+	PretradePoliciesSpotFundsPnlBoundsAxisPositionUnrealized = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_UNREALIZED
+	PretradePoliciesSpotFundsPnlBoundsAxisPositionTotal      = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_TOTAL
 )
 
 const (

@@ -32,6 +32,7 @@ use crate::param::AccountId;
 use crate::pretrade::holdings::{AdjustmentTarget, Holdings, PositionPnlState};
 use crate::pretrade::policy::missing_required_field_account_adjustment_reject;
 use crate::pretrade::{PolicyAccountAdjustmentResult, RejectScope, Rejects};
+use crate::storage::ConfigCell;
 use crate::{Mutations, PnlState};
 
 use super::rejects::{
@@ -487,45 +488,57 @@ where
             let account_group = ctx.state_account_group();
             let state_snapshot = ctx.state_snapshot(account_group);
             let account_currency = ctx.account_currency(account_group);
-            let barrier =
-                self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());
-            let token = crate::core::mutation::next_mutation_owner_id();
-            let previous =
-                self.pnl
-                    .with_mut(account_id, super::AccountPnlEntry::zero, |entry, _| {
-                        let previous = *entry;
-                        *entry = super::AccountPnlEntry {
-                            state,
-                            assertion_token: Some(token),
-                        };
-                        previous
-                    });
-            self.register_account_pnl_adjustment_rollback(
-                mutations,
-                AccountPnlAssertionRollback {
-                    account_control,
-                    account_id,
-                    previous,
-                    asserted: state,
-                    token,
-                    lease,
-                },
-                state_snapshot,
-            );
-            // Untagged by construction: the engine discards these blocks when the
-            // batch rejects and only records them once every mutation is committed,
-            // so by the time the cause exists its assertion is over and no rollback
-            // is left that could invalidate a provenance tag.
-            let account_blocks = barrier
-                .as_ref()
-                .and_then(|barrier| {
-                    account_pnl_block_for_state(account_currency.as_ref(), state, barrier, None)
+            self.settings.with_snapshot(|settings| {
+                let barrier = settings
+                    .pnl_barrier_for(account_id, account_group, account_currency.as_ref())
+                    .cloned();
+                let token = crate::core::mutation::next_mutation_owner_id();
+                let previous =
+                    self.pnl
+                        .with_mut(account_id, super::AccountPnlEntry::zero, |entry, _| {
+                            let previous = *entry;
+                            *entry = super::AccountPnlEntry {
+                                state,
+                                assertion_token: Some(token),
+                            };
+                            previous
+                        });
+                self.register_account_pnl_adjustment_rollback(
+                    mutations,
+                    AccountPnlAssertionRollback {
+                        account_control,
+                        account_id,
+                        previous,
+                        asserted: state,
+                        token,
+                        lease,
+                    },
+                    state_snapshot,
+                );
+                // Untagged by construction: the engine discards these blocks
+                // when the batch rejects and only records them once every
+                // mutation is committed, so by the time the cause exists its
+                // assertion is over and no rollback can invalidate a tag.
+                let account_blocks = barrier
+                    .as_ref()
+                    .and_then(|barrier| {
+                        account_pnl_block_for_state(account_currency.as_ref(), state, barrier, None)
+                    })
+                    .or_else(|| {
+                        self.pnl_axis_block(
+                            settings,
+                            account_id,
+                            account_group,
+                            account_currency.as_ref(),
+                            false,
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+                Ok(PolicyAccountAdjustmentResult {
+                    account_adjustments: Vec::new(),
+                    account_blocks,
                 })
-                .into_iter()
-                .collect();
-            Ok(PolicyAccountAdjustmentResult {
-                account_adjustments: Vec::new(),
-                account_blocks,
             })
         })
     }

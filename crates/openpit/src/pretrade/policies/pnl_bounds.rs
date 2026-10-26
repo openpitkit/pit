@@ -22,6 +22,8 @@ use crate::param::{Asset, Pnl};
 use crate::pretrade::policy::PolicyName;
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope};
 
+pub(super) const REALIZED_PNL_LABEL: &str = "realized pnl";
+
 pub(super) fn has_configured_bound(lower_bound: &Option<Pnl>, upper_bound: &Option<Pnl>) -> bool {
     lower_bound.is_some() || upper_bound.is_some()
 }
@@ -62,8 +64,29 @@ pub(super) fn barrier_breach_details(
     asset_label: &'static str,
     asset: &Asset,
 ) -> String {
+    labelled_barrier_breach_details(
+        breached_sides,
+        lower_bound,
+        upper_bound,
+        realized,
+        REALIZED_PNL_LABEL,
+        asset_label,
+        asset,
+    )
+}
+
+/// Formats a labelled P&L value and only the configured breached bounds.
+pub(super) fn labelled_barrier_breach_details(
+    breached_sides: &[&'static str],
+    lower_bound: Option<Pnl>,
+    upper_bound: Option<Pnl>,
+    value: Pnl,
+    label: &str,
+    asset_label: &'static str,
+    asset: &Asset,
+) -> String {
     let desc = breached_sides.join(" and ");
-    let mut details = format!("{desc} bound breached: realized pnl {realized}");
+    let mut details = format!("{desc} bound breached: {label} {value}");
     if let Some(lower) = lower_bound {
         details.push_str(&format!(", lower bound {lower}"));
     }

@@ -37,10 +37,11 @@ import (
 // and it is valid for as long as that engine is.
 //
 // The SpotFunds retune methods - SpotFunds, SpotFundsPnlBoundsKillSwitch,
-// SpotFundsGlobalLimitMode, SpotFundsAccountLimitMode, SpotFundsPositionLimit,
-// and SpotFundsAccountGroupLimitMode - are exclusive operations. Under NoSync
-// and AccountSync the engine takes no lock for them: run each with no other
-// call on the engine in flight, as asyncengine.AsyncEngine.Exclusive does.
+// SpotFundsPnlBoundsAxis, SpotFundsGlobalLimitMode, SpotFundsAccountLimitMode,
+// SpotFundsPositionLimit, and SpotFundsAccountGroupLimitMode - are exclusive
+// operations. Under NoSync and AccountSync the engine takes no lock for them:
+// run each with no other call on the engine in flight, as
+// asyncengine.AsyncEngine.Exclusive does.
 // Under FullSync the engine orders them itself.
 type Configurator struct {
 	engine native.Engine
@@ -600,12 +601,12 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 	return nil
 }
 
-// SpotFundsPnlBoundsKillSwitch updates the account P&L bounds axis of
+// SpotFundsPnlBoundsKillSwitch updates the realized account P&L bounds of
 // the named spot-funds policy.
 //
 // globalBarrier uses three states: optional.None leaves the global barrier
 // unchanged, optional.Some(nil) clears it, and optional.Some(&barrier) sets it.
-// Nil slices leave their axes untouched; non-nil empty slices clear them.
+// Nil slices leave their tiers untouched; non-nil empty slices clear them.
 // Barrier updates preserve live accumulated P&L.
 // With a known effective account currency, an account-tier mismatch fails
 // closed and blocks the account; account-group and global mismatches are
@@ -630,6 +631,89 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
 ) (AccountBlockOutcomes, error) {
+	nativeGlobal, hasGlobal, nativeAccountGroups, nativeAccounts := nativeSpotFundsPnlBoundsTiers(
+		globalBarrier, accountGroupBarriers, accountBarriers,
+	)
+	blocks, configErr := native.EngineConfigureSpotFundsPnlBoundsKillSwitch(
+		c.engine,
+		name,
+		nativeGlobal,
+		hasGlobal,
+		nativeAccountGroups,
+		nativeAccounts,
+	)
+	runtime.KeepAlive(globalBarrier)
+	runtime.KeepAlive(accountGroupBarriers)
+	runtime.KeepAlive(accountBarriers)
+	if configErr != nil {
+		return AccountBlockOutcomes{}, newErrorFromHandle(configErr)
+	}
+	return newAccountBlockOutcomes(blocks), nil
+}
+
+// SpotFundsPnlBoundsAxis retunes one P&L-bounds measure of the named spot-funds
+// policy: account unrealized, account total, position unrealized, or position
+// total P&L. Only the selected axis changes; realized bounds and P&L stay
+// unchanged.
+//
+// globalBarrier uses three states: optional.None leaves the global barrier
+// unchanged, optional.Some(nil) clears it, and optional.Some(&barrier) sets it.
+// Nil slices leave their tiers untouched; non-nil empty slices clear them.
+// The currency rules of SpotFundsPnlBoundsBarrier apply.
+//
+// With an effective barrier, a breach or halt on the axis blocks the account
+// with PnlKillSwitchTriggered at pre-trade, dry run, a fill, the account P&L
+// force-set, and a retune that changes the axis's effective barrier. A fill
+// checks axes for a trade or non-zero fee when the report gave no block of its
+// own. A change of an account's group membership does not check the axes;
+// the next order catches the breach.
+//
+// Accounts whose effective barrier changes are evaluated before return. Each
+// returned outcome pairs the affected account with its recorded block. Removing
+// the last effective barrier reports no block and does not release an existing
+// block. Clearing an override can expose a lower-tier barrier that is evaluated
+// and may record and report a block.
+//
+// Returns a *Error on a domain error. An unknown axis returns
+// ErrorKindValidation. On any error, settings stay unchanged.
+func (c Configurator) SpotFundsPnlBoundsAxis(
+	name string,
+	axis policies.SpotFundsPnlBoundsAxis,
+	globalBarrier optional.Option[*policies.SpotFundsPnlBoundsBarrier],
+	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
+	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
+) (AccountBlockOutcomes, error) {
+	nativeGlobal, hasGlobal, nativeAccountGroups, nativeAccounts := nativeSpotFundsPnlBoundsTiers(
+		globalBarrier, accountGroupBarriers, accountBarriers,
+	)
+	blocks, configErr := native.EngineConfigureSpotFundsPnlBoundsAxis(
+		c.engine,
+		name,
+		axis.Handle(),
+		nativeGlobal,
+		hasGlobal,
+		nativeAccountGroups,
+		nativeAccounts,
+	)
+	runtime.KeepAlive(globalBarrier)
+	runtime.KeepAlive(accountGroupBarriers)
+	runtime.KeepAlive(accountBarriers)
+	if configErr != nil {
+		return AccountBlockOutcomes{}, newErrorFromHandle(configErr)
+	}
+	return newAccountBlockOutcomes(blocks), nil
+}
+
+func nativeSpotFundsPnlBoundsTiers(
+	globalBarrier optional.Option[*policies.SpotFundsPnlBoundsBarrier],
+	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
+	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
+) (
+	*native.PretradePoliciesSpotFundsPnlBoundsBarrier,
+	bool,
+	[]native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
+	[]native.PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
+) {
 	var nativeGlobal *native.PretradePoliciesSpotFundsPnlBoundsBarrier
 	globalValue, hasGlobal := globalBarrier.Get()
 	if hasGlobal && globalValue != nil {
@@ -673,21 +757,7 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 		}
 	}
 
-	blocks, configErr := native.EngineConfigureSpotFundsPnlBoundsKillSwitch(
-		c.engine,
-		name,
-		nativeGlobal,
-		hasGlobal,
-		nativeAccountGroups,
-		nativeAccounts,
-	)
-	runtime.KeepAlive(globalBarrier)
-	runtime.KeepAlive(accountGroupBarriers)
-	runtime.KeepAlive(accountBarriers)
-	if configErr != nil {
-		return AccountBlockOutcomes{}, newErrorFromHandle(configErr)
-	}
-	return newAccountBlockOutcomes(blocks), nil
+	return nativeGlobal, hasGlobal, nativeAccountGroups, nativeAccounts
 }
 
 // AccountBlockOutcome is a block inserted for an account selected by the

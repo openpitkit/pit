@@ -28,13 +28,14 @@ use std::fmt::{Display, Formatter};
 
 use super::{
     SpotFundsLimitMode, SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountGroupBarrier,
-    SpotFundsPnlBoundsBarrier,
+    SpotFundsPnlBoundsAxis, SpotFundsPnlBoundsBarrier,
 };
 use crate::core::instrument::Instrument;
 use crate::marketdata::{
     AccountInfo, InstrumentId, MarketDataService, MarketDataSync, Quote, QuoteResolution,
 };
 use crate::param::{AccountGroupId, AccountId, Asset, Price, Quantity};
+use crate::storage::LockingPolicyFactory;
 
 use super::super::pnl_bounds;
 use super::market_order_pricer::WithSlippage;
@@ -161,6 +162,185 @@ pub enum SpotFundsOverrideTarget {
 
 // ─── SpotFundsSettings ────────────────────────────────────────────────────────
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SpotFundsPnlBarrierSet {
+    global_barrier: Option<SpotFundsPnlBoundsBarrier>,
+    account_group_barriers: HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier>,
+    account_barriers: HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier>,
+}
+
+impl SpotFundsPnlBarrierSet {
+    /// Selects candidates whose effective barrier changed and remains present.
+    ///
+    /// Global changes reach accounts known through P&L, holdings (including
+    /// provisional state), explicit barriers, membership or caller-supplied
+    /// keys. Other changes reach changed account targets and members of changed
+    /// groups. Removing the last effective barrier yields no candidate;
+    /// clearing an override can expose another effective barrier.
+    pub(crate) fn changed_barriers<'a, Factory, ResolveAccountCurrency>(
+        &'a self,
+        previous: &Self,
+        pnl: &super::AccountPnlStorage<Factory>,
+        holdings: &super::SpotFundsHoldingsStorage<Factory>,
+        memberships: &[(AccountId, AccountGroupId)],
+        known_accounts: impl IntoIterator<Item = AccountId>,
+        mut resolve_account_currency: ResolveAccountCurrency,
+    ) -> Vec<(
+        AccountId,
+        Option<AccountGroupId>,
+        Option<Asset>,
+        &'a SpotFundsPnlBoundsBarrier,
+    )>
+    where
+        Factory: LockingPolicyFactory,
+        ResolveAccountCurrency: FnMut(AccountId, Option<AccountGroupId>) -> Option<Asset>,
+    {
+        let global_changed = previous.global_barrier() != self.global_barrier();
+        let mut changed_accounts = std::collections::BTreeSet::new();
+        for account_id in previous
+            .account_barriers()
+            .keys()
+            .chain(self.account_barriers().keys())
+        {
+            if previous.account_barriers().get(account_id)
+                != self.account_barriers().get(account_id)
+            {
+                changed_accounts.insert(*account_id);
+            }
+        }
+        let mut changed_groups = std::collections::BTreeSet::new();
+        for group_id in previous
+            .account_group_barriers()
+            .keys()
+            .chain(self.account_group_barriers().keys())
+        {
+            if previous.account_group_barriers().get(group_id)
+                != self.account_group_barriers().get(group_id)
+            {
+                changed_groups.insert(*group_id);
+            }
+        }
+        if !global_changed && changed_accounts.is_empty() && changed_groups.is_empty() {
+            return Vec::new();
+        }
+        let memberships = memberships
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut candidates = changed_accounts;
+        if global_changed {
+            candidates.extend(pnl.keys());
+            candidates.extend(holdings.keys().into_iter().map(|(account, _)| account));
+            candidates.extend(previous.account_barriers().keys().copied());
+            candidates.extend(self.account_barriers().keys().copied());
+            candidates.extend(memberships.keys().copied());
+            candidates.extend(known_accounts);
+        } else if !changed_groups.is_empty() {
+            candidates.extend(
+                memberships.iter().filter_map(|(account, group)| {
+                    changed_groups.contains(group).then_some(*account)
+                }),
+            );
+        }
+        candidates
+            .into_iter()
+            .filter_map(|account_id| {
+                let group = memberships.get(&account_id).copied();
+                let currency = resolve_account_currency(account_id, group);
+                let barrier = self.barrier_for(account_id, group, currency.as_ref())?;
+                (previous.barrier_for(account_id, group, currency.as_ref()) != Some(barrier))
+                    .then_some((account_id, group, currency, barrier))
+            })
+            .collect()
+    }
+
+    fn set_global_barrier(
+        &mut self,
+        barrier: Option<SpotFundsPnlBoundsBarrier>,
+    ) -> Result<(), SpotFundsConfigError> {
+        if let Some(barrier) = barrier.as_ref() {
+            validate_pnl_bounds(barrier)?;
+        }
+        self.global_barrier = barrier;
+        Ok(())
+    }
+
+    fn set_account_group_barriers(
+        &mut self,
+        barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
+    ) -> Result<(), SpotFundsConfigError> {
+        let barriers = collect_pnl_account_group_barriers(barriers)?;
+        self.account_group_barriers = barriers;
+        Ok(())
+    }
+
+    fn set_account_barriers(
+        &mut self,
+        barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
+    ) -> Result<(), SpotFundsConfigError> {
+        let barriers = collect_pnl_account_barriers(barriers)?;
+        self.account_barriers = barriers;
+        Ok(())
+    }
+
+    pub(super) fn barrier_for(
+        &self,
+        account_id: AccountId,
+        account_group_id: Option<AccountGroupId>,
+        account_currency: Option<&Asset>,
+    ) -> Option<&SpotFundsPnlBoundsBarrier> {
+        if let Some(barrier) = self.account_barriers.get(&account_id) {
+            return Some(&barrier.barrier);
+        }
+        let matches_currency = |barrier: &&SpotFundsPnlBoundsBarrier| {
+            account_currency.is_none_or(|currency| &barrier.currency == currency)
+        };
+        account_group_id
+            .and_then(|group| self.account_group_barriers.get(&group))
+            .map(|entry| &entry.barrier)
+            .filter(matches_currency)
+            .or_else(|| self.global_barrier.as_ref().filter(matches_currency))
+    }
+
+    // This currency-blind early-out lets `reject_halted_account_pnl` avoid
+    // currency resolution. Do not use it as a control predicate: it is true
+    // when no barrier matches the account currency.
+    pub(super) fn has_scope(
+        &self,
+        account_id: AccountId,
+        account_group_id: Option<AccountGroupId>,
+    ) -> bool {
+        self.references_account(account_id)
+            || account_group_id
+                .is_some_and(|group| self.account_group_barriers.contains_key(&group))
+            || self.global_barrier.is_some()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.global_barrier.is_none()
+            && self.account_group_barriers.is_empty()
+            && self.account_barriers.is_empty()
+    }
+
+    fn references_account(&self, account_id: AccountId) -> bool {
+        self.account_barriers.contains_key(&account_id)
+    }
+
+    pub(super) fn global_barrier(&self) -> Option<&SpotFundsPnlBoundsBarrier> {
+        self.global_barrier.as_ref()
+    }
+
+    pub(super) fn account_group_barriers(
+        &self,
+    ) -> &HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier> {
+        &self.account_group_barriers
+    }
+
+    pub(super) fn account_barriers(&self) -> &HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier> {
+        &self.account_barriers
+    }
+}
+
 /// Runtime-updatable settings of [`SpotFundsPolicy`](super::SpotFundsPolicy).
 ///
 /// Carries the slippage / pricing-source / override cascade and the funds
@@ -189,9 +369,11 @@ pub struct SpotFundsSettings {
     account_limit_modes: HashMap<AccountId, SpotFundsLimitMode>,
     account_group_limit_modes: HashMap<AccountGroupId, SpotFundsLimitMode>,
     position_limits: HashMap<(AccountId, Asset), Quantity>,
-    pnl_global_barrier: Option<SpotFundsPnlBoundsBarrier>,
-    pnl_account_group_barriers: HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier>,
-    pnl_account_barriers: HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier>,
+    pnl_barriers: SpotFundsPnlBarrierSet,
+    pnl_account_unrealized_barriers: SpotFundsPnlBarrierSet,
+    pnl_account_total_barriers: SpotFundsPnlBarrierSet,
+    pnl_position_unrealized_barriers: SpotFundsPnlBarrierSet,
+    pnl_position_total_barriers: SpotFundsPnlBarrierSet,
     global_pricer: WithSlippage,
     pricing_source: SpotFundsPricingSource,
     global_limit_mode: SpotFundsLimitMode,
@@ -207,7 +389,10 @@ impl SpotFundsSettings {
                 .position_limits
                 .keys()
                 .any(|(account, _)| *account == account_id)
-            || self.pnl_account_barriers.contains_key(&account_id)
+            || self.pnl_barriers.references_account(account_id)
+            || SpotFundsPnlBoundsAxis::ALL
+                .into_iter()
+                .any(|axis| self.pnl_axis_barriers(axis).references_account(account_id))
     }
 
     /// Builds the cascade from the full set of configuration parameters.
@@ -276,9 +461,11 @@ impl SpotFundsSettings {
             account_limit_modes: HashMap::new(),
             account_group_limit_modes: HashMap::new(),
             position_limits: HashMap::new(),
-            pnl_global_barrier: None,
-            pnl_account_group_barriers: HashMap::new(),
-            pnl_account_barriers: HashMap::new(),
+            pnl_barriers: SpotFundsPnlBarrierSet::default(),
+            pnl_account_unrealized_barriers: SpotFundsPnlBarrierSet::default(),
+            pnl_account_total_barriers: SpotFundsPnlBarrierSet::default(),
+            pnl_position_unrealized_barriers: SpotFundsPnlBarrierSet::default(),
+            pnl_position_total_barriers: SpotFundsPnlBarrierSet::default(),
             global_pricer,
             pricing_source,
             global_limit_mode: SpotFundsLimitMode::Enforce,
@@ -383,11 +570,7 @@ impl SpotFundsSettings {
         &mut self,
         barrier: Option<SpotFundsPnlBoundsBarrier>,
     ) -> Result<(), SpotFundsConfigError> {
-        if let Some(barrier) = barrier.as_ref() {
-            validate_pnl_bounds(barrier)?;
-        }
-        self.pnl_global_barrier = barrier;
-        Ok(())
+        self.pnl_barriers.set_global_barrier(barrier)
     }
 
     /// Replaces account-group account P&L bounds.
@@ -403,9 +586,7 @@ impl SpotFundsSettings {
         &mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
     ) -> Result<(), SpotFundsConfigError> {
-        let barriers = collect_pnl_account_group_barriers(barriers)?;
-        self.pnl_account_group_barriers = barriers;
-        Ok(())
+        self.pnl_barriers.set_account_group_barriers(barriers)
     }
 
     /// Replaces account-specific account P&L bounds without changing
@@ -422,9 +603,75 @@ impl SpotFundsSettings {
         &mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
     ) -> Result<(), SpotFundsConfigError> {
-        let barriers = collect_pnl_account_barriers(barriers)?;
-        self.pnl_account_barriers = barriers;
-        Ok(())
+        self.pnl_barriers.set_account_barriers(barriers)
+    }
+
+    /// Replaces or clears the global P&L bounds for one axis.
+    ///
+    /// The barrier resolves as described on [`SpotFundsPnlBoundsAxis`].
+    /// A setting on one axis never affects realized bounds or another axis.
+    pub fn set_pnl_axis_global_barrier(
+        &mut self,
+        axis: SpotFundsPnlBoundsAxis,
+        barrier: Option<SpotFundsPnlBoundsBarrier>,
+    ) -> Result<(), SpotFundsConfigError> {
+        self.pnl_axis_barriers_mut(axis).set_global_barrier(barrier)
+    }
+
+    /// Replaces account-group P&L bounds for one axis.
+    ///
+    /// The barrier resolves as described on [`SpotFundsPnlBoundsAxis`].
+    /// A setting on one axis never affects realized bounds or another axis.
+    pub fn set_pnl_axis_account_group_barriers(
+        &mut self,
+        axis: SpotFundsPnlBoundsAxis,
+        barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
+    ) -> Result<(), SpotFundsConfigError> {
+        self.pnl_axis_barriers_mut(axis)
+            .set_account_group_barriers(barriers)
+    }
+
+    /// Replaces account-specific P&L bounds for one axis.
+    ///
+    /// The barrier resolves as described on [`SpotFundsPnlBoundsAxis`].
+    /// A setting on one axis never affects realized bounds or another axis.
+    pub fn set_pnl_axis_account_barriers(
+        &mut self,
+        axis: SpotFundsPnlBoundsAxis,
+        barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
+    ) -> Result<(), SpotFundsConfigError> {
+        self.pnl_axis_barriers_mut(axis)
+            .set_account_barriers(barriers)
+    }
+
+    pub(super) fn pnl_barriers(&self) -> &SpotFundsPnlBarrierSet {
+        &self.pnl_barriers
+    }
+
+    pub(crate) fn pnl_axis_barriers(
+        &self,
+        axis: SpotFundsPnlBoundsAxis,
+    ) -> &SpotFundsPnlBarrierSet {
+        match axis {
+            SpotFundsPnlBoundsAxis::AccountUnrealized => &self.pnl_account_unrealized_barriers,
+            SpotFundsPnlBoundsAxis::AccountTotal => &self.pnl_account_total_barriers,
+            SpotFundsPnlBoundsAxis::PositionUnrealized => &self.pnl_position_unrealized_barriers,
+            SpotFundsPnlBoundsAxis::PositionTotal => &self.pnl_position_total_barriers,
+        }
+    }
+
+    fn pnl_axis_barriers_mut(
+        &mut self,
+        axis: SpotFundsPnlBoundsAxis,
+    ) -> &mut SpotFundsPnlBarrierSet {
+        match axis {
+            SpotFundsPnlBoundsAxis::AccountUnrealized => &mut self.pnl_account_unrealized_barriers,
+            SpotFundsPnlBoundsAxis::AccountTotal => &mut self.pnl_account_total_barriers,
+            SpotFundsPnlBoundsAxis::PositionUnrealized => {
+                &mut self.pnl_position_unrealized_barriers
+            }
+            SpotFundsPnlBoundsAxis::PositionTotal => &mut self.pnl_position_total_barriers,
+        }
     }
 
     /// Installs account-specific account P&L bounds, consuming and returning
@@ -461,10 +708,7 @@ impl SpotFundsSettings {
         self.set_pnl_global_barrier(global_barrier)?;
         self.set_pnl_account_group_barriers(account_group_barriers)?;
         self.set_pnl_account_barriers(account_barriers)?;
-        if self.pnl_global_barrier.is_none()
-            && self.pnl_account_group_barriers.is_empty()
-            && self.pnl_account_barriers.is_empty()
-        {
+        if self.pnl_barriers.is_empty() {
             return Err(SpotFundsConfigError::NoPnlBarriersConfigured);
         }
         Ok(self)
@@ -476,17 +720,8 @@ impl SpotFundsSettings {
         account_group_id: Option<AccountGroupId>,
         account_currency: Option<&Asset>,
     ) -> Option<&SpotFundsPnlBoundsBarrier> {
-        if let Some(barrier) = self.pnl_account_barriers.get(&account_id) {
-            return Some(&barrier.barrier);
-        }
-        let matches_currency = |barrier: &&SpotFundsPnlBoundsBarrier| {
-            account_currency.is_none_or(|currency| &barrier.currency == currency)
-        };
-        account_group_id
-            .and_then(|group| self.pnl_account_group_barriers.get(&group))
-            .map(|entry| &entry.barrier)
-            .filter(matches_currency)
-            .or_else(|| self.pnl_global_barrier.as_ref().filter(matches_currency))
+        self.pnl_barriers
+            .barrier_for(account_id, account_group_id, account_currency)
     }
 
     // This currency-blind early-out lets `reject_halted_account_pnl` avoid
@@ -497,26 +732,7 @@ impl SpotFundsSettings {
         account_id: AccountId,
         account_group_id: Option<AccountGroupId>,
     ) -> bool {
-        self.pnl_account_barriers.contains_key(&account_id)
-            || account_group_id
-                .is_some_and(|group| self.pnl_account_group_barriers.contains_key(&group))
-            || self.pnl_global_barrier.is_some()
-    }
-
-    pub(super) fn pnl_global_barrier(&self) -> Option<&SpotFundsPnlBoundsBarrier> {
-        self.pnl_global_barrier.as_ref()
-    }
-
-    pub(super) fn pnl_account_group_barriers(
-        &self,
-    ) -> &HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier> {
-        &self.pnl_account_group_barriers
-    }
-
-    pub(super) fn pnl_account_barriers(
-        &self,
-    ) -> &HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier> {
-        &self.pnl_account_barriers
+        self.pnl_barriers.has_scope(account_id, account_group_id)
     }
 
     /// Reads the global funds limit mode applied when no override matches.
@@ -865,6 +1081,444 @@ mod tests {
         assert!(settings
             .pnl_barrier_for(fallback_account_id, Some(group_id), Some(&chf))
             .is_none());
+    }
+
+    fn pnl_barrier(currency: &str, lower: &str) -> SpotFundsPnlBoundsBarrier {
+        SpotFundsPnlBoundsBarrier {
+            currency: asset(currency),
+            lower_bound: Some(Pnl::from_str(lower).expect("valid pnl")),
+            upper_bound: None,
+        }
+    }
+
+    #[test]
+    fn pnl_axes_all_contains_every_variant_exactly_once() {
+        let mut counts = [0; 4];
+        for axis in SpotFundsPnlBoundsAxis::ALL {
+            let slot = match axis {
+                SpotFundsPnlBoundsAxis::AccountUnrealized => 0,
+                SpotFundsPnlBoundsAxis::AccountTotal => 1,
+                SpotFundsPnlBoundsAxis::PositionUnrealized => 2,
+                SpotFundsPnlBoundsAxis::PositionTotal => 3,
+            };
+            counts[slot] += 1;
+        }
+        assert_eq!(counts, [1; 4], "ALL must contain every axis exactly once");
+    }
+
+    #[test]
+    fn pnl_axis_cascade_keeps_account_scope_and_filters_fallbacks() {
+        let account_id = account(1);
+        let other_account = account(2);
+        let group_id = group(7);
+        let global = pnl_barrier("USD", "-100");
+        let grouped = pnl_barrier("EUR", "-50");
+        let specific = pnl_barrier("CHF", "-10");
+        for axis in SpotFundsPnlBoundsAxis::ALL {
+            let mut settings = default_settings();
+            settings
+                .set_pnl_axis_global_barrier(axis, Some(global.clone()))
+                .unwrap();
+            settings
+                .set_pnl_axis_account_group_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountGroupBarrier {
+                        barrier: grouped.clone(),
+                        account_group_id: group_id,
+                    }],
+                )
+                .unwrap();
+            settings
+                .set_pnl_axis_account_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountBarrier {
+                        barrier: specific.clone(),
+                        account_id,
+                    }],
+                )
+                .unwrap();
+            let barriers = settings.pnl_axis_barriers(axis);
+            for currency in [
+                None,
+                Some(&global.currency),
+                Some(&grouped.currency),
+                Some(&specific.currency),
+            ] {
+                assert_eq!(
+                    barriers.barrier_for(account_id, Some(group_id), currency),
+                    Some(&specific),
+                    "{axis:?}: account tier wins unfiltered"
+                );
+            }
+            assert_eq!(
+                barriers.barrier_for(other_account, Some(group_id), None),
+                Some(&grouped),
+                "{axis:?}: group precedes global without currency"
+            );
+            assert_eq!(
+                barriers.barrier_for(other_account, Some(group_id), Some(&grouped.currency)),
+                Some(&grouped),
+                "{axis:?}: matching group wins"
+            );
+            assert_eq!(
+                barriers.barrier_for(other_account, Some(group_id), Some(&global.currency)),
+                Some(&global),
+                "{axis:?}: mismatched group falls through to global"
+            );
+            assert_eq!(
+                barriers.barrier_for(other_account, None, None),
+                Some(&global),
+                "{axis:?}: global applies without currency"
+            );
+            assert_eq!(
+                barriers.barrier_for(other_account, Some(group(8)), Some(&global.currency)),
+                Some(&global),
+                "{axis:?}: unrelated group falls through"
+            );
+            assert_eq!(
+                barriers.barrier_for(other_account, Some(group_id), Some(&specific.currency)),
+                None,
+                "{axis:?}: mismatched fallbacks are skipped"
+            );
+            assert_eq!(
+                barriers.barrier_for(other_account, None, Some(&grouped.currency)),
+                None,
+                "{axis:?}: mismatched global is skipped"
+            );
+        }
+    }
+
+    #[test]
+    fn pnl_axis_setters_validate_each_tier_and_preserve_previous_values_on_error() {
+        let account_id = account(1);
+        let group_id = group(7);
+        let valid = pnl_barrier("USD", "-10");
+        let invalid = SpotFundsPnlBoundsBarrier {
+            currency: asset("EUR"),
+            lower_bound: None,
+            upper_bound: None,
+        };
+        for axis in SpotFundsPnlBoundsAxis::ALL {
+            let mut settings = default_settings();
+            settings
+                .set_pnl_axis_global_barrier(axis, Some(valid.clone()))
+                .unwrap();
+            assert_eq!(
+                settings.set_pnl_axis_global_barrier(axis, Some(invalid.clone())),
+                Err(SpotFundsConfigError::NoPnlBoundsConfigured),
+                "{axis:?}: global rejects absent bounds"
+            );
+            assert_eq!(
+                settings.pnl_axis_barriers(axis).global_barrier(),
+                Some(&valid),
+                "{axis:?}: failed global replacement is atomic"
+            );
+
+            let previous_group = SpotFundsPnlBoundsAccountGroupBarrier {
+                barrier: valid.clone(),
+                account_group_id: group_id,
+            };
+            settings
+                .set_pnl_axis_account_group_barriers(axis, [previous_group.clone()])
+                .unwrap();
+            assert_eq!(
+                settings.set_pnl_axis_account_group_barriers(
+                    axis,
+                    [
+                        SpotFundsPnlBoundsAccountGroupBarrier {
+                            barrier: pnl_barrier("EUR", "-20"),
+                            account_group_id: group(8)
+                        },
+                        SpotFundsPnlBoundsAccountGroupBarrier {
+                            barrier: invalid.clone(),
+                            account_group_id: group_id
+                        },
+                    ]
+                ),
+                Err(SpotFundsConfigError::NoPnlBoundsConfigured),
+                "{axis:?}: group rejects absent bounds"
+            );
+            assert_eq!(
+                settings.pnl_axis_barriers(axis).account_group_barriers(),
+                &HashMap::from([(group_id, previous_group)]),
+                "{axis:?}: failed group replacement is atomic"
+            );
+
+            let previous_account = SpotFundsPnlBoundsAccountBarrier {
+                barrier: valid.clone(),
+                account_id,
+            };
+            settings
+                .set_pnl_axis_account_barriers(axis, [previous_account.clone()])
+                .unwrap();
+            assert_eq!(
+                settings.set_pnl_axis_account_barriers(
+                    axis,
+                    [
+                        SpotFundsPnlBoundsAccountBarrier {
+                            barrier: pnl_barrier("EUR", "-20"),
+                            account_id: account(2)
+                        },
+                        SpotFundsPnlBoundsAccountBarrier {
+                            barrier: invalid.clone(),
+                            account_id
+                        },
+                    ]
+                ),
+                Err(SpotFundsConfigError::NoPnlBoundsConfigured),
+                "{axis:?}: account rejects absent bounds"
+            );
+            assert_eq!(
+                settings.pnl_axis_barriers(axis).account_barriers(),
+                &HashMap::from([(account_id, previous_account)]),
+                "{axis:?}: failed account replacement is atomic"
+            );
+        }
+    }
+
+    #[test]
+    fn pnl_axes_and_realized_bounds_are_isolated_at_every_tier() {
+        let account_id = account(1);
+        let group_id = group(7);
+        let realized = pnl_barrier("USD", "-100");
+        let changed = pnl_barrier("EUR", "-50");
+        for axis in SpotFundsPnlBoundsAxis::ALL {
+            let mut settings = default_settings()
+                .with_pnl_barriers(
+                    Some(realized.clone()),
+                    [SpotFundsPnlBoundsAccountGroupBarrier {
+                        barrier: realized.clone(),
+                        account_group_id: group_id,
+                    }],
+                    [SpotFundsPnlBoundsAccountBarrier {
+                        barrier: realized.clone(),
+                        account_id,
+                    }],
+                )
+                .unwrap();
+            // Seed every axis so replacing another axis cannot pass by
+            // clearing it.
+            for other in SpotFundsPnlBoundsAxis::ALL {
+                settings
+                    .set_pnl_axis_global_barrier(other, Some(realized.clone()))
+                    .unwrap();
+                settings
+                    .set_pnl_axis_account_group_barriers(
+                        other,
+                        [SpotFundsPnlBoundsAccountGroupBarrier {
+                            barrier: realized.clone(),
+                            account_group_id: group_id,
+                        }],
+                    )
+                    .unwrap();
+                settings
+                    .set_pnl_axis_account_barriers(
+                        other,
+                        [SpotFundsPnlBoundsAccountBarrier {
+                            barrier: realized.clone(),
+                            account_id,
+                        }],
+                    )
+                    .unwrap();
+            }
+            settings
+                .set_pnl_axis_global_barrier(axis, Some(changed.clone()))
+                .unwrap();
+            settings
+                .set_pnl_axis_account_group_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountGroupBarrier {
+                        barrier: changed.clone(),
+                        account_group_id: group_id,
+                    }],
+                )
+                .unwrap();
+            settings
+                .set_pnl_axis_account_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountBarrier {
+                        barrier: changed.clone(),
+                        account_id,
+                    }],
+                )
+                .unwrap();
+            for (id, group) in [
+                (account_id, Some(group_id)),
+                (account(2), Some(group_id)),
+                (account(2), None),
+            ] {
+                assert_eq!(
+                    settings.pnl_barrier_for(id, group, None),
+                    Some(&realized),
+                    "{axis:?}: axis setting preserves realized resolution"
+                );
+                for other in SpotFundsPnlBoundsAxis::ALL {
+                    let expected = if other == axis { &changed } else { &realized };
+                    assert_eq!(
+                        settings
+                            .pnl_axis_barriers(other)
+                            .barrier_for(id, group, None),
+                        Some(expected),
+                        "{axis:?}: only selected axis changes ({other:?})"
+                    );
+                }
+            }
+            settings
+                .set_pnl_global_barrier(Some(pnl_barrier("CHF", "-1")))
+                .unwrap();
+            settings.set_pnl_account_group_barriers([]).unwrap();
+            settings.set_pnl_account_barriers([]).unwrap();
+            for other in SpotFundsPnlBoundsAxis::ALL {
+                let expected = if other == axis { &changed } else { &realized };
+                for (id, group) in [
+                    (account_id, Some(group_id)),
+                    (account(2), Some(group_id)),
+                    (account(2), None),
+                ] {
+                    assert_eq!(
+                        settings
+                            .pnl_axis_barriers(other)
+                            .barrier_for(id, group, None),
+                        Some(expected),
+                        "{axis:?}: realized setting preserves {other:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pnl_axis_tiers_clear_independently() {
+        let account_id = account(1);
+        let group_id = group(7);
+        for axis in SpotFundsPnlBoundsAxis::ALL {
+            let mut settings = default_settings();
+            settings
+                .set_pnl_axis_global_barrier(axis, Some(pnl_barrier("USD", "-100")))
+                .unwrap();
+            settings
+                .set_pnl_axis_account_group_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountGroupBarrier {
+                        barrier: pnl_barrier("USD", "-50"),
+                        account_group_id: group_id,
+                    }],
+                )
+                .unwrap();
+            settings
+                .set_pnl_axis_account_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountBarrier {
+                        barrier: pnl_barrier("USD", "-10"),
+                        account_id,
+                    }],
+                )
+                .unwrap();
+            settings.set_pnl_axis_global_barrier(axis, None).unwrap();
+            let barriers = settings.pnl_axis_barriers(axis);
+            assert!(
+                barriers.global_barrier().is_none(),
+                "{axis:?}: None clears global"
+            );
+            assert_eq!(barriers.account_group_barriers().len(), 1);
+            assert_eq!(barriers.account_barriers().len(), 1);
+            settings
+                .set_pnl_axis_account_group_barriers(axis, [])
+                .unwrap();
+            let barriers = settings.pnl_axis_barriers(axis);
+            assert!(
+                barriers.account_group_barriers().is_empty(),
+                "{axis:?}: empty iterator clears groups"
+            );
+            assert_eq!(barriers.account_barriers().len(), 1);
+            settings.set_pnl_axis_account_barriers(axis, []).unwrap();
+            assert!(
+                settings.pnl_axis_barriers(axis).is_empty(),
+                "{axis:?}: empty iterator clears accounts"
+            );
+            assert!(
+                !settings.references_account(account_id),
+                "{axis:?}: clearing removes account reference"
+            );
+        }
+    }
+
+    #[test]
+    fn pnl_axes_reference_accounts_only_at_account_tier() {
+        let account_id = account(1);
+        for axis in SpotFundsPnlBoundsAxis::ALL {
+            let mut settings = default_settings();
+            settings
+                .set_pnl_axis_global_barrier(axis, Some(pnl_barrier("USD", "-100")))
+                .unwrap();
+            assert!(
+                !settings.references_account(account_id),
+                "{axis:?}: global does not reference an account"
+            );
+            settings
+                .set_pnl_axis_account_group_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountGroupBarrier {
+                        barrier: pnl_barrier("USD", "-50"),
+                        account_group_id: group(1),
+                    }],
+                )
+                .unwrap();
+            assert!(
+                !settings.references_account(account_id),
+                "{axis:?}: group does not reference an account"
+            );
+            settings
+                .set_pnl_axis_account_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountBarrier {
+                        barrier: pnl_barrier("USD", "-10"),
+                        account_id,
+                    }],
+                )
+                .unwrap();
+            assert!(
+                settings.references_account(account_id),
+                "{axis:?}: account-tier axis barrier references its account"
+            );
+            assert!(
+                !settings.references_account(account(2)),
+                "{axis:?}: unrelated account is not referenced"
+            );
+        }
+    }
+
+    #[test]
+    fn pnl_builder_rejects_empty_realized_inputs_even_with_axis_barriers() {
+        for axis in SpotFundsPnlBoundsAxis::ALL {
+            let mut settings = default_settings();
+            settings
+                .set_pnl_axis_global_barrier(axis, Some(pnl_barrier("USD", "-100")))
+                .unwrap();
+            settings
+                .set_pnl_axis_account_group_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountGroupBarrier {
+                        barrier: pnl_barrier("USD", "-50"),
+                        account_group_id: group(1),
+                    }],
+                )
+                .unwrap();
+            settings
+                .set_pnl_axis_account_barriers(
+                    axis,
+                    [SpotFundsPnlBoundsAccountBarrier {
+                        barrier: pnl_barrier("USD", "-10"),
+                        account_id: account(1),
+                    }],
+                )
+                .unwrap();
+            assert_eq!(
+                settings.with_pnl_barriers(None, [], []).unwrap_err(),
+                SpotFundsConfigError::NoPnlBarriersConfigured,
+                "{axis:?}: axes do not satisfy realized builder"
+            );
+        }
     }
 
     /// Registers `AAPL/USD` with `mark = 100` in the default bucket and returns

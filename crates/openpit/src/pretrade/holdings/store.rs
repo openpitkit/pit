@@ -15,6 +15,10 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::sync::{Arc, Barrier};
+
 use crate::param::{AccountId, Asset};
 use crate::storage::{CreateStorageFor, LockingPolicyFactory, Storage, StorageBuilder};
 
@@ -34,6 +38,9 @@ where
     LockingPolicy: crate::storage::LockingPolicy,
 {
     inner: Storage<(AccountId, Asset), Holdings, LockingPolicy>,
+    index: Storage<AccountId, BTreeSet<Asset>, LockingPolicy>,
+    #[cfg(test)]
+    index_update_hook: parking_lot::Mutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
 }
 
 impl<LockingPolicy> HoldingsStore<LockingPolicy>
@@ -45,13 +52,18 @@ where
     /// The `Factory` type parameter is the
     /// [`LockingPolicyFactory`] supplied by the engine builder; the
     /// store's `Policy` is `Factory::Policy`.
+    /// It must implement [`CreateStorageFor`] for both `(AccountId, Asset)`
+    /// and `AccountId` keys.
     pub fn new<Factory>(builder: &StorageBuilder<Factory>) -> Self
     where
         Factory: LockingPolicyFactory<Policy = LockingPolicy>,
-        Factory: CreateStorageFor<(AccountId, Asset)>,
+        Factory: CreateStorageFor<(AccountId, Asset)> + CreateStorageFor<AccountId>,
     {
         Self {
             inner: builder.create_for_bound_key::<(AccountId, Asset), Holdings>(),
+            index: builder.create_for_bound_key::<AccountId, BTreeSet<Asset>>(),
+            #[cfg(test)]
+            index_update_hook: parking_lot::Mutex::new(None),
         }
     }
 
@@ -61,6 +73,15 @@ where
     /// Returns `None` if the key is not present.
     pub fn get(&self, key: &(AccountId, Asset)) -> Option<Holdings> {
         self.inner.with(key, |holdings| *holdings)
+    }
+
+    /// Copies the assets of this account's slots, or `None` without slots.
+    ///
+    /// A slot is listed once its creating call has returned. A slot whose
+    /// removal is in flight may still be listed. The index is exact at
+    /// quiescence, and no empty account set survives.
+    pub(crate) fn account_assets(&self, account_id: &AccountId) -> Option<BTreeSet<Asset>> {
+        self.index.with(account_id, Clone::clone)
     }
 
     /// Read-only scoped access.
@@ -100,7 +121,15 @@ where
         Mutator: FnOnce(&mut Holdings, bool) -> Output,
         Initializer: FnOnce() -> Holdings,
     {
-        self.inner.with_mut(key, default, mutator)
+        let mut was_new = false;
+        let output = self.inner.with_mut(key.clone(), default, |slot, is_new| {
+            was_new = is_new;
+            mutator(slot, is_new)
+        });
+        if was_new {
+            self.index_created_slot(&key);
+        }
+        output
     }
 
     /// Read/write scoped access; inserts on demand and rolls back on error.
@@ -116,12 +145,26 @@ where
         Mutator: FnOnce(&mut Holdings, bool) -> Result<Output, Error>,
         Initializer: FnOnce() -> Holdings,
     {
-        self.inner.with_mut_or_insert(key, default, mutator)
+        let mut was_new = false;
+        let result = self
+            .inner
+            .with_mut_or_insert(key.clone(), default, |slot, is_new| {
+                was_new = is_new;
+                mutator(slot, is_new)
+            });
+        if was_new && result.is_ok() {
+            self.index_created_slot(&key);
+        }
+        result
     }
 
     /// Removes the entry under `key`. Returns `true` if it was present.
     pub fn remove(&self, key: &(AccountId, Asset)) -> bool {
-        self.inner.remove(key)
+        let removed = self.inner.remove(key);
+        if removed {
+            self.unindex_removed_slot(key);
+        }
+        removed
     }
 
     pub(crate) fn remove_if(
@@ -129,11 +172,15 @@ where
         key: &(AccountId, Asset),
         predicate: impl FnOnce(&Holdings) -> bool,
     ) -> bool {
-        self.inner.remove_if(key, predicate)
+        let removed = self.inner.remove_if(key, predicate);
+        if removed {
+            self.unindex_removed_slot(key);
+        }
+        removed
     }
 
     pub fn remove_if_zero(&self, key: &(AccountId, Asset)) -> bool {
-        self.inner.remove_if(key, Holdings::is_zero)
+        self.remove_if(key, Holdings::is_zero)
     }
 
     /// Like [`with_mut_or_insert`](Self::with_mut_or_insert) but atomically removes a newly-inserted
@@ -154,8 +201,69 @@ where
         Mutator: FnOnce(&mut Holdings, bool) -> Result<Output, Error>,
         Initializer: FnOnce() -> Holdings,
     {
-        self.inner
-            .with_mut_or_insert_prune_new_if(key, default, Holdings::is_zero, mutator)
+        let mut was_new = false;
+        let mut was_pruned = false;
+        let result = self.inner.with_mut_or_insert_prune_new_if(
+            key.clone(),
+            default,
+            |slot| {
+                was_pruned = slot.is_zero();
+                was_pruned
+            },
+            |slot, is_new| {
+                was_new = is_new;
+                mutator(slot, is_new)
+            },
+        );
+        if was_new && result.is_ok() && !was_pruned {
+            self.index_created_slot(&key);
+        }
+        result
+    }
+
+    // Call only after releasing holdings locks: nesting is index -> holdings.
+    fn index_created_slot(&self, key: &(AccountId, Asset)) {
+        #[cfg(test)]
+        self.wait_index_update_hook();
+        let _: Result<(), std::convert::Infallible> = self.index.with_mut_or_insert_prune_new_if(
+            key.0,
+            BTreeSet::new,
+            BTreeSet::is_empty,
+            |assets, _| {
+                if self.inner.with(key, |_| ()).is_some() {
+                    assets.insert(key.1.clone());
+                }
+                Ok(())
+            },
+        );
+    }
+
+    fn unindex_removed_slot(&self, key: &(AccountId, Asset)) {
+        #[cfg(test)]
+        self.wait_index_update_hook();
+        let is_empty = self.index.with_mut_if_present(&key.0, |assets| {
+            if self.inner.with(key, |_| ()).is_none() {
+                assets.remove(&key.1);
+            }
+            assets.is_empty()
+        });
+        if is_empty == Some(true) {
+            self.index.remove_if(&key.0, BTreeSet::is_empty);
+        }
+    }
+
+    #[cfg(test)]
+    fn set_index_update_hook(&self, entered: Arc<Barrier>, release: Arc<Barrier>) {
+        *self.index_update_hook.lock() = Some((entered, release));
+    }
+
+    #[cfg(test)]
+    fn wait_index_update_hook(&self) {
+        let hook = self.index_update_hook.lock().take();
+        if let Some((entered, release)) = hook {
+            entered.wait();
+            release.wait();
+        }
     }
 
     /// Number of entries.
@@ -178,7 +286,7 @@ mod tests {
     use crate::param::{AccountId, Asset, PositionSize};
     use crate::storage::{LockingPolicyFactory, NoLocking};
 
-    use super::{Holdings, HoldingsStore};
+    use super::{BTreeSet, Holdings, HoldingsStore};
 
     type TestStore = HoldingsStore<<NoLocking as LockingPolicyFactory>::Policy>;
 
@@ -448,5 +556,412 @@ mod tests {
             store.is_empty(),
             "rollback must remove the new entry on Err"
         );
+    }
+
+    #[test]
+    fn with_mut_lists_created_asset() {
+        let store = store();
+        let key = (account(1), aapl());
+
+        let output = store.with_mut(key, Holdings::zero, |slot, is_new| {
+            assert!(is_new);
+            *slot = holdings("5", "0");
+            7
+        });
+
+        assert_eq!(output, 7);
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([aapl()])),
+            "created asset must be indexed"
+        );
+    }
+
+    #[test]
+    fn with_mut_or_insert_lists_created_asset_on_success() {
+        let store = store();
+
+        let result =
+            store.with_mut_or_insert((account(1), aapl()), Holdings::zero, |slot, is_new| {
+                assert!(is_new);
+                *slot = holdings("5", "0");
+                Ok::<_, ()>(7)
+            });
+
+        assert_eq!(result, Ok(7));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([aapl()])),
+            "successful insertion must index the asset"
+        );
+    }
+
+    #[test]
+    fn prune_new_if_zero_lists_nonzero_asset() {
+        let store = store();
+
+        let result = store.with_mut_or_insert_prune_new_if_zero(
+            (account(1), aapl()),
+            Holdings::zero,
+            |slot, is_new| {
+                assert!(is_new);
+                *slot = holdings("5", "0");
+                Ok::<_, ()>(7)
+            },
+        );
+
+        assert_eq!(result, Ok(7));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([aapl()])),
+            "nonzero new slot must be indexed"
+        );
+    }
+
+    #[test]
+    fn with_mut_or_insert_error_leaves_no_account_index() {
+        let store = store();
+        let key = (account(1), aapl());
+
+        let result = store.with_mut_or_insert(key.clone(), Holdings::zero, |slot, is_new| {
+            assert!(is_new);
+            *slot = holdings("5", "0");
+            Err::<(), _>("fail")
+        });
+
+        assert_eq!(result, Err("fail"));
+        assert_eq!(store.get(&key), None);
+        assert_eq!(
+            store.account_assets(&account(1)),
+            None,
+            "rolled-back new slot must leave no account index"
+        );
+    }
+
+    #[test]
+    fn prune_new_if_zero_leaves_no_account_index() {
+        let store = store();
+        let key = (account(1), aapl());
+
+        let result = store.with_mut_or_insert_prune_new_if_zero(
+            key.clone(),
+            || holdings("5", "0"),
+            |slot, is_new| {
+                assert!(is_new);
+                *slot = Holdings::zero();
+                Ok::<_, ()>(7)
+            },
+        );
+
+        assert_eq!(result, Ok(7));
+        assert_eq!(store.get(&key), None);
+        assert_eq!(
+            store.account_assets(&account(1)),
+            None,
+            "pruned new zero slot must leave no account index"
+        );
+    }
+
+    #[test]
+    fn prune_new_if_zero_error_leaves_no_account_index() {
+        let store = store();
+        let key = (account(1), aapl());
+
+        let result =
+            store.with_mut_or_insert_prune_new_if_zero(key.clone(), Holdings::zero, |slot, _| {
+                *slot = holdings("5", "0");
+                Err::<(), _>("fail")
+            });
+
+        assert_eq!(result, Err("fail"));
+        assert_eq!(store.get(&key), None);
+        assert_eq!(
+            store.account_assets(&account(1)),
+            None,
+            "failed prune-new insertion must leave no account index"
+        );
+    }
+
+    #[test]
+    fn remove_drops_asset_and_keeps_account_with_another_slot() {
+        let store = store();
+        let key = (account(1), aapl());
+        store.with_mut(key.clone(), Holdings::zero, |_, _| {});
+        store.with_mut((account(1), usd()), Holdings::zero, |_, _| {});
+
+        assert!(store.remove(&key));
+        assert!(!store.remove(&key));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([usd()])),
+            "removed asset must leave the other live asset indexed"
+        );
+    }
+
+    #[test]
+    fn remove_drops_account_index_with_last_slot() {
+        let store = store();
+        let key = (account(1), aapl());
+        store.with_mut(key.clone(), Holdings::zero, |_, _| {});
+
+        assert!(store.remove(&key));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            None,
+            "last slot removal must drop the empty account set"
+        );
+    }
+
+    #[test]
+    fn remove_if_false_keeps_asset_indexed() {
+        let store = store();
+        let key = (account(1), aapl());
+        store.with_mut(key.clone(), Holdings::zero, |_, _| {});
+
+        assert!(!store.remove_if(&key, |_| false));
+        assert_eq!(store.get(&key), Some(Holdings::zero()));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([aapl()]))
+        );
+    }
+
+    #[test]
+    fn remove_if_true_drops_asset_and_then_last_account_slot() {
+        let store = store();
+        let key = (account(1), aapl());
+        let other = (account(1), usd());
+        store.with_mut(key.clone(), Holdings::zero, |_, _| {});
+        store.with_mut(other.clone(), Holdings::zero, |_, _| {});
+
+        assert!(store.remove_if(&key, Holdings::is_zero));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([usd()])),
+            "conditional removal must unindex only the removed asset"
+        );
+        assert!(store.remove_if(&other, Holdings::is_zero));
+        assert_eq!(store.account_assets(&account(1)), None);
+    }
+
+    #[test]
+    fn remove_if_zero_drops_only_zero_assets() {
+        let store = store();
+        let nonzero = (account(1), aapl());
+        let zero = (account(1), usd());
+        store.with_mut(nonzero.clone(), || holdings("5", "0"), |_, _| {});
+        store.with_mut(zero.clone(), Holdings::zero, |_, _| {});
+
+        assert!(!store.remove_if_zero(&nonzero));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([aapl(), usd()]))
+        );
+        assert!(store.remove_if_zero(&zero));
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([aapl()])),
+            "zero slot removal must unindex only the removed asset"
+        );
+        store.with_mut_if_present(&nonzero, |slot| *slot = Holdings::zero());
+        assert!(store.remove_if_zero(&nonzero));
+        assert_eq!(store.account_assets(&account(1)), None);
+    }
+
+    #[test]
+    fn accounts_index_only_their_own_assets_in_sorted_order() {
+        let store = store();
+        store.with_mut((account(1), usd()), Holdings::zero, |_, _| {});
+        store.with_mut((account(1), aapl()), Holdings::zero, |_, _| {});
+        store.with_mut((account(2), usd()), Holdings::zero, |_, _| {});
+
+        assert_eq!(
+            store
+                .account_assets(&account(1))
+                .map(|assets| assets.into_iter().collect::<Vec<_>>()),
+            Some(vec![aapl(), usd()])
+        );
+        assert_eq!(
+            store.account_assets(&account(2)),
+            Some(BTreeSet::from([usd()]))
+        );
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.index.len(), 2);
+        assert!(store.remove(&(account(2), usd())));
+        assert_eq!(store.account_assets(&account(2)), None);
+        assert_eq!(
+            store.account_assets(&account(1)),
+            Some(BTreeSet::from([aapl(), usd()]))
+        );
+    }
+
+    #[test]
+    fn full_sync_removal_preserves_recreated_slot_index() {
+        use std::sync::{Arc, Barrier};
+
+        let builder = crate::Engine::builder::<(), (), ()>().full_sync();
+        let store = HoldingsStore::new(builder.storage_builder());
+        let key = (account(1), aapl());
+        store.with_mut(key.clone(), Holdings::zero, |_, _| {});
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        store.set_index_update_hook(entered.clone(), release.clone());
+
+        let removed = std::thread::scope(|scope| {
+            let removal = scope.spawn(|| store.remove(&key));
+            entered.wait();
+            store.with_mut(key.clone(), Holdings::zero, |slot, _| {
+                *slot = holdings("7", "0");
+            });
+            release.wait();
+            removal.join().unwrap()
+        });
+
+        assert!(removed);
+        assert_eq!(
+            store.account_assets(&key.0),
+            Some(BTreeSet::from([key.1.clone()])),
+            "re-created slot must remain indexed"
+        );
+        assert_eq!(store.get(&key), Some(holdings("7", "0")));
+    }
+
+    #[test]
+    fn full_sync_creation_does_not_index_removed_slot() {
+        use std::sync::{Arc, Barrier};
+
+        let builder = crate::Engine::builder::<(), (), ()>().full_sync();
+        let store = HoldingsStore::new(builder.storage_builder());
+        let key = (account(1), aapl());
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        store.set_index_update_hook(entered.clone(), release.clone());
+
+        let removed = std::thread::scope(|scope| {
+            let creation = scope.spawn(|| {
+                store.with_mut(key.clone(), Holdings::zero, |_, _| {});
+            });
+            entered.wait();
+            let removed = store.remove(&key);
+            release.wait();
+            creation.join().unwrap();
+            removed
+        });
+
+        assert!(removed);
+        assert_eq!(
+            store.account_assets(&key.0),
+            None,
+            "removed slot must leave no account index"
+        );
+        assert_eq!(store.get(&key), None);
+    }
+
+    #[test]
+    fn full_sync_index_matches_live_slots_after_concurrent_creation_and_removal() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Barrier;
+
+        let builder = crate::Engine::builder::<(), (), ()>().full_sync();
+        let store = HoldingsStore::new(builder.storage_builder());
+        store.with_mut((account(2), aapl()), Holdings::zero, |_, _| {});
+        let phase = Barrier::new(4);
+        let exact_at_quiescence = AtomicBool::new(true);
+
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let store = &store;
+                let phase = &phase;
+                let exact_at_quiescence = &exact_at_quiescence;
+                scope.spawn(move || {
+                    for round in 0..128 {
+                        for asset in [aapl(), usd()] {
+                            let key = (account(1), asset);
+                            match (worker + round) % 3 {
+                                0 => store.with_mut(key.clone(), Holdings::zero, |slot, _| {
+                                    *slot = holdings("5", "0")
+                                }),
+                                1 => store
+                                    .with_mut_or_insert(key.clone(), Holdings::zero, |slot, _| {
+                                        *slot = holdings("5", "0");
+                                        Ok::<_, ()>(())
+                                    })
+                                    .unwrap(),
+                                _ => store
+                                    .with_mut_or_insert_prune_new_if_zero(
+                                        key.clone(),
+                                        Holdings::zero,
+                                        |slot, _| {
+                                            *slot = holdings("5", "0");
+                                            Ok::<_, ()>(())
+                                        },
+                                    )
+                                    .unwrap(),
+                            }
+                            if (worker + round) % 4 != 0 {
+                                match (worker + round) % 3 {
+                                    0 => {
+                                        store.remove(&key);
+                                    }
+                                    1 => {
+                                        store.remove_if(&key, |_| true);
+                                    }
+                                    _ => {
+                                        store.with_mut_if_present(&key, |slot| {
+                                            *slot = Holdings::zero();
+                                        });
+                                        store.remove_if_zero(&key);
+                                    }
+                                }
+                            }
+                            store.with_mut(key, Holdings::zero, |_, _| {});
+                        }
+                        phase.wait();
+                        if worker == 0 {
+                            let expected: BTreeSet<_> = store
+                                .keys()
+                                .into_iter()
+                                .filter_map(|(owner, asset)| (owner == account(1)).then_some(asset))
+                                .collect();
+                            let expected = if expected.is_empty() {
+                                None
+                            } else {
+                                Some(expected)
+                            };
+                            if store.account_assets(&account(1)) != expected {
+                                exact_at_quiescence.store(false, Ordering::Relaxed);
+                            }
+                        }
+                        phase.wait();
+                    }
+                });
+            }
+        });
+
+        assert!(
+            exact_at_quiescence.load(Ordering::Relaxed),
+            "concurrent index must exactly match live slots at each quiescent point"
+        );
+        let keys = store.keys();
+        for owner in [account(1), account(2)] {
+            let expected: BTreeSet<_> = keys
+                .iter()
+                .filter_map(|(account, asset)| (*account == owner).then_some(asset.clone()))
+                .collect();
+            if expected.is_empty() {
+                assert_eq!(store.account_assets(&owner), None);
+            } else {
+                assert_eq!(store.account_assets(&owner), Some(expected));
+            }
+        }
+        for owner in store.index.keys() {
+            assert!(
+                store
+                    .index
+                    .with(&owner, |assets| !assets.is_empty())
+                    .unwrap(),
+                "concurrent removal must leave no empty account set"
+            );
+        }
     }
 }

@@ -1950,6 +1950,119 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	}
 }
 
+// Source: https://wiki.openpit.dev/Spot-Funds/
+// - Self-Computed PnL Kill Switch / Unrealized and Total PnL Bounds
+// Keep this example in sync with the matching wiki example.
+func TestExampleWikiSpotFundsPnlAxisReconfigure(t *testing.T) {
+	// Harness scaffolding: the account buys one AAPL at 100 USD.
+	eb := NewEngineBuilder().FullSync()
+	marketData, err := eb.MarketData(marketdata.InfiniteTTL()).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer marketData.Close()
+	usd, _ := param.NewAsset("USD")
+	aapl, _ := param.NewAsset("AAPL")
+	instrument := param.NewInstrument(aapl, usd)
+	aaplID, err := marketData.Register(instrument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialMark, _ := param.NewPriceFromString("100")
+	if err := marketData.Push(
+		aaplID, marketdata.NewQuote().WithMark(initialMark), 0,
+	); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := eb.Builtin(
+		policies.BuildSpotFunds().WithMarketOrders(marketData, 0),
+	).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Stop()
+	account := param.NewAccountIDFromUint64(99224416)
+	if err := engine.Accounts().SetCurrency(account, usd); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := engine.ApplyAccountAdjustment(
+		account, []model.AccountAdjustment{wikiSeedBalanceAdjustment(t, "1000")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seed.BatchError.IsSet() {
+		t.Fatalf("seed rejected: %v", seed.BatchError)
+	}
+	reservation, rejects, err := engine.ExecutePreTrade(wikiExampleOrder(t, "1", "100"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("buy rejected: %v", rejects)
+	}
+	lock, err := reservation.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation.CommitAndClose()
+	report := model.NewExecutionReport()
+	op := model.NewExecutionReportOperation()
+	op.SetInstrument(instrument)
+	op.SetAccountID(account)
+	op.SetSide(param.SideBuy)
+	report.SetOperation(op)
+	fill := report.EnsureFillView()
+	quantity, _ := param.NewQuantityFromString("1")
+	zero, _ := param.NewQuantityFromString("0")
+	fill.SetLastTrade(model.NewExecutionReportTrade(initialMark, quantity))
+	fill.SetRemainingReservedQuantity(zero)
+	if err := fill.SetLock(lock.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	fill.SetIsFinal(true)
+	bought, err := engine.ApplyExecutionReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bought.AccountBlocks) != 0 {
+		t.Fatalf("buy blocked: %v", bought.AccountBlocks)
+	}
+
+	mark, _ := param.NewPriceFromString("90")
+	if err := marketData.Push(
+		aaplID,
+		marketdata.NewQuote().WithMark(mark),
+		0,
+	); err != nil {
+		panic(err)
+	}
+	lower, _ := param.NewPnlFromString("-5")
+	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   usd,
+		LowerBound: optional.Some(lower),
+	}
+	retune, err := engine.Configure().SpotFundsPnlBoundsAxis(
+		policies.SpotFundsPolicyName,
+		policies.SpotFundsPnlBoundsAxisAccountUnrealized,
+		optional.Some(&barrier), nil, nil,
+	)
+	if err != nil {
+		panic(err)
+	}
+	if len(retune.AccountBlocks) != 1 {
+		panic("expected one unrealized PnL block")
+	}
+	outcome := retune.AccountBlocks[0]
+	if outcome.AccountID != account ||
+		outcome.Block.Code != reject.CodePnlKillSwitchTriggered {
+		panic("expected the account's PnL kill-switch block")
+	}
+	if outcome.Block.Reason != "pnl kill switch triggered" {
+		panic("expected a PnL breach, not a calculation halt")
+	}
+}
+
 // Source: https://wiki.openpit.dev/Pre-Trade-Lock/
 // - Persisting and Restoring a Lock
 func TestExampleWikiPreTradeLockPersistence(t *testing.T) {

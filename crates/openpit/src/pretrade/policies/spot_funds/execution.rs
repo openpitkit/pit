@@ -107,7 +107,7 @@ where
         }
     }
 
-    fn account_currency_factor(
+    pub(super) fn account_currency_factor(
         &self,
         account_id: AccountId,
         account_group: Option<AccountGroupId>,
@@ -158,19 +158,6 @@ where
         trade_price_with_factor(trade_price, factor).map(Some)
     }
 
-    pub(super) fn pnl_barrier_for(
-        &self,
-        account_id: AccountId,
-        account_group_id: Option<crate::param::AccountGroupId>,
-        account_currency: Option<&Asset>,
-    ) -> Option<super::SpotFundsPnlBoundsBarrier> {
-        self.settings.with(|settings| {
-            settings
-                .pnl_barrier_for(account_id, account_group_id, account_currency)
-                .cloned()
-        })
-    }
-
     fn fee_pnl_delta(
         &self,
         account_id: AccountId,
@@ -208,6 +195,14 @@ where
         }
     }
 
+    // Available and held quantities both belong to the position.
+    pub(super) fn owned_quantity(holdings: Holdings) -> Result<PositionSize, PnlHaltReason> {
+        holdings
+            .available()
+            .checked_add(holdings.held())
+            .map_err(|_| PnlHaltReason::ArithmeticOverflow)
+    }
+
     // A fill realizes P&L only when it reduces, closes or reverses what is
     // owned. Yields the signed owned size for such a fill, and `None` when the
     // fill realizes nothing, which leaves the account line unengaged.
@@ -215,10 +210,7 @@ where
         holdings: Holdings,
         signed_quantity: PositionSize,
     ) -> Result<Option<PositionSize>, PnlHaltReason> {
-        let owned = holdings
-            .available()
-            .checked_add(holdings.held())
-            .map_err(|_| PnlHaltReason::ArithmeticOverflow)?;
+        let owned = Self::owned_quantity(holdings)?;
         let owned_decimal = owned.to_decimal();
         let signed_quantity = signed_quantity.to_decimal();
         let realizes = owned_decimal != Decimal::ZERO
@@ -239,7 +231,10 @@ where
         }
     }
 
-    fn select_pnl_halt_reason(halt_reason: &mut Option<PnlHaltReason>, candidate: PnlHaltReason) {
+    pub(super) fn select_pnl_halt_reason(
+        halt_reason: &mut Option<PnlHaltReason>,
+        candidate: PnlHaltReason,
+    ) {
         let replace = match *halt_reason {
             Some(current) => {
                 Self::pnl_halt_reason_priority(candidate) < Self::pnl_halt_reason_priority(current)
@@ -253,7 +248,7 @@ where
 
     // Account PnL derives the event contribution from quantity and cost basis,
     // never from the position ledger's sticky state or emitted delta.
-    fn account_position_pnl_contribution(
+    pub(super) fn account_position_pnl_contribution(
         holdings: Holdings,
         signed_quantity: PositionSize,
         price: Option<Price>,
@@ -434,7 +429,9 @@ where
     #[allow(clippy::too_many_arguments)]
     fn apply_execution_fee(
         &self,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_group: Option<AccountGroupId>,
+        account_currency: &Option<Asset>,
+        settings: &super::SpotFundsSettings,
         account_id: AccountId,
         underlying_asset: &Asset,
         settlement_asset: &Asset,
@@ -451,8 +448,6 @@ where
             });
         }
 
-        let account_group = ctx.state_account_group();
-        let account_currency = ctx.account_currency(account_group);
         let (account_pnl_halt_reason_before, account_pnl_provenance_before) = match self
             .pnl
             .with(&account_id, |entry| (entry.state, entry.assertion_token))
@@ -468,8 +463,9 @@ where
             .unwrap_or(false);
         let mut position_pnl_halt = false;
         let mut position_pnl_halt_reason = None;
-        let pnl_barrier =
-            self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());
+        let pnl_barrier = settings
+            .pnl_barrier_for(account_id, account_group, account_currency.as_ref())
+            .cloned();
         // A barrier currency mismatch is a static configuration fault rather
         // than a consequence of this report, so surfacing it must not depend on
         // the report engaging the account P&L line.
@@ -787,7 +783,9 @@ where
     #[allow(clippy::too_many_arguments)]
     fn apply_trade_fill(
         &self,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_group: Option<AccountGroupId>,
+        account_currency: &Option<Asset>,
+        settings: &super::SpotFundsSettings,
         account_id: AccountId,
         underlying_asset: &Asset,
         settlement_asset: &Asset,
@@ -844,10 +842,9 @@ where
             })
             .flatten();
         let position_pnl_was_halted = position_pnl_halt_reason_before.is_some();
-        let account_group = ctx.state_account_group();
-        let account_currency = ctx.account_currency(account_group);
-        let pnl_barrier =
-            self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());
+        let pnl_barrier = settings
+            .pnl_barrier_for(account_id, account_group, account_currency.as_ref())
+            .cloned();
         // A barrier currency mismatch is a static configuration fault rather
         // than a consequence of this report, so surfacing it must not depend on
         // the report engaging the account P&L line.
@@ -1563,64 +1560,103 @@ where
         let mut account_pnls: Vec<AccountPnlOutcome> = Vec::with_capacity(1);
         let mut deltas = FillCancelDeltas::new();
 
-        if let Some(trade) = request.last_trade {
-            match self.apply_trade_fill(
-                ctx,
-                request.account_id,
-                &underlying_asset,
-                &settlement_asset,
-                request.side,
-                trade,
-                request.fee.as_ref(),
-                &request.lock,
-                &mut deltas,
-            ) {
-                Ok(application) => {
-                    if let Some(account_pnl) = application.account_pnl {
-                        account_pnls.push(account_pnl);
+        let mut apply = |settings: Option<&super::SpotFundsSettings>| {
+            let scope = settings.map(|settings| {
+                let account_group = ctx.state_account_group();
+                let account_currency = ctx.account_currency(account_group);
+                (account_group, account_currency, settings)
+            });
+            if let Some((account_group, ref account_currency, settings)) = scope {
+                if let Some(trade) = request.last_trade {
+                    match self.apply_trade_fill(
+                        account_group,
+                        account_currency,
+                        settings,
+                        request.account_id,
+                        &underlying_asset,
+                        &settlement_asset,
+                        request.side,
+                        trade,
+                        request.fee.as_ref(),
+                        &request.lock,
+                        &mut deltas,
+                    ) {
+                        Ok(application) => {
+                            if let Some(account_pnl) = application.account_pnl {
+                                account_pnls.push(account_pnl);
+                            }
+                            if let Some(block) = application.account_block {
+                                account_blocks.push(block);
+                            }
+                        }
+                        Err(block) => account_blocks.push(block),
                     }
-                    if let Some(block) = application.account_block {
-                        account_blocks.push(block);
+                } else if let Some(fee) = request.fee.as_ref() {
+                    // A structured fee belongs to the execution report, not
+                    // to its optional last trade. Fee-only corrections must
+                    // reach balances and account PnL through the same
+                    // accounting rules.
+                    match self.apply_execution_fee(
+                        account_group,
+                        account_currency,
+                        settings,
+                        request.account_id,
+                        &underlying_asset,
+                        &settlement_asset,
+                        fee,
+                        &mut deltas,
+                    ) {
+                        Ok(application) => {
+                            if let Some(account_pnl) = application.account_pnl {
+                                account_pnls.push(account_pnl);
+                            }
+                            if let Some(block) = application.account_block {
+                                account_blocks.push(block);
+                            }
+                        }
+                        Err(block) => account_blocks.push(block),
                     }
                 }
-                Err(block) => account_blocks.push(block),
             }
-        } else if let Some(fee) = request.fee.as_ref() {
-            // A structured fee belongs to the execution report, not to its
-            // optional last trade. Fee-only corrections must reach balances
-            // and account PnL through the same accounting rules.
-            match self.apply_execution_fee(
-                ctx,
-                request.account_id,
-                &underlying_asset,
-                &settlement_asset,
-                fee,
-                &mut deltas,
-            ) {
-                Ok(application) => {
-                    if let Some(account_pnl) = application.account_pnl {
-                        account_pnls.push(account_pnl);
-                    }
-                    if let Some(block) = application.account_block {
-                        account_blocks.push(block);
-                    }
-                }
-                Err(block) => account_blocks.push(block),
-            }
-        }
 
-        if request.is_final && !request.remaining_reserved_quantity.is_zero() {
-            if let Err(block) = self.apply_cancel_release(
-                request.account_id,
-                &underlying_asset,
-                &settlement_asset,
-                request.side,
-                request.remaining_reserved_quantity,
-                &request.lock,
-                &mut deltas,
-            ) {
-                account_blocks.push(block);
+            if request.is_final && !request.remaining_reserved_quantity.is_zero() {
+                if let Err(block) = self.apply_cancel_release(
+                    request.account_id,
+                    &underlying_asset,
+                    &settlement_asset,
+                    request.side,
+                    request.remaining_reserved_quantity,
+                    &request.lock,
+                    &mut deltas,
+                ) {
+                    account_blocks.push(block);
+                }
             }
+
+            if let Some((account_group, account_currency, settings)) = scope {
+                if account_blocks.is_empty() {
+                    if let Some(block) = self.pnl_axis_block(
+                        settings,
+                        request.account_id,
+                        account_group,
+                        account_currency.as_ref(),
+                        true,
+                    ) {
+                        account_blocks.push(block);
+                    }
+                }
+            }
+        };
+        if request.last_trade.is_some()
+            || request
+                .fee
+                .as_ref()
+                .is_some_and(|fee| !fee.amount.is_zero())
+        {
+            self.settings
+                .with_snapshot(|settings| apply(Some(settings)));
+        } else {
+            apply(None);
         }
 
         let group_id = self.group_id();

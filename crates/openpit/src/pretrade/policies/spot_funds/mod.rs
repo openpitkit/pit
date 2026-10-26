@@ -41,7 +41,7 @@ use crate::pretrade::{
     PolicyAccountAdjustmentResult, PolicyConfigurationResult, PolicyPreTradeResult,
     PolicyRuntimeConfiguration, PostTradeResult, PreTradeContext, Rejects,
 };
-use crate::storage::{CreateStorageFor, LockingPolicyFactory, Storage, StorageBuilder};
+use crate::storage::{ConfigCell, CreateStorageFor, LockingPolicyFactory, Storage, StorageBuilder};
 use crate::{AccountAdjustmentContext, Mutations};
 
 mod adjustment;
@@ -54,6 +54,7 @@ mod pre_trade;
 mod rejects;
 mod retirement;
 mod rollback;
+mod unrealized;
 mod views;
 
 #[cfg(test)]
@@ -65,7 +66,7 @@ pub use market_data::{
 };
 pub use pnl::{
     SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountGroupBarrier,
-    SpotFundsPnlBoundsBarrier,
+    SpotFundsPnlBoundsAxis, SpotFundsPnlBoundsBarrier,
 };
 
 const SPOT_FUNDS_POLICY_NAME: &str = "SpotFundsPolicy";
@@ -205,26 +206,11 @@ where
     }
 }
 
-/// Re-evaluates known accounts against an account P&L barrier change.
+/// Judges stored account P&L for changed, still-effective realized barriers.
 ///
-/// A barrier is a control, so arming it, narrowing it, or moving an account
-/// onto a different tier of the cascade must decide the account's fate in that
-/// same call rather than waiting for the account's next fill. Accounts are
-/// evaluated only when their effective barrier changes or an unchanged
-/// account-tier barrier changes currency-match status. An unrelated settings
-/// retune or otherwise unchanged group/global barrier therefore never re-blocks
-/// an account an operator has just unblocked. Removing the last effective
-/// barrier yields no block. Clearing an override can expose a fallback barrier,
-/// which is evaluated normally and can record a block. Neither operation
-/// releases an existing block - a block belongs to the engine and only an
-/// explicit operator action lifts it.
-///
-/// A global barrier change sweeps every account known through P&L, holdings
-/// (including provisional state), explicit account barriers, group membership,
-/// or account currency. An
-/// account/group-only change is narrower: it checks changed account targets
-/// and members of changed groups. Missing P&L is the implicit numeric zero and
-/// is never materialized by this read-only sweep.
+/// Candidate selection and effective-barrier comparison are shared with the
+/// axis sweep. Missing P&L remains implicit zero; this read-only sweep never
+/// materializes it. Existing blocks are released only by an operator.
 pub(crate) fn account_pnl_barrier_change_blocks<StorageFactory>(
     pnl: &AccountPnlStorage<StorageFactory>,
     holdings: &SpotFundsHoldingsStorage<StorageFactory>,
@@ -232,75 +218,23 @@ pub(crate) fn account_pnl_barrier_change_blocks<StorageFactory>(
     current: &SpotFundsSettings,
     memberships: &[(AccountId, AccountGroupId)],
     known_accounts: impl IntoIterator<Item = AccountId>,
-    resolve_account_currency: impl Fn(AccountId, Option<AccountGroupId>) -> Option<Asset>,
+    resolve_account_currency: impl FnMut(AccountId, Option<AccountGroupId>) -> Option<Asset>,
 ) -> Vec<(AccountId, crate::pretrade::AccountBlock)>
 where
     StorageFactory: LockingPolicyFactory,
 {
-    let global_changed = previous.pnl_global_barrier() != current.pnl_global_barrier();
-    let mut changed_accounts = std::collections::BTreeSet::new();
-    for account_id in previous
-        .pnl_account_barriers()
-        .keys()
-        .chain(current.pnl_account_barriers().keys())
-    {
-        if previous.pnl_account_barriers().get(account_id)
-            != current.pnl_account_barriers().get(account_id)
-        {
-            changed_accounts.insert(*account_id);
-        }
-    }
-    let mut changed_groups = std::collections::BTreeSet::new();
-    for group_id in previous
-        .pnl_account_group_barriers()
-        .keys()
-        .chain(current.pnl_account_group_barriers().keys())
-    {
-        if previous.pnl_account_group_barriers().get(group_id)
-            != current.pnl_account_group_barriers().get(group_id)
-        {
-            changed_groups.insert(*group_id);
-        }
-    }
-
-    if !global_changed && changed_accounts.is_empty() && changed_groups.is_empty() {
-        return Vec::new();
-    }
-
-    let memberships = memberships
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let mut candidates = changed_accounts;
-    if global_changed {
-        candidates.extend(pnl.keys());
-        candidates.extend(holdings.keys().into_iter().map(|(account, _)| account));
-        candidates.extend(previous.pnl_account_barriers().keys().copied());
-        candidates.extend(current.pnl_account_barriers().keys().copied());
-        candidates.extend(memberships.keys().copied());
-        candidates.extend(known_accounts);
-    } else if !changed_groups.is_empty() {
-        candidates.extend(
-            memberships
-                .iter()
-                .filter_map(|(account, group)| changed_groups.contains(group).then_some(*account)),
-        );
-    }
-
     let mut blocks = Vec::new();
-    for account_id in candidates {
-        let account_group_id = memberships.get(&account_id).copied();
-        let account_currency = resolve_account_currency(account_id, account_group_id);
-        let Some(current_barrier) =
-            current.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
-        else {
-            continue;
-        };
-        if previous.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
-            == Some(current_barrier)
-        {
-            continue;
-        }
+    for (account_id, _, account_currency, current_barrier) in current
+        .pnl_barriers()
+        .changed_barriers::<StorageFactory, _>(
+            previous.pnl_barriers(),
+            pnl,
+            holdings,
+            memberships,
+            known_accounts,
+            resolve_account_currency,
+        )
+    {
         let (state, provenance) = pnl
             .with(&account_id, |entry| (entry.state, entry.assertion_token))
             .unwrap_or((crate::PnlState::Value(Pnl::ZERO), None));
@@ -315,6 +249,58 @@ where
         blocks.push((account_id, block));
     }
     blocks
+}
+
+type PnlAxisBarrierChanges = std::collections::BTreeMap<
+    AccountId,
+    (
+        Option<AccountGroupId>,
+        Option<Asset>,
+        [Option<SpotFundsPnlBoundsBarrier>; 4],
+    ),
+>;
+
+/// Groups changed, still-effective axis barriers in `ALL` order per account.
+///
+/// Candidate selection and effective-barrier comparison are shared with the
+/// realized sweep. Accounts that it blocked are excluded before valuation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pnl_axis_barrier_changes<StorageFactory>(
+    pnl: &AccountPnlStorage<StorageFactory>,
+    holdings: &SpotFundsHoldingsStorage<StorageFactory>,
+    previous: &SpotFundsSettings,
+    current: &SpotFundsSettings,
+    memberships: &[(AccountId, AccountGroupId)],
+    known_accounts: &[AccountId],
+    resolve_account_currency: &mut impl FnMut(AccountId, Option<AccountGroupId>) -> Option<Asset>,
+    realized_blocks: &std::collections::BTreeSet<AccountId>,
+) -> PnlAxisBarrierChanges
+where
+    StorageFactory: LockingPolicyFactory,
+{
+    let mut changes = std::collections::BTreeMap::new();
+    for (index, axis) in SpotFundsPnlBoundsAxis::ALL.into_iter().enumerate() {
+        for (account, group, currency, barrier) in current
+            .pnl_axis_barriers(axis)
+            .changed_barriers::<StorageFactory, _>(
+                previous.pnl_axis_barriers(axis),
+                pnl,
+                holdings,
+                memberships,
+                known_accounts.iter().copied(),
+                &mut *resolve_account_currency,
+            )
+        {
+            if realized_blocks.contains(&account) {
+                continue;
+            }
+            changes
+                .entry(account)
+                .or_insert_with(|| (group, currency, std::array::from_fn(|_| None)))
+                .2[index] = Some(barrier.clone());
+        }
+    }
+    changes
 }
 
 pub(crate) fn account_pnl_membership_change_block<StorageFactory>(
@@ -827,7 +813,7 @@ where
     Sync: SyncMode,
     Sync::StorageLockingPolicyFactory: LockingPolicyFactory,
     MarketDataSyncMode: MarketDataSync,
-    <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    <Sync::StorageLockingPolicyFactory as LockingPolicyFactory>::Policy: 'static,
 {
     fn name(&self) -> &str {
         Self::NAME
@@ -863,6 +849,24 @@ where
         configuration: PolicyRuntimeConfiguration,
     ) -> PolicyConfigurationResult {
         match configuration {
+            PolicyRuntimeConfiguration::CheckSpotFundsPnlAxes {
+                account_id,
+                account_group_id,
+                account_currency,
+                barriers,
+            } => {
+                let account_blocks = self
+                    .pnl_axis_block_for_barriers(
+                        barriers.each_ref().map(Option::as_ref),
+                        account_id,
+                        account_group_id,
+                        account_currency.as_ref(),
+                        true,
+                    )
+                    .into_iter()
+                    .collect();
+                PolicyConfigurationResult { account_blocks }
+            }
             PolicyRuntimeConfiguration::SetSpotFundsAccountPnl {
                 account_id,
                 account_group_id,
@@ -870,19 +874,25 @@ where
                 state,
             } => {
                 self.set_account_pnl_state(account_id, state);
-                let account_blocks = self
-                    .pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
-                    .as_ref()
-                    .and_then(|barrier| {
-                        rejects::account_pnl_block_for_state(
-                            account_currency.as_ref(),
-                            state,
-                            barrier,
-                            None,
-                        )
-                    })
-                    .into_iter()
-                    .collect();
+                let account_blocks = self.settings.with(|settings| {
+                    let currency = account_currency.as_ref();
+                    settings
+                        .pnl_barrier_for(account_id, account_group_id, currency)
+                        .and_then(|barrier| {
+                            rejects::account_pnl_block_for_state(currency, state, barrier, None)
+                        })
+                        .or_else(|| {
+                            self.pnl_axis_block(
+                                settings,
+                                account_id,
+                                account_group_id,
+                                currency,
+                                false,
+                            )
+                        })
+                        .into_iter()
+                        .collect()
+                });
                 PolicyConfigurationResult { account_blocks }
             }
         }

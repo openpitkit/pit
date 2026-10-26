@@ -38,8 +38,8 @@ use openpit::pretrade::policies::{
     PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings, RateLimit,
     RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
-    SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPolicy, SpotFundsPricingSource,
-    SpotFundsSettings,
+    SpotFundsLimitMode, SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPnlBoundsAxis,
+    SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings,
 };
 use openpit::pretrade::{PreTradePolicy, RejectCode, RejectScope, DEFAULT_POLICY_GROUP_ID};
 use openpit::storage::{FullLocking, IndexLocking, NoLocking};
@@ -1805,6 +1805,122 @@ fn seed_spot(engine: &SpotEngine, account: u64, asset_code: &str, amount: &str) 
     engine
         .apply_account_adjustment(AccountId::from_u64(account), &[adj])
         .expect("seed must succeed");
+}
+
+#[test]
+fn configure_spot_funds_axis_retune_returns_only_new_changed_barrier_blocks() {
+    for (axis, label, suffix) in [
+        (
+            SpotFundsPnlBoundsAxis::AccountUnrealized,
+            "account unrealized pnl",
+            "",
+        ),
+        (
+            SpotFundsPnlBoundsAxis::AccountTotal,
+            "account total pnl",
+            "",
+        ),
+        (
+            SpotFundsPnlBoundsAxis::PositionUnrealized,
+            "position unrealized pnl",
+            ", asset AAPL",
+        ),
+        (
+            SpotFundsPnlBoundsAxis::PositionTotal,
+            "position total pnl",
+            ", asset AAPL",
+        ),
+    ] {
+        for narrowing in [false, true] {
+            let (engine, _) = build_spot_market_engine(0, "90");
+            let account = AccountId::from_u64(1);
+            engine
+                .accounts()
+                .set_currency(account, Asset::new("USD").unwrap());
+            let mut position = spot_balance("AAPL", "2");
+            position.balance_average_entry_price = Some(Price::from_str("100").unwrap());
+            engine
+                .apply_account_adjustment(account, &[position])
+                .unwrap();
+            let barrier = |lower: &str| SpotFundsPnlBoundsBarrier {
+                currency: Asset::new("USD").unwrap(),
+                lower_bound: Some(Pnl::from_str(lower).unwrap()),
+                upper_bound: Some(Pnl::from_str("10").unwrap()),
+            };
+            let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+            engine
+                .configure()
+                .spot_funds::<SpotFundsConfigError>(name, |settings| {
+                    settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+                    if narrowing {
+                        settings.set_pnl_axis_global_barrier(axis, Some(barrier("-100")))?;
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            let retuned = engine
+                .configure()
+                .spot_funds::<SpotFundsConfigError>(name, |settings| {
+                    settings.set_pnl_axis_global_barrier(axis, Some(barrier("-10")))
+                })
+                .unwrap();
+            assert_eq!(
+                retuned.account_blocks.len(),
+                1,
+                "Configurator must return a new {axis:?} block, narrowing {narrowing}"
+            );
+            let outcome = &retuned.account_blocks[0];
+            assert_eq!(outcome.account_id, account);
+            assert_eq!(outcome.block.code, RejectCode::PnlKillSwitchTriggered);
+            assert_eq!(outcome.block.reason, "pnl kill switch triggered");
+            assert_eq!(
+                outcome.block.details,
+                format!(
+                    concat!(
+                        "lower bound breached: {label} -20, lower bound -10, ",
+                        "upper bound 10, currency USD{suffix}"
+                    ),
+                    label = label,
+                    suffix = suffix,
+                )
+            );
+            assert!(
+                engine
+                    .start_pre_trade(order_with_price(1, "1", "100"))
+                    .is_err(),
+                "Configurator must record its block"
+            );
+            let already_blocked = engine
+                .configure()
+                .spot_funds::<SpotFundsConfigError>(name, |settings| {
+                    settings.set_pnl_axis_global_barrier(axis, Some(barrier("-5")))
+                })
+                .unwrap();
+            assert!(
+                already_blocked.account_blocks.is_empty(),
+                "Configurator returns only newly inserted blocks"
+            );
+            engine.accounts().unblock(account);
+            let unchanged = engine
+                .configure()
+                .spot_funds::<SpotFundsConfigError>(name, |settings| {
+                    settings.set_global_slippage_bps(12)?;
+                    settings.set_global_limit_mode(SpotFundsLimitMode::Enforce);
+                    settings.set_pnl_axis_global_barrier(axis, Some(barrier("-5")))
+                })
+                .unwrap();
+            assert!(
+                unchanged.account_blocks.is_empty(),
+                "Configurator must not report an unchanged axis block"
+            );
+            assert!(
+                engine
+                    .start_pre_trade(order_with_price(1, "1", "100"))
+                    .is_ok(),
+                "Configurator must preserve the operator's unblock for unchanged axes"
+            );
+        }
+    }
 }
 
 fn assert_market_buy_locks_price(engine: &SpotEngine, account: u64, expected: &str) {

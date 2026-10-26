@@ -58,7 +58,16 @@ pub(super) fn account_pnl_block_for_state(
     if let Some(block) = account_pnl_barrier_currency_mismatch_block(account_currency, barrier) {
         return Some(block);
     }
-    let block = match state {
+    labelled_pnl_block_for_state(state, barrier, super::super::pnl_bounds::REALIZED_PNL_LABEL)
+        .map(|block| block.with_provenance(provenance))
+}
+
+fn labelled_pnl_block_for_state(
+    state: crate::PnlState,
+    barrier: &super::SpotFundsPnlBoundsBarrier,
+    label: &str,
+) -> Option<AccountBlock> {
+    match state {
         crate::PnlState::Value(absolute) => {
             let sides = super::super::pnl_bounds::breached_sides(
                 barrier.lower_bound,
@@ -68,11 +77,12 @@ pub(super) fn account_pnl_block_for_state(
             (!sides.is_empty()).then(|| {
                 super::super::pnl_bounds::pnl_breach_account_block(
                     super::SPOT_FUNDS_POLICY_NAME,
-                    super::super::pnl_bounds::barrier_breach_details(
+                    super::super::pnl_bounds::labelled_barrier_breach_details(
                         &sides,
                         barrier.lower_bound,
                         barrier.upper_bound,
                         absolute,
+                        label,
                         "currency",
                         &barrier.currency,
                     ),
@@ -83,8 +93,7 @@ pub(super) fn account_pnl_block_for_state(
             super::SPOT_FUNDS_POLICY_NAME,
             reason,
         )),
-    };
-    block.map(|block| block.with_provenance(provenance))
+    }
 }
 
 pub(super) fn insufficient_funds_reject(
@@ -125,6 +134,43 @@ pub(super) fn order_value_calculation_failed_reject(
         "order value calculation failed",
         details.into(),
     )
+}
+
+fn pnl_axis_label(axis: super::SpotFundsPnlBoundsAxis) -> &'static str {
+    match axis {
+        super::SpotFundsPnlBoundsAxis::AccountUnrealized => "account unrealized pnl",
+        super::SpotFundsPnlBoundsAxis::AccountTotal => "account total pnl",
+        super::SpotFundsPnlBoundsAxis::PositionUnrealized => "position unrealized pnl",
+        super::SpotFundsPnlBoundsAxis::PositionTotal => "position total pnl",
+    }
+}
+
+pub(super) fn pnl_axis_currency_mismatch_block(
+    axis: super::SpotFundsPnlBoundsAxis,
+    account_currency: Option<&Asset>,
+    barrier: &super::SpotFundsPnlBoundsBarrier,
+) -> Option<AccountBlock> {
+    account_pnl_barrier_currency_mismatch_block(account_currency, barrier).map(|mut block| {
+        block.details = format!("{}: {}", pnl_axis_label(axis), block.details);
+        block
+    })
+}
+
+pub(super) fn pnl_axis_block_for_state(
+    axis: super::SpotFundsPnlBoundsAxis,
+    asset: Option<&Asset>,
+    state: crate::PnlState,
+    barrier: &super::SpotFundsPnlBoundsBarrier,
+) -> Option<AccountBlock> {
+    let label = pnl_axis_label(axis);
+    let mut block = labelled_pnl_block_for_state(state, barrier, label)?;
+    if matches!(state, crate::PnlState::Halted(_)) {
+        block.details = format!("{label}: {}", block.details);
+    }
+    if let Some(asset) = asset {
+        block.details.push_str(&format!(", asset {asset}"));
+    }
+    Some(block)
 }
 
 pub(super) fn account_pnl_halted_block(policy: &str, reason: PnlHaltReason) -> AccountBlock {

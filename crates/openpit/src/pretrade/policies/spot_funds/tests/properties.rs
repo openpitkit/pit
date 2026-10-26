@@ -1182,6 +1182,43 @@ fn every_reservation_is_released(case: &Case) -> Result<(), TestCaseError> {
 proptest! {
     #![proptest_config(config(CASES))]
 
+    #[test]
+    fn position_unrealized_equals_the_realized_delta_of_a_full_close(
+        owned in prop_oneof![-5_000i64..=-1, 1i64..=5_000],
+        average in 1i64..=50_000,
+        price in 0i64..=50_000,
+    ) {
+        let owned = ps(&hundredths(owned));
+        let average = px(&hundredths(average));
+        let price = px(&hundredths(price));
+        let holdings = Holdings::new(owned, PositionSize::ZERO)
+            .with_avg_entry_price(Some(average));
+        let delta = holdings.realize_position_fill(
+            PositionSize::new(-owned.to_decimal()), price,
+        ).unwrap().realized_delta().unwrap();
+        let policy = build_policy_with_market_data(instr("AAPL", "USD"), price, 0);
+        policy.holdings.with_mut((account(1), asset("AAPL")), Holdings::zero, |slot, _| {
+            *slot = holdings;
+        });
+        let mut settings = settings(0);
+        settings.set_pnl_axis_global_barrier(
+            SpotFundsPnlBoundsAxis::PositionUnrealized,
+            Some(SpotFundsPnlBoundsBarrier {
+                currency: asset("USD"),
+                lower_bound: Some(Pnl::ZERO),
+                upper_bound: Some(Pnl::ZERO),
+            }),
+        ).unwrap();
+        let block = policy.pnl_axis_block(&settings, account(1), None, Some(&asset("USD")), false);
+        if delta == Pnl::ZERO {
+            prop_assert!(block.is_none());
+        } else {
+            let side = if delta < Pnl::ZERO { "lower" } else { "upper" };
+            let expected = format!("{side} bound breached: position unrealized pnl {delta}, lower bound 0, upper bound 0, currency USD, asset AAPL");
+            prop_assert_eq!(block.unwrap().details, expected);
+        }
+    }
+
     // Over arbitrary sequences the dry run equals the real check, the
     // verdict equals the model's, and holdings equal the model.
     #[test]

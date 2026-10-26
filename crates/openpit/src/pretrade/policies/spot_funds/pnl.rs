@@ -17,6 +17,51 @@
 
 use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
 
+/// P&L measure bounded by a runtime spot-funds configuration.
+///
+/// Unrealized P&L of a position is the amount a full close of its owned
+/// quantity at the current price would add to realized P&L.
+///
+/// Each axis is configured at the global, account-group and account tiers
+/// and resolves its barrier like the realized bounds: the account tier
+/// applies whatever its currency; account-group, then global barriers apply
+/// only when their currency matches a known account currency. Without a known
+/// account currency, the first in-scope barrier applies. Bounds are compared
+/// as stored and are never FX-converted.
+///
+/// Axes are checked on pre-trade, dry run, a fill (a trade or non-zero fee,
+/// when the report gave no block of its own), an account P&L force-set, and a
+/// retune that changes the axis's effective barrier. An account-group
+/// membership change does not check axes; the next order catches a breach.
+///
+/// A breach or halted value of an axis with an effective barrier blocks the
+/// account with `PnlKillSwitchTriggered` in every limit mode. An account-tier
+/// barrier in a different currency than a known account currency also blocks
+/// it. A position axis compares each position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SpotFundsPnlBoundsAxis {
+    /// Sum of unrealized P&L over the account's positions, in the account
+    /// currency.
+    AccountUnrealized,
+    /// Realized account P&L plus account unrealized P&L.
+    AccountTotal,
+    /// Unrealized P&L of each position, each position compared with the same
+    /// bounds.
+    PositionUnrealized,
+    /// Realized plus unrealized P&L of each position, each position compared
+    /// with the same bounds.
+    PositionTotal,
+}
+
+impl SpotFundsPnlBoundsAxis {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::AccountUnrealized,
+        Self::AccountTotal,
+        Self::PositionUnrealized,
+        Self::PositionTotal,
+    ];
+}
+
 /// Account P&L bounds used by the spot-funds policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsBarrier {
@@ -25,9 +70,10 @@ pub struct SpotFundsPnlBoundsBarrier {
     /// With a known effective account currency, an account-tier mismatch fails
     /// closed and blocks the account; account-group and global mismatches are
     /// skipped. A known-currency account with no account barrier and no matching
-    /// fallback has no effective barrier, but its P&L keeps accumulating and
-    /// publishing. Without an effective currency, the first in-scope barrier
-    /// applies. Bounds are compared as stored and are never FX-converted.
+    /// fallback has no effective barrier, but its realized P&L keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     pub currency: Asset,
     /// Optional lower bound, typically a negative loss limit.
     pub lower_bound: Option<Pnl>,

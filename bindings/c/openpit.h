@@ -335,6 +335,20 @@ typedef OpenPitParamError ** OpenPitOutParamError;
 typedef uint8_t OpenPitPretradePoliciesSpotFundsLimitMode;
 
 /**
+ * Raw selector for a runtime spot-funds P&L measure, with values 0 through 3.
+ *
+ * - 0 (`AccountUnrealized`): sum of unrealized P&L in account currency.
+ * - 1 (`AccountTotal`): realized account P&L plus account unrealized P&L.
+ * - 2 (`PositionUnrealized`): unrealized P&L of each position, compared
+ *   alone.
+ * - 3 (`PositionTotal`): realized plus unrealized P&L of each position.
+ *
+ * Unrealized P&L is the amount a full close of owned quantity at the current
+ * price would add to realized P&L. Every position uses the same bounds.
+ */
+typedef uint8_t OpenPitPretradePoliciesSpotFundsPnlBoundsAxis;
+
+/**
  * Tagged target variants for a spot-funds slippage override.
  *
  * Spot funds overrides use an explicit tagged hierarchy with the variants
@@ -973,6 +987,30 @@ typedef uint8_t OpenPitSettlementUnit;
  */
 #define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY \
     ((OpenPitPretradePoliciesSpotFundsLimitMode) 1)
+
+/**
+ * Bound the sum of unrealized position P&L in the account currency.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_ACCOUNT_UNREALIZED \
+    ((OpenPitPretradePoliciesSpotFundsPnlBoundsAxis) 0)
+
+/**
+ * Bound realized account P&L plus account unrealized P&L.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_ACCOUNT_TOTAL \
+    ((OpenPitPretradePoliciesSpotFundsPnlBoundsAxis) 1)
+
+/**
+ * Bound the unrealized P&L of each position against the same bounds.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_UNREALIZED \
+    ((OpenPitPretradePoliciesSpotFundsPnlBoundsAxis) 2)
+
+/**
+ * Bound realized plus unrealized P&L of each position against the same bounds.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_TOTAL \
+    ((OpenPitPretradePoliciesSpotFundsPnlBoundsAxis) 3)
 
 /**
  * Instrument-level override.
@@ -7716,7 +7754,7 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
  * Adds the built-in spot-funds policy with account P&L bounds.
  *
  * This entry point builds the regular `SpotFundsPolicy` and configures only
- * its P&L-bounds axis. The policy keeps its stable built-in name
+ * its realized P&L bounds. The policy keeps its stable built-in name
  * `"SpotFundsPolicy"`; no separate policy namespace is created. It seeds the
  * funds-limit axis as `TrackOnly` and market pricing as `Mark` / 0 bps / no
  * overrides; tune those regular spot-funds knobs after build with
@@ -7805,7 +7843,7 @@ bool openpit_engine_configure_spot_funds(
 );
 
 /**
- * Retunes the P&L-bounds axis of the built-in spot-funds policy registered
+ * Retunes the realized P&L bounds of the built-in spot-funds policy registered
  * under `name`.
  *
  * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
@@ -7821,17 +7859,17 @@ bool openpit_engine_configure_spot_funds(
  *   openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy
  *   registers under its fixed name `"SpotFundsPolicy"`, so pass that string
  *   here.
- * - This is a partial update (PATCH): each of the three axes (global,
+ * - This is a partial update (PATCH): each of the three tiers (global,
  *   `account_group`, `account`) is replaced only when its `has_*` flag is
- *   `true`; a `has_*` flag set to `false` leaves that axis unchanged.
+ *   `true`; a `has_*` flag set to `false` leaves that tier unchanged.
  * - When `has_global` is `true`, a null `global` clears the global barrier;
  *   a non-null `global` sets it.
  * - When `has_account_group` is `true`, the `account_group_len` entries at
- *   `account_group` replace the whole per-account-group axis; an engaged
+ *   `account_group` replace the whole per-account-group tier; an engaged
  *   empty list (`has_account_group == true`, `account_group_len == 0`)
  *   clears it.
  * - When `has_account` is `true`, the `account_len` entries at `account`
- *   replace the whole per-account axis; an engaged empty list (`has_account
+ *   replace the whole per-account tier; an engaged empty list (`has_account
  *   == true`, `account_len == 0`) clears it.
  * - Each `currency` string view inside a barrier must be valid for the
  *   duration of the call.
@@ -7864,6 +7902,79 @@ OpenPitPretradeAccountBlockOutcomeList *
 openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
     OpenPitEngine * engine,
     OpenPitStringView name,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
+    bool has_global,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
+    size_t account_group_len,
+    bool has_account_group,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
+    size_t account_len,
+    bool has_account,
+    OpenPitConfigureError ** out_error
+);
+
+/**
+ * Retunes one P&L-bounds axis of the built-in spot-funds policy under `name`.
+ *
+ * Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
+ * `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
+ * runs it with no other call on `engine` in flight on any thread, policy
+ * callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
+ * after the account-state writes already in flight.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy and is interpreted as UTF-8. The built-in
+ *   spot-funds builder functions register under `"SpotFundsPolicy"`.
+ * - `axis` selects `AccountUnrealized` (0), `AccountTotal` (1),
+ *   `PositionUnrealized` (2), or `PositionTotal` (3), as defined by
+ *   `OpenPitPretradePoliciesSpotFundsPnlBoundsAxis`.
+ * - Unrealized P&L is what a full close of owned quantity at the current
+ *   price would add to realized P&L. Every position uses the same bounds.
+ * - This is a partial update (PATCH): the global, account-group and account
+ *   tiers are each replaced only when their `has_*` flag is `true`. A false
+ *   flag leaves that tier unchanged and its arguments are ignored.
+ * - When `has_global` is `true`, a null `global` clears the global barrier;
+ *   a non-null `global` sets it.
+ * - When `has_account_group` is `true`, the `account_group_len` entries at
+ *   `account_group` replace that whole tier; an engaged empty list clears
+ *   it.
+ * - When `has_account` is `true`, the `account_len` entries at `account`
+ *   replace that whole tier; an engaged empty list clears it.
+ * - Engaged slices with non-zero lengths must be non-null. Each barrier's
+ *   `currency` string view must be valid for the duration of the call.
+ * - Only the selected axis changes; realized bounds and P&L stay unchanged.
+ * - With an effective barrier, a breach or halt on an axis blocks with
+ *   `PnlKillSwitchTriggered` at pre-trade, dry run, a fill, the account P&L
+ *   force-set, and a retune that changes the axis's effective barrier. A
+ *   fill checks axes for a trade or non-zero fee when the report gave no
+ *   block of its own. Moving an account to another account group does not
+ *   check the axes; the next order catches the breach.
+ *
+ * Success:
+ * - Returns a caller-owned account-block-outcome list, possibly empty;
+ *   release it with `openpit_destroy_pretrade_account_block_outcome_list`.
+ *   Each outcome pairs the engine-selected account with its recorded block.
+ *   Accounts whose effective barrier changes are evaluated before return.
+ *   Removing the last effective barrier reports no block and does not
+ *   release an existing block. Clearing an override can expose a lower-tier
+ *   barrier that is evaluated and may record and report a block.
+ *
+ * Error:
+ * - Returns null; if `out_error` is non-null, writes a caller-owned
+ *   `OpenPitConfigureError` (release with
+ *   `openpit_destroy_configure_error`).
+ * - A null `engine`, null / invalid-UTF-8 `name`, invalid `axis`, or invalid
+ *   barrier argument returns `Validation`.
+ * - An unregistered `name` returns `Unknown`; a name registered to a policy
+ *   other than spot-funds returns `TypeMismatch`.
+ * - In every error case, the settings stay unchanged.
+ */
+OpenPitPretradeAccountBlockOutcomeList *
+openpit_engine_configure_spot_funds_pnl_bounds_axis(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    OpenPitPretradePoliciesSpotFundsPnlBoundsAxis axis,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
     bool has_global,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,

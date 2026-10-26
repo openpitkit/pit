@@ -1622,6 +1622,127 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
 }
 
 #[test]
+fn example_wiki_spot_funds_pnl_axis_reconfigure() -> Result<(), Box<dyn std::error::Error>> {
+    // Source: https://wiki.openpit.dev/Spot-Funds/
+    // - Self-Computed PnL Kill Switch / Unrealized and Total PnL Bounds
+    // Keep this example in sync with the matching wiki example. The engine,
+    // market data and account purchase below are harness scaffolding.
+    use std::sync::Arc;
+
+    use openpit::param::{AccountId, AdjustmentAmount, Asset, PositionSize, Trade};
+    use openpit::pretrade::policies::SpotFundsSettings;
+    use openpit::{
+        AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
+        ExecutionReportFillDetails, QuoteTtl, SpotFundsMarketData, SpotFundsPricingSource,
+        WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+        WithAccountAdjustmentBounds, WithExecutionReportFillDetails,
+    };
+
+    type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
+    type SpotAdjustment = WithAccountAdjustmentAmount<
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
+    >;
+
+    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
+    let market_data = builder.market_data(QuoteTtl::Infinite).build();
+    let usd = Asset::new("USD")?;
+    let instrument = Instrument::new(Asset::new("AAPL")?, usd.clone());
+    let aapl_id = market_data.register(instrument.clone())?;
+    let initial_mark = Price::from_str("100")?;
+    market_data.push(
+        aapl_id,
+        Quote::new().with_mark(initial_mark),
+        std::time::Duration::ZERO,
+    )?;
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
+        Some(SpotFundsMarketData::new(Arc::clone(&market_data))),
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+    let account = AccountId::from_u64(99224416);
+    engine.accounts().set_currency(account, usd.clone());
+    let seed = WithAccountAdjustmentAmount {
+        inner: WithAccountAdjustmentBounds {
+            inner: WithAccountAdjustmentBalanceOperation {
+                inner: AccountAdjustmentAmount::default(),
+                operation: AccountAdjustmentBalanceOperation {
+                    asset: usd.clone(),
+                    average_entry_price: None,
+                },
+            },
+            bounds: AccountAdjustmentBounds::default(),
+        },
+        amount: AccountAdjustmentAmount {
+            balance: Some(AdjustmentAmount::Absolute(PositionSize::from_str("1000")?)),
+            held: None,
+            incoming: None,
+        },
+    };
+    engine.apply_account_adjustment(account, &[seed])?;
+    let mut reservation = engine.execute_pre_trade(aapl_usd_order("1", "100"))?;
+    let lock = reservation.lock().clone();
+    reservation.commit();
+    let report = WithExecutionReportOperation {
+        inner: WithExecutionReportFillDetails {
+            inner: (),
+            fill: ExecutionReportFillDetails {
+                last_trade: Some(Trade {
+                    price: initial_mark,
+                    quantity: Quantity::from_str("1")?,
+                }),
+                fee: None,
+                remaining_reserved_quantity: Quantity::from_str("0")?,
+                lock,
+                is_final: true,
+            },
+        },
+        operation: ExecutionReportOperation {
+            instrument,
+            account_id: account,
+            side: Side::Buy,
+        },
+    };
+    let bought = engine.apply_execution_report(&report);
+    assert!(bought.account_blocks.is_empty());
+
+    use openpit::param::{Pnl, Price};
+    use openpit::pretrade::policies::{
+        SpotFundsConfigError, SpotFundsPnlBoundsAxis, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
+    };
+    use openpit::pretrade::RejectCode;
+    use openpit::{FullSync, Quote};
+
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    market_data.push(
+        aapl_id,
+        Quote::new().with_mark(Price::from_str("90")?),
+        std::time::Duration::ZERO,
+    )?;
+    let lower = Pnl::from_str("-5")?;
+    let retune = engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_axis_global_barrier(
+                SpotFundsPnlBoundsAxis::AccountUnrealized,
+                Some(SpotFundsPnlBoundsBarrier {
+                    currency: usd.clone(),
+                    lower_bound: Some(lower),
+                    upper_bound: None,
+                }),
+            )
+        })?;
+    assert_eq!(retune.account_blocks.len(), 1);
+    let outcome = &retune.account_blocks[0];
+    assert_eq!(outcome.account_id, account);
+    assert_eq!(outcome.block.code, RejectCode::PnlKillSwitchTriggered);
+    assert_eq!(outcome.block.reason, "pnl kill switch triggered");
+    Ok(())
+}
+
+#[test]
 fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Balance-Reconciliation/
     // - Delta Versus Absolute

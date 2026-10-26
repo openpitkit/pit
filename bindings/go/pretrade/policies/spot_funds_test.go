@@ -1582,6 +1582,258 @@ func TestSpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl(t *testing.T) {
 	assertSpotFundsPnlPreTradeReject(t, engine, account)
 }
 
+func TestSpotFundsPnlBoundsAxisSelector(t *testing.T) {
+	tests := []struct {
+		name string
+		axis policies.SpotFundsPnlBoundsAxis
+		want native.PretradePoliciesSpotFundsPnlBoundsAxis
+	}{
+		{"account-unrealized", policies.SpotFundsPnlBoundsAxisAccountUnrealized, native.PretradePoliciesSpotFundsPnlBoundsAxisAccountUnrealized},
+		{"account-total", policies.SpotFundsPnlBoundsAxisAccountTotal, native.PretradePoliciesSpotFundsPnlBoundsAxisAccountTotal},
+		{"position-unrealized", policies.SpotFundsPnlBoundsAxisPositionUnrealized, native.PretradePoliciesSpotFundsPnlBoundsAxisPositionUnrealized},
+		{"position-total", policies.SpotFundsPnlBoundsAxisPositionTotal, native.PretradePoliciesSpotFundsPnlBoundsAxisPositionTotal},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := native.PretradePoliciesSpotFundsPnlBoundsAxis(test.axis); got != test.want {
+				t.Fatalf("axis value = %v, want native %v", got, test.want)
+			}
+			if got := test.axis.Handle(); got != test.want {
+				t.Fatalf("Handle() = %v, want %v", got, test.want)
+			}
+			if got := test.axis.String(); got != test.name {
+				t.Fatalf("String() = %q, want %q", got, test.name)
+			}
+		})
+	}
+	if got := policies.SpotFundsPnlBoundsAxis(4).String(); got != "SpotFundsPnlBoundsAxis(4)" {
+		t.Fatalf("unknown String() = %q, want SpotFundsPnlBoundsAxis(4)", got)
+	}
+}
+
+func newSpotFundsPnlAxisEngine(t *testing.T) (*openpit.Engine, *marketdata.Service) {
+	t.Helper()
+	service := mustMarketDataService(t)
+	t.Cleanup(service.Close)
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds().WithMarketOrders(service, 0)).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	t.Cleanup(engine.Stop)
+	return engine, service
+}
+
+func setSpotFundsPnlAxisMark(t *testing.T, service *marketdata.Service, value string) {
+	t.Helper()
+	price, err := param.NewPriceFromString(value)
+	if err != nil {
+		t.Fatalf("NewPriceFromString(%q) error = %v", value, err)
+	}
+	if _, err := service.PushByInstrument(
+		param.NewInstrument(mustAsset(t, "AAPL"), mustAsset(t, "USD")),
+		marketdata.NewQuote().WithMark(price),
+		0,
+	); err != nil {
+		t.Fatalf("PushByInstrument() error = %v", err)
+	}
+}
+
+func TestSpotFundsPnlBoundsAxisRuntimeArming(t *testing.T) {
+	tests := []struct {
+		axis  policies.SpotFundsPnlBoundsAxis
+		label string
+	}{
+		{policies.SpotFundsPnlBoundsAxisAccountUnrealized, "account unrealized pnl"},
+		{policies.SpotFundsPnlBoundsAxisAccountTotal, "account total pnl"},
+		{policies.SpotFundsPnlBoundsAxisPositionUnrealized, "position unrealized pnl"},
+		{policies.SpotFundsPnlBoundsAxisPositionTotal, "position total pnl"},
+	}
+	for _, test := range tests {
+		t.Run(test.axis.String(), func(t *testing.T) {
+			engine, service := newSpotFundsPnlAxisEngine(t)
+			account := param.NewAccountIDFromUint64(83101)
+			usd := mustAsset(t, "USD")
+			seedSpotFundsLifecycleAccount(t, engine, account, usd)
+			setSpotFundsPnlAxisMark(t, service, "100")
+			applySpotFundsLifecycleFill(t, engine, account)
+			setSpotFundsPnlAxisMark(t, service, "90")
+			barrier := policies.SpotFundsPnlBoundsBarrier{
+				Currency:   usd,
+				LowerBound: optional.Some(mustPnl(t, "-5")),
+			}
+			result, err := engine.Configure().SpotFundsPnlBoundsAxis(
+				policies.SpotFundsPolicyName, test.axis, optional.Some(&barrier), nil, nil,
+			)
+			if err != nil {
+				t.Fatalf("SpotFundsPnlBoundsAxis() error = %v", err)
+			}
+			if len(result.AccountBlocks) != 1 {
+				t.Fatalf("arming AccountBlocks = %v, want one", result.AccountBlocks)
+			}
+			outcome := result.AccountBlocks[0]
+			if outcome.AccountID != account || outcome.Block.Code != reject.CodePnlKillSwitchTriggered {
+				t.Fatalf("arming outcome = %v, want account %v with PnlKillSwitchTriggered", outcome, account)
+			}
+			if !strings.Contains(outcome.Block.Details, test.label) {
+				t.Fatalf("arming Details = %q, want axis label %q", outcome.Block.Details, test.label)
+			}
+		})
+	}
+}
+
+func TestSpotFundsPnlBoundsAxisRuntimeTiers(t *testing.T) {
+	for _, tier := range []string{"group", "account"} {
+		t.Run(tier, func(t *testing.T) {
+			engine, service := newSpotFundsPnlAxisEngine(t)
+			account := param.NewAccountIDFromUint64(83102)
+			other := param.NewAccountIDFromUint64(83103)
+			group := mustAccountGroupID(t, 86)
+			usd := mustAsset(t, "USD")
+			setSpotFundsPnlAxisMark(t, service, "100")
+			for _, id := range []param.AccountID{account, other} {
+				seedSpotFundsLifecycleAccount(t, engine, id, usd)
+				applySpotFundsLifecycleFill(t, engine, id)
+			}
+			if err := engine.Accounts().RegisterGroup([]param.AccountID{account}, group); err != nil {
+				t.Fatalf("RegisterGroup() error = %v", err)
+			}
+			setSpotFundsPnlAxisMark(t, service, "90")
+			barrier := policies.SpotFundsPnlBoundsBarrier{
+				Currency:   usd,
+				LowerBound: optional.Some(mustPnl(t, "-5")),
+			}
+			var groups []policies.SpotFundsPnlBoundsAccountGroupBarrier
+			var accounts []policies.SpotFundsPnlBoundsAccountBarrier
+			if tier == "group" {
+				groups = []policies.SpotFundsPnlBoundsAccountGroupBarrier{{AccountGroupID: group, Barrier: barrier}}
+			} else {
+				accounts = []policies.SpotFundsPnlBoundsAccountBarrier{{AccountID: account, Barrier: barrier}}
+			}
+			result, err := engine.Configure().SpotFundsPnlBoundsAxis(
+				policies.SpotFundsPolicyName, policies.SpotFundsPnlBoundsAxisPositionTotal,
+				optional.None[*policies.SpotFundsPnlBoundsBarrier](), groups, accounts,
+			)
+			if err != nil {
+				t.Fatalf("SpotFundsPnlBoundsAxis() error = %v", err)
+			}
+			if len(result.AccountBlocks) != 1 {
+				t.Fatalf("tier AccountBlocks = %v, want one", result.AccountBlocks)
+			}
+			outcome := result.AccountBlocks[0]
+			if outcome.AccountID != account || outcome.Block.Code != reject.CodePnlKillSwitchTriggered {
+				t.Fatalf("tier outcome = %v, want account %v with PnlKillSwitchTriggered", outcome, account)
+			}
+		})
+	}
+}
+
+func TestSpotFundsPnlBoundsAxisRuntimePatch(t *testing.T) {
+	for _, tier := range []string{"global", "group", "account"} {
+		for _, update := range []string{"unchanged", "clear"} {
+			t.Run(tier+"/"+update, func(t *testing.T) {
+				engine, service := newSpotFundsPnlAxisEngine(t)
+				account := param.NewAccountIDFromUint64(83104)
+				group := mustAccountGroupID(t, 87)
+				usd := mustAsset(t, "USD")
+				barrier := policies.SpotFundsPnlBoundsBarrier{
+					Currency:   usd,
+					LowerBound: optional.Some(mustPnl(t, "-5")),
+				}
+				global := optional.None[*policies.SpotFundsPnlBoundsBarrier]()
+				var groups []policies.SpotFundsPnlBoundsAccountGroupBarrier
+				var accounts []policies.SpotFundsPnlBoundsAccountBarrier
+				switch tier {
+				case "global":
+					global = optional.Some(&barrier)
+				case "group":
+					groups = []policies.SpotFundsPnlBoundsAccountGroupBarrier{{AccountGroupID: group, Barrier: barrier}}
+				case "account":
+					accounts = []policies.SpotFundsPnlBoundsAccountBarrier{{AccountID: account, Barrier: barrier}}
+				}
+				if _, err := engine.Configure().SpotFundsPnlBoundsAxis(
+					policies.SpotFundsPolicyName, policies.SpotFundsPnlBoundsAxisAccountUnrealized,
+					global, groups, accounts,
+				); err != nil {
+					t.Fatalf("initial retune error = %v", err)
+				}
+				global = optional.None[*policies.SpotFundsPnlBoundsBarrier]()
+				groups = nil
+				accounts = nil
+				if update == "clear" {
+					switch tier {
+					case "global":
+						global = optional.Some[*policies.SpotFundsPnlBoundsBarrier](nil)
+					case "group":
+						groups = []policies.SpotFundsPnlBoundsAccountGroupBarrier{}
+					case "account":
+						accounts = []policies.SpotFundsPnlBoundsAccountBarrier{}
+					}
+				}
+				if _, err := engine.Configure().SpotFundsPnlBoundsAxis(
+					policies.SpotFundsPolicyName, policies.SpotFundsPnlBoundsAxisAccountUnrealized,
+					global, groups, accounts,
+				); err != nil {
+					t.Fatalf("patch retune error = %v", err)
+				}
+				seedSpotFundsLifecycleAccount(t, engine, account, usd)
+				if err := engine.Accounts().RegisterGroup([]param.AccountID{account}, group); err != nil {
+					t.Fatalf("RegisterGroup() error = %v", err)
+				}
+				setSpotFundsPnlAxisMark(t, service, "100")
+				applySpotFundsLifecycleFill(t, engine, account)
+				setSpotFundsPnlAxisMark(t, service, "90")
+				if update == "clear" {
+					reservation, rejects, err := engine.ExecutePreTrade(spotFundsLifecycleOrder(t, account))
+					if reservation != nil {
+						reservation.RollbackAndClose()
+					}
+					if err != nil {
+						t.Fatalf("ExecutePreTrade() error = %v", err)
+					}
+					if reservation == nil || len(rejects) != 0 {
+						t.Fatalf("cleared tier result = (%v, %v), want reservation without rejects", reservation, rejects)
+					}
+				} else {
+					assertSpotFundsPnlPreTradeReject(t, engine, account)
+				}
+			})
+		}
+	}
+}
+
+func TestSpotFundsPnlBoundsAxisRuntimeInvalid(t *testing.T) {
+	engine, service := newSpotFundsPnlAxisEngine(t)
+	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   mustAsset(t, "USD"),
+		LowerBound: optional.Some(mustPnl(t, "-5")),
+	}
+	result, err := engine.Configure().SpotFundsPnlBoundsAxis(
+		policies.SpotFundsPolicyName, policies.SpotFundsPnlBoundsAxis(4),
+		optional.Some(&barrier), nil, nil,
+	)
+	var configErr *configure.Error
+	if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
+		t.Fatalf("invalid axis error = %v (%T), want *configure.Error with ErrorKindValidation", err, err)
+	}
+	if len(result.AccountBlocks) != 0 {
+		t.Fatalf("invalid axis AccountBlocks = %v, want none", result.AccountBlocks)
+	}
+	account := param.NewAccountIDFromUint64(83105)
+	seedSpotFundsLifecycleAccount(t, engine, account, barrier.Currency)
+	setSpotFundsPnlAxisMark(t, service, "100")
+	applySpotFundsLifecycleFill(t, engine, account)
+	setSpotFundsPnlAxisMark(t, service, "90")
+	reservation, rejects, err := engine.ExecutePreTrade(spotFundsLifecycleOrder(t, account))
+	if reservation != nil {
+		reservation.RollbackAndClose()
+	}
+	if err != nil || reservation == nil || len(rejects) != 0 {
+		t.Fatalf("after invalid axis result = (%v, %v, %v), want reservation without rejects", reservation, rejects, err)
+	}
+}
+
 func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
 	usd := mustAsset(t, "USD")
 	account := param.NewAccountIDFromUint64(83002)

@@ -96,6 +96,47 @@ type SpotFundsOverrideEntry struct {
 	Override SpotFundsOverride
 }
 
+// SpotFundsPnlBoundsAxis selects a runtime P&L measure to bound. Unrealized P&L
+// is what a full close of owned quantity at the current price would add to
+// realized P&L. Every position uses the same bounds.
+type SpotFundsPnlBoundsAxis uint8
+
+const (
+	// SpotFundsPnlBoundsAxisAccountUnrealized bounds the sum of unrealized
+	// position P&L in account currency.
+	SpotFundsPnlBoundsAxisAccountUnrealized SpotFundsPnlBoundsAxis = SpotFundsPnlBoundsAxis(native.PretradePoliciesSpotFundsPnlBoundsAxisAccountUnrealized)
+	// SpotFundsPnlBoundsAxisAccountTotal bounds realized account P&L plus
+	// account unrealized P&L.
+	SpotFundsPnlBoundsAxisAccountTotal SpotFundsPnlBoundsAxis = SpotFundsPnlBoundsAxis(native.PretradePoliciesSpotFundsPnlBoundsAxisAccountTotal)
+	// SpotFundsPnlBoundsAxisPositionUnrealized bounds the unrealized P&L of
+	// each position against the same bounds.
+	SpotFundsPnlBoundsAxisPositionUnrealized SpotFundsPnlBoundsAxis = SpotFundsPnlBoundsAxis(native.PretradePoliciesSpotFundsPnlBoundsAxisPositionUnrealized)
+	// SpotFundsPnlBoundsAxisPositionTotal bounds realized plus unrealized P&L
+	// of each position against the same bounds.
+	SpotFundsPnlBoundsAxisPositionTotal SpotFundsPnlBoundsAxis = SpotFundsPnlBoundsAxis(native.PretradePoliciesSpotFundsPnlBoundsAxisPositionTotal)
+)
+
+// Handle returns the native selector value.
+func (v SpotFundsPnlBoundsAxis) Handle() native.PretradePoliciesSpotFundsPnlBoundsAxis {
+	return native.PretradePoliciesSpotFundsPnlBoundsAxis(v)
+}
+
+// String returns the axis name, or its numeric value if unknown.
+func (v SpotFundsPnlBoundsAxis) String() string {
+	switch v {
+	case SpotFundsPnlBoundsAxisAccountUnrealized:
+		return "account-unrealized"
+	case SpotFundsPnlBoundsAxisAccountTotal:
+		return "account-total"
+	case SpotFundsPnlBoundsAxisPositionUnrealized:
+		return "position-unrealized"
+	case SpotFundsPnlBoundsAxisPositionTotal:
+		return "position-total"
+	default:
+		return fmt.Sprintf("SpotFundsPnlBoundsAxis(%d)", uint8(v))
+	}
+}
+
 // SpotFundsPnlBoundsBarrier defines currency-specific self-computed account
 // P&L bounds. With a known effective account currency, an account-tier
 // mismatch fails closed and blocks the account; account-group and global

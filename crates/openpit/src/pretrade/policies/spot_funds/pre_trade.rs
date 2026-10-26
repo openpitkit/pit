@@ -56,26 +56,39 @@ where
         account_group_id: Option<crate::param::AccountGroupId>,
     ) -> Result<(), Rejects> {
         let has_barrier = settings.has_pnl_barrier_scope(account_id, account_group_id);
-        if !has_barrier {
+        if !has_barrier
+            && !super::SpotFundsPnlBoundsAxis::ALL.into_iter().any(|axis| {
+                settings
+                    .pnl_axis_barriers(axis)
+                    .has_scope(account_id, account_group_id)
+            })
+        {
             return Ok(());
         }
         let account_currency = ctx.account_currency(account_group_id);
         let barrier =
             settings.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref());
-        let Some(barrier) = barrier else {
-            return Ok(());
-        };
-        let state = self.account_pnl_state(account_id);
-        if let Some(block) = super::rejects::account_pnl_block_for_state(
-            account_currency.as_ref(),
-            state,
-            barrier,
-            None,
-        ) {
-            Err(Rejects::from(Reject::from(block)))
-        } else {
-            Ok(())
+        if let Some(barrier) = barrier {
+            let state = self.account_pnl_state(account_id);
+            if let Some(block) = super::rejects::account_pnl_block_for_state(
+                account_currency.as_ref(),
+                state,
+                barrier,
+                None,
+            ) {
+                return Err(Rejects::from(Reject::from(block)));
+            }
         }
+        if let Some(block) = self.pnl_axis_block(
+            settings,
+            account_id,
+            account_group_id,
+            account_currency.as_ref(),
+            false,
+        ) {
+            return Err(Rejects::from(Reject::from(block)));
+        }
+        Ok(())
     }
 
     /// Returns a [`Reject`] appropriate for the given [`SpotFundsPriceError`].
