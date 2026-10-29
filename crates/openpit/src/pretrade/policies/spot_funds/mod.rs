@@ -368,8 +368,11 @@ fn release_account_pnl_lease<StorageFactory>(
 ///
 /// Initial balances are always seeded through the
 /// `apply_account_adjustment` pipeline. Missing `(account, asset)`
-/// holdings are treated as zero and fail reservations through the
-/// regular [`crate::pretrade::RejectCode::InsufficientFunds`] path.
+/// holdings are treated as zero. Under [`SpotFundsLimitMode::Enforce`] a
+/// reservation they cannot cover fails through the regular
+/// [`crate::pretrade::RejectCode::InsufficientFunds`] path; under
+/// [`SpotFundsLimitMode::TrackOnly`] it is recorded and `available` goes
+/// negative.
 ///
 /// A configured position-limit barrier rejects an order whose projected
 /// position exceeds its inclusive bound with
