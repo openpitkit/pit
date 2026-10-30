@@ -66,6 +66,16 @@ const entryPairs = `[${entrySpecifiers
   .map((specifier, index) => `[${JSON.stringify(specifier)}, entry${index}]`)
   .join(", ")}]`;
 
+// The tsc consumer and npm pack tests run CPU-bound child processes, so their
+// duration follows machine load, not the code under test. Measured: tsc takes
+// about 2 s alone and up to 3.6 s inside a full check-full on a saturated
+// machine (load average around 800 on 14 cores); npm pack about 1 s alone and
+// up to 2.9 s there. Under such load vitest's 5 s default failed the tsc test.
+// 30 s keeps an eightfold margin over the worst measurement and still fails a
+// hung child quickly. The node smokes and browser bundles stay under 0.6 s
+// even then, so they keep the default.
+const childProcessTimeoutMs = 30_000;
+
 interface ExportConditions {
   browser: {
     import: string;
@@ -234,6 +244,11 @@ function runDeclarationConsumer(
           moduleResolution,
           strict: true,
           skipLibCheck: false,
+          // TypeScript's own `lib.*.d.ts` files are not what this smoke
+          // proves, and checking them took about 40% of each tsc run. The
+          // package declarations and every ambient `@types` package stay
+          // fully checked.
+          skipDefaultLibCheck: true,
           noEmit: true,
         },
         files: ["consumer.ts"],
@@ -372,57 +387,61 @@ describe("published package module formats", () => {
     );
   });
 
-  it("packs only the publishable runtime, declarations, and metadata", () => {
-    const npmCache = mkdtempSync(join(tmpdir(), "openpit-npm-cache-"));
-    let packed: Array<{ files: Array<{ path: string }>; version: string }>;
-    try {
-      packed = JSON.parse(
-        execFileSync("npm", ["pack", "--dry-run", "--json"], {
-          cwd: distDir,
-          encoding: "utf8",
-          env: { ...process.env, npm_config_cache: npmCache },
-          stdio: "pipe",
-        }),
-      ) as Array<{ files: Array<{ path: string }>; version: string }>;
-    } finally {
-      rmSync(npmCache, { recursive: true, force: true });
-    }
-    const metadata = packed[0];
-    if (metadata === undefined) {
-      throw new Error("npm pack returned no package metadata");
-    }
-    const files = metadata.files.map(({ path }) => path);
-    expect(files).toContain("node/index.cjs");
-    expect(files).toContain("node/node-cjs-shared.cjs");
-    expect(files).not.toContain("node/node-cjs-shared.js");
-    expect(
-      files.some((path) => /^node\/chunk-.*\.js(?:\.map)?$/.test(path)),
-    ).toBe(false);
-    expect(
-      files.some((path) => /^browser\/chunk-.*\.cjs(?:\.map)?$/.test(path)),
-    ).toBe(false);
-    expect(files).toContain("browser/index.js");
-    expect(files).toContain("types/index.d.ts");
-    expect(files).toContain("README.md");
-    for (const subpath of packageSubpaths) {
-      const entry = subpath === "." ? "index" : subpath.slice(2);
-      expect(files).not.toContain(`node/${entry}.js.map`);
-      expect(files).not.toContain(`node/${entry}.cjs.map`);
-      expect(files).not.toContain(`browser/${entry}.cjs.map`);
-      expect(files).toContain(`browser/${entry}.js.map`);
-    }
-    expect(files).not.toContain("node/runtime.js.map");
-    expect(files).not.toContain("node/runtime.cjs.map");
-    expect(files).not.toContain("browser/runtime.cjs.map");
-    expect(files).toContain("browser/runtime.js.map");
-    expect(files.some((path) => path.startsWith("src-ts/"))).toBe(false);
-    expect(files).not.toContain("Cargo.toml");
+  it(
+    "packs only the publishable runtime, declarations, and metadata",
+    () => {
+      const npmCache = mkdtempSync(join(tmpdir(), "openpit-npm-cache-"));
+      let packed: Array<{ files: Array<{ path: string }>; version: string }>;
+      try {
+        packed = JSON.parse(
+          execFileSync("npm", ["pack", "--dry-run", "--json"], {
+            cwd: distDir,
+            encoding: "utf8",
+            env: { ...process.env, npm_config_cache: npmCache },
+            stdio: "pipe",
+          }),
+        ) as Array<{ files: Array<{ path: string }>; version: string }>;
+      } finally {
+        rmSync(npmCache, { recursive: true, force: true });
+      }
+      const metadata = packed[0];
+      if (metadata === undefined) {
+        throw new Error("npm pack returned no package metadata");
+      }
+      const files = metadata.files.map(({ path }) => path);
+      expect(files).toContain("node/index.cjs");
+      expect(files).toContain("node/node-cjs-shared.cjs");
+      expect(files).not.toContain("node/node-cjs-shared.js");
+      expect(
+        files.some((path) => /^node\/chunk-.*\.js(?:\.map)?$/.test(path)),
+      ).toBe(false);
+      expect(
+        files.some((path) => /^browser\/chunk-.*\.cjs(?:\.map)?$/.test(path)),
+      ).toBe(false);
+      expect(files).toContain("browser/index.js");
+      expect(files).toContain("types/index.d.ts");
+      expect(files).toContain("README.md");
+      for (const subpath of packageSubpaths) {
+        const entry = subpath === "." ? "index" : subpath.slice(2);
+        expect(files).not.toContain(`node/${entry}.js.map`);
+        expect(files).not.toContain(`node/${entry}.cjs.map`);
+        expect(files).not.toContain(`browser/${entry}.cjs.map`);
+        expect(files).toContain(`browser/${entry}.js.map`);
+      }
+      expect(files).not.toContain("node/runtime.js.map");
+      expect(files).not.toContain("node/runtime.cjs.map");
+      expect(files).not.toContain("browser/runtime.cjs.map");
+      expect(files).toContain("browser/runtime.js.map");
+      expect(files.some((path) => path.startsWith("src-ts/"))).toBe(false);
+      expect(files).not.toContain("Cargo.toml");
 
-    const manifest = JSON.parse(
-      readFileSync(join(distDir, "package.json"), "utf8"),
-    ) as { version: string };
-    expect(metadata.version).toBe(manifest.version);
-  });
+      const manifest = JSON.parse(
+        readFileSync(join(distDir, "package.json"), "utf8"),
+      ) as { version: string };
+      expect(metadata.version).toBe(manifest.version);
+    },
+    childProcessTimeoutMs,
+  );
 
   it("loads the root and every subpath through CommonJS require", () => {
     runNode(commonJsSmoke);
@@ -441,6 +460,7 @@ describe("published package module formats", () => {
     (moduleResolution) => {
       runDeclarationConsumer(moduleResolution);
     },
+    childProcessTimeoutMs,
   );
 
   it.each(["esm", "cjs"] as const)(
