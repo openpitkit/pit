@@ -199,7 +199,7 @@ build-release: _ensure-python-env
 # The wasm32 target and wasm-bindgen-cli come from `just install`.
 
 # Build the JS package using the already installed local toolchain/dependencies.
-build-js:
+build-js: ensure-node
     cd bindings/js && npm run build
 
 # Build Go against the debug FFI runtime.
@@ -863,7 +863,7 @@ fmt-go:
     cd bindings/go && gofmt -w .
     gofmt -w examples/go
 # Format JS (prettier --write).
-fmt-js:
+fmt-js: ensure-node
     cd bindings/js && npm run format
 
 # Prepare a release with notes from an absolute path outside the repository.
