@@ -974,19 +974,18 @@ jobs:
           retention-days: 1
 
   # Proposes the released port to microsoft/vcpkg once everything else is
-  # published. It never fails the release: the job shows red, the run stays
-  # green, and the error goes to the run summary. Fix the cause and re-run this
-  # job; it takes the port from the managed registry, so a re-run outlives the
-  # artifacts of this run.
+  # published. A failure makes the run red after all publications finish.
+  # Fix the cause and re-run this job; it takes the port from the managed
+  # registry, so a re-run outlives the artifacts of this run.
   sync-vcpkg-upstream:
     name: Propose microsoft/vcpkg port update
     needs:
       - publish-github-release
+      - publish-go-sources
       - publish-vcpkg-registry
       - verify-tag
     if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
     runs-on: ubuntu-22.04
-    continue-on-error: true
     permissions:
       contents: read
     concurrency:
