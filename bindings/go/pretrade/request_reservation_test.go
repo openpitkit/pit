@@ -412,7 +412,7 @@ func newNativeEngineForPreTradeTests(t *testing.T) native.Engine {
 	if err != nil {
 		t.Fatalf("CreateEngineBuilder() error = %v", err)
 	}
-	if err := native.EngineBuilderAddBuiltinOrderValidation(builder, native.DefaultPolicyGroupID); err != nil {
+	if err := native.EngineBuilderAddBuiltinOrderValidation(builder, native.DefaultPolicyGroupID, nil); err != nil {
 		native.DestroyEngineBuilder(builder)
 		t.Fatalf("EngineBuilderAddBuiltinOrderValidation() error = %v", err)
 	}

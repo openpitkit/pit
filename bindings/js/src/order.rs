@@ -17,8 +17,8 @@
 
 //! Order payload bindings: `Order` and its groups.
 //!
-//! The order is assembled from three optional groups: `OrderOperation`,
-//! `OrderPosition`, and `OrderMargin`. Each group is a mutable builder with a
+//! The order has four optional groups: `OrderOperation`, `OrderPosition`,
+//! `OrderMargin`, and `OrderReview`. Each group is a mutable builder with a
 //! parameterless constructor plus camelCase getters and setters. Every field is
 //! individually optional, with split `underlyingAsset`/`settlementAsset`
 //! values.
@@ -81,6 +81,14 @@ export interface OrderMarginInit {
   autoBorrow?: boolean;
 }
 
+/** Plain-object form of {@link OrderReview}. */
+export interface OrderReviewInit {
+  /** Whether a human has confirmed the order. Defaults to `false`. */
+  confirmed?: boolean;
+  /** Whether an earlier committed with-hold run holds the reservation. Defaults to `false`. */
+  alreadyHeld?: boolean;
+}
+
 /**
  * Plain-object form of {@link Order}. Each group accepts either the typed
  * wrapper or its own plain-object form.
@@ -89,6 +97,8 @@ export interface OrderInit {
   operation?: OrderOperation | OrderOperationInit;
   position?: OrderPosition | OrderPositionInit;
   margin?: OrderMargin | OrderMarginInit;
+  /** An omitted group means the order is unconfirmed and not held. */
+  review?: OrderReview | OrderReviewInit;
 }
 "#;
 
@@ -106,6 +116,10 @@ extern "C" {
     /// An [`OrderMargin`](JsOrderMargin) wrapper or its plain-object form.
     #[wasm_bindgen(typescript_type = "OrderMargin | OrderMarginInit")]
     pub type OrderMarginLike;
+
+    /// An [`OrderReview`](JsOrderReview) wrapper or its plain-object form.
+    #[wasm_bindgen(typescript_type = "OrderReview | OrderReviewInit")]
+    pub type OrderReviewLike;
 
     /// An [`Order`](JsOrder) wrapper or its plain-object form.
     #[wasm_bindgen(typescript_type = "Order | OrderInit")]
@@ -603,13 +617,69 @@ impl JsOrderMargin {
     }
 }
 
-/// Top-level order assembled from the operation, position, and margin groups.
+/// The caller's confirmation of an order after human review.
+///
+/// The engine reads `confirmed` and `alreadyHeld` through its order review
+/// reader. For a confirmed order, every policy instance still runs and the
+/// engine discards review marks. Reject-mode instances and evaluation failures
+/// still reject.
+///
+/// `alreadyHeld` asserts that an earlier committed with-hold run already holds
+/// this order's reservation.
+#[wasm_bindgen(js_name = OrderReview)]
+#[derive(Clone, Default)]
+pub struct JsOrderReview {
+    confirmed: bool,
+    already_held: bool,
+}
+
+#[wasm_bindgen(js_class = OrderReview)]
+impl JsOrderReview {
+    /// Constructs a review group with `confirmed` and `alreadyHeld` set to `false`.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> JsOrderReview {
+        Self::default()
+    }
+
+    /// Whether a human has confirmed the order.
+    #[wasm_bindgen(getter, js_name = confirmed)]
+    pub fn confirmed(&self) -> bool {
+        self.confirmed
+    }
+
+    /// Sets the confirmation flag.
+    #[wasm_bindgen(setter, js_name = confirmed)]
+    pub fn set_confirmed(&mut self, value: bool) {
+        self.confirmed = value;
+    }
+
+    /// Whether an earlier committed with-hold run holds the reservation.
+    #[wasm_bindgen(getter, js_name = alreadyHeld)]
+    pub fn already_held(&self) -> bool {
+        self.already_held
+    }
+
+    /// Sets whether the reservation is already held.
+    #[wasm_bindgen(setter, js_name = alreadyHeld)]
+    pub fn set_already_held(&mut self, value: bool) {
+        self.already_held = value;
+    }
+
+    /// Returns a copy of the review group.
+    #[wasm_bindgen(js_name = clone)]
+    pub fn js_clone(&self) -> JsOrderReview {
+        self.clone()
+    }
+}
+
+/// Top-level order with operation, position, margin, and review groups.
 #[wasm_bindgen(js_name = Order)]
 #[derive(Clone, Default)]
 pub struct JsOrder {
     operation: Option<JsOrderOperation>,
     position: Option<JsOrderPosition>,
     margin: Option<JsOrderMargin>,
+    review: Option<JsOrderReview>,
 }
 
 #[wasm_bindgen(js_class = Order)]
@@ -676,6 +746,25 @@ impl JsOrder {
     #[wasm_bindgen(setter, js_name = margin)]
     pub fn set_margin(&mut self, value: OrderMarginLike) -> Result<(), JsValue> {
         self.margin = coerce_margin(value.into())?;
+        Ok(())
+    }
+
+    /// The review group. A value of `undefined` means the order is unconfirmed
+    /// and not held.
+    #[wasm_bindgen(getter, js_name = review)]
+    pub fn review(&self) -> Option<JsOrderReview> {
+        self.review.clone()
+    }
+
+    /// Sets the review group from an `OrderReview` or `OrderReviewInit`.
+    ///
+    /// # Errors
+    ///
+    /// Throws `TypeError` when the group or its `confirmed` or `alreadyHeld`
+    /// field is invalid.
+    #[wasm_bindgen(setter, js_name = review)]
+    pub fn set_review(&mut self, value: OrderReviewLike) -> Result<(), JsValue> {
+        self.review = coerce_review(value.into())?;
         Ok(())
     }
 
@@ -751,15 +840,34 @@ fn coerce_margin(value: JsValue) -> Result<Option<JsOrderMargin>, JsValue> {
     ))
 }
 
+/// Resolves an optional `OrderReview | OrderReviewInit` argument.
+fn coerce_review(value: JsValue) -> Result<Option<JsOrderReview>, JsValue> {
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    if let Some(wrapped) = extract_cloned_wrapper::<JsOrderReview>(&value)? {
+        return Ok(Some(wrapped));
+    }
+    if is_plain_object(&value) {
+        return Ok(Some(JsOrderReview {
+            confirmed: read_optional_bool(&value, "confirmed")?.unwrap_or(false),
+            already_held: read_optional_bool(&value, "alreadyHeld")?.unwrap_or(false),
+        }));
+    }
+    Err(invalid_field(
+        "review must be an OrderReview or a plain object",
+    ))
+}
+
 impl JsOrder {
-    /// Builds an order from a plain object literal `{ operation?, position?,
-    /// margin? }`, coercing each group from its wrapper or its own literal
-    /// form.
+    /// Builds an order from a plain object literal, coercing each group from
+    /// its wrapper or its own literal form.
     fn from_object(value: &JsValue) -> Result<Self, JsValue> {
         Ok(Self {
             operation: coerce_operation(read_field(value, "operation")?)?,
             position: coerce_position(read_field(value, "position")?)?,
             margin: coerce_margin(read_field(value, "margin")?)?,
+            review: coerce_review(read_field(value, "review")?)?,
         })
     }
 
@@ -791,8 +899,9 @@ impl JsOrder {
     /// group is copied field by field into the `Populated` variant.
     pub(crate) fn to_interop(&self) -> openpit_interop::Order {
         use openpit_interop::{
-            OrderMarginAccess, OrderOperationAccess, OrderPositionAccess, PopulatedOrderMargin,
-            PopulatedOrderOperation, PopulatedOrderPosition,
+            OrderMarginAccess, OrderOperationAccess, OrderPositionAccess, OrderReviewAccess,
+            PopulatedOrderMargin, PopulatedOrderOperation, PopulatedOrderPosition,
+            PopulatedOrderReview,
         };
 
         let operation = match &self.operation {
@@ -824,10 +933,19 @@ impl JsOrder {
             }),
         };
 
+        let review = match &self.review {
+            None => OrderReviewAccess::Absent,
+            Some(review) => OrderReviewAccess::Populated(PopulatedOrderReview {
+                confirmed: review.confirmed,
+                already_held: review.already_held,
+            }),
+        };
+
         openpit_interop::Order {
             operation,
             position,
             margin,
+            review,
         }
     }
 }

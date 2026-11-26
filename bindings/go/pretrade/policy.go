@@ -42,10 +42,10 @@ type Policy interface {
 
 	// CheckPreTradeStart performs start-stage checks against an order.
 	//
-	// Returning a non-empty reject list contributes rejects to the start-stage
-	// reject result. All registered policies are evaluated in registration
-	// order and their reject lists are merged before the engine returns to the
-	// caller.
+	// Return rejects or review marks. Each item's Mode is optional; its zero
+	// value means Reject.
+	// All registered policies are evaluated in registration order. Effective
+	// rejects stop the order. Review marks alone are available via Request.Reviews.
 	//
 	// The order is a view of engine memory and is valid only during this hook.
 	// Its string fields and model values derived from it, including nested
@@ -61,13 +61,15 @@ type Policy interface {
 	CheckPreTradeStart(Context, model.Order) []reject.Reject
 
 	// PerformPreTradeCheck performs main-stage checks and can emit mutations
-	// or rejects.
+	// and return rejects or review marks. Each item's Mode is optional; its zero
+	// value means Reject.
 	//
 	// Policies may inspect the order, append mutations to be committed or
 	// rolled back later, fill the result collector with lock prices and
-	// account-adjustment outcomes, and return zero or more rejects.
-	// An empty rejects list means accept. The engine keeps the result collector
-	// content on acceptance. Drop-copy also keeps it with ordinary,
+	// account-adjustment outcomes, and return zero or more rejects or marks.
+	// An empty list means accept. Use the collector even when returning marks:
+	// the engine retains the result for review with hold and discards it for
+	// review without hold. Drop-copy also keeps it with ordinary,
 	// non-enforcing rejects; evaluation-failure rejects discard it and abort the
 	// drop-copy operation.
 	//

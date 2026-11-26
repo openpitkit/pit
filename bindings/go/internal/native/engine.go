@@ -19,6 +19,7 @@ package native
 
 /*
 #include "openpit.h"
+#include <stdlib.h>
 
 extern const OpenPitPretradeRejectList * openpit_account_adjustment_batch_error_get_rejects(
     const OpenPitAccountAdjustmentBatchError * batch_error
@@ -99,19 +100,56 @@ func EngineBuildErrorGetPolicyGroupID(err EngineBuildError) uint16 {
 	return uint16(C.openpit_engine_build_error_get_policy_group_id(err))
 }
 
-func EngineBuilderAddPreTradePolicy(builder EngineBuilder, policy PretradePreTradePolicy) error {
+// PolicyInstance identifies a registration. An empty Name uses the policy name;
+// the zero Mode is Reject.
+type PolicyInstance struct {
+	Name string
+	Mode PretradeRuleMode
+}
+
+func newPolicyInstance(instance *PolicyInstance) (*C.OpenPitPolicyInstance, func(), error) {
+	if instance == nil {
+		return nil, func() {}, nil
+	}
+	if instance.Mode > RuleModeReviewWithoutHold {
+		return nil, nil, fmt.Errorf("invalid instance mode: %d", instance.Mode)
+	}
+	var name C.OpenPitStringView
+	if len(instance.Name) > 0 {
+		name.ptr = (*C.uint8_t)(C.malloc(C.size_t(len(instance.Name))))
+		name.len = C.size_t(len(instance.Name))
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(name.ptr)), len(instance.Name)), instance.Name)
+	}
+	return &C.OpenPitPolicyInstance{
+		name: name,
+		mode: ruleModeToC(instance.Mode),
+	}, func() { C.free(unsafe.Pointer(name.ptr)) }, nil
+}
+
+func EngineBuilderAddPreTradePolicy(builder EngineBuilder, policy PretradePreTradePolicy, instance *PolicyInstance) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var outError SharedString
-	if !C.openpit_engine_builder_add_pre_trade_policy(builder, policy, C.OpenPitOutError(&outError)) { //nolint:gocritic // CGo out-parameter requires address-of operator
+	if !C.openpit_engine_builder_add_pre_trade_policy(builder, policy, cInstance, C.OpenPitOutError(&outError)) { //nolint:gocritic // CGo out-parameter requires address-of operator
 		return consumeSharedStringAsError(outError, "openpit_engine_builder_add_pre_trade_policy failed")
 	}
 	return nil
 }
 
-func EngineBuilderAddBuiltinOrderValidation(builder EngineBuilder, groupID PolicyGroupID) error {
+func EngineBuilderAddBuiltinOrderValidation(builder EngineBuilder, groupID PolicyGroupID, instance *PolicyInstance) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var outError SharedString
 	if !C.openpit_engine_builder_add_builtin_order_validation_policy(
 		builder,
 		groupID,
+		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return consumeSharedStringAsError(
@@ -129,7 +167,13 @@ func EngineBuilderAddBuiltinRateLimit(
 	assets []PretradePoliciesRateLimitAssetBarrier,
 	accounts []PretradePoliciesRateLimitAccountBarrier,
 	accountAssets []PretradePoliciesRateLimitAccountAssetBarrier,
+	instance *PolicyInstance,
 ) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var assetsPtr *C.OpenPitPretradePoliciesRateLimitAssetBarrier
 	if len(assets) > 0 {
 		assetsPtr = (*C.OpenPitPretradePoliciesRateLimitAssetBarrier)(unsafe.Pointer(&assets[0]))
@@ -154,6 +198,7 @@ func EngineBuilderAddBuiltinRateLimit(
 		C.size_t(len(accounts)),
 		accountAssetsPtr,
 		C.size_t(len(accountAssets)),
+		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	runtime.KeepAlive(assets)
@@ -174,7 +219,13 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 	broker *PretradePoliciesOrderSizeBrokerBarrier,
 	assets []PretradePoliciesOrderSizeAssetBarrier,
 	accountAssets []PretradePoliciesOrderSizeAccountAssetBarrier,
+	instance *PolicyInstance,
 ) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var assetsPtr *C.OpenPitPretradePoliciesOrderSizeAssetBarrier
 	if len(assets) > 0 {
 		assetsPtr = (*C.OpenPitPretradePoliciesOrderSizeAssetBarrier)(unsafe.Pointer(&assets[0]))
@@ -195,6 +246,7 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 		C.size_t(len(assets)),
 		accountAssetsPtr,
 		C.size_t(len(accountAssets)),
+		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	runtime.KeepAlive(assets)
@@ -213,7 +265,13 @@ func EngineBuilderAddBuiltinPnlBoundsKillSwitch(
 	groupID PolicyGroupID,
 	brokerBarriers []PretradePoliciesPnlBoundsBarrier,
 	accountBarriers []PretradePoliciesPnlBoundsAccountBarrier,
+	instance *PolicyInstance,
 ) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var brokerPtr *C.OpenPitPretradePoliciesPnlBoundsBarrier
 	if len(brokerBarriers) > 0 {
 		brokerPtr = (*C.OpenPitPretradePoliciesPnlBoundsBarrier)(unsafe.Pointer(&brokerBarriers[0]))
@@ -233,6 +291,7 @@ func EngineBuilderAddBuiltinPnlBoundsKillSwitch(
 		C.size_t(len(brokerBarriers)),
 		accountPtr,
 		C.size_t(len(accountBarriers)),
+		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	runtime.KeepAlive(brokerBarriers)
@@ -284,7 +343,13 @@ func EngineBuilderAddBuiltinSpotFunds(
 	pricingSource uint8,
 	instrumentOverrides []PretradePoliciesSpotFundsOverride,
 	groupID PolicyGroupID,
+	instance *PolicyInstance,
 ) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var slippagePtr *C.uint16_t
 	if marketSlippageBps != nil {
 		slippageValue := C.uint16_t(*marketSlippageBps)
@@ -306,6 +371,7 @@ func EngineBuilderAddBuiltinSpotFunds(
 		overridesPtr,
 		C.size_t(len(instrumentOverrides)),
 		groupID,
+		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	runtime.KeepAlive(instrumentOverrides)
@@ -325,7 +391,13 @@ func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 	globalBarrier *PretradePoliciesSpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
+	instance *PolicyInstance,
 ) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
 	if globalBarrier != nil {
 		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
@@ -355,6 +427,7 @@ func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 		C.size_t(len(accountGroupBarriers)),
 		accountPtr,
 		C.size_t(len(accountBarriers)),
+		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	runtime.KeepAlive(globalBarrier)
@@ -571,6 +644,17 @@ func EngineApplyAccountAdjustment(
 //------------------------------------------------------------------------------
 // PretradePreTradeRequest
 
+func PretradePreTradeRequestGetReviews(request PretradePreTradeRequest) (PretradeRejectList, error) {
+	var outError SharedString
+	list := C.openpit_pretrade_pre_trade_request_get_reviews(
+		request, C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	)
+	if list == nil {
+		return nil, consumeSharedStringAsError(outError, "openpit_pretrade_pre_trade_request_get_reviews failed")
+	}
+	return list, nil
+}
+
 func PretradePreTradeRequestExecute(
 	request PretradePreTradeRequest,
 ) (PretradePreTradeReservation, PretradeRejectList, error) {
@@ -671,6 +755,10 @@ func PretradePreTradeDryRunReportGetRejects(
 	return C.openpit_pretrade_pre_trade_dry_run_report_get_rejects(report)
 }
 
+func PretradePreTradeDryRunReportGetReviews(report PretradePreTradeDryRunReport) PretradeRejectList {
+	return C.openpit_pretrade_pre_trade_dry_run_report_get_reviews(report)
+}
+
 // PretradePreTradeDryRunReportGetLock returns a caller-owned lock handle.
 // Release it with DestroyPretradePreTradeLock.
 func PretradePreTradeDryRunReportGetLock(
@@ -714,6 +802,10 @@ func PretradePreTradeReservationCommit(reservation PretradePreTradeReservation) 
 
 func PretradePreTradeReservationRollback(reservation PretradePreTradeReservation) {
 	C.openpit_pretrade_pre_trade_reservation_rollback(reservation)
+}
+
+func PretradePreTradeReservationGetReviews(reservation PretradePreTradeReservation) PretradeRejectList {
+	return C.openpit_pretrade_pre_trade_reservation_get_reviews(reservation)
 }
 
 func PretradePreTradeReservationGetLock(

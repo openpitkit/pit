@@ -64,7 +64,7 @@ var acceptingDriverEngine = sync.OnceValue(func() acceptingDriverEngineResult {
 		return acceptingDriverEngineResult{err: err}
 	}
 	if err := native.EngineBuilderAddBuiltinOrderValidation(
-		builder, native.DefaultPolicyGroupID,
+		builder, native.DefaultPolicyGroupID, nil,
 	); err != nil {
 		native.DestroyEngineBuilder(builder)
 		return acceptingDriverEngineResult{err: err}

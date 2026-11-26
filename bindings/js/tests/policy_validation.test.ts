@@ -72,6 +72,211 @@ function sizedOrder(
   };
 }
 
+describe("policy instances", () => {
+  const rejecting: Policy = {
+    name: "RejectPolicy",
+    checkPreTradeStart() {
+      return [
+        { code: "RiskLimitExceeded", reason: "limit", details: "details" },
+      ];
+    },
+    performPreTradeCheck() {
+      return undefined;
+    },
+  };
+  const accepting: Policy = {
+    ...rejecting,
+    name: "AcceptPolicy",
+    checkPreTradeStart() {
+      return [];
+    },
+  };
+  const builtin = (quantity = "0") =>
+    buildOrderSizeLimit().brokerBarrier(
+      new OrderSizeBrokerBarrier(new OrderSizeLimit(quantity, undefined)),
+    );
+  it.each(
+    (
+      [undefined, "Reject", "ReviewWithHold", "ReviewWithoutHold"] as const
+    ).flatMap((mode) =>
+      [false, true].flatMap((custom) =>
+        [false, true].map((alreadyReady) => ({ mode, custom, alreadyReady })),
+      ),
+    ),
+  )(
+    "classifies mode=$mode, custom=$custom, ready=$alreadyReady",
+    ({ mode, custom, alreadyReady }) => {
+      const instance =
+        mode === undefined
+          ? { name: "named-instance" }
+          : { name: "named-instance", mode };
+      let engine: Engine;
+      if (alreadyReady) {
+        const ready = Engine.builder().preTrade(accepting);
+        if (custom) ready.preTrade(rejecting, instance);
+        else ready.builtin(builtin(), instance);
+        engine = ready.build();
+      } else {
+        const builder = Engine.builder();
+        engine = (
+          custom
+            ? builder.preTrade(rejecting, instance)
+            : builder.builtin(builtin(), instance)
+        ).build();
+      }
+      const result = engine.startPreTrade(sizedOrder("1", "10"));
+      if (mode === undefined || mode === "Reject") {
+        expect(result.ok).toBe(false);
+        expect(result.rejects).toHaveLength(1);
+        expect(result.rejects[0]!.mode).toBe("Reject");
+      } else {
+        expect(result.ok).toBe(true);
+        expect(result.rejects).toHaveLength(0);
+        expect(result.reviews).toHaveLength(1);
+        expect(result.reviews[0]).toMatchObject({
+          mode,
+          policy: custom ? "RejectPolicy" : "OrderSizeLimitPolicy",
+        });
+      }
+    },
+  );
+
+  it("defaults to Reject without instance options", () => {
+    expect(
+      Engine.builder()
+        .builtin(builtin())
+        .build()
+        .startPreTrade(sizedOrder("1", "10")).ok,
+    ).toBe(false);
+  });
+
+  it.each(
+    ["reject", "reviewwithhold", "Unknown", ""].flatMap((mode) =>
+      [false, true].flatMap((custom) =>
+        [false, true].map((alreadyReady) => ({ mode, custom, alreadyReady })),
+      ),
+    ),
+  )(
+    "rejects mode=$mode, custom=$custom, ready=$alreadyReady",
+    ({ mode, custom, alreadyReady }) => {
+      const builder = alreadyReady
+        ? Engine.builder().preTrade(accepting)
+        : Engine.builder();
+      const instance = { mode: mode as never };
+      let caught: unknown;
+      try {
+        if (custom) builder.preTrade(rejecting, instance);
+        else builder.builtin(builtin(), instance);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(EngineBuildError);
+      expect(caught).toMatchObject({ kind: "InvalidConfiguration" });
+    },
+  );
+
+  it("keeps the ready builder usable after invalid instance modes", () => {
+    const ready = Engine.builder().preTrade(accepting);
+    const instance = { mode: "Unknown" as never };
+    for (const register of [
+      () => ready.builtin(builtin(), instance),
+      () => ready.preTrade(rejecting, instance),
+    ]) {
+      let caught: unknown;
+      try {
+        register();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(EngineBuildError);
+      expect(caught).toMatchObject({ kind: "InvalidConfiguration" });
+    }
+    ready.preTrade(rejecting);
+    expect(() => ready.build()).not.toThrow();
+  });
+
+  it("rejects duplicate default names", () => {
+    const duplicates = Engine.builder().builtin(builtin());
+    duplicates.builtin(builtin());
+    expect(() => duplicates.build()).toThrow(/duplicate policy name/);
+  });
+
+  it("uses the policy name for an empty instance name", () => {
+    const emptyName = Engine.builder().builtin(builtin(), { name: "" });
+    emptyName.builtin(builtin());
+    expect(() => emptyName.build()).toThrow(
+      /duplicate policy name.*OrderSizeLimitPolicy/,
+    );
+  });
+
+  it("uses the policy name for a null instance name", () => {
+    const nullName = Engine.builder().builtin(builtin(), { name: null });
+    nullName.builtin(builtin());
+    expect(() => nullName.build()).toThrow(
+      /duplicate policy name.*OrderSizeLimitPolicy/,
+    );
+  });
+
+  it.each(["ReviewWithHold", "ReviewWithoutHold"] as const)(
+    "configures instances independently in mode %s",
+    (mode) => {
+      const ready = Engine.builder().builtin(builtin(), {
+        name: "size-reject",
+      });
+      ready.builtin(builtin("100"), { name: "size-review", mode });
+      const engine = ready.build();
+      for (const [name, quantity] of [
+        ["size-reject", "100"],
+        ["size-review", "0"],
+      ] as const) {
+        engine.configure().orderSizeLimit(name, {
+          broker: new OrderSizeBrokerBarrier(
+            new OrderSizeLimit(quantity, undefined),
+          ),
+        });
+      }
+      const result = engine.startPreTrade(sizedOrder("1", "10"));
+      expect(result.ok).toBe(true);
+      expect(result.rejects).toHaveLength(0);
+      expect(result.reviews).toHaveLength(1);
+      expect(result.reviews[0]).toMatchObject({
+        mode,
+        code: "OrderQtyExceedsLimit",
+        scope: "order",
+        policy: "OrderSizeLimitPolicy",
+      });
+      engine.configure().orderSizeLimit("size-reject", {
+        broker: new OrderSizeBrokerBarrier(new OrderSizeLimit("0", undefined)),
+      });
+      const rejected = engine.startPreTrade(sizedOrder("1", "10"));
+      expect(rejected.ok).toBe(false);
+      expect(rejected.rejects).toHaveLength(1);
+      expect(rejected.rejects[0]!.mode).toBe("Reject");
+    },
+  );
+
+  it.each(["name", "mode"])(
+    "propagates an instance %s getter exception unchanged",
+    (property) => {
+      const marker = new Error(`instance.${property} getter failed`);
+      const instance = Object.defineProperty({}, property, {
+        get() {
+          throw marker;
+        },
+      });
+
+      let caught: unknown;
+      try {
+        Engine.builder().builtin(builtin(), instance);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBe(marker);
+    },
+  );
+});
+
 describe("rate-limit boundary conversion", () => {
   it("preserves a fractional sub-millisecond window", () => {
     const limit = new RateLimit(2, 0.0005);

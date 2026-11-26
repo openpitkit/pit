@@ -64,6 +64,11 @@ rules:
           fn $FN(..., $PAYLOAD: &PreTradeContext<$F>, ...) -> $R { ... }
       - pattern-not-inside: |
           fn $FN(..., $PAYLOAD: &PreTradeContext<$F>, ...) { ... }
+      # PreTradeContextOf is the engine's alias for the same context type.
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &PreTradeContextOf<$T>, ...) -> $R { ... }
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &PreTradeContextOf<$T>, ...) { ... }
       - pattern-not-inside: |
           fn $FN(..., $PAYLOAD: &PostTradeContext<$F>, ...) -> $R { ... }
       - pattern-not-inside: |

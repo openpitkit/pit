@@ -506,6 +506,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
     instrument_overrides: *const OpenPitPretradePoliciesSpotFundsOverride,
     overrides_len: usize,
     policy_group_id: u16,
+    instance: *const crate::engine::OpenPitPolicyInstance,
     out_error: OpenPitOutError,
 ) -> bool {
     if builder.is_null() {
@@ -623,7 +624,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
         storage_builder,
     )
     .with_policy_group_id(PolicyGroupId::new(policy_group_id));
-    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
+    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy, instance) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
@@ -664,6 +665,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
     account_group_len: usize,
     account: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier,
     account_len: usize,
+    instance: *const crate::engine::OpenPitPolicyInstance,
     out_error: OpenPitOutError,
 ) -> bool {
     if builder.is_null() {
@@ -780,7 +782,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
             return false;
         }
     };
-    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
+    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy, instance) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
@@ -1653,6 +1655,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         };
@@ -1673,6 +1676,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -1709,6 +1713,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         });
@@ -2033,6 +2038,7 @@ mod tests {
                     std::ptr::null(),
                     0,
                     0,
+                    std::ptr::null(),
                     null_out_error(),
                 )
             });
@@ -2163,6 +2169,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 7,
+                std::ptr::null(),
                 null_out_error(),
             )
         };
@@ -2188,6 +2195,7 @@ mod tests {
                 overrides.as_ptr(),
                 overrides.len(),
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         };
@@ -2210,6 +2218,7 @@ mod tests {
                 overrides.as_ptr(),
                 overrides.len(),
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         };
@@ -2232,6 +2241,7 @@ mod tests {
                 overrides.as_ptr(),
                 overrides.len(),
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         };
@@ -2266,6 +2276,7 @@ mod tests {
                 overrides.as_ptr(),
                 overrides.len(),
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2292,6 +2303,7 @@ mod tests {
                 overrides.as_ptr(),
                 overrides.len(),
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2316,6 +2328,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2341,6 +2354,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2366,6 +2380,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2387,6 +2402,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2411,6 +2427,7 @@ mod tests {
                 std::ptr::null(),
                 1,
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2440,6 +2457,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 &mut err as *mut _ as OpenPitOutError,
             )
         };
@@ -2472,6 +2490,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         };
@@ -2499,6 +2518,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         };
@@ -2520,6 +2540,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         });
@@ -2577,6 +2598,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         });
@@ -2638,6 +2660,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 0,
+                std::ptr::null(),
                 null_out_error(),
             )
         });

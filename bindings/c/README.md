@@ -343,8 +343,9 @@ int main(void) {
         goto cleanup;
     }
 
+    /* Register in the default group with the default policy instance. */
     if (!openpit_engine_builder_add_builtin_order_validation_policy(
-            builder, 0, &error)) {  /* group id 0 = default group */
+            builder, 0, NULL, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_order_validation_policy",
             error);
@@ -352,7 +353,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
-            builder, 0, &pnl_barrier, 1, NULL, 0, &error)) {
+            builder, 0, &pnl_barrier, 1, NULL, 0, NULL, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy",
             error);
@@ -360,7 +361,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_rate_limit_policy(
-            builder, 0, &rate_limit, NULL, 0, NULL, 0, NULL, 0, &error)) {
+            builder, 0, &rate_limit, NULL, 0, NULL, 0, NULL, 0, NULL, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_rate_limit_policy",
             error);
@@ -368,7 +369,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_order_size_limit_policy(
-            builder, 0, &order_size_limit, NULL, 0, NULL, 0, &error)) {
+            builder, 0, &order_size_limit, NULL, 0, NULL, 0, NULL, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_order_size_limit_policy",
             error);

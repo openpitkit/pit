@@ -54,7 +54,7 @@ use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
     DropCopyOperation, DropCopyStartMutationRecorder, PolicyAccountAdjustmentResult,
     PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradePolicy,
-    PreTradeRequest, PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
+    PreTradeRequest, PreTradeReservation, Reject, RejectCode, RejectScope, Rejects, RuleMode,
 };
 use openpit::storage::StorageBuilder;
 use openpit::AccountAdjustmentContext;
@@ -75,15 +75,16 @@ use openpit_interop::{
     AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
     EngineHandle, EngineLocking, ExecutionReportFillAccess, ExecutionReportOperationAccess,
     ExecutionReportPositionImpactAccess, FinancialImpactAccess, OrderMarginAccess,
-    OrderOperationAccess, OrderPositionAccess, PopulatedAccountAdjustmentOperation,
-    PopulatedAccountPnlOperation, PopulatedBalanceOperation, PopulatedExecutionReportFill,
-    PopulatedExecutionReportOperation, PopulatedExecutionReportPositionImpact,
-    PopulatedFinancialImpact, PopulatedOrderMargin, PopulatedOrderOperation,
-    PopulatedOrderPosition, PopulatedPositionOperation, SyncMode,
+    OrderOperationAccess, OrderPositionAccess, OrderReviewAccess,
+    PopulatedAccountAdjustmentOperation, PopulatedAccountPnlOperation, PopulatedBalanceOperation,
+    PopulatedExecutionReportFill, PopulatedExecutionReportOperation,
+    PopulatedExecutionReportPositionImpact, PopulatedFinancialImpact, PopulatedOrderMargin,
+    PopulatedOrderOperation, PopulatedOrderPosition, PopulatedOrderReview,
+    PopulatedPositionOperation, SyncMode,
 };
 use pyo3::basic::CompareOp;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyAttributeError, PyException, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyModule};
 use rust_decimal::prelude::ToPrimitive;
@@ -1209,6 +1210,7 @@ impl PyEngine {
                 }
 
                 Ok(PyStartPreTradeResult {
+                    reviews: request.reviews().iter().map(convert_reject).collect(),
                     request: Some(Py::new(
                         py,
                         PyRequest {
@@ -1226,6 +1228,7 @@ impl PyEngine {
                 Ok(PyStartPreTradeResult {
                     request: None,
                     rejects: rejects.iter().map(convert_reject).collect(),
+                    reviews: Vec::new(),
                 })
             }
         }
@@ -1244,15 +1247,7 @@ impl PyEngine {
                 if let Some(error) = scope.finish() {
                     return Err(error);
                 }
-                Ok(PyExecuteResult {
-                    reservation: Some(Py::new(
-                        py,
-                        PyReservation {
-                            inner: RefCell::new(Some(reservation)),
-                        },
-                    )?),
-                    rejects: Vec::new(),
-                })
+                PyExecuteResult::from_reservation(py, reservation)
             }
             Err(rejects) => {
                 if let Some(error) = scope.finish() {
@@ -1261,6 +1256,7 @@ impl PyEngine {
                 Ok(PyExecuteResult {
                     reservation: None,
                     rejects: rejects.iter().map(convert_reject).collect(),
+                    reviews: Vec::new(),
                 })
             }
         }
@@ -1319,6 +1315,17 @@ impl PyEngine {
         }
     }
 
+    /// Run a non-mutating simulation of the pre-trade start stage.
+    ///
+    /// Raises:
+    ///     TypeError: If `order` is not an order object or a policy returns
+    ///         a non-iterable value other than `None`.
+    ///     ValueError: If a policy return value has an invalid reject field.
+    ///     AttributeError: If a policy return value lacks a required reject field.
+    ///     OverflowError: If a policy return value has a `user_data` token that
+    ///         fits in 64 bits but exceeds the platform's word size.
+    ///     Exception: Exceptions from policy callbacks or from Python code invoked
+    ///         while reading their return values keep their original type.
     #[pyo3(signature = (order))]
     fn start_pre_trade_dry_run(
         &self,
@@ -1334,6 +1341,20 @@ impl PyEngine {
         Ok(PyPreTradeDryRunReport { inner: report })
     }
 
+    /// Run a non-mutating simulation of the pre-trade start and main stages.
+    ///
+    /// Raises:
+    ///     TypeError: If `order` is not an order object, a start-stage policy returns
+    ///         a non-iterable value other than `None`, or a main-stage policy return
+    ///         value has a non-iterable collection or an incompatible field type.
+    ///     ValueError: If a policy return value has an invalid field.
+    ///     openpit.param.ParamError: If a numeric field in a policy return value fails
+    ///         domain parsing or exceeds the supported decimal range.
+    ///     AttributeError: If a policy return value lacks a required attribute.
+    ///     OverflowError: If a policy return value has a `user_data` token that
+    ///         fits in 64 bits but exceeds the platform's word size.
+    ///     Exception: Exceptions from policy callbacks or from Python code invoked
+    ///         while reading their return values keep their original type.
     #[pyo3(signature = (order))]
     fn execute_pre_trade_dry_run(
         &self,
@@ -2142,6 +2163,7 @@ struct PyReject {
     policy: String,
     scope: String,
     user_data: u64,
+    mode: RuleMode,
 }
 
 #[pymethods]
@@ -2171,6 +2193,19 @@ impl PyReject {
         self.scope.clone()
     }
 
+    /// Enforcement mode for the pre-trade start and main stages.
+    ///
+    /// Returns `Reject`, `ReviewWithHold`, or `ReviewWithoutHold`.
+    /// Both stages report evaluation failures as `Reject`.
+    /// Any account-adjustment entry rejects the batch and is reported as
+    /// `Reject`. Drop copy applies bookkeeping in every mode,
+    /// aborts on evaluation failures, and omits review marks and their
+    /// account blocks.
+    #[getter]
+    fn mode(&self) -> &'static str {
+        self.mode.as_str()
+    }
+
     #[getter]
     fn user_data(&self) -> u64 {
         self.user_data
@@ -2178,8 +2213,14 @@ impl PyReject {
 
     fn __repr__(&self) -> String {
         format!(
-            "Reject(code={:?}, reason={:?}, details={:?}, policy={:?}, scope={:?}, user_data={})",
-            self.code, self.reason, self.details, self.policy, self.scope, self.user_data
+            "Reject(code={:?}, reason={:?}, details={:?}, policy={:?}, scope={:?}, mode={:?}, user_data={})",
+            self.code,
+            self.reason,
+            self.details,
+            self.policy,
+            self.scope,
+            self.mode.as_str(),
+            self.user_data
         )
     }
 }
@@ -2188,10 +2229,13 @@ impl PyReject {
 struct PyStartPreTradeResult {
     request: Option<Py<PyRequest>>,
     rejects: Vec<PyReject>,
+    reviews: Vec<PyReject>,
 }
 
 #[pymethods]
 impl PyStartPreTradeResult {
+    /// Whether the start stage found no rejects. Check `reviews` for marks
+    /// that require a human decision before submission.
     #[getter]
     fn ok(&self) -> bool {
         self.rejects.is_empty()
@@ -2207,13 +2251,25 @@ impl PyStartPreTradeResult {
         self.rejects.clone()
     }
 
+    /// Review marks from the start stage. Execute the request to get the final
+    /// verdict and check the execution result's review marks before submission.
+    #[getter]
+    fn reviews(&self) -> Vec<PyReject> {
+        self.reviews.clone()
+    }
+
+    /// Same as `ok`. Check `reviews` before submission.
     fn __bool__(&self) -> bool {
         self.ok()
     }
 
     fn __repr__(&self) -> String {
         if self.rejects.is_empty() {
-            "StartResult(ok=True)".to_owned()
+            if self.reviews.is_empty() {
+                "StartResult(ok=True)".to_owned()
+            } else {
+                format!("StartResult(ok=True, reviews={})", self.reviews.len())
+            }
         } else {
             format!("StartResult(ok=False, rejects={})", self.rejects.len())
         }
@@ -2224,6 +2280,23 @@ impl PyStartPreTradeResult {
 struct PyExecuteResult {
     reservation: Option<Py<PyReservation>>,
     rejects: Vec<PyReject>,
+    reviews: Vec<PyReject>,
+}
+
+impl PyExecuteResult {
+    fn from_reservation(py: Python<'_>, reservation: PreTradeReservation) -> PyResult<Self> {
+        let reviews = reservation.reviews().iter().map(convert_reject).collect();
+        Ok(Self {
+            reservation: Some(Py::new(
+                py,
+                PyReservation {
+                    inner: RefCell::new(Some(reservation)),
+                },
+            )?),
+            rejects: Vec::new(),
+            reviews,
+        })
+    }
 }
 
 #[pyclass(name = "DropCopyResult", module = "openpit.pretrade")]
@@ -2266,6 +2339,8 @@ impl PyDropCopyResult {
 
 #[pymethods]
 impl PyExecuteResult {
+    /// Whether the evaluated stages found no rejects. Check `reviews` for
+    /// marks that require a human decision before submission.
     #[getter]
     fn ok(&self) -> bool {
         self.rejects.is_empty()
@@ -2283,13 +2358,28 @@ impl PyExecuteResult {
         self.rejects.clone()
     }
 
+    /// Review marks from the stages that ran. A non-empty list requires a
+    /// human decision before submission. Commit the reservation immediately
+    /// and keep the order unsent. The reservation keeps holds and policy
+    /// results only if every review mark is with-hold.
+    /// To approve, run the order again with `OrderReview(confirmed=True)`.
+    #[getter]
+    fn reviews(&self) -> Vec<PyReject> {
+        self.reviews.clone()
+    }
+
+    /// Same as `ok`. Check `reviews` before submission.
     fn __bool__(&self) -> bool {
         self.ok()
     }
 
     fn __repr__(&self) -> String {
         if self.ok() {
-            "ExecuteResult(ok=True)".to_owned()
+            if self.reviews.is_empty() {
+                "ExecuteResult(ok=True)".to_owned()
+            } else {
+                format!("ExecuteResult(ok=True, reviews={})", self.reviews.len())
+            }
         } else {
             format!("ExecuteResult(ok=False, rejects={})", self.rejects.len())
         }
@@ -3072,28 +3162,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
                     python_callback_rejects(&self.name)
                 })?;
 
-            let mut rejects = Vec::new();
-            let result = match apply_policy_pre_trade_result(
-                &self.name,
-                decision,
-                mutations,
-                &mut rejects,
-            ) {
-                Ok(result) => result,
-                Err(error) => {
-                    set_python_callback_error(error);
-                    return Err(python_callback_rejects(&self.name));
-                }
-            };
-            if rejects.is_empty() {
-                Ok(result)
-            } else {
-                let rejects = Rejects::from(rejects);
-                Err(match result {
-                    Some(result) => rejects.with_policy_result(result),
-                    None => rejects,
-                })
-            }
+            python_pre_trade_result(&self.name, decision, mutations)
         })
     }
 
@@ -3166,24 +3235,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
                     set_python_callback_error(error);
                     python_callback_rejects(&self.name)
                 })?;
-            let mut rejects = Vec::new();
-            let result = match apply_policy_pre_trade_result(
-                &self.name,
-                decision,
-                mutations,
-                &mut rejects,
-            ) {
-                Ok(result) => result,
-                Err(error) => {
-                    set_python_callback_error(error);
-                    return Err(python_callback_rejects(&self.name));
-                }
-            };
-            if rejects.is_empty() {
-                Ok(result)
-            } else {
-                Err(Rejects::from(rejects))
-            }
+            python_pre_trade_result(&self.name, decision, mutations)
         })
     }
 
@@ -3402,11 +3454,23 @@ fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<Order> {
         }
     };
 
+    let review = match order.review.as_ref() {
+        None => OrderReviewAccess::Absent,
+        Some(py_review) => {
+            let review = py_review.bind(py).borrow();
+            OrderReviewAccess::Populated(PopulatedOrderReview {
+                confirmed: review.confirmed,
+                already_held: review.already_held,
+            })
+        }
+    };
+
     Ok(openpit_interop::RequestWithPayload::new(
         openpit_interop::Order {
             operation,
             position,
             margin,
+            review,
         },
         obj.clone().unbind(),
     ))
@@ -3593,6 +3657,28 @@ fn apply_policy_decision(
     Ok(())
 }
 
+fn python_pre_trade_result(
+    policy_name: &str,
+    decision: Bound<'_, PyAny>,
+    mutations: &mut Mutations,
+) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+    let mut rejects = Vec::new();
+    let result = apply_policy_pre_trade_result(policy_name, decision, mutations, &mut rejects)
+        .map_err(|error| {
+            set_python_callback_error(error);
+            python_callback_rejects(policy_name)
+        })?;
+    if rejects.is_empty() {
+        Ok(result)
+    } else {
+        let rejects = Rejects::from(rejects);
+        Err(match result {
+            Some(result) => rejects.with_policy_result(result),
+            None => rejects,
+        })
+    }
+}
+
 fn apply_policy_pre_trade_result(
     policy_name: &str,
     value: Bound<'_, PyAny>,
@@ -3676,6 +3762,15 @@ fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult<
             .map_err(|_| PyValueError::new_err("reject.scope must be a string"))?
             .as_str(),
     )?;
+    let mode = match value.getattr("mode") {
+        Ok(mode) => parse_rule_mode(&mode.extract::<String>().map_err(|_| {
+            PyValueError::new_err(
+                "reject.mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold'",
+            )
+        })?)?,
+        Err(error) if error.is_instance_of::<PyAttributeError>(value.py()) => RuleMode::Reject,
+        Err(error) => return Err(error),
+    };
     let user_data = if value.hasattr("user_data")? {
         value.getattr("user_data")?.extract::<u64>().map_err(|_| {
             PyValueError::new_err("reject.user_data must be an integer token (default 0)")
@@ -3684,6 +3779,7 @@ fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult<
         0
     };
     Ok(Reject::new(policy_name, scope, code, reason, details)
+        .with_mode(mode)
         .with_user_data(user_data_to_usize(user_data)?))
 }
 
@@ -4061,6 +4157,34 @@ fn parse_reject_scope(value: &str) -> PyResult<RejectScope> {
     }
 }
 
+fn parse_policy_instance(
+    name: Option<String>,
+    mode: Option<&str>,
+) -> PyResult<openpit::PolicyInstance> {
+    Ok(openpit::PolicyInstance {
+        name: name.filter(|name| !name.is_empty()),
+        mode: match mode {
+            Some(mode) => parse_rule_mode(mode).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold', got {mode:?}"
+                ))
+            })?,
+            None => RuleMode::Reject,
+        },
+    })
+}
+
+fn parse_rule_mode(value: &str) -> PyResult<RuleMode> {
+    match value {
+        mode if mode == RuleMode::Reject.as_str() => Ok(RuleMode::Reject),
+        mode if mode == RuleMode::ReviewWithHold.as_str() => Ok(RuleMode::ReviewWithHold),
+        mode if mode == RuleMode::ReviewWithoutHold.as_str() => Ok(RuleMode::ReviewWithoutHold),
+        other => Err(PyValueError::new_err(format!(
+            "reject.mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold', got {other:?}"
+        ))),
+    }
+}
+
 fn parse_reject_code(value: &str) -> PyResult<RejectCode> {
     match value {
         code if code == RejectCode::MissingRequiredField.as_str() => {
@@ -4210,40 +4334,44 @@ impl PyBuilderState {
     fn add_configurable_rate_limit(
         self,
         policy: RateLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
     ) -> Self {
         PyBuilderState::Ready(match self {
-            Self::Synced(builder) => builder.pre_trade(policy),
-            Self::Ready(builder) => builder.pre_trade(policy),
+            Self::Synced(builder) => builder.pre_trade_instance(policy, instance),
+            Self::Ready(builder) => builder.pre_trade_instance(policy, instance),
         })
     }
 
     fn add_configurable_pnl_killswitch(
         self,
         policy: PnlBoundsKillSwitchPolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
     ) -> Self {
         PyBuilderState::Ready(match self {
-            Self::Synced(builder) => builder.pre_trade(policy),
-            Self::Ready(builder) => builder.pre_trade(policy),
+            Self::Synced(builder) => builder.pre_trade_instance(policy, instance),
+            Self::Ready(builder) => builder.pre_trade_instance(policy, instance),
         })
     }
 
     fn add_configurable_order_size_limit(
         self,
         policy: OrderSizeLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
     ) -> Self {
         PyBuilderState::Ready(match self {
-            Self::Synced(builder) => builder.pre_trade(policy),
-            Self::Ready(builder) => builder.pre_trade(policy),
+            Self::Synced(builder) => builder.pre_trade_instance(policy, instance),
+            Self::Ready(builder) => builder.pre_trade_instance(policy, instance),
         })
     }
 
     fn add_configurable_spot_funds(
         self,
         policy: SpotFundsPolicy<openpit_interop::EngineLocking, openpit_interop::EngineLocking>,
+        instance: openpit::PolicyInstance,
     ) -> Self {
         PyBuilderState::Ready(match self {
-            Self::Synced(builder) => builder.pre_trade(policy),
-            Self::Ready(builder) => builder.pre_trade(policy),
+            Self::Synced(builder) => builder.pre_trade_instance(policy, instance),
+            Self::Ready(builder) => builder.pre_trade_instance(policy, instance),
         })
     }
 }
@@ -4279,20 +4407,37 @@ impl PySyncedEngineBuilder {
 
 #[pymethods]
 impl PySyncedEngineBuilder {
-    #[pyo3(signature = (policy))]
-    fn pre_trade(&self, policy: &Bound<'_, PyAny>) -> PyResult<PyReadyEngineBuilder> {
+    /// Register a policy. None or empty name uses the policy name.
+    /// None mode means Reject.
+    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    #[pyo3(signature = (policy, *, name=None, mode=None))]
+    fn pre_trade(
+        &self,
+        policy: &Bound<'_, PyAny>,
+        name: Option<String>,
+        mode: Option<&str>,
+    ) -> PyResult<PyReadyEngineBuilder> {
         let rb = PyReadyEngineBuilder::new(self.sync_policy);
-        rb.push_policy(policy)?;
+        rb.push_policy(policy, parse_policy_instance(name, mode)?)?;
         Ok(rb)
     }
 
+    /// Register a built-in policy. None or empty name uses the policy name.
+    /// None mode means Reject.
+    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    #[pyo3(signature = (builtin_ready_builder, *, name=None, mode=None))]
     fn builtin(
         &self,
         py: Python<'_>,
         builtin_ready_builder: &Bound<'_, PyAny>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<Py<PyReadyEngineBuilder>> {
         let rb = Py::new(py, PyReadyEngineBuilder::new(self.sync_policy))?;
-        builtin_ready_builder.call_method1("_build", (rb.bind(py),))?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("name", name)?;
+        kwargs.set_item("mode", mode)?;
+        builtin_ready_builder.call_method("_build", (rb.bind(py),), Some(&kwargs))?;
         Ok(rb)
     }
 
@@ -4322,6 +4467,7 @@ impl PyReadyEngineBuilder {
         PyReadyEngineBuilder {
             state: RefCell::new(Some(PyBuilderState::Synced(
                 EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
+                    .with_order_review()
                     .sync(openpit_interop::EngineLocking::new(sync_policy)),
             ))),
             sync_policy,
@@ -4338,11 +4484,15 @@ impl PyReadyEngineBuilder {
         Ok(())
     }
 
-    fn add_policy(&self, policy: BoxedPreTradePolicy) -> PyResult<()> {
+    fn add_policy(
+        &self,
+        policy: BoxedPreTradePolicy,
+        instance: openpit::PolicyInstance,
+    ) -> PyResult<()> {
         self.with_state(|state| {
             PyBuilderState::Ready(match state {
-                PyBuilderState::Synced(builder) => builder.pre_trade(policy),
-                PyBuilderState::Ready(builder) => builder.pre_trade(policy),
+                PyBuilderState::Synced(builder) => builder.pre_trade_instance(policy, instance),
+                PyBuilderState::Ready(builder) => builder.pre_trade_instance(policy, instance),
             })
         })
     }
@@ -4350,32 +4500,40 @@ impl PyReadyEngineBuilder {
     fn add_configurable_rate_limit(
         &self,
         policy: RateLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
     ) -> PyResult<()> {
-        self.with_state(|state| state.add_configurable_rate_limit(policy))
+        self.with_state(|state| state.add_configurable_rate_limit(policy, instance))
     }
 
     fn add_configurable_pnl_killswitch(
         &self,
         policy: PnlBoundsKillSwitchPolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
     ) -> PyResult<()> {
-        self.with_state(|state| state.add_configurable_pnl_killswitch(policy))
+        self.with_state(|state| state.add_configurable_pnl_killswitch(policy, instance))
     }
 
     fn add_configurable_order_size_limit(
         &self,
         policy: OrderSizeLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
     ) -> PyResult<()> {
-        self.with_state(|state| state.add_configurable_order_size_limit(policy))
+        self.with_state(|state| state.add_configurable_order_size_limit(policy, instance))
     }
 
     fn add_configurable_spot_funds(
         &self,
         policy: SpotFundsPolicy<openpit_interop::EngineLocking, openpit_interop::EngineLocking>,
+        instance: openpit::PolicyInstance,
     ) -> PyResult<()> {
-        self.with_state(|state| state.add_configurable_spot_funds(policy))
+        self.with_state(|state| state.add_configurable_spot_funds(policy, instance))
     }
 
-    fn push_policy(&self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn push_policy(
+        &self,
+        policy: &Bound<'_, PyAny>,
+        instance: openpit::PolicyInstance,
+    ) -> PyResult<()> {
         let name = policy
             .getattr("name")?
             .extract::<String>()
@@ -4389,24 +4547,32 @@ impl PyReadyEngineBuilder {
         ensure_callable_method(policy, "perform_pre_trade_check")?;
         ensure_callable_method(policy, "apply_execution_report")?;
         ensure_callable_method(policy, "apply_account_adjustment")?;
-        self.add_policy(BoxedPreTradePolicy {
-            inner: Box::new(PythonPreTradePolicyAdapter {
-                name,
-                policy_group_id,
-                policy: policy.clone().unbind(),
-            }),
-        })
+        self.add_policy(
+            BoxedPreTradePolicy {
+                inner: Box::new(PythonPreTradePolicyAdapter {
+                    name,
+                    policy_group_id,
+                    policy: policy.clone().unbind(),
+                }),
+            },
+            instance,
+        )
     }
 }
 
 #[pymethods]
 impl PyReadyEngineBuilder {
-    #[pyo3(signature = (policy))]
+    /// Register a policy. None or empty name uses the policy name.
+    /// None mode means Reject.
+    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    #[pyo3(signature = (policy, *, name=None, mode=None))]
     fn pre_trade<'py>(
         slf: PyRef<'py, Self>,
         policy: &Bound<'_, PyAny>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
-        slf.push_policy(policy)?;
+        slf.push_policy(policy, parse_policy_instance(name, mode)?)?;
         Ok(slf)
     }
 
@@ -4422,7 +4588,8 @@ impl PyReadyEngineBuilder {
     }
 
     // Underscore-prefixed Python name: called only by policy builders' _build hooks.
-    #[pyo3(name = "_add_builtin_rate_limit", signature = (*, policy_group_id = 0, broker = None, asset_barriers = vec![], account_barriers = vec![], account_asset_barriers = vec![]))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(name = "_add_builtin_rate_limit", signature = (*, policy_group_id = 0, broker = None, asset_barriers = vec![], account_barriers = vec![], account_asset_barriers = vec![], name=None, mode=None))]
     fn add_builtin_rate_limit<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
@@ -4430,6 +4597,8 @@ impl PyReadyEngineBuilder {
         asset_barriers: Vec<(String, usize, u64)>,
         account_barriers: Vec<(u64, usize, u64)>,
         account_asset_barriers: Vec<(u64, String, usize, u64)>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
         let policy = {
             let state = slf.state.borrow();
@@ -4446,17 +4615,19 @@ impl PyReadyEngineBuilder {
                 account_asset_barriers,
             )?
         };
-        slf.add_configurable_rate_limit(policy)?;
+        slf.add_configurable_rate_limit(policy, parse_policy_instance(name, mode)?)?;
         Ok(slf)
     }
 
-    #[pyo3(name = "_add_builtin_order_size_limit", signature = (*, policy_group_id = 0, broker = None, asset_barriers = vec![], account_asset_barriers = vec![]))]
+    #[pyo3(name = "_add_builtin_order_size_limit", signature = (*, policy_group_id = 0, broker = None, asset_barriers = vec![], account_asset_barriers = vec![], name=None, mode=None))]
     fn add_builtin_order_size_limit<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
         broker: Option<PyRef<'_, PyOrderSizeLimit>>,
         asset_barriers: Vec<(PyRef<'_, PyOrderSizeLimit>, String)>,
         account_asset_barriers: Vec<(PyRef<'_, PyOrderSizeLimit>, u64, String)>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
         let policy = make_order_size_limit_policy(
             PolicyGroupId::new(policy_group_id),
@@ -4464,16 +4635,18 @@ impl PyReadyEngineBuilder {
             asset_barriers,
             account_asset_barriers,
         )?;
-        slf.add_configurable_order_size_limit(policy)?;
+        slf.add_configurable_order_size_limit(policy, parse_policy_instance(name, mode)?)?;
         Ok(slf)
     }
 
-    #[pyo3(name = "_add_builtin_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, broker_barriers = vec![], account_barriers = vec![]))]
+    #[pyo3(name = "_add_builtin_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, broker_barriers = vec![], account_barriers = vec![], name=None, mode=None))]
     fn add_builtin_pnl_bounds_killswitch<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
         broker_barriers: Vec<Bound<'_, PyAny>>,
         account_barriers: Vec<Bound<'_, PyAny>>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
         let policy = {
             let state = slf.state.borrow();
@@ -4488,22 +4661,26 @@ impl PyReadyEngineBuilder {
                 account_barriers,
             )?
         };
-        slf.add_configurable_pnl_killswitch(policy)?;
+        slf.add_configurable_pnl_killswitch(policy, parse_policy_instance(name, mode)?)?;
         Ok(slf)
     }
 
-    #[pyo3(name = "_add_builtin_order_validation", signature = (*, policy_group_id = 0))]
+    #[pyo3(name = "_add_builtin_order_validation", signature = (*, policy_group_id = 0, name=None, mode=None))]
     fn add_builtin_order_validation<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
-        slf.add_policy(make_order_validation_start_check(PolicyGroupId::new(
-            policy_group_id,
-        )))?;
+        slf.add_policy(
+            make_order_validation_start_check(PolicyGroupId::new(policy_group_id)),
+            parse_policy_instance(name, mode)?,
+        )?;
         Ok(slf)
     }
 
-    #[pyo3(name = "_add_builtin_spot_funds", signature = (*, policy_group_id = 0, market_data = None, global_slippage_bps = None, pricing_source = None, overrides = vec![]))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(name = "_add_builtin_spot_funds", signature = (*, policy_group_id = 0, market_data = None, global_slippage_bps = None, pricing_source = None, overrides = vec![], name=None, mode=None))]
     fn add_builtin_spot_funds<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
@@ -4511,6 +4688,8 @@ impl PyReadyEngineBuilder {
         global_slippage_bps: Option<u16>,
         pricing_source: Option<&str>,
         overrides: Vec<Bound<'_, PyAny>>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
         let engine_sync = slf.sync_policy;
         let md_handle = market_data.map(|svc| (svc.inner.clone(), svc.mode));
@@ -4534,11 +4713,12 @@ impl PyReadyEngineBuilder {
                 overrides,
             )?
         };
-        slf.add_configurable_spot_funds(policy)?;
+        slf.add_configurable_spot_funds(policy, parse_policy_instance(name, mode)?)?;
         Ok(slf)
     }
 
-    #[pyo3(name = "_add_builtin_spot_funds_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, market_data = None, global_barrier = None, account_group_barriers = vec![], account_barriers = vec![]))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(name = "_add_builtin_spot_funds_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, market_data = None, global_barrier = None, account_group_barriers = vec![], account_barriers = vec![], name=None, mode=None))]
     fn add_builtin_spot_funds_pnl_bounds_killswitch<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
@@ -4546,6 +4726,8 @@ impl PyReadyEngineBuilder {
         global_barrier: Option<Bound<'_, PyAny>>,
         account_group_barriers: Vec<Bound<'_, PyAny>>,
         account_barriers: Vec<Bound<'_, PyAny>>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
         let engine_sync = slf.sync_policy;
         let md_handle = market_data.map(|svc| (svc.inner.clone(), svc.mode));
@@ -4565,15 +4747,24 @@ impl PyReadyEngineBuilder {
                 account_barriers,
             )?
         };
-        slf.add_configurable_spot_funds(policy)?;
+        slf.add_configurable_spot_funds(policy, parse_policy_instance(name, mode)?)?;
         Ok(slf)
     }
 
+    /// Register a built-in policy. None or empty name uses the policy name.
+    /// None mode means Reject.
+    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    #[pyo3(signature = (builtin_ready_builder, *, name=None, mode=None))]
     fn builtin<'py>(
         slf: &Bound<'py, Self>,
         builtin_ready_builder: &Bound<'_, PyAny>,
+        name: Option<String>,
+        mode: Option<&str>,
     ) -> PyResult<Bound<'py, Self>> {
-        builtin_ready_builder.call_method1("_build", (slf,))?;
+        let kwargs = PyDict::new(slf.py());
+        kwargs.set_item("name", name)?;
+        kwargs.set_item("mode", mode)?;
+        builtin_ready_builder.call_method("_build", (slf,), Some(&kwargs))?;
         Ok(slf.clone())
     }
 
@@ -5598,11 +5789,64 @@ impl PyOrderMargin {
     }
 }
 
+#[pyclass(
+    name = "OrderReview",
+    module = "openpit.core",
+    subclass,
+    from_py_object
+)]
+#[derive(Clone)]
+struct PyOrderReview {
+    confirmed: bool,
+    already_held: bool,
+}
+
+#[pymethods]
+impl PyOrderReview {
+    #[new]
+    #[pyo3(signature = (*, confirmed = false, already_held = false))]
+    fn new(confirmed: bool, already_held: bool) -> Self {
+        Self {
+            confirmed,
+            already_held,
+        }
+    }
+
+    #[getter]
+    fn confirmed(&self) -> bool {
+        self.confirmed
+    }
+
+    #[setter]
+    fn set_confirmed(&mut self, value: bool) {
+        self.confirmed = value;
+    }
+
+    #[getter]
+    fn already_held(&self) -> bool {
+        self.already_held
+    }
+
+    #[setter]
+    fn set_already_held(&mut self, value: bool) {
+        self.already_held = value;
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "OrderReview(confirmed={}, already_held={})",
+            if self.confirmed { "True" } else { "False" },
+            if self.already_held { "True" } else { "False" }
+        )
+    }
+}
+
 #[pyclass(name = "Order", module = "openpit.core", subclass)]
 struct PyOrder {
     operation: Option<Py<PyOrderOperation>>,
     position: Option<Py<PyOrderPosition>>,
     margin: Option<Py<PyOrderMargin>>,
+    review: Option<Py<PyOrderReview>>,
 }
 
 #[pyclass(name = "Instrument", module = "openpit.core", from_py_object)]
@@ -5822,12 +6066,13 @@ impl PyInstrument {
 #[pymethods]
 impl PyOrder {
     #[new]
-    #[pyo3(signature = (*, operation = None, position = None, margin = None))]
+    #[pyo3(signature = (*, operation = None, position = None, margin = None, review = None))]
     fn new(
         py: Python<'_>,
         operation: Option<&Bound<'_, PyAny>>,
         position: Option<&Bound<'_, PyAny>>,
         margin: Option<&Bound<'_, PyAny>>,
+        review: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let operation = operation
             .map(|v| {
@@ -5857,10 +6102,12 @@ impl PyOrder {
                     .and_then(|r| r)
             })
             .transpose()?;
+        let review = review.map(|v| clone_order_review(py, v)).transpose()?;
         Ok(Self {
             operation,
             position,
             margin,
+            review,
         })
     }
 
@@ -5922,6 +6169,17 @@ impl PyOrder {
         Ok(())
     }
 
+    #[getter]
+    fn review(&self, py: Python<'_>) -> Option<Py<PyOrderReview>> {
+        self.review.as_ref().map(|v| v.clone_ref(py))
+    }
+
+    #[setter]
+    fn set_review(&mut self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.review = value.map(|v| clone_order_review(py, v)).transpose()?;
+        Ok(())
+    }
+
     fn __repr__(&self, py: Python<'_>) -> String {
         let operation = self
             .operation
@@ -5932,11 +6190,19 @@ impl PyOrder {
             .as_ref()
             .map(|v| v.bind(py).borrow().__repr__(py));
         let margin = self.margin.as_ref().map(|v| v.bind(py).borrow().__repr__());
+        let review = self.review.as_ref().map(|v| v.bind(py).borrow().__repr__());
         format!(
-            "Order(operation={:?}, position={:?}, margin={:?})",
-            operation, position, margin,
+            "Order(operation={:?}, position={:?}, margin={:?}, review={:?})",
+            operation, position, margin, review,
         )
     }
+}
+
+fn clone_order_review(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyOrderReview>> {
+    let review = value
+        .extract::<PyOrderReview>()
+        .map_err(|_| PyTypeError::new_err("review must be openpit.core.OrderReview"))?;
+    Py::new(py, review)
 }
 
 #[pymethods]
@@ -7568,6 +7834,34 @@ struct PyRequest {
 
 #[pymethods]
 impl PyRequest {
+    /// Review marks from the start stage. Execute the request to get the final
+    /// verdict and check the execution result's review marks before submission.
+    ///
+    /// Raises `RuntimeError` once the request has been executed.
+    #[getter]
+    fn reviews(&self) -> PyResult<Vec<PyReject>> {
+        let request_ref = self.inner.borrow();
+        let request = request_ref
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("request has already been executed"))?;
+        Ok(request.reviews().iter().map(convert_reject).collect())
+    }
+
+    /// Run main-stage pre-trade checks.
+    ///
+    /// Raises:
+    ///     RuntimeError: If the request has already been executed.
+    ///     TypeError: If a policy return value has a non-iterable collection
+    ///         or an incompatible field type.
+    ///     ValueError: If a policy return value has an invalid field.
+    ///     openpit.param.ParamError: If a numeric field in a policy return value fails
+    ///         domain parsing or exceeds the supported decimal range.
+    ///     AttributeError: If a policy return value lacks a required attribute.
+    ///     OverflowError: If a policy return value has a `user_data` token that
+    ///         fits in 64 bits but exceeds the platform's word size.
+    ///     Exception: Exceptions from policy callbacks, from mutation rollback callbacks,
+    ///         or from Python code invoked while reading policy return values keep their
+    ///         original type.
     fn execute(&self, py: Python<'_>) -> PyResult<PyExecuteResult> {
         let request = self
             .inner
@@ -7581,15 +7875,7 @@ impl PyRequest {
                 if let Some(error) = scope.finish() {
                     return Err(error);
                 }
-                Ok(PyExecuteResult {
-                    reservation: Some(Py::new(
-                        py,
-                        PyReservation {
-                            inner: RefCell::new(Some(reservation)),
-                        },
-                    )?),
-                    rejects: Vec::new(),
-                })
+                PyExecuteResult::from_reservation(py, reservation)
             }
             Err(rejects) => {
                 if let Some(error) = scope.finish() {
@@ -7598,6 +7884,7 @@ impl PyRequest {
                 Ok(PyExecuteResult {
                     reservation: None,
                     rejects: rejects.iter().map(convert_reject).collect(),
+                    reviews: Vec::new(),
                 })
             }
         }
@@ -7617,6 +7904,22 @@ struct PyPreTradeLock {
 
 #[pymethods]
 impl PyReservation {
+    /// Review marks from the stages that ran. A non-empty list requires a
+    /// human decision before submission. Commit this reservation immediately
+    /// and keep the order unsent. The reservation keeps holds and policy
+    /// results only if every review mark is with-hold.
+    /// To approve, run the order again with `OrderReview(confirmed=True)`.
+    ///
+    /// Raises `RuntimeError` once this reservation has been finalized.
+    #[getter]
+    fn reviews(&self) -> PyResult<Vec<PyReject>> {
+        let reservation_ref = self.inner.borrow();
+        let reservation = reservation_ref
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("reservation has already been finalized"))?;
+        Ok(reservation.reviews().iter().map(convert_reject).collect())
+    }
+
     #[getter]
     fn lock(&self) -> PyResult<PyPreTradeLock> {
         let reservation_ref = self.inner.borrow();
@@ -7641,7 +7944,8 @@ impl PyReservation {
             .collect())
     }
 
-    /// Commits the reserved state.
+    /// Commits the reserved state. If there are review marks, commit before
+    /// the human decision and keep the order unsent.
     ///
     /// Exceptions raised by mutation commit callbacks are re-raised with their
     /// original Python type and message once every callback has run.
@@ -7842,9 +8146,9 @@ impl Drop for PyDropCopyOperation {
 /// and engine state, with zero effect on that state: no rate-limit budget is
 /// spent, no reservation or hold is applied, and no account is blocked.
 ///
-/// Use `is_pass` (or `bool(report)`) to test the verdict. Reuse `lock` and
-/// `account_adjustments` exactly as on `Reservation`, and `account_block` for
-/// an account-scope reject that a real call would have recorded.
+/// Use `is_pass` (or `bool(report)`) to check for rejects and `reviews` for
+/// marks that require a human decision before submission. The `lock`,
+/// `account_adjustments` and `account_block` describe the effects of a live run.
 #[pyclass(name = "DryRunReport", module = "openpit.pretrade")]
 struct PyPreTradeDryRunReport {
     inner: PreTradeDryRunReport,
@@ -7852,7 +8156,8 @@ struct PyPreTradeDryRunReport {
 
 #[pymethods]
 impl PyPreTradeDryRunReport {
-    /// Returns `True` when the order would have been admitted by all stages.
+    /// Whether the evaluated stages would find no rejects. Check `reviews`
+    /// for marks that require a human decision before submission.
     #[getter]
     fn is_pass(&self) -> bool {
         self.inner.is_pass()
@@ -7865,6 +8170,14 @@ impl PyPreTradeDryRunReport {
         self.inner
             .rejects()
             .map(|rejects| rejects.iter().map(convert_reject).collect())
+    }
+
+    /// Review marks that a live run would return. A non-empty list means a
+    /// human decision is required before submission. A live run with review
+    /// marks keeps holds and policy results only if every mark is with-hold.
+    #[getter]
+    fn reviews(&self) -> Vec<PyReject> {
+        self.inner.reviews().iter().map(convert_reject).collect()
     }
 
     /// Returns the lock context the main stage would have produced.
@@ -7893,13 +8206,19 @@ impl PyPreTradeDryRunReport {
         self.inner.account_block().map(convert_account_block)
     }
 
+    /// Same as `is_pass`. Check `reviews` before submission.
     fn __bool__(&self) -> bool {
-        self.inner.is_pass()
+        self.is_pass()
     }
 
     fn __repr__(&self) -> String {
         if self.inner.is_pass() {
-            "DryRunReport(pass)".to_owned()
+            let reviews = self.inner.reviews();
+            if reviews.is_empty() {
+                "DryRunReport(pass)".to_owned()
+            } else {
+                format!("DryRunReport(pass, reviews={})", reviews.len())
+            }
         } else {
             format!(
                 "DryRunReport(reject, rejects={})",
@@ -9526,6 +9845,7 @@ fn convert_reject(reject: &Reject) -> PyReject {
         }
         .to_owned(),
         user_data: reject.user_data as u64,
+        mode: reject.mode,
     }
 }
 
@@ -9642,6 +9962,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyOrderOperation>()?;
     module.add_class::<PyOrderPosition>()?;
     module.add_class::<PyOrderMargin>()?;
+    module.add_class::<PyOrderReview>()?;
     module.add_class::<PyOrder>()?;
     module.add_class::<PyRequest>()?;
     module.add_class::<PyReservation>()?;
@@ -9753,6 +10074,7 @@ mod field_access_tests {
                     operation: OrderOperationAccess::Absent,
                     position: OrderPositionAccess::Absent,
                     margin: OrderMarginAccess::Absent,
+                    review: OrderReviewAccess::Absent,
                 },
                 py.None(),
             )
@@ -9906,7 +10228,7 @@ class AdjustmentCheck:
             let builder = PyReadyEngineBuilder::new(PySyncPolicy::None);
 
             let ov_policy = make_order_validation_start_check(DEFAULT_POLICY_GROUP_ID);
-            builder.add_policy(ov_policy)?;
+            builder.add_policy(ov_policy, openpit::PolicyInstance::default())?;
 
             let policies_module = py.import("openpit.pretrade.policies")?;
             let pnl_lower_bound = Py::new(
@@ -9934,7 +10256,8 @@ class AdjustmentCheck:
                     vec![],
                 )?
             };
-            builder.add_configurable_pnl_killswitch(pnl_policy)?;
+            builder
+                .add_configurable_pnl_killswitch(pnl_policy, openpit::PolicyInstance::default())?;
 
             let rl_policy = {
                 let state = builder.state.borrow();
@@ -9951,7 +10274,7 @@ class AdjustmentCheck:
                     vec![],
                 )?
             };
-            builder.add_configurable_rate_limit(rl_policy)?;
+            builder.add_configurable_rate_limit(rl_policy, openpit::PolicyInstance::default())?;
 
             let size_limit = PyOrderSizeLimit {
                 max_quantity: Some("1000".to_owned()),
@@ -9964,10 +10287,11 @@ class AdjustmentCheck:
                 vec![(size_limit_py.bind(py).borrow(), "USD".to_owned())],
                 vec![],
             )?;
-            builder.add_configurable_order_size_limit(sl_policy)?;
-            builder.push_policy(&start_check)?;
-            builder.push_policy(&execution_check)?;
-            builder.push_policy(&adjustment_check)?;
+            builder
+                .add_configurable_order_size_limit(sl_policy, openpit::PolicyInstance::default())?;
+            builder.push_policy(&start_check, openpit::PolicyInstance::default())?;
+            builder.push_policy(&execution_check, openpit::PolicyInstance::default())?;
+            builder.push_policy(&adjustment_check, openpit::PolicyInstance::default())?;
 
             let engine = builder.build()?;
 
@@ -9990,6 +10314,7 @@ class AdjustmentCheck:
                     operation: Some(operation),
                     position: None,
                     margin: None,
+                    review: None,
                 },
             )?;
 

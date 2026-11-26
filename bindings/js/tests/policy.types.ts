@@ -49,7 +49,7 @@ import {
 } from "@openpit/engine/pretrade/policies";
 import { type AccountAdjustmentContext } from "@openpit/engine/accountadjustment";
 import { type MarketDataService } from "@openpit/engine/marketdata";
-import { RejectCode, RejectScope } from "@openpit/engine/reject";
+import { RejectCode, RejectScope, RuleMode } from "@openpit/engine/reject";
 import { Mutation } from "@openpit/engine/tx";
 
 // A fully-typed custom policy implementing every hook. Each body uses its
@@ -108,6 +108,7 @@ const typedReject: PolicyReject = {
   reason: "typed reject",
   details: "",
   scope: RejectScope.Account,
+  mode: RuleMode.ReviewWithHold,
 };
 void typedReject;
 
@@ -272,6 +273,13 @@ const unknownRejectScope: PolicyReject = {
   scope: "venue",
 };
 void unknownRejectScope;
+
+const unknownRuleMode: PolicyReject = {
+  ...typedReject,
+  // @ts-expect-error - rule modes are case-sensitive wire strings.
+  mode: "reviewWithHold",
+};
+void unknownRuleMode;
 
 new Mutation(
   () => undefined,

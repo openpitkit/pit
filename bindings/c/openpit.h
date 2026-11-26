@@ -94,6 +94,8 @@ typedef struct OpenPitOrderOperation OpenPitOrderOperation;
 typedef struct OpenPitOrderOperationOptional OpenPitOrderOperationOptional;
 typedef struct OpenPitOrderPosition OpenPitOrderPosition;
 typedef struct OpenPitOrderPositionOptional OpenPitOrderPositionOptional;
+typedef struct OpenPitOrderReview OpenPitOrderReview;
+typedef struct OpenPitOrderReviewOptional OpenPitOrderReviewOptional;
 typedef struct OpenPitOutcomeAmount OpenPitOutcomeAmount;
 typedef struct OpenPitOutcomeAmountOptional OpenPitOutcomeAmountOptional;
 typedef struct OpenPitParamAccountGroupIdOptional
@@ -129,6 +131,7 @@ typedef struct OpenPitPnlOutcomeAmountOptional OpenPitPnlOutcomeAmountOptional;
 typedef struct OpenPitPnlOutcomeOptional OpenPitPnlOutcomeOptional;
 typedef struct OpenPitPnlState OpenPitPnlState;
 typedef struct OpenPitPnlStateOptional OpenPitPnlStateOptional;
+typedef struct OpenPitPolicyInstance OpenPitPolicyInstance;
 typedef struct OpenPitPostTradeAccountPnlList OpenPitPostTradeAccountPnlList;
 typedef struct OpenPitPostTradeAdjustmentList OpenPitPostTradeAdjustmentList;
 typedef struct OpenPitPostTradeContext OpenPitPostTradeContext;
@@ -306,6 +309,13 @@ typedef uint8_t OpenPitAccountAdjustmentOperationKind;
  * Zero is not valid; callers must set this field explicitly.
  */
 typedef uint8_t OpenPitPretradeRejectScope;
+
+/**
+ * Raw rule-mode code accepted from C callers.
+ *
+ * Zero means not set and is imported as `Reject`. Outputs always use 1-3.
+ */
+typedef uint8_t OpenPitPretradeRuleMode;
 
 /**
  * Raw stable classification code for a reject.
@@ -711,6 +721,24 @@ typedef uint8_t OpenPitSettlementUnit;
  * The reject applies to account state rather than to one order only.
  */
 #define OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT ((OpenPitPretradeRejectScope) 2)
+
+/**
+ * Reject the order when the rule is breached.
+ */
+#define OPENPIT_PRETRADE_RULE_MODE_REJECT ((OpenPitPretradeRuleMode) 1)
+
+/**
+ * Require human review. The reservation retains holds and policy results only
+ * if every review mark in the run is with-hold.
+ */
+#define OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD \
+    ((OpenPitPretradeRuleMode) 2)
+
+/**
+ * Require human review and discard the reservation's holds and policy results.
+ */
+#define OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD \
+    ((OpenPitPretradeRuleMode) 3)
 
 /**
  * A required field is absent.
@@ -1669,8 +1697,28 @@ struct OpenPitOrderPosition {
     OpenPitTriBool close_position;
 };
 
+/**
+ * Optional pre-trade review group for an order.
+ */
+struct OpenPitOrderReview {
+    /**
+     * Whether the caller confirmed the order. `NOT_SET` means not confirmed.
+     */
+    OpenPitTriBool confirmed;
+    /**
+     * Whether an earlier committed with-hold review run already holds the order's
+     * reservation. `NOT_SET` means not held.
+     */
+    OpenPitTriBool already_held;
+};
+
 struct OpenPitOrderPositionOptional {
     OpenPitOrderPosition value;
+    bool is_set;
+};
+
+struct OpenPitOrderReviewOptional {
+    OpenPitOrderReview value;
     bool is_set;
 };
 
@@ -2433,6 +2481,11 @@ struct OpenPitPretradeReject {
      * Reject scope.
      */
     OpenPitPretradeRejectScope scope;
+    /**
+     * Rule mode. Zero imports as `Reject`; values above 3 are invalid. Outputs
+     * always use 1-3.
+     */
+    OpenPitPretradeRuleMode mode;
 };
 
 /**
@@ -2477,6 +2530,20 @@ struct OpenPitPretradeAccountBlockOutcome {
      * Account block inserted into engine state.
      */
     OpenPitPretradeAccountBlock block;
+};
+
+/**
+ * Registration identity and mode of one pre-trade policy instance.
+ *
+ * A null instance uses the policy's name and `Reject`. A null or empty name
+ * uses the policy's name; otherwise the UTF-8 name is copied during the add
+ * call. Mode 0 means `Reject`; modes above 3 fail through `out_error` and
+ * register nothing. A non-null instance and its name bytes must remain
+ * readable for the duration of the add call.
+ */
+struct OpenPitPolicyInstance {
+    OpenPitStringView name;
+    OpenPitPretradeRuleMode mode;
 };
 
 /**
@@ -3004,6 +3071,10 @@ struct OpenPitOrder {
      * the carrying value, including policy callbacks and adjustment callbacks.
      */
     void * user_data;
+    /**
+     * Optional review group. An absent group means not confirmed and not held.
+     */
+    OpenPitOrderReviewOptional review;
 };
 
 /**
@@ -3020,11 +3091,15 @@ struct OpenPitOrder {
  * - If the callback wants to keep any data from `order`, it must copy that
  *   data before returning.
  * - Return a non-null empty list to accept the order.
- * - Return a non-empty reject list to reject the order.
+ * - Return a non-empty list of rejects or review marks. Review modes request
+ *   human review; effective rejects stop the order.
  * - Return null only when the callback could not evaluate the order. The
  *   engine converts it to a fatal `SystemUnavailable` reject.
- * - A rejected order must set explicit `code` and `scope` values in every
- *   list item.
+ * - If `openpit_pretrade_reject_list_push` refuses an item, do not return
+ *   the list as-is; release it and return null for a fatal
+ *   `SystemUnavailable` reject.
+ * - Set explicit `code` and `scope` values in every list item. The record
+ *   `mode` is optional; zero means `Reject`.
  * - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
  *   allocation-free accepted result. Other returned lists transfer ownership
  *   to the engine and must be created with
@@ -3061,15 +3136,23 @@ typedef OpenPitPretradeRejectList *
  *   `openpit_pretrade_pre_trade_result_push_account_adjustment`. Neither
  *   push carries a `policy_group_id`; the engine assigns the policy group.
  *   The callback must not store or use `out_result` after return.
- * - The reject channel and the `out_result` channel are independent. The
- *   engine keeps `out_result` when the callback accepts. Drop-copy also
- *   keeps it with ordinary, non-enforcing rejects; evaluation-failure
- *   rejects abort drop-copy and discard it.
+ * - An effective reject discards every review mark in live pre-trade and
+ *   dry-run. Live pre-trade also discards all holds and policy results.
+ *   Dry-run still reports its collected lock and outcomes. Without an
+ *   effective reject, a without-hold mark in either stage clears all holds
+ *   and policy results. Otherwise, they are kept. Drop-copy keeps results
+ *   with review marks of either mode and with ordinary, non-enforcing
+ *   rejects. Evaluation failures abort drop-copy and discard the results.
  * - Return a non-null empty list to accept the order.
- * - Return a non-empty reject list to reject the order.
+ * - Return a non-empty list of rejects or review marks. Review modes request
+ *   human review; effective rejects stop the order.
  * - Return null only when the callback could not evaluate the order. The
  *   engine converts it to a fatal `SystemUnavailable` reject.
- * - Every returned reject must contain explicit `code` and `scope` values.
+ * - If `openpit_pretrade_reject_list_push` refuses an item, do not return
+ *   the list as-is; release it and return null for a fatal
+ *   `SystemUnavailable` reject.
+ * - Every returned item must contain explicit `code` and `scope`. The record
+ *   `mode` is optional; zero means `Reject`.
  * - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
  *   allocation-free accepted result. Other returned lists transfer ownership
  *   to the engine and must be created with
@@ -5123,8 +5206,8 @@ openpit_pretrade_reject_list_get_accept_sentinel(
  * `openpit_pretrade_reject_list_get_accept_sentinel`.
  *
  * Use it to tell the two `false` outcomes of
- * `openpit_pretrade_reject_list_push` apart: an unknown reject scope is a bad
- * reject payload, while the accept list is a bad target pointer.
+ * `openpit_pretrade_reject_list_push` apart: an unknown reject scope or mode
+ * is a bad reject payload, while the accept list is a bad target pointer.
  *
  * Contract:
  * - passing null is allowed and returns `false`;
@@ -5155,10 +5238,10 @@ void openpit_destroy_pretrade_reject_list(
  * Contract:
  * - `list` must be a valid non-null pointer;
  * - string views in `reject` are copied before this function returns;
- * - returns `true` after appending a reject with a valid scope;
+ * - returns `true` after appending a reject with a valid scope and mode;
  * - returns `false` and leaves the list unchanged when `reject` carries an
- *   unknown scope, or when `list` is the immutable accept list returned by
- *   `openpit_pretrade_reject_list_get_accept_sentinel`;
+ *   unknown scope or mode, or when `list` is the immutable accept list
+ *   returned by `openpit_pretrade_reject_list_get_accept_sentinel`;
  * - call `openpit_pretrade_reject_list_is_accept_sentinel` to separate those
  *   two outcomes: the first is a bad reject payload, the second is a bad
  *   target pointer, and reporting one as the other hides the real defect;
@@ -5473,6 +5556,8 @@ void openpit_destroy_engine(
  *
  * Success:
  * - returns `Passed` when the order passed this stage; read `out_request`;
+ * - `Passed` with non-empty `openpit_pretrade_pre_trade_request_get_reviews`
+ *   is not permission to send the order;
  * - returns `Rejected` when the order was rejected; read `out_rejects` if
  *   not null.
  *
@@ -5518,6 +5603,9 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
  * Success:
  * - returns `Passed` when the order passed this stage; read
  *   `out_reservation`;
+ * - `Passed` with non-empty
+ *   `openpit_pretrade_pre_trade_reservation_get_reviews` is not permission
+ *   to send the order;
  * - returns `Rejected` when the order was rejected is not null; read
  *   `out_rejects`.
  *
@@ -5714,11 +5802,41 @@ bool openpit_engine_execute_pre_trade_dry_run(
 );
 
 /**
+ * Returns the review marks collected by the start stage.
+ *
+ * Success:
+ * - returns a non-null `OpenPitPretradeRejectList`, empty when there are no
+ *   marks.
+ *
+ * Error:
+ * - returns null when `request` is null or its content has been consumed by
+ *   `openpit_pretrade_pre_trade_request_execute`;
+ * - on error, if `out_error` is not null, it is filled with a caller-owned
+ *   `OpenPitSharedString` that MUST be destroyed by the caller.
+ *
+ * Ownership:
+ * - the caller owns the returned list and MUST release it with
+ *   `openpit_destroy_pretrade_reject_list`;
+ * - the returned list is detached from the request state.
+ *
+ * After execute, read marks with
+ * `openpit_pretrade_pre_trade_reservation_get_reviews`: the main stage may add
+ * marks that require a human decision before submitting the order.
+ */
+OpenPitPretradeRejectList * openpit_pretrade_pre_trade_request_get_reviews(
+    const OpenPitPretradePreTradeRequest * request,
+    OpenPitOutError out_error
+);
+
+/**
  * Executes a deferred request returned by `openpit_engine_start_pre_trade`.
  *
  * Success:
  * - returns `Passed` when the order passed this stage; read
  *   `out_reservation`;
+ * - `Passed` with non-empty
+ *   `openpit_pretrade_pre_trade_reservation_get_reviews` is not permission
+ *   to send the order;
  * - returns `Rejected` when the order was rejected and `out_rejects` is not
  *   null; read `out_rejects`.
  *
@@ -5808,6 +5926,26 @@ void openpit_pretrade_pre_trade_reservation_commit(
  */
 void openpit_pretrade_pre_trade_reservation_rollback(
     OpenPitPretradePreTradeReservation * reservation
+);
+
+/**
+ * Returns the reservation's review marks in stage and policy order.
+ *
+ * Contract:
+ * - `reservation` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call;
+ * - always returns a caller-owned `OpenPitPretradeRejectList`, empty when
+ *   there are no marks; release it with
+ *   `openpit_destroy_pretrade_reject_list`;
+ * - marks require a human decision before submission. With-hold marks retain
+ *   policy results; any without-hold mark leaves the reservation without
+ *   them.
+ *
+ * Lifetime contract:
+ * - the returned list is detached from the reservation state.
+ */
+OpenPitPretradeRejectList * openpit_pretrade_pre_trade_reservation_get_reviews(
+    const OpenPitPretradePreTradeReservation * reservation
 );
 
 /**
@@ -6010,8 +6148,33 @@ void openpit_destroy_pretrade_drop_copy_operation(
  * - this function never fails;
  * - equivalent to "the rejects list returned by
  *   `openpit_pretrade_pre_trade_dry_run_report_get_rejects` is empty".
+ * - `true` with non-empty
+ *   `openpit_pretrade_pre_trade_dry_run_report_get_reviews` is not
+ *   permission to send the order.
  */
 bool openpit_pretrade_pre_trade_dry_run_report_is_pass(
+    const OpenPitPretradePreTradeDryRunReport * report
+);
+
+/**
+ * Returns the review marks the order would have collected.
+ *
+ * `is_pass == true` with a non-empty list returned by
+ * `openpit_pretrade_pre_trade_dry_run_report_get_reviews` is not permission to
+ * send. Any without-hold mark leaves the lock and account adjustments empty.
+ *
+ * Contract:
+ * - `report` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call;
+ * - always returns a caller-owned `OpenPitPretradeRejectList`, empty when
+ *   there are no marks; release it with
+ *   `openpit_destroy_pretrade_reject_list`.
+ *
+ * Lifetime contract:
+ * - the returned list is detached from the report state.
+ */
+OpenPitPretradeRejectList *
+openpit_pretrade_pre_trade_dry_run_report_get_reviews(
     const OpenPitPretradePreTradeDryRunReport * report
 );
 
@@ -7287,6 +7450,7 @@ OpenPitStringView openpit_pretrade_pre_trade_policy_get_name(
 bool openpit_engine_builder_add_pre_trade_policy(
     OpenPitEngineBuilder * builder,
     OpenPitPretradePreTradePolicy * policy,
+    const OpenPitPolicyInstance * instance,
     OpenPitOutError out_error
 );
 
@@ -7383,6 +7547,7 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(
     size_t asset_len,
     const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier * account_asset,
     size_t account_asset_len,
+    const OpenPitPolicyInstance * instance,
     OpenPitOutError out_error
 );
 
@@ -7485,6 +7650,7 @@ bool openpit_engine_configure_order_size_limit(
 bool openpit_engine_builder_add_builtin_order_validation_policy(
     OpenPitEngineBuilder * builder,
     uint16_t policy_group_id,
+    const OpenPitPolicyInstance * instance,
     OpenPitOutError out_error
 );
 
@@ -7518,6 +7684,7 @@ bool openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
     size_t broker_len,
     const OpenPitPretradePoliciesPnlBoundsAccountBarrier * account,
     size_t account_len,
+    const OpenPitPolicyInstance * instance,
     OpenPitOutError out_error
 );
 
@@ -7642,6 +7809,7 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
     size_t account_len,
     const OpenPitPretradePoliciesRateLimitAccountAssetBarrier * account_asset,
     size_t account_asset_len,
+    const OpenPitPolicyInstance * instance,
     OpenPitOutError out_error
 );
 
@@ -7749,6 +7917,7 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
     const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides,
     size_t overrides_len,
     uint16_t policy_group_id,
+    const OpenPitPolicyInstance * instance,
     OpenPitOutError out_error
 );
 
@@ -7785,6 +7954,7 @@ bool openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
     size_t account_group_len,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
     size_t account_len,
+    const OpenPitPolicyInstance * instance,
     OpenPitOutError out_error
 );
 

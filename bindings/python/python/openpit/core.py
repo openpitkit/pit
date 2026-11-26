@@ -33,6 +33,7 @@ from ._openpit import Order as _Order
 from ._openpit import OrderMargin as _OrderMargin
 from ._openpit import OrderOperation as _OrderOperation
 from ._openpit import OrderPosition as _OrderPosition
+from ._openpit import OrderReview as _OrderReview
 from ._openpit import ReferenceBook as ReferenceBook
 from ._openpit import ReferenceBookRegistrationError as ReferenceBookRegistrationError
 from ._openpit import SettlementLag as SettlementLag
@@ -347,6 +348,43 @@ class OrderMargin(_OrderMargin):
         return _OrderMargin.__repr__(self)
 
 
+class OrderReview(_OrderReview):
+    """Confirmation supplied by the caller for a fresh pre-trade run.
+
+    The engine reads ``confirmed`` and ``already_held`` through its order
+    review reader. For a confirmed order, every policy instance still runs
+    and the engine discards review marks. Reject-mode instances and evaluation
+    failures still reject.
+    ``already_held`` is the caller's assertion that this order's reservation
+    is already held by an earlier committed with-hold run.
+    """
+
+    # @typing.override
+    def __new__(cls, *args: typing.Any, **kwargs: typing.Any) -> OrderReview:
+        _ = args, kwargs
+        return _OrderReview.__new__(cls)
+
+    # @typing.override
+    def __init__(self, *, confirmed: bool = False, already_held: bool = False) -> None:
+        _OrderReview.confirmed.__set__(self, confirmed)
+        _OrderReview.already_held.__set__(self, already_held)
+
+    # @typing.override
+    @property
+    def confirmed(self) -> bool:
+        """Whether the caller has confirmed the order. Defaults to ``False``."""
+        return _OrderReview.confirmed.__get__(self, type(self))
+
+    # @typing.override
+    @property
+    def already_held(self) -> bool:
+        """Whether an earlier committed with-hold run holds the reservation.
+
+        Defaults to ``False``.
+        """
+        return _OrderReview.already_held.__get__(self, type(self))
+
+
 class Order(_Order):
     """
     Extensible order model accepted by ``openpit.Engine.start_pre_trade``.
@@ -373,18 +411,22 @@ class Order(_Order):
         operation: OrderOperation | None = None,
         position: OrderPosition | None = None,
         margin: OrderMargin | None = None,
+        review: OrderReview | None = None,
     ) -> None:
         # Structural checks for aggregate groups stay at Python boundary to keep
         # explicit API-contract errors for wrong wrapper types.
         _require_instance(operation, OrderOperation, name="operation")
         _require_instance(position, OrderPosition, name="position")
         _require_instance(margin, OrderMargin, name="margin")
+        _require_instance(review, OrderReview, name="review")
         _Order.operation.__set__(self, operation)
         _Order.position.__set__(self, position)
         _Order.margin.__set__(self, margin)
+        _Order.review.__set__(self, review)
         self.__dict__["_py_operation"] = operation
         self.__dict__["_py_position"] = position
         self.__dict__["_py_margin"] = margin
+        self.__dict__["_py_review"] = review
 
     # @typing.override
     @property
@@ -403,6 +445,15 @@ class Order(_Order):
     def margin(self) -> OrderMargin | None:
         """Margin configuration parameters group."""
         return self.__dict__.get("_py_margin")
+
+    # @typing.override
+    @property
+    def review(self) -> OrderReview | None:
+        """Pre-trade review group.
+
+        When absent, the order is unconfirmed and not held.
+        """
+        return self.__dict__.get("_py_review")
 
     def __repr__(self) -> str:
         return _Order.__repr__(self)
@@ -773,6 +824,7 @@ __all__ = [
     "OrderMargin",
     "OrderOperation",
     "OrderPosition",
+    "OrderReview",
     "ReferenceBook",
     "ReferenceBookRegistrationError",
     "SettlementLag",

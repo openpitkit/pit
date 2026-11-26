@@ -34,8 +34,8 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-// ErrClientRequestClosed is returned by ClientRequest.Execute once the request
-// and its client payload have been released.
+// ErrClientRequestClosed is returned by ClientRequest.Execute and
+// ClientRequest.Reviews after Close.
 var ErrClientRequestClosed = errors.New("client pre-trade request already closed")
 
 // ClientEngineOption configures a ClientEngine at build time.
@@ -90,6 +90,8 @@ func (e *ClientEngine[Order, Report, Adjustment]) Stop() {
 // On accept, the returned ClientRequest owns the payload handle and releases it
 // when Execute or Close is called. On reject or error, the handle is released
 // before StartPreTrade returns.
+// If the request's Reviews() returns marks, obtain a human decision before
+// sending the order.
 func (e *ClientEngine[Order, Report, Adjustment]) StartPreTrade(
 	order Order,
 ) (*ClientRequest, []reject.Reject, error) {
@@ -108,6 +110,8 @@ func (e *ClientEngine[Order, Report, Adjustment]) StartPreTrade(
 //
 // The payload handle is released before ExecutePreTrade returns because all
 // order callbacks have completed by then.
+// If the reservation's Reviews() returns marks, obtain a human decision
+// before sending the order.
 func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 	order Order,
 ) (*pretrade.Reservation, []reject.Reject, error) {
@@ -218,8 +222,26 @@ func (r *ClientRequest) Close() {
 	r.payload.release()
 }
 
+// Reviews returns a copy of the start-stage review marks. A non-empty list
+// requires a human decision before sending the order.
+// If Execute returns a hold for review, commit the reservation to retain the
+// hold and keep the order unsent until approval and a fresh run with Confirmed.
+//
+// After Execute, read the marks from the returned reservation. Reviews returns
+// the native error after Execute and ErrClientRequestClosed after Close.
+func (r *ClientRequest) Reviews() ([]reject.Reject, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.request == nil {
+		return nil, ErrClientRequestClosed
+	}
+	return r.request.Reviews()
+}
+
 // Execute runs the deferred pre-trade request and releases the client order
 // payload after callbacks complete.
+// If the reservation's Reviews() returns marks, obtain a human decision
+// before sending the order.
 //
 // Execute does not close the underlying request; call Close after Execute just
 // as with a standard pretrade.Request.

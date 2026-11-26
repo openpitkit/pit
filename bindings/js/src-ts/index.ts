@@ -114,3 +114,4 @@ export type {
 // The decimal input contract is a cross-cutting boundary type used by nearly
 // every value-type and model constructor, so it stays at the root.
 export type { DecimalInput } from "./types.js";
+export type { PolicyInstance } from "./wasm/openpit_js.js";

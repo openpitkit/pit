@@ -1,5 +1,7 @@
+import conftest
 import openpit
 import pytest
+from openpit._openpit import OrderReview as NativeOrderReview
 
 _ACCOUNT_ID = openpit.param.AccountId.from_int(99224416)
 
@@ -33,6 +35,105 @@ def test_order_uses_optional_defaults() -> None:
     assert order.operation is None
     assert order.position is None
     assert order.margin is None
+    assert order.review is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("confirmed", "already_held"),
+    [(None, False), (False, False), (False, True), (True, False), (True, True)],
+)
+def test_native_order_stores_review_group(
+    confirmed: bool | None, already_held: bool
+) -> None:
+    order = openpit.Order(
+        review=(
+            None
+            if confirmed is None
+            else openpit.OrderReview(confirmed=confirmed, already_held=already_held)
+        ),
+    )
+    native_repr = repr(order)
+    if confirmed is None:
+        assert "review=None" in native_repr
+    else:
+        assert (
+            f"OrderReview(confirmed={confirmed}, already_held={already_held})"
+            in native_repr
+        )
+
+
+@pytest.mark.unit
+def test_start_review_mark_reaches_the_reservation() -> None:
+    mode = openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
+
+    class ReviewPolicy(openpit.pretrade.Policy):
+        @property
+        def name(self) -> str:
+            return "ReviewPolicy"
+
+        def check_pre_trade_start(
+            self, ctx: openpit.pretrade.Context, order: openpit.Order
+        ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+            return (
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                    reason="confirmation required",
+                    details="start-stage review",
+                    mode=mode,
+                ),
+            )
+
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=ReviewPolicy()).build()
+    start = engine.start_pre_trade(order=conftest.make_order())
+    assert start
+    request = start.request
+    assert request is not None
+    assert [mark.mode for mark in start.reviews] == [mode]
+    assert [mark.mode for mark in request.reviews] == [mode]
+    assert repr(start) == "StartResult(ok=True, reviews=1)"
+    executed = request.execute()
+    assert executed
+    assert [mark.mode for mark in executed.reviews] == [mode]
+    reservation = executed.reservation
+    assert reservation is not None
+    assert [mark.mode for mark in reservation.reviews] == [mode]
+    reservation.commit()
+
+
+@pytest.mark.unit
+def test_order_review_confirmed_defaults_to_false() -> None:
+    assert openpit.OrderReview().confirmed is False
+    with pytest.raises(TypeError, match="review must be"):
+        openpit.Order(review=openpit.OrderPosition())  # type: ignore[arg-type]
+
+
+@pytest.mark.unit
+def test_order_review_already_held_defaults_to_false() -> None:
+    assert openpit.OrderReview().already_held is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("confirmed, already_held", [(True, False), (False, True)])
+def test_order_review_flags_are_independent(
+    confirmed: bool, already_held: bool
+) -> None:
+    review = openpit.OrderReview(confirmed=confirmed, already_held=already_held)
+    assert review.confirmed is confirmed
+    assert review.already_held is already_held
+
+
+@pytest.mark.unit
+def test_native_order_review_already_held_setter_is_independent() -> None:
+    review = NativeOrderReview(confirmed=True)
+    review.already_held = True
+    assert review.already_held is True
+    assert review.confirmed is True
+    review.confirmed = False
+    assert review.already_held is True
+    review.already_held = False
+    assert review.already_held is False
+    assert review.confirmed is False
 
 
 @pytest.mark.unit

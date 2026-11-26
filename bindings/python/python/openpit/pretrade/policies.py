@@ -29,6 +29,7 @@ from .._openpit import OrderSizeLimit
 
 if typing.TYPE_CHECKING:
     from .. import param
+    from ._enum import RuleMode
 
 DEFAULT_POLICY_GROUP_ID = 0
 
@@ -172,7 +173,13 @@ class RateLimitReadyBuilder:
         self._account_asset.extend(barriers)
         return self
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
 
         def _nanos(limit: RateLimit) -> int:
@@ -188,6 +195,8 @@ class RateLimitReadyBuilder:
             )
 
         builder._add_builtin_rate_limit(
+            name=name,
+            mode=mode,
             policy_group_id=self._policy_group_id,
             broker=broker,
             asset_barriers=[
@@ -380,9 +389,17 @@ class OrderSizeLimitReadyBuilder:
         self._account_asset.extend(barriers)
         return self
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
         builder._add_builtin_order_size_limit(
+            name=name,
+            mode=mode,
             policy_group_id=self._policy_group_id,
             broker=self._broker.limit if self._broker is not None else None,
             asset_barriers=[(b.limit, b.asset) for b in self._asset],
@@ -550,9 +567,17 @@ class PnlBoundsKillswitchReadyBuilder:
         self._account.extend(barriers)
         return self
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
         builder._add_builtin_pnl_bounds_killswitch(
+            name=name,
+            mode=mode,
             policy_group_id=self._policy_group_id,
             broker_barriers=self._broker,
             account_barriers=self._account,
@@ -855,9 +880,17 @@ class SpotFundsReadyBuilder:
         self._overrides = tuple(overrides)
         return self
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
         builder._add_builtin_spot_funds(
+            name=name,
+            mode=mode,
             policy_group_id=self._policy_group_id,
             market_data=self._market_data,
             global_slippage_bps=self._global_slippage_bps,
@@ -909,9 +942,15 @@ class SpotFundsBuilder:
             overrides,
         )
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
-        self._ready._build(builder)
+        self._ready._build(builder, name=name, mode=mode)
 
 
 def build_spot_funds() -> SpotFundsBuilder:
@@ -978,9 +1017,17 @@ class SpotFundsPnlBoundsKillswitchReadyBuilder:
         self._account.extend(barriers)
         return self
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
         builder._add_builtin_spot_funds_pnl_bounds_killswitch(
+            name=name,
+            mode=mode,
             policy_group_id=self._policy_group_id,
             market_data=self._market_data,
             global_barrier=self._global,
@@ -1035,9 +1082,15 @@ class SpotFundsPnlBoundsKillswitchBuilder:
         """Add account P&L bounds and return a ready builder."""
         return self._ready.account_barriers(*barriers)
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
-        self._ready._build(builder)
+        self._ready._build(builder, name=name, mode=mode)
 
 
 def build_spot_funds_pnl_bounds_killswitch() -> SpotFundsPnlBoundsKillswitchBuilder:
@@ -1065,9 +1118,17 @@ class OrderValidationBuilder:
         self._policy_group_id = policy_group_id
         return self
 
-    def _build(self, builder: typing.Any) -> None:
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
-        builder._add_builtin_order_validation(policy_group_id=self._policy_group_id)
+        builder._add_builtin_order_validation(
+            policy_group_id=self._policy_group_id, name=name, mode=mode
+        )
 
 
 def build_order_validation() -> OrderValidationBuilder:

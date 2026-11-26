@@ -55,6 +55,7 @@ type OrderValues struct {
 	Operation optional.Option[OrderOperation]
 	Position  optional.Option[OrderPosition]
 	Margin    optional.Option[OrderMargin]
+	Review    optional.Option[OrderReview]
 }
 
 // NewOrderFromValues creates an Order from the given values.
@@ -81,6 +82,7 @@ func (o Order) Values() OrderValues {
 		Operation: o.Operation(),
 		Position:  o.Position(),
 		Margin:    o.Margin(),
+		Review:    o.Review(),
 	}
 }
 
@@ -99,6 +101,9 @@ func (o *Order) setValues(values OrderValues) {
 	}
 	if value, ok := values.Margin.Get(); ok {
 		o.SetMargin(value)
+	}
+	if value, ok := values.Review.Get(); ok {
+		o.SetReview(value)
 	}
 }
 
@@ -163,6 +168,35 @@ func (o *Order) SetPosition(position OrderPosition) {
 // UnsetPosition clears the order position.
 func (o *Order) UnsetPosition() {
 	native.OrderUnsetOrderPosition(&o.value)
+}
+
+// Review returns the optional review group. An absent group means the order
+// is neither confirmed nor already held.
+func (o Order) Review() optional.Option[OrderReview] {
+	review := native.OrderGetOrderReview(o.value)
+	if !native.OrderReviewOptionalIsSet(review) {
+		return optional.None[OrderReview]()
+	}
+	return optional.Some(OrderReview{value: native.OrderReviewOptionalGet(review)})
+}
+
+// EnsureReviewView ensures the review group exists and returns a mutable view.
+func (o *Order) EnsureReviewView() OrderReviewView {
+	review := native.OrderGetOrderReviewView(&o.value)
+	if !native.OrderReviewOptionalIsSet(*review) {
+		native.OrderReviewOptionalSet(review, native.NewOrderReview())
+	}
+	return OrderReviewView{ref: native.OrderReviewOptionalGetView(review)}
+}
+
+// SetReview sets the order review group.
+func (o *Order) SetReview(review OrderReview) {
+	native.OrderSetOrderReview(&o.value, review.value)
+}
+
+// UnsetReview clears the order review group.
+func (o *Order) UnsetReview() {
+	native.OrderUnsetOrderReview(&o.value)
 }
 
 // Margin returns the optional order margin.
@@ -631,6 +665,138 @@ func (v *OrderPositionView) SetClosePosition(closePosition bool) {
 // UnsetClosePosition clears the close-position flag on the view.
 func (v *OrderPositionView) UnsetClosePosition() {
 	native.OrderPositionUnsetClosePosition(v.ref)
+}
+
+//------------------------------------------------------------------------------
+// OrderReview
+
+// OrderReview holds an order's pre-trade review flags.
+// An absent review group means the order is neither confirmed nor already held.
+// An unset flag means not confirmed or not held, respectively.
+// The engine reads Confirmed and AlreadyHeld through its order review reader.
+// For confirmed orders, every policy instance still runs; the engine discards
+// review marks. Reject-mode instances and evaluation failures still reject.
+// AlreadyHeld is the caller's assertion that an earlier committed with-hold
+// review run already holds the order's reservation.
+type OrderReview struct{ value native.OrderReview }
+
+// OrderReviewValues holds the optional confirmation and already-held flags.
+type OrderReviewValues struct {
+	Confirmed   optional.Bool
+	AlreadyHeld optional.Bool
+}
+
+// NewOrderReview creates a review group with neither flag set.
+func NewOrderReview() OrderReview {
+	return OrderReview{value: native.NewOrderReview()}
+}
+
+// NewOrderReviewFromValues creates a review group from the given values.
+func NewOrderReviewFromValues(values OrderReviewValues) OrderReview {
+	review := NewOrderReview()
+	review.SetValues(values)
+	return review
+}
+
+// Reset clears the confirmation and already-held flags.
+func (r *OrderReview) Reset() {
+	native.OrderReviewReset(&r.value)
+}
+
+// Values returns a copy of the current review fields.
+func (r OrderReview) Values() OrderReviewValues {
+	return OrderReviewValues{
+		Confirmed:   r.Confirmed(),
+		AlreadyHeld: r.AlreadyHeld(),
+	}
+}
+
+// SetValues replaces the review fields.
+func (r *OrderReview) SetValues(values OrderReviewValues) {
+	r.Reset()
+	if confirmed, ok := values.Confirmed.Get(); ok {
+		r.SetConfirmed(confirmed)
+	}
+	if alreadyHeld, ok := values.AlreadyHeld.Get(); ok {
+		r.SetAlreadyHeld(alreadyHeld)
+	}
+}
+
+// Confirmed returns the optional confirmation flag. An unset flag means the
+// order has not been confirmed. The engine still runs every policy instance
+// and discards review marks for confirmed orders. Reject-mode instances and
+// evaluation failures still reject.
+func (r OrderReview) Confirmed() optional.Bool {
+	return convert.NewBoolOptionFromNative(native.OrderReviewGetConfirmed(r.value))
+}
+
+// SetConfirmed sets the confirmation flag.
+func (r *OrderReview) SetConfirmed(confirmed bool) {
+	native.OrderReviewSetConfirmed(&r.value, convert.NewNativeTriBool(confirmed))
+}
+
+// UnsetConfirmed clears the confirmation flag.
+func (r *OrderReview) UnsetConfirmed() {
+	native.OrderReviewSetConfirmed(&r.value, native.TriBoolNotSet)
+}
+
+// AlreadyHeld returns the caller's optional assertion that an earlier committed
+// with-hold review run already holds the order's reservation. An unset flag
+// means not held.
+func (r OrderReview) AlreadyHeld() optional.Bool {
+	return convert.NewBoolOptionFromNative(native.OrderReviewGetAlreadyHeld(r.value))
+}
+
+// SetAlreadyHeld sets the caller's assertion that an earlier committed with-hold
+// review run already holds the order's reservation.
+func (r *OrderReview) SetAlreadyHeld(alreadyHeld bool) {
+	native.OrderReviewSetAlreadyHeld(&r.value, convert.NewNativeTriBool(alreadyHeld))
+}
+
+// UnsetAlreadyHeld clears the already-held flag, meaning not held.
+func (r *OrderReview) UnsetAlreadyHeld() {
+	native.OrderReviewSetAlreadyHeld(&r.value, native.TriBoolNotSet)
+}
+
+// OrderReviewView is a mutable view into a review group owned by an Order.
+type OrderReviewView struct{ ref *native.OrderReview }
+
+// Reset clears the confirmation and already-held flags on the view.
+func (v *OrderReviewView) Reset() {
+	native.OrderReviewReset(v.ref)
+}
+
+// Confirmed returns the optional confirmation flag on the view.
+func (v OrderReviewView) Confirmed() optional.Bool {
+	return convert.NewBoolOptionFromNative(native.OrderReviewGetConfirmed(*v.ref))
+}
+
+// SetConfirmed sets the confirmation flag on the view.
+func (v *OrderReviewView) SetConfirmed(confirmed bool) {
+	native.OrderReviewSetConfirmed(v.ref, convert.NewNativeTriBool(confirmed))
+}
+
+// UnsetConfirmed clears the confirmation flag on the view.
+func (v *OrderReviewView) UnsetConfirmed() {
+	native.OrderReviewSetConfirmed(v.ref, native.TriBoolNotSet)
+}
+
+// AlreadyHeld returns the caller's optional assertion on the view that an
+// earlier committed with-hold review run already holds the order's reservation.
+// An unset flag means not held.
+func (v OrderReviewView) AlreadyHeld() optional.Bool {
+	return convert.NewBoolOptionFromNative(native.OrderReviewGetAlreadyHeld(*v.ref))
+}
+
+// SetAlreadyHeld sets the caller's assertion on the view that an earlier
+// committed with-hold review run already holds the order's reservation.
+func (v *OrderReviewView) SetAlreadyHeld(alreadyHeld bool) {
+	native.OrderReviewSetAlreadyHeld(v.ref, convert.NewNativeTriBool(alreadyHeld))
+}
+
+// UnsetAlreadyHeld clears the already-held flag on the view, meaning not held.
+func (v *OrderReviewView) UnsetAlreadyHeld() {
+	native.OrderReviewSetAlreadyHeld(v.ref, native.TriBoolNotSet)
 }
 
 //------------------------------------------------------------------------------

@@ -64,8 +64,10 @@ TEST(NonMutatingDryRunWiki, ReadDryRunVerdict) {
 
   const openpit::pretrade::DryRunReport report =
       engine.ExecutePreTradeDryRun(order);
-  if (report.Passed()) {
-    std::cout << "order would be admitted\n";
+  if (!report.Reviews().empty()) {
+    std::cout << "order would require a human decision before sending\n";
+  } else if (report.Passed()) {
+    std::cout << "order had no rejects or review marks in the simulation\n";
   } else {
     for (const openpit::pretrade::Reject& reject : report.Rejects()) {
       std::cout << "would reject by " << reject.policy << " ["

@@ -100,6 +100,17 @@ if rejects != nil {
 // Close rolls the reservation back unless it was committed.
 defer reservation.Close()
 
+reviews, err := reservation.Reviews()
+if err != nil {
+ log.Fatal(err)
+}
+if len(reviews) > 0 {
+ // Leave unsent. After approval, rerun with confirmation set.
+ // Set AlreadyHeld as well if this reservation retained a hold.
+ reservation.Commit()
+ return
+}
+
 // The venue accepted the order, so the reserved state stays.
 reservation.Commit()
 }

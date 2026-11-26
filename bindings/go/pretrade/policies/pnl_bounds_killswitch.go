@@ -177,12 +177,13 @@ func (b *PnlBoundsKillSwitchReadyBuilder) AccountBarriers(
 
 // Build registers the built-in P&L bounds kill-switch policy on the
 // given engine builder.
-func (b *PnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBuilder) error {
+func (b *PnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
 	err := native.EngineBuilderAddBuiltinPnlBoundsKillSwitch(
 		builder,
 		native.PolicyGroupID(b.policyGroupID),
 		b.brokerBarriers,
 		b.accountBarriers,
+		instance,
 	)
 	runtime.KeepAlive(b)
 	return err

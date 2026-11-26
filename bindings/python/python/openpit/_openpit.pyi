@@ -393,7 +393,7 @@ class MarketDataBuilder:
     def build(self) -> MarketDataService: ...
 
 class Reject:
-    """Business reject returned by pre-trade checks."""
+    """Reject or review mark returned by pre-trade checks."""
 
     @property
     def code(self) -> str:
@@ -414,6 +414,18 @@ class Reject:
     @property
     def scope(self) -> str:
         """Reject scope (``order`` or ``account``)."""
+
+    @property
+    def mode(self) -> str:
+        """Enforcement mode for the pre-trade start and main stages.
+
+        Returns ``"Reject"``, ``"ReviewWithHold"``, or ``"ReviewWithoutHold"``.
+        Both stages report evaluation failures as ``"Reject"``.
+        Any account-adjustment entry rejects the batch and is reported as
+        ``"Reject"``. Drop copy applies bookkeeping in every mode,
+        aborts on evaluation failures, and omits review marks and their
+        account blocks.
+        """
 
     @property
     def user_data(self) -> int:
@@ -1054,6 +1066,32 @@ class OrderMargin:
     @auto_borrow.setter
     def auto_borrow(self, value: bool) -> None: ...
 
+class OrderReview:
+    """Confirmation supplied by the caller for a fresh pre-trade run.
+
+    ``already_held`` is the caller's assertion that this order's reservation
+    is already held by an earlier committed with-hold run.
+    """
+
+    def __init__(
+        self, *, confirmed: bool = False, already_held: bool = False
+    ) -> None: ...
+    @property
+    def confirmed(self) -> bool:
+        """Whether the caller has confirmed the order."""
+
+    @confirmed.setter
+    def confirmed(self, value: bool) -> None: ...
+    @property
+    def already_held(self) -> bool:
+        """Whether an earlier committed with-hold run holds the reservation.
+
+        Defaults to ``False``.
+        """
+
+    @already_held.setter
+    def already_held(self, value: bool) -> None: ...
+
 class Order:
     """Extensible order model accepted by ``Engine.start_pre_trade``."""
 
@@ -1063,9 +1101,10 @@ class Order:
         operation: OrderOperation | None = None,
         position: OrderPosition | None = None,
         margin: OrderMargin | None = None,
+        review: OrderReview | None = None,
     ) -> None:
         """Create an order with optional groups."""
-        _ = (operation, position, margin)
+        _ = (operation, position, margin, review)
 
     @property
     def operation(self) -> OrderOperation | None:
@@ -1085,6 +1124,15 @@ class Order:
 
     @margin.setter
     def margin(self, value: OrderMargin | None) -> None: ...
+    @property
+    def review(self) -> OrderReview | None:
+        """Pre-trade review group.
+
+        When absent, the order is unconfirmed and not held.
+        """
+
+    @review.setter
+    def review(self, value: OrderReview | None) -> None: ...
 
 class ExecutionReportOperation:
     """Execution-report instrument and side group."""
@@ -1600,8 +1648,31 @@ class Request:
     error.
     """
 
+    @property
+    def reviews(self) -> list[Reject]:
+        """Start-stage marks requiring a human decision before submission.
+
+        Check ``ExecuteResult.reviews`` after execution. Raises ``RuntimeError``
+        after the request is consumed.
+        """
+
     def execute(self) -> ExecuteResult:
-        """Run main-stage pre-trade checks."""
+        """Run main-stage pre-trade checks.
+
+        Raises:
+            RuntimeError: If the request has already been executed.
+            TypeError: If a policy return value has a non-iterable collection
+                or an incompatible field type.
+            ValueError: If a policy return value has an invalid field.
+            openpit.param.ParamError: If a numeric field in a policy return value fails
+                domain parsing or exceeds the supported decimal range.
+            AttributeError: If a policy return value lacks a required attribute.
+            OverflowError: If a policy return value has a ``user_data`` token that
+                fits in 64 bits but exceeds the platform's word size.
+            Exception: Exceptions from policy callbacks, from mutation rollback
+                callbacks, or from Python code invoked while reading policy return
+                values keep their original type.
+        """
 
 PolicyGroupId: typing.TypeAlias = int
 """Group identifier used to tag policies and their outcomes."""
@@ -1669,8 +1740,8 @@ class Reservation:
     """
     Single-use reservation handle returned by successful main-stage execution.
 
-    Exactly one of ``commit`` or ``rollback`` must be called to finalize the
-    reserved state.
+    Finalize the reserved state with ``commit`` or ``rollback``.
+    A without-hold review carries no reserved state.
 
     Finalization must not fail. A mutation callable that raises is re-raised to
     the caller once the rest of the batch has run, and independently arms the
@@ -1687,6 +1758,17 @@ class Reservation:
     @property
     def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
         """Account adjustment outcomes captured by the reservation."""
+
+    @property
+    def reviews(self) -> list[Reject]:
+        """Marks requiring a human decision before submission.
+
+        If there are review marks, commit immediately and keep the order
+        unsent. The reservation keeps holds and policy results only if every
+        review mark is with-hold. To approve, run the order again with
+        ``OrderReview(confirmed=True)``. Raises ``RuntimeError`` once the
+        reservation is finalized.
+        """
 
     def commit(self) -> None:
         """Finalize reservation as committed.
@@ -1802,7 +1884,7 @@ class StartResult:
 
     @property
     def ok(self) -> bool:
-        """Whether start-stage checks passed."""
+        """Whether the start stage found no rejects. Check ``reviews``."""
 
     @property
     def request(self) -> Request | None:
@@ -1812,21 +1894,28 @@ class StartResult:
     def rejects(self) -> list[Reject]:
         """Reject list when checks fail."""
 
+    @property
+    def reviews(self) -> list[Reject]:
+        """Start-stage marks requiring a human decision before submission.
+
+        Execute the request to get the final verdict. See ``Reservation.reviews``
+        for the review lifecycle.
+        """
+
     def __bool__(self) -> bool:
-        """Boolean convenience alias for ``ok``."""
+        """Same as ``ok``. Check ``reviews`` before submission."""
 
 class ExecuteResult:
     """
-    Result of ``Request.execute``.
+    Result of ``Request.execute`` or ``Engine.execute_pre_trade``.
 
-    This object reports whether main-stage checks accepted the request and,
-    on success, carries the single-use reservation handle that must later be
-    committed or rolled back.
+    Carries the effective rejects or the single-use reservation and its review
+    marks. See ``Reservation.reviews`` for the review lifecycle.
     """
 
     @property
     def ok(self) -> bool:
-        """Whether main-stage checks passed."""
+        """Whether the evaluated stages found no rejects. Check ``reviews``."""
 
     @property
     def reservation(self) -> Reservation | None:
@@ -1836,8 +1925,15 @@ class ExecuteResult:
     def rejects(self) -> list[Reject]:
         """Reject list when checks fail."""
 
+    @property
+    def reviews(self) -> list[Reject]:
+        """Marks requiring a human decision before submission.
+
+        See ``Reservation.reviews`` for the review lifecycle.
+        """
+
     def __bool__(self) -> bool:
-        """Boolean convenience alias for ``ok``."""
+        """Same as ``ok``. Check ``reviews`` before submission."""
 
 class DryRunReport:
     """
@@ -1849,11 +1945,18 @@ class DryRunReport:
 
     @property
     def is_pass(self) -> bool:
-        """Whether the order would have been admitted by all stages."""
+        """Whether the evaluated stages would find no rejects. Check ``reviews``."""
 
     @property
     def rejects(self) -> list[Reject] | None:
         """Reject list when checks would fail."""
+
+    @property
+    def reviews(self) -> list[Reject]:
+        """Marks a live run would return, requiring a decision before submission.
+
+        See ``Reservation.reviews`` for the live review lifecycle.
+        """
 
     @property
     def lock(self) -> Lock:
@@ -1868,7 +1971,7 @@ class DryRunReport:
         """Account block a real account-scope reject would have recorded."""
 
     def __bool__(self) -> bool:
-        """Boolean convenience alias for ``is_pass``."""
+        """Same as ``is_pass``. Check ``reviews`` before submission."""
 
 class OutcomeAmount:
     """Delta and absolute values for one account position field."""
@@ -2266,13 +2369,30 @@ class SyncedEngineBuilder:
     def pre_trade(
         self,
         policy: Policy,
+        *,
+        name: str | None = None,
+        mode: pretrade.RuleMode | None = None,
     ) -> ReadyEngineBuilder:
-        """Register a pre-trade policy."""
-        _ = policy
+        """Register a policy; None or empty name uses the policy name.
 
-    def builtin(self, builtin_ready_builder: typing.Any) -> ReadyEngineBuilder:
-        """Register a built-in policy via its ready builder."""
-        _ = builtin_ready_builder
+        None mode means Reject.
+        Mode strings use exact PascalCase; invalid modes raise ValueError.
+        """
+        _ = (policy, name, mode)
+
+    def builtin(
+        self,
+        builtin_ready_builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: pretrade.RuleMode | None = None,
+    ) -> ReadyEngineBuilder:
+        """Register a built-in policy; None or empty name uses the policy name.
+
+        None mode means Reject.
+        Mode strings use exact PascalCase; invalid modes raise ValueError.
+        """
+        _ = (builtin_ready_builder, name, mode)
 
     def market_data(self, default_ttl: QuoteTtl) -> MarketDataBuilder:
         """Create a market-data service builder."""
@@ -2284,13 +2404,30 @@ class ReadyEngineBuilder:
     def pre_trade(
         self,
         policy: Policy,
+        *,
+        name: str | None = None,
+        mode: pretrade.RuleMode | None = None,
     ) -> ReadyEngineBuilder:
-        """Register an additional pre-trade policy."""
-        _ = policy
+        """Register a policy; None or empty name uses the policy name.
 
-    def builtin(self, builtin_ready_builder: typing.Any) -> ReadyEngineBuilder:
-        """Register a built-in policy via its ready builder."""
-        _ = builtin_ready_builder
+        None mode means Reject.
+        Mode strings use exact PascalCase; invalid modes raise ValueError.
+        """
+        _ = (policy, name, mode)
+
+    def builtin(
+        self,
+        builtin_ready_builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: pretrade.RuleMode | None = None,
+    ) -> ReadyEngineBuilder:
+        """Register a built-in policy; None or empty name uses the policy name.
+
+        None mode means Reject.
+        Mode strings use exact PascalCase; invalid modes raise ValueError.
+        """
+        _ = (builtin_ready_builder, name, mode)
 
     def market_data(self, default_ttl: QuoteTtl) -> MarketDataBuilder:
         """Create a market-data service builder."""
@@ -2310,7 +2447,20 @@ class Engine:
         """Create a new EngineBuilder."""
 
     def start_pre_trade(self, order: object) -> StartResult: ...
-    def start_pre_trade_dry_run(self, order: object) -> DryRunReport: ...
+    def start_pre_trade_dry_run(self, order: object) -> DryRunReport:
+        """Run a non-mutating simulation of the pre-trade start stage.
+
+        Raises:
+            TypeError: If ``order`` is not an order object or a policy returns
+                a non-iterable value other than ``None``.
+            ValueError: If a policy return value has an invalid reject field.
+            AttributeError: If a policy return value lacks a required reject field.
+            OverflowError: If a policy return value has a ``user_data`` token that
+                fits in 64 bits but exceeds the platform's word size.
+            Exception: Exceptions from policy callbacks or from Python code invoked
+                while reading their return values keep their original type.
+        """
+
     def execute_pre_trade(self, order: object) -> ExecuteResult: ...
     def apply_drop_copy(
         self,
@@ -2340,7 +2490,23 @@ class Engine:
         """
         ...
 
-    def execute_pre_trade_dry_run(self, order: object) -> DryRunReport: ...
+    def execute_pre_trade_dry_run(self, order: object) -> DryRunReport:
+        """Run a non-mutating simulation of the pre-trade start and main stages.
+
+        Raises:
+            TypeError: If ``order`` is not an order object, a start-stage policy returns
+                a non-iterable value other than ``None``, or a main-stage policy return
+                value has a non-iterable collection or an incompatible field type.
+            ValueError: If a policy return value has an invalid field.
+            openpit.param.ParamError: If a numeric field in a policy return value fails
+                domain parsing or exceeds the supported decimal range.
+            AttributeError: If a policy return value lacks a required attribute.
+            OverflowError: If a policy return value has a ``user_data`` token that
+                fits in 64 bits but exceeds the platform's word size.
+            Exception: Exceptions from policy callbacks or from Python code invoked
+                while reading their return values keep their original type.
+        """
+
     def apply_execution_report(self, report: object) -> PostTradeResult: ...
     def apply_account_adjustment(
         self,

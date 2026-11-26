@@ -72,7 +72,9 @@ pub use lock::JsLock;
 pub use marketdata::{
     JsInstrument, JsMarketDataBuilder, JsMarketDataService, JsQuote, JsQuoteResolution, JsQuoteTtl,
 };
-pub use order::{JsOrder, JsOrderMargin, JsOrderOperation, JsOrderPosition, JsTradeAmount};
+pub use order::{
+    JsOrder, JsOrderMargin, JsOrderOperation, JsOrderPosition, JsOrderReview, JsTradeAmount,
+};
 pub use outcome::{
     JsAccountAdjustmentOutcome, JsAccountOutcomeEntry, JsAccountPnlOutcome, JsOutcomeAmount,
     JsPnlHaltReason, JsPnlOutcome, JsPnlOutcomeAmount,

@@ -184,8 +184,15 @@ TEST(GettingStartedWiki, BuildAnEngine) {
   }
   openpit::pretrade::Reservation reservation = std::move(*executed.reservation);
 
-  // 5. If the request is successfully sent to the venue, it must be committed.
-  // The rollback must be called otherwise to revert all performed reservations.
+  if (!reservation.Reviews().empty()) {
+    // Leave unsent. After approval, rerun with OrderReview::confirmed set.
+    reservation.Commit();
+    return;
+  }
+
+  // 5. Commit after a successful venue handoff. Call Rollback() on a known
+  // failure; if an exception exits this scope first, Reservation destruction
+  // rolls the pending state back automatically.
   reservation.Commit();
 
   // 6. The order goes to the venue and returns with an execution report.

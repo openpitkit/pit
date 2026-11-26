@@ -103,20 +103,15 @@ if typing.TYPE_CHECKING:
     from ..param import AccountId, Price
 from .._openpit import Context, PostTradeContext
 from ..core import Mutation
-from ._enum import RejectScope
+from ._enum import RejectScope, RuleMode
 
 
 @dataclasses.dataclass(frozen=True)
 class PolicyReject:
     """
-    Business reject produced by a custom policy.
+    Reject or review mark produced by a custom policy.
 
-    Canonical reject model for policy interfaces.
-    Field semantics match the engine reject payload:
-    ``code``, ``reason``, ``details``, and ``scope``.
-
-    This type models a normal reject path. Do not raise exceptions for normal
-    risk decisions. Return this object instead.
+    Return this object for normal risk decisions.
 
     Attributes:
         code: Stable machine-readable reject code string from
@@ -124,6 +119,22 @@ class PolicyReject:
         reason: Short human-readable reason.
         details: Detailed context for logs/diagnostics.
         scope: Reject scope, either ``"order"`` or ``"account"``.
+        mode: Enforcement mode for pre-trade start and main. Defaults to
+            ``RuleMode.REJECT`` (``"Reject"``), which rejects the order.
+            A successful run with either review mode returns a reservation
+            and requires a human decision. With only ``"ReviewWithHold"``
+            marks, the run keeps its holds and policy results (mutations,
+            lock prices, and account adjustments). Commit the reservation
+            immediately. Any ``"ReviewWithoutHold"`` mark discards those
+            holds and results. Send only after a fresh run with the order
+            confirmed and no review marks or rejects.
+            Both stages report evaluation failures as ``"Reject"``.
+            Any account-adjustment entry rejects the batch and is reported as
+            ``"Reject"``. Drop copy applies bookkeeping in every mode,
+            aborts on evaluation failures, and omits review marks and their
+            account blocks. Construction raises ``ValueError`` for a mode
+            outside the three exact strings. The engine also validates the
+            mode on objects returned by policies.
         user_data: Opaque caller-defined integer token copied through reject
             flows. ``0`` means "not set". The SDK never inspects it; lifetime
             and thread-safety are caller-managed. See the
@@ -137,11 +148,13 @@ class PolicyReject:
     reason: str
     details: str
     scope: RejectScope = RejectScope.ORDER
+    mode: RuleMode = dataclasses.field(default=RuleMode.REJECT, kw_only=True)
     user_data: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, RejectScope):
             raise TypeError("scope must be openpit.pretrade.RejectScope")
+        RuleMode(self.mode)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -149,12 +162,13 @@ class PolicyDecision:
     """
     Return type of :meth:`Policy.perform_pre_trade_check`.
 
-    Ordinary pre-trade keeps its contribution only on acceptance. Drop-copy
-    also keeps it alongside ordinary, non-enforcing rejects; an evaluation-
-    failure reject aborts drop-copy and discards the contribution.
+    Live pre-trade keeps the mutations only when the run has no rejects
+    and every review mark in it, if any, is with-hold.
+    Drop-copy keeps them alongside ordinary, non-enforcing rejects.
+    An evaluation-failure reject aborts drop-copy and discards the mutations.
 
     Attributes:
-        rejects: Rejects produced by the policy.
+        rejects: Rejects and review marks produced by the policy.
         mutations: Mutations registered by the policy.
     """
 
@@ -181,11 +195,11 @@ class PolicyDecision:
         mutations: typing.Iterable[Mutation] = (),
     ) -> PolicyDecision:
         """
-        Build a rejecting decision.
+        Build a decision with rejects or review marks.
 
         Args:
-            rejects: One or more business rejects.
-            mutations: Optional mutations produced before reject decision.
+            rejects: One or more rejects or review marks.
+            mutations: Optional mutations produced by the policy.
 
         Returns:
             PolicyDecision: Decision with non-empty rejects.
@@ -199,7 +213,7 @@ class PolicyPreTradeResult:
     Return type of :meth:`Policy.perform_pre_trade_check`.
 
     Attributes:
-        rejects: Rejects produced by the policy.
+        rejects: Rejects and review marks produced by the policy.
         mutations: Mutations registered by the policy.
         account_adjustments: Per-asset outcome entries produced by the policy.
         lock_prices: Prices to store under this policy's ``policy_group_id``.
@@ -236,8 +250,11 @@ class PolicyPreTradeResult:
         lock_prices: typing.Iterable[Price] = (),
     ) -> PolicyPreTradeResult:
         """
-        Build a rejecting pre-trade result. Drop-copy retains its contribution
-        only when every reject is non-enforcing.
+        Build a pre-trade result with rejects or review marks.
+
+        Live pre-trade keeps the contribution only when the run has no
+        rejects and every review mark in it is with-hold.
+        Drop-copy retains it when every reject is non-enforcing.
         """
         return cls(
             rejects=tuple(rejects),
@@ -336,8 +353,8 @@ class Policy(abc.ABC):
 
         Returns:
             Iterable[PolicyReject]:
-                - empty iterable if the order passes this policy
-                - one or more :class:`PolicyReject` if this policy rejects
+                - empty iterable if the policy produces no marks or rejects
+                - one or more rejects or review marks otherwise
         """
         return ()
 
@@ -364,7 +381,7 @@ class Policy(abc.ABC):
         Returns:
             PolicyPreTradeResult:
                 - use ``PolicyPreTradeResult.accept(...)`` for pass path
-                - use ``PolicyPreTradeResult.reject(...)`` for business rejects
+                - use ``PolicyPreTradeResult.reject(...)`` for rejects and marks
         """
         return PolicyPreTradeResult.accept()
 

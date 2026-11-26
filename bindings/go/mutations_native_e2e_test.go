@@ -50,6 +50,206 @@ func requireAppliedDropCopy(
 	return operation
 }
 
+func TestCustomPolicyReviewModes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode reject.RuleMode
+	}{
+		{name: "accept"},
+		{name: "reject", mode: reject.RuleModeReject},
+		{name: "review-with-hold", mode: reject.RuleModeReviewWithHold},
+		{name: "review-without-hold", mode: reject.RuleModeReviewWithoutHold},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := &reviewTestPolicy{
+				lockPrice: mustOrderNativePrice(t, "99"),
+				asset:     mustOrderNativeAsset(t, "USD"),
+			}
+			var wantRejects, wantReviews []reject.Reject
+			if tc.name != "accept" {
+				policy.main = reject.NewSingleItemList(
+					reject.CodeRiskLimitExceeded,
+					policy.Name(),
+					"risk limit exceeded",
+					"from the main stage",
+					reject.ScopeOrder,
+				)
+				policy.main[0].Mode = tc.mode
+				if tc.mode == reject.RuleModeReject {
+					wantRejects = policy.main
+				} else {
+					wantReviews = policy.main
+				}
+			}
+			engine := newEngineWithPreTradePolicyForNativeE2E(t, policy)
+			defer engine.Stop()
+			order := newValidOrderForNativeE2E(t)
+
+			request, rejects, err := engine.StartPreTrade(order)
+			if err != nil || request == nil || len(rejects) != 0 {
+				t.Fatalf("StartPreTrade() = %v, %v, %v, want an accepted request", request, rejects, err)
+			}
+			defer request.Close()
+			assertReviewMarks(t, request.Reviews, nil)
+			reservation, rejects, err := request.Execute()
+			if err != nil || !slices.Equal(rejects, wantRejects) {
+				t.Fatalf("Execute() rejects = %v, error = %v, want %v", rejects, err, wantRejects)
+			}
+			if (reservation == nil) != (len(wantRejects) != 0) {
+				t.Fatalf("Execute() reservation = %v, rejects = %v", reservation, rejects)
+			}
+			if reservation != nil {
+				defer reservation.Close()
+				assertReviewMarks(t, reservation.Reviews, wantReviews)
+				assertReviewResult(t, reservation, tc.mode)
+				reservation.RollbackAndClose()
+				if _, err := reservation.Reviews(); !errors.Is(err, pretrade.ErrReservationClosed) {
+					t.Fatalf("closed Reservation.Reviews() error = %v", err)
+				}
+			}
+			if _, err := request.Reviews(); err == nil || errors.Is(err, pretrade.ErrRequestClosed) {
+				t.Fatalf("executed Request.Reviews() error = %v, want native error", err)
+			}
+			request.Close()
+			if _, err := request.Reviews(); !errors.Is(err, pretrade.ErrRequestClosed) {
+				t.Fatalf("closed Request.Reviews() error = %v", err)
+			}
+
+			report, err := engine.ExecutePreTradeDryRun(order)
+			if err != nil {
+				t.Fatalf("ExecutePreTradeDryRun() error = %v", err)
+			}
+			defer report.Close()
+			passed, err := report.IsPass()
+			if err != nil || passed != (len(wantRejects) == 0) {
+				t.Fatalf("IsPass() = %v, %v, want pass = %v", passed, err, len(wantRejects) == 0)
+			}
+			assertReviewMarks(t, report.Rejects, wantRejects)
+			assertReviewMarks(t, report.Reviews, wantReviews)
+			assertReviewResult(t, report, tc.mode)
+			report.Close()
+			if _, err := report.Reviews(); !errors.Is(err, pretrade.ErrDryRunReportClosed) {
+				t.Fatalf("closed DryRunReport.Reviews() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCustomPolicyReceivesConfirmedOrder(t *testing.T) {
+	policy := &reviewTestPolicy{}
+	policy.start = reject.NewSingleItemList(
+		reject.CodeRiskLimitExceeded, policy.Name(), "requires review", "from the start stage",
+		reject.ScopeOrder,
+	)
+	policy.start[0].Mode = reject.RuleModeReviewWithHold
+	engine := newEngineWithPreTradePolicyForNativeE2E(t, policy)
+	defer engine.Stop()
+
+	for _, confirmed := range []bool{false, true} {
+		order := newValidOrderForNativeE2E(t)
+		want := policy.start
+		if confirmed {
+			review := order.EnsureReviewView()
+			review.SetConfirmed(true)
+			want = nil
+		}
+		request, rejects, err := engine.StartPreTrade(order)
+		if err != nil || request == nil || len(rejects) != 0 {
+			t.Fatalf("StartPreTrade(confirmed = %v) = %v, %v, %v", confirmed, request, rejects, err)
+		}
+		defer request.Close()
+		assertReviewMarks(t, request.Reviews, want)
+		reservation, rejects, err := request.Execute()
+		if err != nil || reservation == nil || len(rejects) != 0 {
+			t.Fatalf("Execute(confirmed = %v) = %v, %v, %v", confirmed, reservation, rejects, err)
+		}
+		defer reservation.Close()
+		assertReviewMarks(t, reservation.Reviews, want)
+		reservation.RollbackAndClose()
+	}
+}
+
+func assertReviewMarks(t *testing.T, read func() ([]reject.Reject, error), want []reject.Reject) {
+	t.Helper()
+	got, err := read()
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("review or reject marks = %v, %v, want %v", got, err, want)
+	}
+}
+
+func assertReviewResult(t *testing.T, result interface {
+	Lock() (pretrade.Lock, error)
+	AccountAdjustments() ([]accountadjustment.Outcome, error)
+}, mode reject.RuleMode) {
+	t.Helper()
+	if mode != reject.RuleModeReviewWithHold && mode != reject.RuleModeReviewWithoutHold {
+		return
+	}
+	lock, lockErr := result.Lock()
+	var lockCount int
+	var lockCountErr error
+	if len(lock.Bytes()) != 0 {
+		lockCount, lockCountErr = lock.Len()
+	}
+	adjustments, adjustmentsErr := result.AccountAdjustments()
+	wantCount := 0
+	if mode == reject.RuleModeReviewWithHold {
+		wantCount = 1
+	}
+	if lockErr != nil || lockCountErr != nil || adjustmentsErr != nil ||
+		lockCount != wantCount || len(adjustments) != wantCount {
+		t.Fatalf("mode %v: lock has %d prices, adjustments = %v, errors = %v, %v, %v, want %d of each",
+			mode, lockCount, adjustments, lockErr, lockCountErr, adjustmentsErr, wantCount)
+	}
+}
+
+type reviewTestPolicy struct {
+	orderNativeE2ENoopStartPolicy
+	start     []reject.Reject
+	main      []reject.Reject
+	lockPrice param.Price
+	asset     param.Asset
+}
+
+func (*reviewTestPolicy) Name() string { return "review-test" }
+
+func (p *reviewTestPolicy) CheckPreTradeStart(_ pretrade.Context, order model.Order) []reject.Reject {
+	if review, ok := order.Review().Get(); ok && review.Confirmed().Or(false) {
+		return nil
+	}
+	return p.start
+}
+
+func (p *reviewTestPolicy) PerformPreTradeCheck(
+	_ pretrade.Context,
+	_ model.Order,
+	_ tx.Mutations,
+	result pretrade.Result,
+) []reject.Reject {
+	if len(p.main) != 0 {
+		if err := result.PushLockPrice(p.lockPrice); err != nil {
+			panic(err)
+		}
+		if err := result.PushAccountAdjustment(accountadjustment.AccountOutcomeEntry{Asset: p.asset}); err != nil {
+			panic(err)
+		}
+	}
+	return p.main
+}
+
+func (p *reviewTestPolicy) CheckPreTradeStartDryRun(ctx pretrade.Context, order model.Order) []reject.Reject {
+	return p.CheckPreTradeStart(ctx, order)
+}
+
+func (p *reviewTestPolicy) PerformPreTradeCheckDryRun(
+	ctx pretrade.Context,
+	order model.Order,
+	mutations tx.Mutations,
+	result pretrade.Result,
+) []reject.Reject {
+	return p.PerformPreTradeCheck(ctx, order, mutations, result)
+}
+
 func requireRejectedDropCopy(
 	t *testing.T,
 	engine *Engine,

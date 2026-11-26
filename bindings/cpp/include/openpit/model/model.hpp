@@ -465,6 +465,32 @@ struct OrderPosition {
   }
 };
 
+/// Optional human-review state of an order.
+struct OrderReview {
+  /// Whether a human confirmed the order. An absent value is unconfirmed.
+  std::optional<bool> confirmed;
+  /// Whether an earlier committed with-hold review run already holds the
+  /// order's reservation. An absent value is not held.
+  std::optional<bool> alreadyHeld;
+
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] static OrderReview FromRaw(const OpenPitOrderReview& raw) {
+    OrderReview out;
+    out.confirmed = detail::FromTriBool(raw.confirmed);
+    out.alreadyHeld = detail::FromTriBool(raw.already_held);
+    return out;
+  }
+
+  [[nodiscard]] OpenPitOrderReview Native() const noexcept {
+    OpenPitOrderReview raw{};
+    raw.confirmed = detail::ToTriBool(confirmed);
+    raw.already_held = detail::ToTriBool(alreadyHeld);
+    return raw;
+  }
+};
+
 // Optional margin group of an order.
 struct OrderMargin {
   std::optional<param::Asset> collateralAsset;
@@ -512,6 +538,9 @@ class Order : public ::openpit::Order {
   std::optional<OrderMargin> margin;
   std::optional<OrderPosition> position;
   std::uintptr_t userData = 0;
+  /// Human-review state. An absent group means the order is unconfirmed
+  /// and not held.
+  std::optional<OrderReview> review;
 
   Order() = default;
 
@@ -556,6 +585,9 @@ class Order : public ::openpit::Order {
           ::openpit::detail::FromNative<OrderPosition>(raw.position.value);
     }
     out.userData = reinterpret_cast<std::uintptr_t>(raw.user_data);
+    if (raw.review.is_set) {
+      out.review = ::openpit::detail::FromNative<OrderReview>(raw.review.value);
+    }
     return out;
   }
 
@@ -576,6 +608,10 @@ class Order : public ::openpit::Order {
       raw.position.is_set = true;
     }
     raw.user_data = reinterpret_cast<void*>(userData);
+    if (review) {
+      raw.review.value = ::openpit::detail::Native(*review);
+      raw.review.is_set = true;
+    }
     return raw;
   }
 };

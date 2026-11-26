@@ -58,6 +58,7 @@ using openpit::pretrade::PushReject;
 using openpit::pretrade::Reject;
 using openpit::pretrade::RejectCode;
 using openpit::pretrade::RejectScope;
+using openpit::pretrade::RuleMode;
 
 static_assert(!std::is_move_constructible_v<openpit::tx::Mutations>);
 static_assert(
@@ -650,7 +651,7 @@ TEST(CustomPolicy, RejectListPushFailureRethrowsInvalidScope) {
     static_cast<void>(engine.StartPreTrade(order));
     FAIL() << "expected an invalid_argument for the unknown reject scope";
   } catch (const std::invalid_argument& error) {
-    EXPECT_STREQ(error.what(), "reject scope is invalid");
+    EXPECT_STREQ(error.what(), "reject scope or mode is invalid");
   }
 }
 
@@ -1003,6 +1004,7 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
       engine.ExecutePreTradeDryRun(MakeDryRunHookOrder());
   EXPECT_TRUE(probe.Passed());
   EXPECT_TRUE(probe.Rejects().empty());
+  EXPECT_TRUE(probe.Reviews().empty());
   EXPECT_EQ(counters.startDryRun, 1u);
   EXPECT_EQ(counters.mainDryRun, 1u);
   EXPECT_EQ(counters.start, 0u);
@@ -1013,8 +1015,123 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
   EXPECT_FALSE(result.Passed());
   ASSERT_EQ(result.rejects.size(), 1u);
   EXPECT_EQ(result.rejects.front().code, RejectCode::Custom);
+  EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
   EXPECT_EQ(counters.start, 1u);
   EXPECT_EQ(counters.main, 1u);
+}
+
+struct ReviewPolicy {
+  std::optional<RuleMode> startMode;
+  std::optional<RuleMode> mainMode;
+
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+      const openpit::Order&) const {
+    if (!startMode) {
+      return std::nullopt;
+    }
+    Reject mark("ReviewPolicy", RejectScope::Order, RejectCode::Custom,
+                "review order", "start stage");
+    mark.mode = *startMode;
+    return mark;
+  }
+
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
+      const openpit::Order& order) const {
+    return CheckPreTradeStart(order);
+  }
+
+  void PerformPreTradeCheck(const Context&, openpit::tx::Mutations&,
+                            openpit::pretrade::Result& result,
+                            PolicyDecision& decision) const {
+    result.PushLockPrice(Price::FromString("100"));
+    result.PushAccountAdjustment(
+        openpit::accountadjustment::AccountOutcomeEntry(
+            openpit::param::Asset("USD")));
+    if (mainMode) {
+      Reject mark("ReviewPolicy", RejectScope::Order, RejectCode::Custom,
+                  "review order", "main stage");
+      mark.mode = *mainMode;
+      decision.Push(std::move(mark));
+    }
+  }
+
+  void PerformPreTradeCheckDryRun(const Context& context,
+                                  openpit::tx::Mutations& mutations,
+                                  openpit::pretrade::Result& result,
+                                  PolicyDecision& decision) const {
+    PerformPreTradeCheck(context, mutations, result, decision);
+  }
+};
+
+TEST(CustomPolicy, StartReviewReachesRequestReservationAndDryRun) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  builder.Add(CustomPolicy<ReviewPolicy>(
+      "ReviewPolicy", ReviewPolicy{RuleMode::ReviewWithHold, std::nullopt}));
+  const openpit::Engine engine = builder.Build();
+  const auto order = MakeDryRunHookOrder();
+
+  const auto dryRun = engine.StartPreTradeDryRun(order);
+  ASSERT_TRUE(dryRun.Passed());
+  ASSERT_EQ(dryRun.Reviews().size(), 1u);
+  EXPECT_EQ(dryRun.Reviews().front().mode, RuleMode::ReviewWithHold);
+
+  auto start = engine.StartPreTrade(order);
+  ASSERT_TRUE(start.Passed());
+  const auto startReviews = start.request->Reviews();
+  ASSERT_EQ(startReviews.size(), 1u);
+  EXPECT_EQ(startReviews.front().mode, RuleMode::ReviewWithHold);
+
+  auto executed = start.request->Execute();
+  ASSERT_TRUE(executed.Passed());
+  const auto reviews = executed.reservation->Reviews();
+  ASSERT_EQ(reviews.size(), 1u);
+  EXPECT_EQ(reviews.front().mode, RuleMode::ReviewWithHold);
+}
+
+TEST(CustomPolicy, MainReviewPreservesPolicyResultOnlyWithHold) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    const bool holds = mode == RuleMode::ReviewWithHold;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy",
+                                           ReviewPolicy{std::nullopt, mode}));
+    const openpit::Engine engine = builder.Build();
+    const auto order = MakeDryRunHookOrder();
+
+    const auto report = engine.ExecutePreTradeDryRun(order);
+    ASSERT_TRUE(report.Passed());
+    const auto dryReviews = report.Reviews();
+    ASSERT_EQ(dryReviews.size(), 1u);
+    EXPECT_EQ(dryReviews.front().mode, mode);
+    EXPECT_EQ(report.Lock().IsEmpty(), !holds);
+    EXPECT_EQ(report.AccountAdjustments().empty(), !holds);
+
+    auto executed = engine.ExecutePreTrade(order);
+    ASSERT_TRUE(executed.Passed());
+    const auto reviews = executed.reservation->Reviews();
+    ASSERT_EQ(reviews.size(), 1u);
+    EXPECT_EQ(reviews.front().mode, mode);
+    EXPECT_EQ(executed.reservation->Lock().IsEmpty(), !holds);
+    EXPECT_EQ(executed.reservation->AccountAdjustments().empty(), !holds);
+  }
+}
+
+TEST(CustomPolicy, InvalidModeFailsLiveAndDryRun) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  builder.Add(CustomPolicy<ReviewPolicy>(
+      "ReviewPolicy", ReviewPolicy{std::nullopt, static_cast<RuleMode>(4)}));
+  const openpit::Engine engine = builder.Build();
+  const auto order = MakeDryRunHookOrder();
+
+  EXPECT_THROW(static_cast<void>(engine.ExecutePreTradeDryRun(order)),
+               std::invalid_argument);
+  try {
+    static_cast<void>(engine.ExecutePreTrade(order));
+    FAIL() << "expected invalid_argument for the unknown reject mode";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(), "reject scope or mode is invalid");
+  }
 }
 
 TEST(CustomPolicy, UsesContextStartDryRunHookForDryRunPipeline) {
@@ -1458,6 +1575,56 @@ TEST(BuiltinPolicy, OrderSizeLimitBrokerBarrierBuilds) {
           Quantity::FromString("100"), Volume::FromString("1000000"))));
   config.AddTo(builder);
   EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
+}
+
+TEST(BuiltinPolicy, InstanceModeControlsOrderSizeLimit) {
+  policies::OrderSizeLimitPolicy config;
+  config.BrokerBarrier(policies::OrderSizeBrokerBarrier(
+      policies::OrderSizeLimit::Quantity(Quantity::FromString("0"))));
+  const auto order = MakeDryRunHookOrder();
+  {
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(config);
+    const auto engine = builder.Build();
+    const auto start = engine.StartPreTrade(order);
+    EXPECT_FALSE(start.Passed());
+    ASSERT_EQ(start.rejects.size(), 1u);
+    EXPECT_EQ(start.rejects.front().mode, RuleMode::Reject);
+  }
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    policies::OrderSizeLimitPolicy reviewConfig;
+    reviewConfig.BrokerBarrier(policies::OrderSizeBrokerBarrier(
+        policies::OrderSizeLimit::Quantity(Quantity::FromString("100"))));
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(config, openpit::PolicyInstance{"size-reject"});
+    builder.Add(reviewConfig, openpit::PolicyInstance{"size-review", mode});
+    const auto engine = builder.Build();
+    using BrokerUpdate = policies::OrderSizeBrokerBarrierUpdate;
+    const auto barrier = [](const char* quantity) {
+      return policies::OrderSizeBrokerBarrier(
+          policies::OrderSizeLimit::Quantity(Quantity::FromString(quantity)));
+    };
+    engine.Configure().OrderSizeLimit("size-reject",
+                                      BrokerUpdate::Set(barrier("100")));
+    engine.Configure().OrderSizeLimit("size-review",
+                                      BrokerUpdate::Set(barrier("0")));
+    const auto start = engine.StartPreTrade(order);
+    ASSERT_TRUE(start.Passed());
+    ASSERT_TRUE(start.request);
+    const auto reviews = start.request->Reviews();
+    ASSERT_EQ(reviews.size(), 1u);
+    EXPECT_EQ(reviews.front().mode, mode);
+    EXPECT_EQ(reviews.front().code, RejectCode::OrderQtyExceedsLimit);
+    EXPECT_EQ(reviews.front().scope, RejectScope::Order);
+    EXPECT_EQ(reviews.front().policy, "OrderSizeLimitPolicy");
+    engine.Configure().OrderSizeLimit("size-reject",
+                                      BrokerUpdate::Set(barrier("0")));
+    const auto rejected = engine.StartPreTrade(order);
+    EXPECT_FALSE(rejected.Passed());
+    ASSERT_EQ(rejected.rejects.size(), 1u);
+    EXPECT_EQ(rejected.rejects.front().mode, RuleMode::Reject);
+  }
 }
 
 TEST(BuiltinPolicy, OrderSizeLimitWithoutCapsSurfacesCoreError) {

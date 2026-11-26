@@ -219,13 +219,14 @@ func (b *OrderSizeLimitReadyBuilder) AccountAssetBarriers(
 // Build marshals the configuration and registers the built-in order-size-limit
 // policy on the given engine builder. The core rejects capless limits and
 // duplicate keys.
-func (b *OrderSizeLimitReadyBuilder) Build(builder native.EngineBuilder) error {
+func (b *OrderSizeLimitReadyBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
 	err := native.EngineBuilderAddBuiltinOrderSizeLimit(
 		builder,
 		native.PolicyGroupID(b.policyGroupID),
 		b.broker,
 		b.assetBarriers,
 		b.accountAssetBarriers,
+		instance,
 	)
 	runtime.KeepAlive(b)
 	return err

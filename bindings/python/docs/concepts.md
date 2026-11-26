@@ -23,8 +23,9 @@ Start-stage checks run during `engine.start_pre_trade(order=...)`. They are
 for fast checks that must run before the main-stage request exists, such as
 payload validation, rate limiting, or kill switches.
 
-Start-stage checks return normal business rejects aggregated from all
-registered policies. They do not register rollback mutations.
+The engine aggregates entries from all registered instances and classifies
+each as an effective reject or a review mark. Live start-stage checks do
+not register rollback mutations.
 
 ## Main stage
 
@@ -32,21 +33,26 @@ The start stage returns `openpit.pretrade.Request` on success. Calling
 `request.execute()` runs main-stage checks. These policies can return rejects
 and register `openpit.Mutation` objects.
 
-If any main-stage check rejects, the engine rolls registered mutations back.
-If all policies pass, the engine returns a `Reservation`.
+An effective reject rolls back the run. When only review marks remain, the
+engine returns them with a `Reservation`. Any `ReviewWithoutHold` mark
+discards the holds and policy results.
 
 ## Reservation
 
-A reservation is explicit and single-use. Call `commit()` only after the caller
-knows the order should become durable, for example after it is accepted by the
-next downstream component. Call `rollback()` when the caller decides not to send
-or cannot send the order.
+A reservation is explicit and single-use. Inspect `reviews` before sending.
+When marks are present, commit the reservation and keep the order unsent.
+After approval, rerun with `OrderReview(confirmed=True)` and set
+`already_held=True` if the earlier run retained a hold. For ordinary orders,
+commit after successful submission or roll back when submission fails.
 
 ## Post-trade feedback
 
 After execution, pass `openpit.ExecutionReport` objects to
 `engine.apply_execution_report(report=...)`. Policies use reports to update
 state such as P&L accumulators and may report that a kill switch is active.
+Review marks do not block accounts. For review-mode instances, only blocks
+with evaluation-failure codes are effective in execution-report handling and
+runtime configuration.
 
 ## Account adjustments
 
@@ -55,3 +61,4 @@ changes, such as balance corrections or direct position updates. The input is a
 batch and the result reports either success or the first failing adjustment.
 An accepted batch can also report account blocks that were recorded by the
 engine before the call returned.
+Any reject entry fails the batch, regardless of instance or record mode.

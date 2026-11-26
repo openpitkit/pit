@@ -70,6 +70,7 @@ using openpit::param::AccountId;
 using openpit::param::Price;
 using openpit::param::Quantity;
 using openpit::pretrade::RejectCode;
+using openpit::pretrade::RuleMode;
 using std::chrono::seconds;
 
 namespace policies = openpit::pretrade::policies;
@@ -964,14 +965,66 @@ TEST(TypedAsyncLifecycle, RealEngineStartExecuteCommit) {
       async.StartPreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
   ASSERT_TRUE(start.Passed());
   ASSERT_TRUE(start.rejects.empty());
+  EXPECT_TRUE(start.request->Reviews().empty());
 
   auto executed = start.request->Execute().Await(kAwaitCap).value();
   ASSERT_TRUE(executed.first);  // non-null reservation.
   EXPECT_TRUE(executed.second.empty());
+  EXPECT_TRUE(executed.first->Reviews().empty());
 
   // Commit-and-close finalizes the reservation through the same account queue.
   EXPECT_TRUE(executed.first->CommitAndClose().Await(kAwaitCap).has_value());
 
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+struct AsyncReviewPolicy {
+  std::function<void()> checkRequestDuringExecute;
+
+  [[nodiscard]] std::optional<openpit::pretrade::Reject> CheckPreTradeStart(
+      const openpit::Order&) const {
+    openpit::pretrade::Reject mark(
+        "AsyncReviewPolicy", openpit::pretrade::RejectScope::Order,
+        RejectCode::Custom, "review order", "start stage");
+    mark.mode = RuleMode::ReviewWithHold;
+    return mark;
+  }
+
+  void PerformPreTradeCheck(const openpit::pretrade::Context&,
+                            openpit::pretrade::PolicyDecision&) const {
+    checkRequestDuringExecute();
+  }
+};
+
+TEST(TypedAsyncLifecycle, ReviewsFollowRequestAndReservationLifetimes) {
+  std::weak_ptr<ae::AsyncRequest<ae::EngineAdapter>> request;
+  EngineBuilder builder(SyncPolicy::Full);
+  builder.Add(openpit::pretrade::CustomPolicy<AsyncReviewPolicy>(
+      "AsyncReviewPolicy", AsyncReviewPolicy{[&request] {
+        auto inFlight = request.lock();
+        ASSERT_TRUE(inFlight);
+        EXPECT_THROW(static_cast<void>(inFlight->Reviews()), openpit::Error);
+      }}));
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  auto start =
+      async.StartPreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(start.Passed());
+  request = start.request;
+  const auto startReviews = start.request->Reviews();
+  ASSERT_EQ(startReviews.size(), 1u);
+  EXPECT_EQ(startReviews.front().mode, RuleMode::ReviewWithHold);
+
+  auto executed = start.request->Execute().Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.first);
+  EXPECT_THROW(static_cast<void>(start.request->Reviews()), openpit::Error);
+  const auto reviews = executed.first->Reviews();
+  ASSERT_EQ(reviews.size(), 1u);
+  EXPECT_EQ(reviews.front().mode, RuleMode::ReviewWithHold);
+
+  ASSERT_TRUE(executed.first->RollbackAndClose().Await(kAwaitCap).has_value());
+  EXPECT_THROW(static_cast<void>(executed.first->Reviews()), openpit::Error);
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
 

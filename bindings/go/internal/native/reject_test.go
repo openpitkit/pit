@@ -26,6 +26,7 @@ func TestCreateRejectListClampsNegativeReserve(t *testing.T) {
 	reject := CreatePretradeReject(
 		RejectCodeOther,
 		RejectScopeOrder,
+		RuleModeReject,
 		NewStringView("policy"),
 		NewStringView("reason"),
 		NewStringView("details"),
@@ -49,6 +50,7 @@ func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
 		CreatePretradeReject(
 			RejectCodeOther,
 			RejectScopeOrder,
+			RuleModeReject,
 			NewStringView("policy"),
 			NewStringView("reason"),
 			NewStringView("details"),
@@ -88,6 +90,7 @@ func TestRejectListPushRejectsUnknownScope(t *testing.T) {
 		CreatePretradeReject(
 			RejectCodeOther,
 			PretradeRejectScope(255),
+			RuleModeReject,
 			NewStringView("policy"),
 			NewStringView("reason"),
 			NewStringView("details"),
@@ -114,6 +117,7 @@ func TestUserDataTokenRoundTripsThroughNativeLists(t *testing.T) {
 		CreatePretradeReject(
 			RejectCodeOther,
 			RejectScopeOrder,
+			RuleModeReject,
 			NewStringView("policy"),
 			NewStringView("reason"),
 			NewStringView("details"),
@@ -168,6 +172,7 @@ func TestSmallUserDataTokenSurvivesStackCopy(t *testing.T) {
 	reject := CreatePretradeReject(
 		RejectCodeOther,
 		RejectScopeOrder,
+		RuleModeReject,
 		NewStringView("policy"),
 		NewStringView("reason"),
 		NewStringView("details"),

@@ -30,13 +30,17 @@ use super::reservation::PreTradeReservation;
 /// The request does not expose the underlying order to the caller;
 /// those values are visible only to the engine and the policies.
 pub struct PreTradeRequest<Order> {
+    reviews: Vec<super::Reject>,
     inner: Box<dyn RequestHandle<Order>>,
 }
 
 /// Internal capability interface used by [`PreTradeRequest`].
 pub(crate) trait RequestHandle<Order> {
     /// Executes deferred main-stage pre-trade checks.
-    fn execute(self: Box<Self>) -> Result<PreTradeReservation, Rejects>;
+    fn execute(
+        self: Box<Self>,
+        reviews: Vec<super::Reject>,
+    ) -> Result<PreTradeReservation, Rejects>;
 }
 
 impl<Order> std::fmt::Debug for PreTradeRequest<Order> {
@@ -46,9 +50,23 @@ impl<Order> std::fmt::Debug for PreTradeRequest<Order> {
 }
 
 impl<Order> PreTradeRequest<Order> {
+    /// Returns the review marks collected by the start stage.
+    ///
+    /// Marks do not reject the request. Inspect the executed reservation's
+    /// `reviews()` before sending the order: the main stage can add marks.
+    pub fn reviews(&self) -> &[super::Reject] {
+        &self.reviews
+    }
+
     /// Executes deferred pre-trade checks.
     ///
     /// The call is single-use by type semantics because `self` is consumed.
+    /// Start-stage marks move into the reservation, followed by main-stage
+    /// marks. Without [`crate::EngineBuilder::with_order_review`], a main-stage
+    /// mark with no effective reject makes the call return an engine reject.
+    /// A start-stage [`super::RuleMode::ReviewWithoutHold`] skips the
+    /// main stage after the blocked-account recheck. Inspect the reservation's
+    /// `reviews()` before sending the order.
     ///
     /// # Examples
     ///
@@ -91,8 +109,9 @@ impl<Order> PreTradeRequest<Order> {
     /// rejected too, because the engine cannot clear it against the blocked
     /// set.
     ///
-    /// A main-stage reject with [`crate::pretrade::RejectScope::Account`]
-    /// latches a block for the order's account. The block persists until it is
+    /// An effective main-stage reject with
+    /// [`crate::pretrade::RejectScope::Account`] latches an account block.
+    /// The block persists until it is
     /// lifted, so later requests for the account are rejected up front. The
     /// block is recorded only for a readable account: an unreadable one records
     /// nothing, since a rejected request created no exposure that would justify
@@ -101,14 +120,25 @@ impl<Order> PreTradeRequest<Order> {
     /// # Errors
     ///
     /// Returns [`Rejects`] when the account is blocked or when any main-stage
-    /// policy rejects the order. All policies run before returning, and all
-    /// registered mutations are rolled back in reverse order.
+    /// policy rejects the order. All policies run before returning. A
+    /// review-mode instance whose marks-only result is discarded has its
+    /// mutations rolled back immediately after its hook, before the next
+    /// instance runs. Kept mutations are rolled back in reverse registration
+    /// order at the end. If compensating a without-hold review fails, or
+    /// rolling back a review-mode instance's mutations fails, returns an engine
+    /// `SystemUnavailable` reject and raises the mutation-failure kill switch.
+    /// Without [`crate::EngineBuilder::with_order_review`], a main stage whose
+    /// policies return a review mark and no effective reject is rejected by the
+    /// engine with [`crate::pretrade::RejectCode::MissingRequiredField`].
     pub fn execute(self) -> Result<PreTradeReservation, Rejects> {
-        self.inner.execute()
+        self.inner.execute(self.reviews)
     }
 
-    pub(crate) fn from_handle(inner: Box<dyn RequestHandle<Order>>) -> Self {
-        Self { inner }
+    pub(crate) fn from_handle(
+        inner: Box<dyn RequestHandle<Order>>,
+        reviews: Vec<super::Reject>,
+    ) -> Self {
+        Self { reviews, inner }
     }
 }
 
@@ -120,29 +150,45 @@ mod tests {
 
     #[test]
     fn execute_consumes_request_and_delegates_to_handle() {
-        let request =
-            PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
+        let mark = crate::pretrade::Reject::new(
+            "ReviewPolicy",
+            crate::pretrade::RejectScope::Order,
+            crate::pretrade::RejectCode::Other,
+            "review required",
+            "start stage",
+        )
+        .with_mode(crate::pretrade::RuleMode::ReviewWithHold);
+        let request = PreTradeRequest::<()>::from_handle(
+            Box::new(RequestHandleImpl::new(Box::new(|reviews| {
                 Ok(PreTradeReservation::from_handle(
                     Box::new(NoopReservationHandle),
                     PreTradeLock::default(),
                     Vec::new(),
+                    reviews,
                 ))
-            }))));
+            }))),
+            vec![mark.clone()],
+        );
 
+        assert_eq!(request.reviews(), std::slice::from_ref(&mark));
         let mut reservation = request.execute().expect("request execution must succeed");
+        assert_eq!(reservation.reviews(), &[mark]);
         reservation.commit();
     }
 
     #[test]
     fn execute_can_finalize_returned_reservation_with_rollback() {
-        let request =
-            PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
+        let request = PreTradeRequest::<()>::from_handle(
+            Box::new(RequestHandleImpl::new(Box::new(|reviews| {
                 Ok(PreTradeReservation::from_handle(
                     Box::new(NoopReservationHandle),
                     PreTradeLock::default(),
                     Vec::new(),
+                    reviews,
                 ))
-            }))));
+            }))),
+            Vec::new(),
+        );
 
         let mut reservation = request.execute().expect("request execution must succeed");
         reservation.rollback();
@@ -150,14 +196,17 @@ mod tests {
 
     #[test]
     fn debug_format_is_opaque() {
-        let request =
-            PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
+        let request = PreTradeRequest::<()>::from_handle(
+            Box::new(RequestHandleImpl::new(Box::new(|reviews| {
                 Ok(PreTradeReservation::from_handle(
                     Box::new(NoopReservationHandle),
                     PreTradeLock::default(),
                     Vec::new(),
+                    reviews,
                 ))
-            }))));
+            }))),
+            Vec::new(),
+        );
         assert!(format!("{request:?}").contains("PreTradeRequest"));
         drop(request.execute());
     }

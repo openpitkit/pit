@@ -49,6 +49,13 @@ int main() {
     return 1;
   }
 
+  if (!result.reservation->Reviews().empty()) {
+    // Leave unsent. After approval, rerun with order.review->confirmed set.
+    // Set alreadyHeld as well if this reservation retained a hold.
+    result.reservation->Commit();
+    return 0;
+  }
+
   // The venue accepted the order, so the reserved state stays. Destroying an
   // unresolved reservation rolls it back instead.
   result.reservation->Commit();

@@ -134,6 +134,7 @@ class ListAccess final {
   friend class ::openpit::Configurator;
   friend class ::openpit::pretrade::DryRunReport;
   friend class ::openpit::pretrade::Request;
+  friend class ::openpit::pretrade::Reservation;
   friend class ::openpit::pretrade::policies::
       SpotFundsPnlBoundsGlobalBarrierUpdate;
   friend class ::openpit::pretrade::policies::

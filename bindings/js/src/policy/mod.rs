@@ -27,7 +27,7 @@
 //! A JS callback may throw. With `panic = "abort"`, allowing that thrown
 //! `JsValue` to become a Rust panic would produce an unrecoverable wasm trap.
 //! Instead the adapter captures the thrown value in a thread-local,
-//! operation-scoped stack, returns a benign sentinel reject into the engine
+//! operation-scoped stack, returns a hard reject into the engine
 //! core, and lets the core unwind normally. The engine entry point then wraps
 //! the first captured exception together with any reconciled result.
 //!
@@ -41,7 +41,7 @@ use openpit::param::{AccountId, Price};
 use openpit::pretrade::{
     AccountBlock, PolicyAccountAdjustmentResult, PolicyGroupId, PolicyPreTradeResult,
     PostTradeContext, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
-    RejectScope, Rejects,
+    RejectScope, Rejects, RuleMode,
 };
 use openpit::{
     AccountAdjustmentContext, AccountOutcomeEntry, Mutation, Mutations, OutcomeAmount, PnlOutcome,
@@ -103,7 +103,7 @@ extern "C" {
 #[wasm_bindgen(typescript_custom_section)]
 const POLICY_TS: &'static str = r#"
 /**
- * A reject raised by a custom {@link Policy}.
+ * A reject or review mark raised by a custom {@link Policy}.
  *
  * `scope` selects an order-level reject (`"order"`, rejects this order) or an
  * account-level reject (`"account"`, escalates to the account) and defaults to
@@ -115,6 +115,15 @@ export interface PolicyReject {
   reason: string;
   details: string;
   scope?: import("../types.js").RejectScope;
+  /**
+   * Defaults to `"Reject"` when omitted, which rejects the order. With no
+   * rejects, either review mode returns a reservation and requires a human
+   * decision. The reservation keeps the run's holds, mutations, lock prices,
+   * and account adjustments only when every mark is `"ReviewWithHold"`.
+   * Any `"ReviewWithoutHold"` mark leaves it with none. Evaluation-failure
+   * codes always reject. In account adjustment, any entry rejects the batch.
+   */
+  mode?: import("../types.js").RuleMode;
   userData?: number | bigint;
 }
 
@@ -166,8 +175,8 @@ export interface PolicyAccountOutcomeEntry {
 }
 
 /**
- * A pre-trade decision: rejects to raise and/or mutations to stage. An empty
- * decision (no rejects, no mutations) accepts the order.
+ * A pre-trade decision with rejects or review marks and mutations to stage.
+ * An empty decision accepts the order without a contribution.
  */
 export interface PolicyDecision {
   rejects?: Iterable<PolicyReject>;
@@ -175,12 +184,13 @@ export interface PolicyDecision {
 }
 
 /**
- * The result of {@link Policy.performPreTradeCheck}. Carries optional rejects
- * and mutations (as in {@link PolicyDecision}) plus optional account
+ * The result of {@link Policy.performPreTradeCheck}. Carries rejects or review
+ * marks and mutations (as in {@link PolicyDecision}) plus optional account
  * adjustments and lock prices. Returning `null`/`undefined` accepts the order
- * with no contribution. Ordinary pre-trade keeps contributions only on
- * acceptance. Drop-copy also keeps them with ordinary, non-enforcing rejects;
- * evaluation-failure rejects abort the operation and discard them.
+ * with no contribution. Pre-trade keeps contributions when there are no
+ * rejects and either there are no marks or every mark is `"ReviewWithHold"`.
+ * Drop-copy also keeps them with ordinary, non-enforcing rejects.
+ * Evaluation-failure rejects abort the operation and discard contributions.
  */
 export interface PolicyPreTradeResult {
   rejects?: Iterable<PolicyReject>;
@@ -231,7 +241,8 @@ export interface Policy<
   /** Policy group id (`0..=65535`); defaults to `0` when omitted. */
   readonly policyGroupId?: number;
   /**
-   * Start-stage check. Returns the rejects to raise (empty iterable to accept).
+   * Start-stage check. Returns rejects or review marks (empty iterable to
+   * accept).
    */
   checkPreTradeStart(ctx: Context, order: OrderModel): Iterable<PolicyReject>;
   /**
@@ -642,8 +653,8 @@ pub(crate) fn set_callback_error(error: JsValue) {
 
 /// Builds the sentinel reject returned into the core when a callback failed.
 ///
-/// The captured `JsValue` carries the real error; this sentinel only lets the
-/// core unwind cleanly so the entry point can re-throw the captured value.
+/// The sentinel lets the core unwind cleanly. A capturing entry point reports
+/// the first captured `JsValue` as the `cause` of a `PolicyCallbackError`.
 fn callback_failure_reject(policy_name: &str) -> Reject {
     Reject::new(
         policy_name,
@@ -680,6 +691,44 @@ pub(crate) struct JsPreTradePolicyAdapter {
 }
 
 impl JsPreTradePolicyAdapter {
+    fn run_main_hook(
+        &self,
+        function: &Function,
+        ctx: &PreTradeContext<crate::engine::StorageFactory>,
+        order: &Order,
+        mutations: &mut Mutations,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        let context = JsContext::from_parts(
+            ctx.account_control.clone(),
+            ctx.drop_copy_start_mutation_recorder(),
+            ctx.operation_snapshot(),
+            order.payload.lifecycle(),
+            ctx.is_drop_copy(),
+        );
+        let payload = callback_payload(order.payload.fresh_js(), &self.name)?;
+        let decision = call_hook(
+            function,
+            &self.policy,
+            &[JsValue::from(context), payload],
+            &self.name,
+        )?;
+        let mut rejects = Vec::new();
+        let result = apply_policy_pre_trade_result(&self.name, &decision, mutations, &mut rejects)
+            .map_err(|error| {
+                set_callback_error(error);
+                callback_failure_rejects(&self.name)
+            })?;
+        if rejects.is_empty() {
+            Ok(result)
+        } else {
+            let rejects = Rejects::from(rejects);
+            Err(match result {
+                Some(result) => rejects.with_policy_result(result),
+                None => rejects,
+            })
+        }
+    }
+
     /// Builds an adapter from a JS policy object.
     ///
     /// Reads the required `name` and
@@ -803,39 +852,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         order: &Order,
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
-        let context = JsContext::from_parts(
-            ctx.account_control.clone(),
-            ctx.drop_copy_start_mutation_recorder(),
-            ctx.operation_snapshot(),
-            order.payload.lifecycle(),
-            ctx.is_drop_copy(),
-        );
-        let context = JsValue::from(context);
-        let payload = callback_payload(order.payload.fresh_js(), &self.name)?;
-        let decision = call_hook(
-            &self.perform_pre_trade_check,
-            &self.policy,
-            &[context, payload],
-            &self.name,
-        )?;
-        let mut rejects = Vec::new();
-        let result =
-            match apply_policy_pre_trade_result(&self.name, &decision, mutations, &mut rejects) {
-                Ok(result) => result,
-                Err(error) => {
-                    set_callback_error(error);
-                    return Err(callback_failure_rejects(&self.name));
-                }
-            };
-        if rejects.is_empty() {
-            Ok(result)
-        } else {
-            let rejects = Rejects::from(rejects);
-            Err(match result {
-                Some(result) => rejects.with_policy_result(result),
-                None => rejects,
-            })
-        }
+        self.run_main_hook(&self.perform_pre_trade_check, ctx, order, mutations)
     }
 
     fn perform_pre_trade_check_dry_run(
@@ -848,34 +865,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
             .perform_pre_trade_check_dry_run
             .as_ref()
             .unwrap_or(&self.perform_pre_trade_check);
-        let context = JsContext::from_parts(
-            ctx.account_control.clone(),
-            ctx.drop_copy_start_mutation_recorder(),
-            ctx.operation_snapshot(),
-            order.payload.lifecycle(),
-            ctx.is_drop_copy(),
-        );
-        let payload = callback_payload(order.payload.fresh_js(), &self.name)?;
-        let decision = call_hook(
-            function,
-            &self.policy,
-            &[JsValue::from(context), payload],
-            &self.name,
-        )?;
-        let mut rejects = Vec::new();
-        let result =
-            match apply_policy_pre_trade_result(&self.name, &decision, mutations, &mut rejects) {
-                Ok(result) => result,
-                Err(error) => {
-                    set_callback_error(error);
-                    return Err(callback_failure_rejects(&self.name));
-                }
-            };
-        if rejects.is_empty() {
-            Ok(result)
-        } else {
-            Err(Rejects::from(rejects))
-        }
+        self.run_main_hook(function, ctx, order, mutations)
     }
 
     fn apply_execution_report(
@@ -959,9 +949,9 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
 
 /// Invokes a hook, mapping a thrown error onto a captured sentinel reject.
 ///
-/// Used by the pre-trade hooks that return `Result<_, Rejects>`; a thrown JS
-/// value is captured for re-throw and a sentinel `Rejects` is returned so the
-/// core unwinds.
+/// Used by pre-trade hooks that return `Result<_, Rejects>`. A sentinel
+/// `Rejects` lets the core unwind. A capturing entry point reports the first
+/// captured JS value as the `cause` of a `PolicyCallbackError`.
 fn call_hook(
     function: &Function,
     this: &JsValue,
@@ -987,8 +977,8 @@ fn callback_payload(
 
 /// Invokes a JS function with `this` bound and up to three positional args.
 ///
-/// Returns the thrown `JsValue` unchanged on failure so the caller can capture
-/// it for re-throw.
+/// Returns the thrown `JsValue` unchanged, or the binding's own `TypeError` for
+/// a returned thenable, for the caller to capture.
 fn call_function(
     function: &Function,
     this: &JsValue,
@@ -1128,8 +1118,9 @@ fn has_field(object: &JsValue, key: &str) -> Result<bool, JsValue> {
 ///
 /// # Errors
 ///
-/// Throws `TypeError` when the value is not iterable or an element has the
-/// wrong shape; semantic reject validation remains a `ParamError`.
+/// Returns a `TypeError` for a malformed iterable, a missing required field,
+/// or a wrong type, `RangeError` for invalid reject scope, mode, or token
+/// values, or `ParamError` for an unknown reject code.
 fn parse_policy_rejects(value: &JsValue, policy_name: &str) -> Result<Vec<Reject>, JsValue> {
     if value.is_null() || value.is_undefined() {
         return Ok(Vec::new());
@@ -1149,8 +1140,9 @@ fn parse_policy_rejects(value: &JsValue, policy_name: &str) -> Result<Vec<Reject
 ///
 /// # Errors
 ///
-/// Throws `TypeError` when a field is missing or has the wrong type, and
-/// `ParamError` when a reject code is unknown.
+/// Returns a `TypeError` for a missing required field or a wrong type,
+/// `RangeError` for invalid scope, mode, or token values, or `ParamError` for
+/// an unknown reject code.
 fn parse_policy_reject(value: &JsValue, policy_name: &str) -> Result<Reject, JsValue> {
     let code = read_string(value, "code")?
         .ok_or_else(|| policy_type_error("reject.code must be a string"))?;
@@ -1163,8 +1155,11 @@ fn parse_policy_reject(value: &JsValue, policy_name: &str) -> Result<Reject, JsV
         Some(scope) => parse_reject_scope(&scope)?,
         None => RejectScope::Order,
     };
+    let mode = parse_rule_mode(&get_field(value, "mode")?)?;
     let user_data = read_user_data(value)?;
-    Ok(Reject::new(policy_name, scope, code, reason, details).with_user_data(user_data))
+    Ok(Reject::new(policy_name, scope, code, reason, details)
+        .with_mode(mode)
+        .with_user_data(user_data))
 }
 
 /// Parses a reject-scope wire string (`"order"`/`"account"`, case-insensitive).
@@ -1178,6 +1173,24 @@ fn parse_reject_scope(value: &str) -> Result<RejectScope, JsValue> {
         "account" => Ok(RejectScope::Account),
         _ => Err(policy_range_error(
             "reject.scope must be \"order\" or \"account\"",
+        )),
+    }
+}
+
+/// Parses a case-sensitive rule mode, defaulting to `Reject` when absent.
+pub(crate) fn parse_rule_mode(value: &JsValue) -> Result<RuleMode, JsValue> {
+    if value.is_undefined() || value.is_null() {
+        return Ok(RuleMode::Reject);
+    }
+    let value = value
+        .as_string()
+        .ok_or_else(|| policy_type_error("reject.mode must be a string"))?;
+    match value.as_str() {
+        mode if mode == RuleMode::Reject.as_str() => Ok(RuleMode::Reject),
+        mode if mode == RuleMode::ReviewWithHold.as_str() => Ok(RuleMode::ReviewWithHold),
+        mode if mode == RuleMode::ReviewWithoutHold.as_str() => Ok(RuleMode::ReviewWithoutHold),
+        _ => Err(policy_range_error(
+            "reject.mode must be \"Reject\", \"ReviewWithHold\", or \"ReviewWithoutHold\"",
         )),
     }
 }
@@ -1222,8 +1235,9 @@ fn read_user_data(value: &JsValue) -> Result<usize, JsValue> {
 ///
 /// # Errors
 ///
-/// Throws `TypeError` for malformed iterables/shapes and `ParamError` for an
-/// unknown reject code.
+/// Returns a `TypeError` for a malformed iterable, a missing required field,
+/// or a wrong type, `RangeError` for invalid reject scope, mode, or token
+/// values, or `ParamError` for an unknown reject code.
 fn apply_policy_decision(
     policy_name: &str,
     value: &JsValue,
@@ -1253,8 +1267,10 @@ fn apply_policy_decision(
 ///
 /// # Errors
 ///
-/// Throws `TypeError` for malformed iterables/shapes, `ParamError` for invalid
-/// domain values, or `AssetError` for an invalid outcome asset.
+/// Returns a `TypeError` for a malformed iterable, a missing required field,
+/// or a wrong type, `RangeError` for invalid scope, mode, or numeric bounds,
+/// `ParamError` for an invalid domain value, or `AssetError` for an invalid
+/// outcome asset.
 fn apply_policy_pre_trade_result(
     policy_name: &str,
     value: &JsValue,
@@ -1315,8 +1331,11 @@ fn apply_policy_pre_trade_result(
 
 /// Parses a `Mutation`-shaped value (a `{ commit, rollback }` pair).
 ///
-/// Both callbacks are invoked with `this` bound to the mutation object; a
-/// throw inside either is captured for re-throw rather than panicking.
+/// Both callbacks are invoked with `this` bound to the mutation object. A
+/// failure in either is captured, and a capturing entry point reports the first
+/// captured JS value as the `cause` of a `PolicyCallbackError`. The implicit
+/// rollback of a reservation destroyed without finalization runs under
+/// suppression and discards the failure.
 ///
 /// # Errors
 ///
@@ -1607,8 +1626,8 @@ enum AccountAdjustmentReturn {
 /// # Errors
 ///
 /// Throws `TypeError` for malformed shapes/iterables, `RangeError` for invalid
-/// boundary integers, and the nested `ParamError`/`AssetError` variants for
-/// invalid domain values.
+/// reject scope, mode, or boundary integers, and the nested
+/// `ParamError`/`AssetError` variants for invalid domain values.
 fn parse_account_adjustment_return(
     policy_name: &str,
     value: &JsValue,

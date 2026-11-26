@@ -22,7 +22,12 @@ engine = (
 )
 ```
 
-Policy names must be unique within one engine configuration.
+`pre_trade` and `builtin` accept keyword arguments `name=None` and
+`mode=None`. The instance name defaults to the policy name and is the key
+for runtime configuration. Give instances distinct names when registering
+the same policy twice. The mode defaults to `Reject`. Set it to
+`ReviewWithHold` or `ReviewWithoutHold` to turn ordinary rejects into review
+marks. Mode strings are case-sensitive. An invalid value raises `ValueError`.
 
 Use `full_sync()` when the same engine is called concurrently from multiple
 OS threads. Use `account_sync()` only when each account is pinned to one
@@ -52,8 +57,11 @@ stage and the heavier main stage.
 execute_result = engine.execute_pre_trade(order=order)
 ```
 
-The shortcut returns the same `ExecuteResult` shape as `request.execute()`. It
-can contain start-stage rejects or main-stage rejects.
+The shortcut returns the same `ExecuteResult` shape as `request.execute()`.
+It reports effective rejects or any review marks from the stages that ran.
+On an order with `OrderReview(confirmed=True)`, the engine still evaluates
+every instance and discards review marks. An evaluation failure remains a
+reject, including on a confirmed order.
 
 ## Apply drop copy
 
@@ -82,7 +90,12 @@ def send_order(order: openpit.Order) -> None:
     _ = order
 
 
-if execute_result:
+if execute_result.reviews:
+    # Keep the order unsent; after approval, rerun with
+    # OrderReview(confirmed=True). Set already_held=True if the
+    # reservation retained a hold.
+    execute_result.reservation.commit()
+elif execute_result.ok:
     reservation = execute_result.reservation
     try:
         send_order(order)

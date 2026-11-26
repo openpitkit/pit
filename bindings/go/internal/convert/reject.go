@@ -46,7 +46,7 @@ func NewNativeRejectList(source []reject.Reject) native.PretradeRejectList {
 			reject.CodeSystemUnavailable,
 			"openpit.callback",
 			"custom policy callback failed",
-			"reject scope is invalid",
+			"reject scope or mode is invalid",
 			reject.ScopeOrder,
 		)
 		result = native.CreatePretradeRejectList(1)

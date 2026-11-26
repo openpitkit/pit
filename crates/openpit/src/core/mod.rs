@@ -72,8 +72,8 @@ pub use instrument::Instrument;
 pub use instrument_id::InstrumentId;
 pub use mutation::{Mutation, Mutations};
 pub use order::{
-    OrderMargin, OrderOperation, OrderPosition, WithOrderMargin, WithOrderOperation,
-    WithOrderPosition,
+    OrderMargin, OrderOperation, OrderPosition, OrderReview, WithOrderMargin, WithOrderOperation,
+    WithOrderPosition, WithOrderReview,
 };
 pub use reference_book::{
     ReferenceBook, ReferenceBookRegistrationError, SettlementLag, SettlementScheme, SettlementUnit,
@@ -86,11 +86,11 @@ pub use request_trait::{
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
     HasAccountAdjustmentPnlOperation, HasAccountAdjustmentPositionLeverage, HasAccountId,
-    HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
-    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
-    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
-    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
+    HasAlreadyHeld, HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition,
+    HasCollateralAsset, HasConfirmed, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
+    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
     HasRemainingReservedQuantity, HasSide, HasTradeAmount, RequestFieldAccessError,
 };
 pub use sync_mode::{

@@ -53,7 +53,8 @@ pub use core::engine::{
     AccountAdjustmentBatchError, AccountSyncEngine, Engine, FullSyncEngine, LocalEngine,
 };
 pub use core::engine_builder::{
-    EngineBuildError, EngineBuilder, IntoPolicyObject, ReadyEngineBuilder, SyncedEngineBuilder,
+    EngineBuildError, EngineBuilder, IntoPolicyObject, PolicyInstance, ReadyEngineBuilder,
+    SyncedEngineBuilder,
 };
 pub use core::{
     AccountAdjustmentAccountPnlOperation, AccountAdjustmentAmount,
@@ -67,21 +68,21 @@ pub use core::{
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
     HasAccountAdjustmentPnlOperation, HasAccountAdjustmentPositionLeverage, HasAccountId,
-    HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
-    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
-    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
-    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
+    HasAlreadyHeld, HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition,
+    HasCollateralAsset, HasConfirmed, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
+    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
     HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument, InstrumentId, Mutation,
-    Mutations, OperationSnapshot, OrderMargin, OrderOperation, OrderPosition, OutcomeAmount,
-    PnlHaltReason, PnlOutcome, PnlOutcomeAmount, PnlState, ReferenceBook,
+    Mutations, OperationSnapshot, OrderMargin, OrderOperation, OrderPosition, OrderReview,
+    OutcomeAmount, PnlHaltReason, PnlOutcome, PnlOutcomeAmount, PnlState, ReferenceBook,
     ReferenceBookRegistrationError, RequestFieldAccessError, SettlementLag, SettlementScheme,
     SettlementUnit, SharedOperationSnapshot, UnknownReferenceBookInstrumentId,
     WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
     WithAccountAdjustmentBalanceRealizedPnl, WithAccountAdjustmentBounds,
     WithAccountAdjustmentPositionOperation, WithExecutionReportFillDetails,
     WithExecutionReportOperation, WithExecutionReportPositionImpact, WithFinancialImpact,
-    WithOrderMargin, WithOrderOperation, WithOrderPosition,
+    WithOrderMargin, WithOrderOperation, WithOrderPosition, WithOrderReview,
 };
 pub use core::{
     AccountBlockError, AccountBlockHandle, AccountControl, AccountGroupError,

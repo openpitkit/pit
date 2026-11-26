@@ -35,6 +35,7 @@ import pytest
 # - https://wiki.openpit.dev/Policy-API/
 # - https://wiki.openpit.dev/Pre-trade-Pipeline/
 # - https://wiki.openpit.dev/Pre-Trade-Lock/
+# - https://wiki.openpit.dev/Review-Mode/
 # - https://wiki.openpit.dev/Spot-Funds/
 # If this file changes, update every linked documentation snippet.
 
@@ -109,7 +110,7 @@ class ReserveThenValidatePolicy(openpit.pretrade.Policy):
                     openpit.pretrade.PolicyReject(
                         code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
                         reason="temporary reservation exceeds limit",
-                        details=(f"reserved {next_reserved}, " f"limit: {self._limit}"),
+                        details=(f"reserved {next_reserved}, limit: {self._limit}"),
                         scope=openpit.pretrade.RejectScope.ORDER,
                     )
                 ],
@@ -291,6 +292,80 @@ class BlockOnAdjustmentPolicy(openpit.pretrade.Policy):
 
 
 # --- Tests ---
+
+
+# Source: https://wiki.openpit.dev/Review-Mode/#python
+# Keep this example in sync with the matching wiki example.
+class ApprovalPolicy(openpit.pretrade.Policy):
+    @property
+    def name(self) -> str:
+        return "ApprovalPolicy"
+
+    def perform_pre_trade_check(
+        self, _ctx: openpit.pretrade.Context, _order: openpit.Order
+    ) -> openpit.pretrade.PolicyPreTradeResult:
+        return openpit.pretrade.PolicyPreTradeResult.reject(
+            rejects=[
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
+                    reason="approval required",
+                    details="obtain a human decision before sending",
+                )
+            ],
+        )
+
+
+@pytest.mark.integration
+def test_example_wiki_review_mode() -> None:
+    # Source: https://wiki.openpit.dev/Review-Mode/#python
+    policy = ApprovalPolicy()
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(
+            policy=policy,
+            name="approval",
+            mode=openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+        )
+        .build()
+    )
+    operation = openpit.OrderOperation(
+        instrument=openpit.Instrument("AAPL", "USD"),
+        account_id=openpit.param.AccountId.from_int(99224416),
+        side=openpit.param.Side.BUY,
+        trade_amount=openpit.param.TradeAmount.quantity("10"),
+        price=openpit.param.Price("25"),
+    )
+    sent_orders: list[openpit.Order] = []
+
+    def run(order: openpit.Order) -> list[openpit.pretrade.Reject]:
+        result = engine.execute_pre_trade(order=order)
+        reservation = result.reservation
+        if not result.ok or reservation is None:
+            raise RuntimeError(f"order rejected: {result.rejects}")
+        reviews = result.reviews
+        if reviews:
+            reservation.commit()
+            return reviews
+
+        # Stand-in for a successful venue send.
+        sent_orders.append(order)
+        reservation.commit()
+        return reviews
+
+    reviews = run(openpit.Order(operation=operation))
+    assert [review.mode for review in reviews] == [
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD
+    ]
+    assert not sent_orders
+
+    # A human approved the same order.
+    confirmed_order = openpit.Order(
+        operation=operation, review=openpit.OrderReview(confirmed=True)
+    )
+    confirmed_reviews = run(confirmed_order)
+    assert not confirmed_reviews
+    assert len(sent_orders) == 1
 
 
 @pytest.mark.integration
@@ -701,9 +776,7 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
                     code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
                     reason="strategy blocked",
                     details=(
-                        "strategy tag "
-                        f"{strategy_order.strategy_tag!r}"
-                        " is not allowed"
+                        f"strategy tag {strategy_order.strategy_tag!r} is not allowed"
                     ),
                     scope=openpit.pretrade.RejectScope.ORDER,
                 )
@@ -1578,8 +1651,10 @@ def test_example_wiki_dry_run_verdict() -> None:
     )
 
     report = engine.execute_pre_trade_dry_run(order=order)
-    if report.is_pass:
-        print("order would be admitted")
+    if report.reviews:
+        print("order would require a human decision before sending")
+    elif report.is_pass:
+        print("order had no rejects or review marks in the simulation")
     else:
         for reject in report.rejects:
             print(

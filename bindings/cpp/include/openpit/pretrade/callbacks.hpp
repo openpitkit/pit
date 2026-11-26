@@ -81,7 +81,8 @@ namespace openpit::pretrade {
 
 class Result {
  public:
-  // Ordinary pre-trade keeps these contributions only on acceptance.
+  // Live pre-trade and dry-run keep these contributions on acceptance and
+  // when the only findings are with-hold review marks.
   // Drop-copy also keeps them with ordinary, non-enforcing rejects;
   // evaluation-failure rejects abort drop-copy and discard them.
   Result(const Result&) = delete;

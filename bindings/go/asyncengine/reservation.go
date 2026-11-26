@@ -26,13 +26,14 @@ import (
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/future"
 	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
 )
 
 // AsyncReservation wraps a *pretrade.Reservation so that Commit, Rollback,
 // Close, CommitAndClose, and RollbackAndClose are routed through the same
 // per-account queue as the call that produced the reservation. This preserves
 // the AccountSync invariant up to and including reservation finalization.
-// Lock and AccountAdjustments are synchronous. Snapshot reads distinguish
+// Lock, AccountAdjustments, and Reviews are synchronous. Snapshot reads distinguish
 // three states. While open, an admitted read completes before native
 // finalization starts. While finalizing, a read returns
 // ErrFinalizationInProgress immediately. That signal is transient, the read
@@ -184,6 +185,20 @@ func (r *AsyncReservation) AccountAdjustments() ([]accountadjustment.Outcome, er
 	r.methodMu.Lock()
 	defer r.methodMu.Unlock()
 	return r.inner.AccountAdjustments()
+}
+
+// Reviews returns a copy of the review marks from both pre-trade stages.
+// A non-empty list requires a human decision before sending the order.
+// Like Lock, it reports ErrFinalizationInProgress while finalizing and
+// pretrade.ErrReservationClosed after closing.
+func (r *AsyncReservation) Reviews() ([]reject.Reject, error) {
+	if err := r.beginRead(); err != nil {
+		return nil, err
+	}
+	defer r.endRead()
+	r.methodMu.Lock()
+	defer r.methodMu.Unlock()
+	return r.inner.Reviews()
 }
 
 // Commit enqueues Commit on the underlying reservation. The reservation

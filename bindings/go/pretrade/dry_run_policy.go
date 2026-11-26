@@ -42,8 +42,8 @@ import (
 type DryRunPolicy interface {
 	// CheckPreTradeStartDryRun is the read-only variant of CheckPreTradeStart.
 	//
-	// Must not mutate any engine or external state. Returns the rejects the
-	// start stage would produce for order with zero side effects.
+	// Must not mutate any engine or external state. Returns the rejects and
+	// review marks the start stage would produce, with no side effects.
 	//
 	// The order is a view of engine memory and is valid only during this hook.
 	// Its string fields and model values derived from it, including nested
@@ -60,8 +60,9 @@ type DryRunPolicy interface {
 	//
 	// Must not mutate any engine or external state. The mutations handle is
 	// provided for API symmetry but any mutations pushed to it are discarded
-	// by the engine. Returns the rejects the main stage would produce with
-	// zero side effects.
+	// by the engine. Returns the rejects and review marks the main stage would
+	// produce. Fill the result collector as in PerformPreTradeCheck, including
+	// when returning review marks.
 	//
 	// The order is a view of engine memory and is valid only during this hook.
 	// Its string fields and model values derived from it, including nested

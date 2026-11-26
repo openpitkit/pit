@@ -57,6 +57,13 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 ///
 /// # Lifecycle guidance
 ///
+/// Inspect [`reviews`](Self::reviews) before submission. With-hold review is
+/// committed immediately without sending the order; do not keep the reservation
+/// open while awaiting a human decision. Without-hold review has nothing to
+/// release. Confirmation is a fresh pre-trade attempt with `confirmed` set.
+///
+/// When there are no review marks:
+///
 /// - Keep the `PreTradeReservation` alive until the order is actually sent.
 /// - Call [`PreTradeReservation::commit`] only after the venue accepted the order and
 ///   the reservation must become durable engine state.
@@ -104,6 +111,7 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// ```
 pub struct PreTradeReservation {
     account_adjustments: Vec<AccountAdjustmentOutcome>,
+    reviews: Vec<super::Reject>,
     lock: PreTradeLock,
     inner: Option<Box<dyn ReservationHandle>>,
 }
@@ -123,6 +131,16 @@ pub(crate) trait ReservationHandle {
 }
 
 impl PreTradeReservation {
+    /// Returns review marks from the stages that ran, in stage and policy order.
+    ///
+    /// A nonempty slice requires a human decision before submission. Any
+    /// [`super::RuleMode::ReviewWithoutHold`] mark means this reservation has no
+    /// mutations, lock prices, or account adjustments. With-hold review retains
+    /// them: commit the reservation for review without sending the order.
+    pub fn reviews(&self) -> &[super::Reject] {
+        &self.reviews
+    }
+
     /// Finalizes by applying commit mutations.
     ///
     /// The reservation owns its commit/rollback capability exactly once.
@@ -208,9 +226,11 @@ impl PreTradeReservation {
         inner: Box<dyn ReservationHandle>,
         lock: PreTradeLock,
         account_adjustments: Vec<AccountAdjustmentOutcome>,
+        reviews: Vec<super::Reject>,
     ) -> Self {
         Self {
             account_adjustments,
+            reviews,
             lock,
             inner: Some(inner),
         }
@@ -261,6 +281,7 @@ mod tests {
             )),
             PreTradeLock::default(),
             Vec::new(),
+            Vec::new(),
         );
 
         drop(reservation);
@@ -287,6 +308,7 @@ mod tests {
             )),
             PreTradeLock::default(),
             Vec::new(),
+            Vec::new(),
         );
 
         drop(reservation);
@@ -299,6 +321,7 @@ mod tests {
     fn commit_panics_for_finalized_reservation() {
         let mut reservation = PreTradeReservation {
             account_adjustments: Vec::new(),
+            reviews: Vec::new(),
             lock: PreTradeLock::default(),
             inner: None,
         };
@@ -309,6 +332,7 @@ mod tests {
     fn rollback_is_noop_for_finalized_reservation() {
         let mut reservation = PreTradeReservation {
             account_adjustments: Vec::new(),
+            reviews: Vec::new(),
             lock: PreTradeLock::default(),
             inner: None,
         };
@@ -316,10 +340,40 @@ mod tests {
     }
 
     #[test]
+    fn review_metadata_survives_finalization() {
+        use crate::pretrade::{Reject, RejectCode, RejectScope, RuleMode};
+
+        for commit in [true, false] {
+            let mark = Reject::new(
+                "Risk",
+                RejectScope::Order,
+                RejectCode::Other,
+                "review",
+                "details",
+            )
+            .with_mode(RuleMode::ReviewWithoutHold);
+            let mut reservation = PreTradeReservation::from_handle(
+                Box::new(LockedReservationHandle),
+                PreTradeLock::new(),
+                Vec::new(),
+                vec![mark.clone()],
+            );
+            if commit {
+                reservation.commit();
+            } else {
+                reservation.rollback();
+            }
+            reservation.rollback();
+            assert_eq!(reservation.reviews(), &[mark]);
+        }
+    }
+
+    #[test]
     fn commit_with_locked_reservation_handle() {
         let mut reservation = PreTradeReservation::from_handle(
             Box::new(LockedReservationHandle),
             PreTradeLock::new(),
+            Vec::new(),
             Vec::new(),
         );
         reservation.commit();
@@ -331,6 +385,7 @@ mod tests {
         let reservation = PreTradeReservation::from_handle(
             Box::new(LockedReservationHandle),
             PreTradeLock::from_entries([(DEFAULT_POLICY_GROUP_ID, price)]),
+            Vec::new(),
             Vec::new(),
         );
 
@@ -346,6 +401,7 @@ mod tests {
         let reservation = PreTradeReservation::from_handle(
             Box::new(LockedReservationHandle),
             PreTradeLock::new(),
+            Vec::new(),
             Vec::new(),
         );
 
@@ -377,6 +433,7 @@ mod tests {
             )),
             PreTradeLock::default(),
             Vec::new(),
+            Vec::new(),
         );
         reservation.commit();
 
@@ -400,6 +457,7 @@ mod tests {
                 crate::core::configure::EngineCallTracker::default(),
             )),
             PreTradeLock::default(),
+            Vec::new(),
             Vec::new(),
         );
         reservation.rollback();

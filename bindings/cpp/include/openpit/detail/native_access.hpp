@@ -137,6 +137,7 @@ class NativeAccess final {
     friend struct ::openpit::model::OrderMargin;
     friend struct ::openpit::model::OrderOperation;
     friend struct ::openpit::model::OrderPosition;
+    friend struct ::openpit::model::OrderReview;
     friend struct ::openpit::model::PositionImpact;
     friend struct ::openpit::model::Trade;
 

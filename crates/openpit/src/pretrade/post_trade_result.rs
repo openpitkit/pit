@@ -36,8 +36,10 @@ use crate::core::account_outcome::{AccountAdjustmentOutcome, AccountPnlOutcome};
 pub struct PostTradeResult {
     /// Account blocks reported by policies after the post-trade was performed.
     ///
-    /// Non-empty when at least one policy entered a blocked state. The engine
-    /// merges blocks from all policies in registration order.
+    /// A review instance's block whose code is not an evaluation failure
+    /// ([`super::RejectCode::is_evaluation_failure`]) is dropped by the engine,
+    /// neither recorded nor returned.
+    /// The engine merges blocks from all policies in registration order.
     ///
     /// A non-empty value here does **not** mean that [Self::account_adjustments]
     /// or [Self::account_pnls] were rolled back - see the type-level atomicity

@@ -36,7 +36,7 @@ from .._openpit import (
 )
 from ..core import Mutation
 from ..param import AccountId, Price
-from ._enum import RejectScope
+from ._enum import RejectScope, RuleMode
 
 @dataclasses.dataclass(frozen=True)
 class PolicyReject:
@@ -44,6 +44,7 @@ class PolicyReject:
     reason: str
     details: str
     scope: RejectScope = RejectScope.ORDER
+    mode: RuleMode = dataclasses.field(default=RuleMode.REJECT, kw_only=True)
     user_data: int = 0
 
 @dataclasses.dataclass(frozen=True)

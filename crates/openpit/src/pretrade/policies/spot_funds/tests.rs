@@ -6845,7 +6845,13 @@ fn ctx_with_group(
         .register_group(&[account_id], group_id)
         .expect("registration must succeed");
     let handle = AccountGroupsHandle::from_inner(FullLocking::new_shared(groups));
-    crate::pretrade::PreTradeContext::with_groups(None, handle, Ok(account_id))
+    crate::pretrade::PreTradeContext::with_groups(
+        None,
+        handle,
+        Ok(account_id),
+        Ok(false),
+        Ok(false),
+    )
 }
 
 // ── group-tier override selects correct slippage for buy ──────────────────

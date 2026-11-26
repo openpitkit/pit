@@ -24,8 +24,11 @@ is intended to be copied into a Python file after installing `openpit`.
 
 ## Full order lifecycle
 
-Use this when integrating OpenPit around a real order-submission path. The
-reservation is committed only after the downstream send succeeds.
+Use this when integrating OpenPit around a real order-submission path.
+If the result has review marks, commit the reservation immediately and
+keep the order unsent. After approval, rerun with `confirmed=True`, and
+set `already_held=True` if the reservation retained a hold. If the result
+is successful and has no marks, commit after the downstream send succeeds.
 
 ```python
 import datetime
@@ -112,29 +115,33 @@ order = openpit.Order(
 )
 
 result = engine.execute_pre_trade(order=order)
-if not result:
-    raise RuntimeError(result.rejects[0].reason)
-
-try:
-    send_order_to_venue(order)
-except Exception:
-    result.reservation.rollback()
-    raise
-else:
+if result.reviews:
+    # Keep the order unsent; after approval, rerun with
+    # OrderReview(confirmed=True).
     result.reservation.commit()
+elif result.ok:
+    try:
+        send_order_to_venue(order)
+    except Exception:
+        result.reservation.rollback()
+        raise
+    else:
+        result.reservation.commit()
 
-report = openpit.ExecutionReport(
-    operation=openpit.ExecutionReportOperation(
-        instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_int(99224416),
-        side=openpit.param.Side.BUY,
-    ),
-    financial_impact=openpit.FinancialImpact(
-        pnl=openpit.param.Pnl("-50"),
-        fee=openpit.param.Fee("3.4"),
-    ),
-)
-assert not engine.apply_execution_report(report=report).account_blocks
+    report = openpit.ExecutionReport(
+        operation=openpit.ExecutionReportOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=openpit.param.AccountId.from_int(99224416),
+            side=openpit.param.Side.BUY,
+        ),
+        financial_impact=openpit.FinancialImpact(
+            pnl=openpit.param.Pnl("-50"),
+            fee=openpit.param.Fee("3.4"),
+        ),
+    )
+    assert not engine.apply_execution_report(report=report).account_blocks
+else:
+    raise RuntimeError(result.rejects[0].reason)
 ```
 
 ## Domain value types

@@ -191,6 +191,27 @@ class OrderMargin:
     def auto_borrow(self) -> bool:
         """Whether auto-borrow may cover a temporary collateral shortage."""
 
+class OrderReview:
+    """Confirmation for a fresh run. Policies still evaluate reject rules.
+
+    ``already_held`` is the caller's assertion that this order's reservation
+    is already held by an earlier committed with-hold run.
+    """
+
+    def __init__(
+        self, *, confirmed: bool = False, already_held: bool = False
+    ) -> None: ...
+    @property
+    def confirmed(self) -> bool:
+        """Whether the caller has confirmed the order."""
+
+    @property
+    def already_held(self) -> bool:
+        """Whether an earlier committed with-hold run holds the reservation.
+
+        Defaults to ``False``.
+        """
+
 class Order:
     """Extensible Python order model accepted by ``openpit.Engine.start_pre_trade``."""
 
@@ -200,6 +221,7 @@ class Order:
         operation: OrderOperation | None = None,
         position: OrderPosition | None = None,
         margin: OrderMargin | None = None,
+        review: OrderReview | None = None,
     ) -> None: ...
     @property
     def operation(self) -> OrderOperation | None:
@@ -212,6 +234,13 @@ class Order:
     @property
     def margin(self) -> OrderMargin | None:
         """Margin configuration parameters group."""
+
+    @property
+    def review(self) -> OrderReview | None:
+        """Pre-trade review group.
+
+        When absent, the order is unconfirmed and not held.
+        """
 
 class ExecutionReportOperation:
     """Main operation parameters reported by the execution."""
@@ -381,6 +410,7 @@ __all__ = [
     "OrderMargin",
     "OrderOperation",
     "OrderPosition",
+    "OrderReview",
     "ReferenceBook",
     "ReferenceBookRegistrationError",
     "SettlementLag",

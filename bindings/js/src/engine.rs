@@ -57,6 +57,9 @@ use crate::domain::{
 
 #[wasm_bindgen]
 extern "C" {
+    /// Optional policy registration identity and mode.
+    #[wasm_bindgen(typescript_type = "PolicyInstance")]
+    pub type PolicyInstanceLike;
     /// An iterable of account adjustments (`AccountAdjustment` objects or plain
     /// `AccountAdjustmentInit` literals).
     #[wasm_bindgen(typescript_type = "Iterable<AccountAdjustment | AccountAdjustmentInit>")]
@@ -79,12 +82,56 @@ use crate::policy::order_validation::JsOrderValidationBuilder;
 use crate::policy::pnl_killswitch::JsPnlBoundsKillswitchBuilder;
 use crate::policy::rate_limit::JsRateLimitBuilder;
 use crate::policy::spot_funds::{JsSpotFundsBuilder, JsSpotFundsPnlBoundsKillswitchBuilder};
-use crate::policy::{BuiltinReadyBuilder, CallbackErrorScope, JsPreTradePolicyAdapter, PolicyLike};
+use crate::policy::{
+    parse_rule_mode, BuiltinReadyBuilder, CallbackErrorScope, JsPreTradePolicyAdapter, PolicyLike,
+};
 use crate::reject::JsAccountBlock;
 use crate::result::{
     JsAccountAdjustmentBatchResult, JsDropCopyResult, JsDryRunReport, JsExecuteResult,
     JsPostTradeResult, JsStartResult,
 };
+
+#[wasm_bindgen(typescript_custom_section)]
+const POLICY_INSTANCE_TS: &str = r#"
+/** Registration identity and mode.
+ * Omitted, null, or empty name uses the policy name.
+ * Omitted or null mode is "Reject". A non-string name (unless null or
+ * omitted) or an invalid mode throws EngineBuildError with kind
+ * "InvalidConfiguration". Strings use exact PascalCase.
+ * A throwing getter is rethrown unchanged.
+ */
+export interface PolicyInstance {
+  name?: string | null;
+  mode?: import("../types.js").RuleMode | null;
+}
+"#;
+
+fn parse_policy_instance(
+    value: Option<PolicyInstanceLike>,
+) -> Result<openpit::PolicyInstance, JsValue> {
+    let Some(value) = value else {
+        return Ok(openpit::PolicyInstance::default());
+    };
+    let invalid = crate::error::engine_build_configuration_error;
+    if !value.is_object() {
+        return Err(invalid("instance must be an object"));
+    }
+    let name = Reflect::get(&value, &JsValue::from_str("name"))?;
+    let name = if name.is_undefined() || name.is_null() {
+        None
+    } else {
+        Some(
+            name.as_string()
+                .ok_or_else(|| invalid("instance.name must be a string"))?,
+        )
+        .filter(|name| !name.is_empty())
+    };
+    let mode = Reflect::get(&value, &JsValue::from_str("mode"))?;
+    let mode = parse_rule_mode(&mode).map_err(|_| {
+        invalid("instance.mode must be Reject, ReviewWithHold, or ReviewWithoutHold")
+    })?;
+    Ok(openpit::PolicyInstance { name, mode })
+}
 
 thread_local! {
     static NEXT_CALLBACK_SCOPE_ID: Cell<u64> = const { Cell::new(1) };
@@ -252,6 +299,7 @@ export function makeOrderPolicyPayload(normalized, original) {
     operation: ["underlyingAsset", "settlementAsset", "accountId", "side", "tradeAmount", "price"],
     position: ["positionSide", "reduceOnly", "closePosition"],
     margin: ["collateralAsset", "leverage", "autoBorrow"],
+    review: ["confirmed", "alreadyHeld"],
   });
 }
 
@@ -479,26 +527,26 @@ impl BuilderState {
     }
 
     /// Registers `policy` and returns the advanced `Ready` state.
-    fn pre_trade<Policy>(self, policy: Policy) -> BuilderState
+    fn pre_trade<Policy>(self, policy: Policy, instance: openpit::PolicyInstance) -> BuilderState
     where
         Policy: PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
             + Send
             + 'static,
     {
         BuilderState::Ready(match self {
-            BuilderState::Synced(builder) => builder.pre_trade(policy),
-            BuilderState::Ready(builder) => builder.pre_trade(policy),
+            BuilderState::Synced(builder) => builder.pre_trade_instance(policy, instance),
+            BuilderState::Ready(builder) => builder.pre_trade_instance(policy, instance),
         })
     }
 
     /// Registers a builtin policy, preserving its concrete configurable type.
-    fn builtin(self, policy: BuiltinPolicy) -> BuilderState {
+    fn builtin(self, policy: BuiltinPolicy, instance: openpit::PolicyInstance) -> BuilderState {
         match policy {
-            BuiltinPolicy::OrderValidation(policy) => self.pre_trade(policy),
-            BuiltinPolicy::OrderSizeLimit(policy) => self.pre_trade(policy),
-            BuiltinPolicy::RateLimit(policy) => self.pre_trade(policy),
-            BuiltinPolicy::PnlBoundsKillswitch(policy) => self.pre_trade(policy),
-            BuiltinPolicy::SpotFunds(policy) => self.pre_trade(policy),
+            BuiltinPolicy::OrderValidation(policy) => self.pre_trade(policy, instance),
+            BuiltinPolicy::OrderSizeLimit(policy) => self.pre_trade(policy, instance),
+            BuiltinPolicy::RateLimit(policy) => self.pre_trade(policy, instance),
+            BuiltinPolicy::PnlBoundsKillswitch(policy) => self.pre_trade(policy, instance),
+            BuiltinPolicy::SpotFunds(policy) => self.pre_trade(policy, instance),
         }
     }
 }
@@ -545,7 +593,10 @@ impl JsEngine {
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
     /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Re-throws the original error a custom policy callback threw, if any.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed start-hook
+    /// return has a `TypeError` cause for a missing field or wrong type,
+    /// `RangeError` for an invalid scope, mode, or token value, or
+    /// `ParamError` for an unknown reject code.
     #[wasm_bindgen(js_name = startPreTrade)]
     pub fn start_pre_trade(&self, order: OrderLike) -> Result<JsStartResult, JsValue> {
         let original: JsValue = order.into();
@@ -575,7 +626,10 @@ impl JsEngine {
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
     /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Re-throws the original error a custom policy callback threw, if any.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return
+    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
+    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
+    /// invalid domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = executePreTrade)]
     pub fn execute_pre_trade(&self, order: OrderLike) -> Result<JsExecuteResult, JsValue> {
         let original: JsValue = order.into();
@@ -611,7 +665,10 @@ impl JsEngine {
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
     /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Re-throws the original error a custom policy callback threw, if any.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return
+    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
+    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
+    /// invalid domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = applyDropCopy)]
     pub fn apply_drop_copy(&self, order: OrderLike) -> Result<JsDropCopyResult, JsValue> {
         let original: JsValue = order.into();
@@ -640,7 +697,10 @@ impl JsEngine {
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
     /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Re-throws the original error a custom policy callback threw, if any.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed start-hook
+    /// return has a `TypeError` cause for a missing field or wrong type,
+    /// `RangeError` for an invalid scope, mode, or token value, or
+    /// `ParamError` for an unknown reject code.
     #[wasm_bindgen(js_name = startPreTradeDryRun)]
     pub fn start_pre_trade_dry_run(&self, order: OrderLike) -> Result<JsDryRunReport, JsValue> {
         let original: JsValue = order.into();
@@ -664,7 +724,10 @@ impl JsEngine {
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
     /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Re-throws the original error a custom policy callback threw, if any.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return
+    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
+    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
+    /// invalid domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = executePreTradeDryRun)]
     pub fn execute_pre_trade_dry_run(&self, order: OrderLike) -> Result<JsDryRunReport, JsValue> {
         let original: JsValue = order.into();
@@ -689,8 +752,9 @@ impl JsEngine {
     /// Throws `ParamError`/`AssetError` when `report` is neither a valid
     /// `ExecutionReport` nor a valid `ExecutionReportInit` literal. Throws
     /// `LifecycleError` when this same engine is re-entered synchronously from
-    /// one of its policy callbacks. Re-throws the original error a custom
-    /// policy callback threw, if any.
+    /// one of its policy callbacks. Throws `PolicyCallbackError` on callback
+    /// failure. A malformed return has a `TypeError` cause for an invalid
+    /// result shape, a non-iterable field, a wrong outcome type, or a thenable.
     #[wasm_bindgen(js_name = applyExecutionReport)]
     pub fn apply_execution_report(
         &self,
@@ -721,7 +785,10 @@ impl JsEngine {
     /// Throws `ParamError`/`AssetError`/`AccountIdError` when `accountId` or an
     /// adjustment in the batch is invalid. Throws `LifecycleError` when this
     /// same engine is re-entered synchronously from one of its policy callbacks.
-    /// Re-throws the original error a custom policy callback threw, if any.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return
+    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
+    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
+    /// invalid domain value, or `AssetError` for an invalid outcome asset.
     #[wasm_bindgen(js_name = applyAccountAdjustment)]
     pub fn apply_account_adjustment(
         &self,
@@ -1265,14 +1332,24 @@ impl JsEngineBuilder {
     ///
     /// `policy` is any JS object implementing the `Policy` shape; it is adapted
     /// to a core `PreTradePolicy` immediately.
+    /// The optional `instance` supplies the registration name and mode.
+    /// An omitted, null, or empty name uses the policy name.
+    /// Omitted or null mode is `Reject`.
     ///
     /// # Errors
     ///
     /// Throws `ParamError` when `policy` is not a valid `Policy` object.
+    /// A non-string instance name (unless null or omitted) or an invalid mode
+    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
+    /// registration call.
     #[wasm_bindgen(js_name = preTrade)]
-    pub fn pre_trade(&self, policy: PolicyLike) -> Result<JsReadyEngineBuilder, JsValue> {
+    pub fn pre_trade(
+        &self,
+        policy: PolicyLike,
+        instance: Option<PolicyInstanceLike>,
+    ) -> Result<JsReadyEngineBuilder, JsValue> {
         let builder = JsReadyEngineBuilder::new();
-        builder.register_pre_trade(policy.into())?;
+        builder.register_pre_trade(policy.into(), parse_policy_instance(instance)?)?;
         Ok(builder)
     }
 
@@ -1281,18 +1358,25 @@ impl JsEngineBuilder {
     ///
     /// `readyBuilder` is an always-ready builtin builder or the result of a
     /// required barrier-stage configuration call.
+    /// The optional `instance` supplies the registration name and mode.
+    /// An omitted, null, or empty name uses the policy name.
+    /// Omitted or null mode is `Reject`.
     ///
     /// # Errors
     ///
     /// Throws `ParamError` when `readyBuilder` is not a builtin ready-builder
     /// token, or `EngineBuildError` when the builtin's configuration is invalid.
+    /// A non-string instance name (unless null or omitted) or an invalid mode
+    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
+    /// registration call.
     #[wasm_bindgen(js_name = builtin)]
     pub fn builtin(
         &self,
         ready_builder: BuiltinReadyBuilder,
+        instance: Option<PolicyInstanceLike>,
     ) -> Result<JsReadyEngineBuilder, JsValue> {
         let builder = JsReadyEngineBuilder::new();
-        builder.register_builtin(ready_builder.into())?;
+        builder.register_builtin(ready_builder.into(), parse_policy_instance(instance)?)?;
         Ok(builder)
     }
 
@@ -1321,29 +1405,49 @@ impl JsReadyEngineBuilder {
     /// Registers an additional custom pre-trade policy.
     ///
     /// `policy` is any JS object implementing the `Policy` shape.
+    /// The optional `instance` supplies the registration name and mode.
+    /// An omitted, null, or empty name uses the policy name.
+    /// Omitted or null mode is `Reject`.
     ///
     /// # Errors
     ///
     /// Throws `ParamError` when `policy` is not a valid `Policy` object, or
     /// `LifecycleError` when the builder has already been consumed.
+    /// A non-string instance name (unless null or omitted) or an invalid mode
+    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
+    /// registration call.
     #[wasm_bindgen(js_name = preTrade)]
-    pub fn pre_trade(&self, policy: PolicyLike) -> Result<(), JsValue> {
-        self.register_pre_trade(policy.into())
+    pub fn pre_trade(
+        &self,
+        policy: PolicyLike,
+        instance: Option<PolicyInstanceLike>,
+    ) -> Result<(), JsValue> {
+        self.register_pre_trade(policy.into(), parse_policy_instance(instance)?)
     }
 
     /// Registers an additional builtin policy from its ready-builder token.
     ///
     /// `readyBuilder` is an always-ready builtin builder or the result of a
     /// required barrier-stage configuration call.
+    /// The optional `instance` supplies the registration name and mode.
+    /// An omitted, null, or empty name uses the policy name.
+    /// Omitted or null mode is `Reject`.
     ///
     /// # Errors
     ///
     /// Throws `ParamError` when `readyBuilder` is not a builtin ready-builder
     /// token, `EngineBuildError` when the builtin's configuration is invalid, or
     /// `LifecycleError` when the builder has already been consumed.
+    /// A non-string instance name (unless null or omitted) or an invalid mode
+    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
+    /// registration call.
     #[wasm_bindgen(js_name = builtin)]
-    pub fn builtin(&self, ready_builder: BuiltinReadyBuilder) -> Result<(), JsValue> {
-        self.register_builtin(ready_builder.into())
+    pub fn builtin(
+        &self,
+        ready_builder: BuiltinReadyBuilder,
+        instance: Option<PolicyInstanceLike>,
+    ) -> Result<(), JsValue> {
+        self.register_builtin(ready_builder.into(), parse_policy_instance(instance)?)
     }
 
     /// Opens a market-data builder with the given default TTL.
@@ -1388,6 +1492,7 @@ impl JsReadyEngineBuilder {
     /// Builds a fresh ready builder seeded with the no-sync core builder.
     fn new() -> Self {
         let builder = EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
+            .with_order_review()
             .sync(EngineLocking::new(SyncMode::None));
         Self {
             state: RefCell::new(Some(BuilderState::Synced(builder))),
@@ -1415,7 +1520,11 @@ impl JsReadyEngineBuilder {
     ///
     /// Throws `ParamError` when `policy` is invalid, or `LifecycleError` when
     /// the builder has already been consumed.
-    fn register_pre_trade(&self, policy: JsValue) -> Result<(), JsValue> {
+    fn register_pre_trade(
+        &self,
+        policy: JsValue,
+        instance: openpit::PolicyInstance,
+    ) -> Result<(), JsValue> {
         // `from_js` must run before `take_state`: an invalid policy returns its
         // error while the builder state is still in place, so a rejected
         // registration never consumes the builder (mirrors the restore-on-
@@ -1423,7 +1532,7 @@ impl JsReadyEngineBuilder {
         let adapter = JsPreTradePolicyAdapter::from_js(policy)?;
         let boxed = BoxedPreTradePolicy::new(Box::new(adapter));
         let state = self.take_state()?;
-        *self.state.borrow_mut() = Some(state.pre_trade(boxed));
+        *self.state.borrow_mut() = Some(state.pre_trade(boxed, instance));
         Ok(())
     }
 
@@ -1434,7 +1543,11 @@ impl JsReadyEngineBuilder {
     /// Throws `ParamError` when `token` is not a builtin ready-builder,
     /// `EngineBuildError` on an invalid builtin configuration, or
     /// `LifecycleError` on a consumed builder.
-    fn register_builtin(&self, token: JsValue) -> Result<(), JsValue> {
+    fn register_builtin(
+        &self,
+        token: JsValue,
+        instance: openpit::PolicyInstance,
+    ) -> Result<(), JsValue> {
         let state = self.take_state()?;
         let policy = match build_builtin_policy(&token, state.storage_builder()) {
             Ok(policy) => policy,
@@ -1445,7 +1558,7 @@ impl JsReadyEngineBuilder {
                 return Err(error);
             }
         };
-        *self.state.borrow_mut() = Some(state.builtin(policy));
+        *self.state.borrow_mut() = Some(state.builtin(policy, instance));
         Ok(())
     }
 }

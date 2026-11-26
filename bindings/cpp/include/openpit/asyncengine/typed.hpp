@@ -196,6 +196,8 @@ struct StartOutcome {
   std::shared_ptr<AsyncRequest<Driver>> request;
   std::vector<::openpit::pretrade::Reject> rejects;
 
+  /// Returns whether a request is available. If its `Reviews()` is non-empty,
+  /// a human decision is required before sending the order.
   [[nodiscard]] bool Passed() const noexcept {
     return static_cast<bool>(request);
   }
@@ -210,6 +212,8 @@ struct ExecuteOutcome {
   std::shared_ptr<AsyncReservation<Driver>> reservation;
   std::vector<::openpit::pretrade::Reject> rejects;
 
+  /// Returns whether a reservation is available. If its `Reviews()` is
+  /// non-empty, a human decision is required before sending the order.
   [[nodiscard]] bool Passed() const noexcept {
     return static_cast<bool>(reservation);
   }
@@ -509,6 +513,13 @@ class AsyncReservation
   [[nodiscard]] ::openpit::pretrade::PreTradeLock Lock() const {
     const auto reader = m_lifecycle.BeginRead();
     return m_reservation.Lock();
+  }
+
+  /// Returns detached review marks with the same lifetime rules as `Lock()`.
+  /// A non-empty list requires a human decision before sending the order.
+  [[nodiscard]] std::vector<::openpit::pretrade::Reject> Reviews() const {
+    const auto reader = m_lifecycle.BeginRead();
+    return m_reservation.Reviews();
   }
 
   // Returns detached account-adjustment outcomes. While open, it returns the
@@ -822,6 +833,14 @@ class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
 
   [[nodiscard]] ::openpit::param::AccountId AccountId() const noexcept {
     return m_accountId;
+  }
+
+  /// Returns the start-stage review marks. A non-empty list requires a human
+  /// decision before sending the order. Throws `Error` once execution starts
+  /// or the request closes. After execution, read marks from the reservation.
+  [[nodiscard]] std::vector<::openpit::pretrade::Reject> Reviews() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_request.Reviews();
   }
 
   // Enqueues the main stage. The future mirrors `ExecutePreTrade`: a non-null
@@ -1453,15 +1472,11 @@ AsyncRequest<Driver>::Execute(std::chrono::nanoseconds timeout) {
   return m_engine->template Call2<ReservationPtr, Rejects>(
       accountId,
       [self](Driver&) -> std::pair<ReservationPtr, Rejects> {
-        std::lock_guard<std::mutex> lock(self->m_mutex);
-        ::openpit::pretrade::ExecuteResult result;
-        try {
-          result = self->m_request.Execute();
-        } catch (...) {
-          self->m_request = ::openpit::pretrade::Request();
-          throw;
-        }
-        self->m_request = ::openpit::pretrade::Request();
+        std::unique_lock<std::mutex> lock(self->m_mutex);
+        auto request = std::move(self->m_request);
+        // Policy callbacks can read the async wrapper.
+        lock.unlock();
+        ::openpit::pretrade::ExecuteResult result = request.Execute();
         if (!result.Passed()) {
           return {nullptr, std::move(result.rejects)};
         }

@@ -42,7 +42,7 @@ use crate::pretrade::policies::{
 };
 use crate::pretrade::{
     AccountBlockOutcome, AccountBlockOutcomes, PolicyConfigurationResult,
-    PolicyRuntimeConfiguration, PreTradePolicy,
+    PolicyRuntimeConfiguration, PreTradePolicy, RuleMode,
 };
 use crate::storage::{ConfigCell, LockingPolicyFactory};
 
@@ -227,16 +227,16 @@ impl std::error::Error for ConfigureError {}
 
 // ─── ConfigRegistry ──────────────────────────────────────────────────────────
 
-/// Per-engine map from policy name to its built-in settings cell.
+/// Per-engine registry of built-in settings cells in registration order.
 pub(crate) struct ConfigRegistry<Factory: LockingPolicyFactory> {
-    entries: HashMap<String, ConfigEntry<Factory>>,
+    entries: Vec<(String, (RuleMode, ConfigEntry<Factory>))>,
     #[cfg(debug_assertions)]
     pub(crate) engine_calls: EngineCallTracker,
 }
 
 impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
-    /// Builds a registry from the builder's collected `(name, cell)` pairs.
-    pub(crate) fn from_entries(entries: HashMap<String, ConfigEntry<Factory>>) -> Self {
+    /// Builds a registry from the builder's collected instance modes and cells.
+    pub(crate) fn from_entries(entries: Vec<(String, (RuleMode, ConfigEntry<Factory>))>) -> Self {
         Self {
             entries,
             #[cfg(debug_assertions)]
@@ -247,7 +247,7 @@ impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: Vec::new(),
             #[cfg(debug_assertions)]
             engine_calls: EngineCallTracker::default(),
         }
@@ -262,29 +262,33 @@ impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
         current_currency: Option<Asset>,
     ) -> Vec<crate::pretrade::AccountBlock> {
         self.entries
-            .values()
-            .filter_map(|entry| {
+            .iter()
+            .filter_map(|(_, (mode, entry))| {
                 let ConfigEntry::SpotFunds { settings, pnl, .. } = entry else {
                     return None;
                 };
-                settings.with(|settings| {
-                    account_pnl_membership_change_block::<Factory>(
-                        pnl,
-                        settings,
-                        account,
-                        previous_group,
-                        current_group,
-                        previous_currency.as_ref(),
-                        current_currency.as_ref(),
-                    )
-                })
+                settings
+                    .with(|settings| {
+                        account_pnl_membership_change_block::<Factory>(
+                            pnl,
+                            settings,
+                            account,
+                            previous_group,
+                            current_group,
+                            previous_currency.as_ref(),
+                            current_currency.as_ref(),
+                        )
+                    })
+                    .filter(|block| block.is_effective(*mode))
             })
             .collect()
     }
 
-    fn entry(&self, name: &str) -> Result<&ConfigEntry<Factory>, ConfigureError> {
+    fn entry(&self, name: &str) -> Result<(RuleMode, &ConfigEntry<Factory>), ConfigureError> {
         self.entries
-            .get(name)
+            .iter()
+            .find(|(entry_name, _)| entry_name == name)
+            .map(|(_, (mode, entry))| (*mode, entry))
             .ok_or_else(|| ConfigureError::UnknownPolicy {
                 name: name.to_owned(),
             })
@@ -445,7 +449,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
         let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
-        match self.registry().entry(name)? {
+        match self.registry().entry(name)?.1 {
             ConfigEntry::RateLimit(cell) => cell
                 .update(f)
                 .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),
@@ -470,7 +474,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
         let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
-        match self.registry().entry(name)? {
+        match self.registry().entry(name)?.1 {
             ConfigEntry::PnlBoundsKillSwitch { settings, .. } => settings
                 .update(f)
                 .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),
@@ -511,7 +515,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
         let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
-        match self.registry().entry(name)? {
+        match self.registry().entry(name)?.1 {
             ConfigEntry::PnlBoundsKillSwitch { realized, .. } => {
                 {
                     realized.with_mut(
@@ -544,6 +548,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// block, while clearing an override can expose a fallback barrier that is
     /// evaluated normally and can record a block. Neither operation releases a
     /// previously recorded block.
+    /// A review instance's block whose code is not an evaluation failure
+    /// ([`crate::pretrade::RejectCode::is_evaluation_failure`]) is dropped,
+    /// neither recorded nor returned.
     ///
     /// The same rule applies independently to each P&L bound axis: only a
     /// changed, still-effective barrier is evaluated. Realized P&L is checked
@@ -575,7 +582,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter_exclusive();
         let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
-        match self.registry().entry(name)? {
+        let (mode, entry) = self.registry().entry(name)?;
+        match entry {
             ConfigEntry::SpotFunds {
                 settings,
                 transition,
@@ -632,6 +640,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                         .collect::<std::collections::BTreeSet<_>>();
                     account_blocks.reserve(blocks.len());
                     let mut record_block = |account, block: crate::pretrade::AccountBlock| {
+                        if !block.is_effective(mode) {
+                            return;
+                        }
                         if self
                             .inner
                             .blocked_accounts
@@ -695,8 +706,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         self.inner
             .pre_trade_policies
             .iter()
-            .find(|policy| policy.name() == name)
-            .map(Box::as_ref)
+            .find(|instance| instance.name == name)
+            .map(|instance| instance.policy.as_ref())
             .ok_or_else(|| ConfigureError::UnknownPolicy {
                 name: name.to_owned(),
             })
@@ -713,6 +724,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// did not cause. The engine processes that block before returning it. If
     /// the account is already blocked, its first stored cause remains unchanged
     /// and the result still contains the policy-reported block.
+    /// A review instance's block whose code is not an evaluation failure
+    /// ([`crate::pretrade::RejectCode::is_evaluation_failure`]) is dropped,
+    /// neither recorded nor returned.
     ///
     /// # Errors
     ///
@@ -730,7 +744,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
         let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
-        match self.registry().entry(name)? {
+        let (mode, entry) = self.registry().entry(name)?;
+        match entry {
             ConfigEntry::SpotFunds { .. } => {
                 let policy = self.pre_trade_policy(name)?;
                 {
@@ -749,7 +764,10 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                             .currency_of(account, account_group_id),
                         state,
                     };
-                    let result = policy.apply_runtime_configuration(configuration);
+                    let mut result = policy.apply_runtime_configuration(configuration);
+                    result
+                        .account_blocks
+                        .retain(|block| block.is_effective(mode));
                     for block in &result.account_blocks {
                         self.inner
                             .blocked_accounts
@@ -779,7 +797,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
         let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
-        match self.registry().entry(name)? {
+        match self.registry().entry(name)?.1 {
             ConfigEntry::OrderSizeLimit(cell) => cell
                 .update(f)
                 .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),

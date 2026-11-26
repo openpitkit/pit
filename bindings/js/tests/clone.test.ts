@@ -20,12 +20,33 @@ import { describe, expect, it } from "vitest";
 // See engine.test.ts for the import-resolution scheme. Run `npm run build`
 // first.
 import { AccountId, Price } from "@openpit/engine/param";
-import { OrderOperation } from "@openpit/engine/model";
+import { Order, OrderOperation, OrderReview } from "@openpit/engine/model";
 
 // Wrapper-valued setters borrow and clone at the wasm boundary. Assigning a
 // wrapper must never invalidate the caller's handle.
 
 describe("wrapper setters are non-consuming", () => {
+  it("copies the native review group when cloning an order", () => {
+    const group = new OrderReview();
+    expect(group.alreadyHeld).toBe(false);
+    group.confirmed = true;
+    group.alreadyHeld = true;
+    const original = new Order();
+    original.review = group;
+    const cloned = original.clone();
+
+    group.confirmed = false;
+    group.alreadyHeld = false;
+    original.review = { confirmed: false, alreadyHeld: false };
+    expect(cloned.review?.confirmed).toBe(true);
+    expect(cloned.review?.alreadyHeld).toBe(true);
+    expect(cloned.review?.clone().confirmed).toBe(true);
+    expect(cloned.review?.clone().alreadyHeld).toBe(true);
+    expect(original.review?.confirmed).toBe(false);
+    expect(original.review?.alreadyHeld).toBe(false);
+    expect(new Order().clone().review).toBeUndefined();
+  });
+
   it("keeps an AccountId usable after direct assignment", () => {
     const account = AccountId.fromInt(99224416n);
     const operation = new OrderOperation();

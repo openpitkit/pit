@@ -138,6 +138,28 @@ export const RejectScope = {
 export type RejectScope = (typeof RejectScope)[keyof typeof RejectScope];
 
 /**
+ * Enforcement mode of a pre-trade rule. Execution with review marks and no
+ * rejects returns a reservation in either review mode.
+ */
+export const RuleMode = {
+  /** Reject the order and roll back prepared mutations. */
+  Reject: "Reject",
+  /**
+   * Require a human decision. The reservation keeps the run's holds and policy
+   * results only if every review mark is `ReviewWithHold`.
+   */
+  ReviewWithHold: "ReviewWithHold",
+  /**
+   * Require a human decision. Any `ReviewWithoutHold` mark leaves the
+   * reservation without holds, mutations, lock prices, or account adjustments.
+   */
+  ReviewWithoutHold: "ReviewWithoutHold",
+} as const;
+
+/** Enforcement mode of a pre-trade rule. */
+export type RuleMode = (typeof RuleMode)[keyof typeof RuleMode];
+
+/**
  * Quote field a spot-funds policy uses to price market orders. These are the
  * stable wire values accepted by the JavaScript policy builder.
  */

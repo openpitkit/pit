@@ -153,12 +153,10 @@ func (
 // PreTrade registers client pre-trade policies and advances the builder to
 // ClientReadyEngineBuilder.
 func (b *ClientSyncedEngineBuilder[Order, Report, Adjustment]) PreTrade(
-	policy ...pretrade.ClientPreTradePolicy[Order, Report],
+	policy pretrade.ClientPreTradePolicy[Order, Report], options ...InstanceOption,
 ) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
 	rb := b.newReady()
-	for _, p := range policy {
-		rb.addPreTradePolicy(p)
-	}
+	rb.addPreTradePolicy(policy, options...)
 	return rb
 }
 
@@ -167,8 +165,9 @@ func (
 	b *ClientSyncedEngineBuilder[Order, Report, Adjustment],
 ) Builtin(
 	builtinReadyBuilder builtinReadyBuilder,
+	options ...InstanceOption,
 ) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	return b.newReady().Builtin(builtinReadyBuilder)
+	return b.newReady().Builtin(builtinReadyBuilder, options...)
 }
 
 //------------------------------------------------------------------------------
@@ -204,11 +203,9 @@ func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) Build() (
 
 // PreTrade appends additional client pre-trade policies to an already-ready builder.
 func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) PreTrade(
-	policy ...pretrade.ClientPreTradePolicy[Order, Report],
+	policy pretrade.ClientPreTradePolicy[Order, Report], options ...InstanceOption,
 ) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	for _, p := range policy {
-		b.addPreTradePolicy(p)
-	}
+	b.addPreTradePolicy(policy, options...)
 	return b
 }
 
@@ -217,8 +214,9 @@ func (
 	b *ClientReadyEngineBuilder[Order, Report, Adjustment],
 ) Builtin(
 	builtinReadyBuilder builtinReadyBuilder,
+	options ...InstanceOption,
 ) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	b.ready.Builtin(builtinReadyBuilder)
+	b.ready.Builtin(builtinReadyBuilder, options...)
 	return b
 }
 
@@ -226,10 +224,11 @@ func (
 	b *ClientReadyEngineBuilder[Order, Report, Adjustment],
 ) addPreTradePolicy(
 	p pretrade.ClientPreTradePolicy[Order, Report],
+	options ...InstanceOption,
 ) {
 	if b.unsafeFastPayloadCallbacks {
-		b.ready.PreTrade(pretrade.NewUnsafeFastClientPreTradePolicy(p))
+		b.ready.PreTrade(pretrade.NewUnsafeFastClientPreTradePolicy(p), options...)
 		return
 	}
-	b.ready.PreTrade(pretrade.NewSafeClientPreTradePolicy(p))
+	b.ready.PreTrade(pretrade.NewSafeClientPreTradePolicy(p), options...)
 }

@@ -37,15 +37,28 @@ use crate::pretrade::PreTradePolicy;
 use crate::pretrade::{
     AccountBlock, DropCopyOperation, PolicyAccountAdjustmentResult, PolicyPreTradeResult,
     PostTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradeRequest,
-    PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
+    PreTradeReservation, Reject, RejectCode, RejectScope, Rejects, RuleMode,
 };
 use crate::time::Instant;
-use crate::{AccountAdjustmentContext, Mutations};
+use crate::{AccountAdjustmentContext, Mutations, RequestFieldAccessError};
+
+pub(crate) type OrderReviewReader<Order> = fn(
+    &Order,
+) -> (
+    Result<bool, RequestFieldAccessError>,
+    Result<bool, RequestFieldAccessError>,
+);
+
+pub(crate) struct RegisteredPolicy<Policy: ?Sized> {
+    pub(crate) name: String,
+    pub(crate) policy: Box<Policy>,
+    pub(crate) mode: RuleMode,
+}
 
 pub(crate) struct EngineInner<Trait: EngineTrait> {
     #[allow(clippy::type_complexity)]
     pub(crate) pre_trade_policies: Vec<
-        Box<
+        RegisteredPolicy<
             <Trait::Sync as SyncMode>::PreTradePolicyObject<
                 Trait::Order,
                 Trait::ExecutionReport,
@@ -53,6 +66,7 @@ pub(crate) struct EngineInner<Trait: EngineTrait> {
             >,
         >,
     >,
+    pub(crate) order_review: Option<OrderReviewReader<Trait::Order>>,
     pub(crate) blocked_accounts: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
         as crate::storage::LockingPolicyFactory>::Shared<
         BlockedAccounts<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
@@ -74,7 +88,7 @@ pub(crate) struct EngineInner<Trait: EngineTrait> {
 /// Error returned when account-adjustment batch validation fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountAdjustmentBatchError {
-    /// Rejects produced by the policy.
+    /// Policy entries that rejected the batch, all reported as [`RuleMode::Reject`].
     pub rejects: Rejects,
     /// Zero-based index of the failing adjustment.
     pub failed_adjustment_index: usize,
@@ -256,6 +270,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// Start-stage policies run in registration order. The engine collects
     /// reject lists returned by all start-stage policies before deciding
     /// whether to create a deferred request.
+    /// Review marks do not reject the order and are retained on the request;
+    /// effective rejects discard every mark collected in the stage.
+    /// Without [`EngineBuilder::with_order_review`], a mark with no effective
+    /// reject becomes an engine reject.
+    /// With [`EngineBuilder::with_order_review`], a `confirmed` order reports
+    /// no review marks.
     ///
     /// The engine does not enforce optional order extensions (for example
     /// `instrument` or `side`). Policies that depend on extension fields must
@@ -269,8 +289,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// an order whose account ID cannot be read is rejected too, because the
     /// engine cannot clear it against the blocked set.
     ///
-    /// A start-stage reject with [`RejectScope::Account`] latches a block for
-    /// the order's account. The block persists until it is lifted, so later
+    /// An effective start-stage reject with [`RejectScope::Account`] latches a
+    /// block for the order's account. The block persists until lifted, so later
     /// requests for the account are rejected up front. The block is recorded
     /// only for a readable account: an unreadable one records nothing, since a
     /// rejected request created no exposure that would justify the global
@@ -280,6 +300,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
     ///
     /// Returns [`Rejects`] when the account is blocked or when any start-stage
     /// policy rejects the order.
+    /// With [`EngineBuilder::with_order_review`], an unreadable review flag
+    /// produces an engine [`RejectCode::MissingRequiredField`] reject before
+    /// any policy runs.
+    /// Without [`EngineBuilder::with_order_review`], a stage whose policies
+    /// return a review mark and no effective reject is rejected by the engine
+    /// with [`RejectCode::MissingRequiredField`].
     pub fn start_pre_trade(
         &self,
         order: Trait::Order,
@@ -311,6 +337,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
             return Err(rejects);
         }
 
+        let (confirmed, already_held) = validated_order_review(&self.inner, &order)?;
         let account_control = known_account.map(|id| {
             let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
             AccountControl::new(handle, id)
@@ -321,12 +348,15 @@ impl<Trait: EngineTrait> Engine<Trait> {
             self.accounts(),
             account_groups,
             account,
+            Ok(confirmed),
+            Ok(already_held),
         );
-        let (start_rejects, account_block) = with_start_pre_trade_now(now, || {
+        let (start_rejects, reviews, account_block) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
                 &self.inner,
                 &ctx,
                 &order,
+                confirmed,
                 |policy, ctx, order| policy.check_pre_trade_start(ctx, order),
             )
         });
@@ -342,14 +372,28 @@ impl<Trait: EngineTrait> Engine<Trait> {
         }
 
         let engine = <Trait::Sync as SyncMode>::downgrade(&self.inner);
-        let request_handle = RequestHandleImpl::<Trait::Order>::new(Box::new(move || {
-            execute_pre_trade_request::<Trait>(engine, ctx, order)
+        let request_handle = RequestHandleImpl::<Trait::Order>::new(Box::new(move |reviews| {
+            execute_pre_trade_request::<Trait>(engine, ctx, order, reviews, confirmed)
         }));
 
-        Ok(PreTradeRequest::from_handle(Box::new(request_handle)))
+        Ok(PreTradeRequest::from_handle(
+            Box::new(request_handle),
+            reviews,
+        ))
     }
 
     /// Runs start-stage checks and executes main-stage checks immediately.
+    ///
+    /// Inspect the returned reservation's `reviews()` before sending the order.
+    /// The reservation retains mutations, lock prices, and account adjustments
+    /// only if every review mark in the run is with-hold.
+    /// Without-hold review compensates mutations and returns empty reservation
+    /// output; a start-stage without-hold mark skips main-stage checks after
+    /// the blocked-account recheck. Effective rejects discard all marks.
+    /// Without [`EngineBuilder::with_order_review`], a mark with no effective
+    /// reject becomes an engine reject.
+    /// With [`EngineBuilder::with_order_review`], a `confirmed` order reports
+    /// no review marks.
     ///
     /// This is a convenience shortcut equivalent to
     /// `engine.start_pre_trade(order)?.execute()`, including its account-block
@@ -359,6 +403,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// # Errors
     ///
     /// Returns [`Rejects`] for both stages.
+    /// With [`EngineBuilder::with_order_review`], an unreadable review flag
+    /// produces an engine [`RejectCode::MissingRequiredField`] reject before
+    /// any policy runs.
+    /// Without [`EngineBuilder::with_order_review`], a stage whose policies
+    /// return a review mark and no effective reject is rejected by the engine
+    /// with [`RejectCode::MissingRequiredField`].
     pub fn execute_pre_trade(&self, order: Trait::Order) -> Result<PreTradeReservation, Rejects>
     where
         Trait::Order: HasAccountId,
@@ -370,7 +420,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// Applies a drop-copy operation without enforcing policy rejects.
     ///
     /// Policies run in registration order and keep their normal mutations,
-    /// locks, account adjustments, and account blocks. Ordinary policy rejects
+    /// locks, account adjustments, and reject-derived account blocks. Review
+    /// marks never latch account blocks or appear in the operation, and their
+    /// mode does not suppress bookkeeping. Ordinary policy rejects
     /// do not stop the pipeline or appear in the operation. Rejects that mean a
     /// policy could not evaluate or apply the historical order fail the whole
     /// operation. On such a failure, collected mutations are rolled back and
@@ -402,6 +454,11 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// accesses may interleave. Callers that need whole-pipeline isolation must
     /// serialize those calls externally.
     ///
+    /// With [`EngineBuilder::with_order_review`], both review flags are read
+    /// once and passed to policies through the context as read. A read error
+    /// fails nothing by itself and reaches only a policy that asks for that
+    /// flag.
+    ///
     /// # Errors
     ///
     /// Returns [`RejectCode::MissingRequiredField`] when the account ID is
@@ -424,6 +481,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
         let account = order
             .account_id()
             .map_err(|_| new_drop_copy_unreadable_account_rejects())?;
+        let (confirmed, already_held) = read_order_review(&self.inner, &order);
         let account_control = AccountControl::new(
             AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone()),
             account,
@@ -434,13 +492,16 @@ impl<Trait: EngineTrait> Engine<Trait> {
             self.accounts(),
             account_groups,
             account,
+            confirmed,
+            already_held,
         );
 
-        let (start_rejects, _) = with_start_pre_trade_now(now, || {
+        let (start_rejects, _, _) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
                 &self.inner,
                 &ctx,
                 &order,
+                false,
                 |policy, ctx, order| policy.check_pre_trade_start(ctx, order),
             )
         });
@@ -455,10 +516,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
             return Err(rejects);
         }
 
-        let (rejects, _, mutations, lock, outcomes) = run_pre_trade_main_stage::<Trait, _>(
+        let (rejects, _, _, mutations, lock, outcomes) = run_pre_trade_main_stage::<Trait, _>(
             &self.inner,
             &ctx,
             &order,
+            false,
+            false,
             |policy, ctx, order, mutations| policy.perform_pre_trade_check(ctx, order, mutations),
         );
         if let Some(rejects) = fatal_drop_copy_rejects(rejects) {
@@ -534,6 +597,16 @@ impl<Trait: EngineTrait> Engine<Trait> {
     ///
     /// The initial blocked-account read still applies, so an already-blocked
     /// account is reported as rejected.
+    /// Review marks are returned through [`PreTradeDryRunReport::reviews`];
+    /// they never produce a would-be account block.
+    /// With [`EngineBuilder::with_order_review`], a `confirmed` order reports
+    /// no review marks.
+    /// With [`EngineBuilder::with_order_review`], an unreadable review flag
+    /// produces an engine [`RejectCode::MissingRequiredField`] reject in the
+    /// report before any policy runs.
+    /// Without [`EngineBuilder::with_order_review`], a stage whose policies
+    /// return a review mark and no effective reject produces an engine
+    /// [`RejectCode::MissingRequiredField`] reject in the report.
     pub fn start_pre_trade_dry_run(&self, order: Trait::Order) -> PreTradeDryRunReport
     where
         Trait::Order: HasAccountId,
@@ -552,9 +625,27 @@ impl<Trait: EngineTrait> Engine<Trait> {
             known_account,
             RejectScope::Order,
         ) {
-            return PreTradeDryRunReport::new(Some(rejects), PreTradeLock::new(), Vec::new(), None);
+            return PreTradeDryRunReport::new(
+                Some(rejects),
+                PreTradeLock::new(),
+                Vec::new(),
+                None,
+                Vec::new(),
+            );
         }
 
+        let (confirmed, already_held) = match validated_order_review(&self.inner, &order) {
+            Ok(flags) => flags,
+            Err(rejects) => {
+                return PreTradeDryRunReport::new(
+                    Some(rejects),
+                    PreTradeLock::new(),
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                )
+            }
+        };
         let account_control = known_account.map(|id| {
             let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
             AccountControl::new(handle, id)
@@ -565,17 +656,26 @@ impl<Trait: EngineTrait> Engine<Trait> {
             self.accounts(),
             account_groups,
             account,
+            Ok(confirmed),
+            Ok(already_held),
         );
-        let (rejects, account_block) = with_start_pre_trade_now(now, || {
+        let (rejects, reviews, account_block) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
                 &self.inner,
                 &ctx,
                 &order,
+                confirmed,
                 |policy, ctx, order| policy.check_pre_trade_start_dry_run(ctx, order),
             )
         });
 
-        PreTradeDryRunReport::new(rejects, PreTradeLock::new(), Vec::new(), account_block)
+        PreTradeDryRunReport::new(
+            rejects,
+            PreTradeLock::new(),
+            Vec::new(),
+            account_block,
+            reviews,
+        )
     }
 
     /// Runs the full pre-trade pipeline as a non-mutating dry-run.
@@ -594,6 +694,20 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// runs and the report carries its pass/reject verdict together with the
     /// would-be lock and account adjustments, whose numbers match what a real
     /// reservation reports for the same order and engine state.
+    /// Review marks follow the real pipeline's stage cutoff. A start-stage
+    /// without-hold mark skips main-stage checks; any without-hold mark leaves
+    /// the reported lock and adjustments empty. Effective rejects discard
+    /// every mark.
+    /// With [`EngineBuilder::with_order_review`], a `confirmed` order reports
+    /// no review marks.
+    /// [`PreTradeDryRunReport::is_pass`] only means there are no rejects:
+    /// callers also inspect `reviews()`.
+    /// With [`EngineBuilder::with_order_review`], an unreadable review flag
+    /// produces an engine [`RejectCode::MissingRequiredField`] reject in the
+    /// report before any policy runs.
+    /// Without [`EngineBuilder::with_order_review`], a stage whose policies
+    /// return a review mark and no effective reject produces an engine
+    /// [`RejectCode::MissingRequiredField`] reject in the report.
     pub fn execute_pre_trade_dry_run(&self, order: Trait::Order) -> PreTradeDryRunReport
     where
         Trait::Order: HasAccountId,
@@ -612,9 +726,27 @@ impl<Trait: EngineTrait> Engine<Trait> {
             known_account,
             RejectScope::Order,
         ) {
-            return PreTradeDryRunReport::new(Some(rejects), PreTradeLock::new(), Vec::new(), None);
+            return PreTradeDryRunReport::new(
+                Some(rejects),
+                PreTradeLock::new(),
+                Vec::new(),
+                None,
+                Vec::new(),
+            );
         }
 
+        let (confirmed, already_held) = match validated_order_review(&self.inner, &order) {
+            Ok(flags) => flags,
+            Err(rejects) => {
+                return PreTradeDryRunReport::new(
+                    Some(rejects),
+                    PreTradeLock::new(),
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                )
+            }
+        };
         let account_control = known_account.map(|id| {
             let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
             AccountControl::new(handle, id)
@@ -625,40 +757,66 @@ impl<Trait: EngineTrait> Engine<Trait> {
             self.accounts(),
             account_groups,
             account,
+            Ok(confirmed),
+            Ok(already_held),
         );
 
-        let (start_rejects, start_account_block) = with_start_pre_trade_now(now, || {
-            run_pre_trade_start_stage::<Trait, _>(
-                &self.inner,
-                &ctx,
-                &order,
-                |policy, ctx, order| policy.check_pre_trade_start_dry_run(ctx, order),
-            )
-        });
+        let (start_rejects, mut reviews, start_account_block) =
+            with_start_pre_trade_now(now, || {
+                run_pre_trade_start_stage::<Trait, _>(
+                    &self.inner,
+                    &ctx,
+                    &order,
+                    confirmed,
+                    |policy, ctx, order| policy.check_pre_trade_start_dry_run(ctx, order),
+                )
+            });
         if let Some(rejects) = start_rejects {
             return PreTradeDryRunReport::new(
                 Some(rejects),
                 PreTradeLock::new(),
                 Vec::new(),
                 start_account_block,
+                Vec::new(),
             );
+        }
+
+        if reviews
+            .iter()
+            .any(|review| review.mode == RuleMode::ReviewWithoutHold)
+        {
+            return PreTradeDryRunReport::new(None, PreTradeLock::new(), Vec::new(), None, reviews);
         }
 
         // The collected mutations are intentionally discarded: a dry-run never
         // commits or rolls back. The throwaway `Mutations` only satisfies the
         // hook signature for any read-only policy that still appends inert
         // commit/rollback pairs through the default delegation.
-        let (rejects, account_block, _mutations, lock, outcomes) =
+        let (rejects, main_reviews, account_block, _mutations, mut lock, mut outcomes) =
             run_pre_trade_main_stage::<Trait, _>(
                 &self.inner,
                 &ctx,
                 &order,
+                true,
+                confirmed,
                 |policy, ctx, order, mutations| {
                     policy.perform_pre_trade_check_dry_run(ctx, order, mutations)
                 },
             );
 
-        PreTradeDryRunReport::new(rejects, lock, outcomes, account_block)
+        if rejects.is_some() {
+            reviews.clear();
+        } else {
+            reviews.extend(main_reviews);
+            if reviews
+                .iter()
+                .any(|review| review.mode == RuleMode::ReviewWithoutHold)
+            {
+                lock = PreTradeLock::new();
+                outcomes.clear();
+            }
+        }
+        PreTradeDryRunReport::new(rejects, lock, outcomes, account_block, reviews)
     }
 
     /// Applies post-trade updates across all policies and returns aggregated result.
@@ -669,6 +827,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
     ///
     /// Reject scope is not consulted on this path; this method does not derive
     /// an account block from a reject.
+    /// A review instance's block whose code is not an evaluation failure
+    /// ([`RejectCode::is_evaluation_failure`]) is dropped, neither recorded nor
+    /// returned.
     ///
     /// A non-empty [`PostTradeResult::account_blocks`] means at least one policy entered a
     /// blocked state after the report was applied. This does **not** imply that
@@ -697,9 +858,14 @@ impl<Trait: EngineTrait> Engine<Trait> {
         let ctx = PostTradeContext::with_accounts(accounts, account_groups, account.clone());
 
         for policy in &inner.pre_trade_policies {
-            let Some(result) = policy.apply_execution_report(&ctx, report) else {
+            let mode = policy.mode;
+            let policy = &policy.policy;
+            let Some(mut result) = policy.apply_execution_report(&ctx, report) else {
                 continue;
             };
+            result
+                .account_blocks
+                .retain(|block| block.is_effective(mode));
             blocks.extend(result.account_blocks);
             account_pnls.extend(result.account_pnls);
             account_adjustments.extend(result.account_adjustments);
@@ -784,6 +950,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
 
         'outer: for (index, adjustment) in adjustments.iter().enumerate() {
             for policy in &inner.pre_trade_policies {
+                let policy = &policy.policy;
                 match policy.apply_account_adjustment(&ctx, account_id, adjustment, &mut mutations)
                 {
                     Ok(result) => {
@@ -807,7 +974,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
                         );
                         batch_error = Some(AccountAdjustmentBatchError {
                             failed_adjustment_index: index,
-                            rejects,
+                            rejects: rejects.into_batch_rejects(),
                         });
                         break 'outer;
                     }
@@ -883,6 +1050,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
             let mut mutations = Mutations::new();
             let mut refusals = Vec::new();
             for policy in &inner.pre_trade_policies {
+                let policy = &policy.policy;
                 if let Err(refusal) = policy.retire_account(account_id, &mut mutations) {
                     refusals.push(AccountRetirementPolicyRefusal {
                         policy: policy.name().to_owned(),
@@ -927,6 +1095,39 @@ type PreTradeContextOf<Trait> =
 type AccountBlockHandleOf<Trait> =
     AccountBlockHandle<<<Trait as EngineTrait>::Sync as SyncMode>::StorageLockingPolicyFactory>;
 
+fn read_order_review<Trait: EngineTrait>(
+    inner: &EngineInner<Trait>,
+    order: &Trait::Order,
+) -> (
+    Result<bool, RequestFieldAccessError>,
+    Result<bool, RequestFieldAccessError>,
+) {
+    match inner.order_review {
+        Some(reader) => reader(order),
+        None => (Ok(false), Ok(false)),
+    }
+}
+
+fn validated_order_review<Trait: EngineTrait>(
+    inner: &EngineInner<Trait>,
+    order: &Trait::Order,
+) -> Result<(bool, bool), Rejects> {
+    let (confirmed, already_held) = read_order_review(inner, order);
+    let unreadable = |field: &str, error: RequestFieldAccessError| {
+        Rejects::from(Reject::new(
+            "Engine",
+            RejectScope::Order,
+            RejectCode::MissingRequiredField,
+            "order review field is unreadable",
+            format!("{field}: {error}"),
+        ))
+    };
+    Ok((
+        confirmed.map_err(|error| unreadable("confirmed", error))?,
+        already_held.map_err(|error| unreadable("already_held", error))?,
+    ))
+}
+
 /// Runs the start stage over every policy and reports the merged verdict
 /// without recording an account block in the engine registry.
 ///
@@ -939,8 +1140,9 @@ fn run_pre_trade_start_stage<Trait, Hook>(
     inner: &EngineInner<Trait>,
     ctx: &PreTradeContextOf<Trait>,
     order: &Trait::Order,
+    confirmed: bool,
     hook: Hook,
-) -> (Option<Rejects>, Option<AccountBlock>)
+) -> (Option<Rejects>, Vec<Reject>, Option<AccountBlock>)
 where
     Trait: EngineTrait,
     Hook: Fn(
@@ -949,16 +1151,21 @@ where
         &Trait::Order,
     ) -> Result<(), Rejects>,
 {
+    let mut reviews = Vec::new();
     let mut rejects_collection = Vec::new();
     let mut total_rejects_len = 0;
     let mut account_block: Option<AccountBlock> = None;
     for policy in &inner.pre_trade_policies {
+        let mode = policy.mode;
+        let policy = &policy.policy;
         let result = hook(&**policy, ctx, order);
         if let Err(rejects) = result {
             debug_assert!(
                 !rejects.is_empty(),
                 "policy returned Err with empty Rejects"
             );
+            let (rejects, marks, _) = rejects.into_classified(mode);
+            reviews.extend(marks);
             total_rejects_len += rejects.len();
             let reject_account_block = rejects
                 .iter()
@@ -972,35 +1179,45 @@ where
             if account_block.is_none() {
                 account_block = reject_account_block;
             }
-            rejects_collection.push(rejects);
+            rejects_collection.push(Rejects::new(rejects));
         }
     }
     debug_assert!(account_block.is_none() || total_rejects_len > 0);
-    (
+    let (rejects, reviews) = finish_pre_trade_stage(
+        inner.order_review.is_some(),
+        ctx.is_drop_copy(),
+        confirmed,
         merge_reject_lists(rejects_collection, total_rejects_len),
-        account_block,
-    )
+        reviews,
+    );
+    (rejects, reviews, account_block)
 }
 
-/// Runs the main stage over every policy and reports the merged verdict, the
-/// collected mutations, the assembled lock, and the account outcomes
-/// **without** committing, rolling back, or recording anything.
+/// Runs the main stage over every policy, returning the merged verdict, kept
+/// mutations, lock, and outcomes. Reject instances and all drop-copy instances
+/// write directly into the stage's mutations; only review instances outside
+/// drop-copy get a separate segment that can be discarded.
 ///
 /// `hook` selects the per-policy entry point (the normal
 /// [`perform_pre_trade_check`](PreTradePolicy::perform_pre_trade_check) or its
-/// dry-run variant); the loop, reject merge, first-account-block selection, lock
-/// assembly, and outcome tagging are identical for both. The caller decides
-/// what to do with the returned [`Mutations`] (commit, roll back, or drop) and
-/// whether to record the returned reject-derived [`AccountBlock`]. Drop-copy
-/// blocks reported directly through the context remain there until the caller
-/// applies or abandons its deferred operations.
+/// dry-run variant). A review instance's marks-only error invalidates its
+/// contribution: its result is ignored and its segment is rolled back before
+/// the next hook, or discarded without callbacks when `dry_run` is true.
+/// Rollback failures arm the kill switch and add an effective engine reject.
+/// Drop-copy keeps every mutation and takes results unless evaluation failed.
+/// Kept mutations remain in registration order for the caller to finalize.
+/// The caller records reject-derived account blocks; drop-copy blocks reported
+/// through the context remain there until it applies or abandons them.
 fn run_pre_trade_main_stage<Trait, Hook>(
     inner: &EngineInner<Trait>,
     ctx: &PreTradeContextOf<Trait>,
     order: &Trait::Order,
+    dry_run: bool,
+    confirmed: bool,
     hook: Hook,
 ) -> (
     Option<Rejects>,
+    Vec<Reject>,
     Option<AccountBlock>,
     Mutations,
     PreTradeLock,
@@ -1017,29 +1234,70 @@ where
 {
     let policy_count = inner.pre_trade_policies.len();
     let mut mutations = Mutations::with_capacity(policy_count);
+    let mut reviews = Vec::new();
     let mut rejects_collection = Vec::new();
     let mut total_rejects_len = 0;
     let mut outcomes: Vec<AccountAdjustmentOutcome> = Vec::new();
     let mut lock = PreTradeLock::new();
     let mut first_account_block: Option<AccountBlock> = None;
     for policy in &inner.pre_trade_policies {
-        let result = hook(&**policy, ctx, order, &mut mutations);
+        let mode = policy.mode;
+        let policy = &policy.policy;
+        let mut segment = (mode != RuleMode::Reject && !ctx.is_drop_copy()).then(Mutations::new);
+        let result = hook(
+            &**policy,
+            ctx,
+            order,
+            match segment.as_mut() {
+                Some(segment) => segment,
+                None => &mut mutations,
+            },
+        );
         match result {
-            Ok(None) => {}
-            Ok(Some(outcome)) => {
-                append_pre_trade_policy_result(
-                    outcome,
-                    policy.policy_group_id(),
-                    &mut lock,
-                    &mut outcomes,
-                );
+            Ok(result) => {
+                if let Some(segment) = segment {
+                    mutations.append(segment);
+                }
+                if let Some(outcome) = result {
+                    append_pre_trade_policy_result(
+                        outcome,
+                        policy.policy_group_id(),
+                        &mut lock,
+                        &mut outcomes,
+                    );
+                }
             }
             Err(rejects) => {
-                let (rejects, recorded_result) = rejects.into_parts();
-                if ctx.is_drop_copy()
-                    && !rejects
-                        .iter()
-                        .any(|reject| reject.code.is_evaluation_failure())
+                debug_assert!(
+                    !rejects.is_empty(),
+                    "policy returned Err with empty Rejects"
+                );
+                let (mut rejects, marks, recorded_result) = rejects.into_classified(mode);
+                reviews.extend(marks);
+                let discard_segment = rejects.is_empty() && segment.is_some();
+                if let Some(segment) = segment {
+                    if discard_segment {
+                        if !dry_run {
+                            let rollback = segment.rollback_all();
+                            if let Some(scope) = rollback.failure().scope() {
+                                let block_handle: AccountBlockHandleOf<Trait> =
+                                    AccountBlockHandle::from_inner(inner.blocked_accounts.clone());
+                                block_handle.record_mutation_failure(ctx.account_id().ok(), scope);
+                                rejects.push(new_review_rollback_reject(
+                                    rollback.callback_failure_details(),
+                                ));
+                            }
+                        }
+                    } else {
+                        mutations.append(segment);
+                    }
+                }
+                if !discard_segment
+                    && (rejects.is_empty()
+                        || (ctx.is_drop_copy()
+                            && !rejects
+                                .iter()
+                                .any(|reject| reject.code.is_evaluation_failure())))
                 {
                     if let Some(outcome) = recorded_result {
                         append_pre_trade_policy_result(
@@ -1050,10 +1308,6 @@ where
                         );
                     }
                 }
-                debug_assert!(
-                    !rejects.is_empty(),
-                    "policy returned Err with empty Rejects"
-                );
                 total_rejects_len += rejects.len();
                 let reject_account_block = rejects
                     .iter()
@@ -1073,12 +1327,30 @@ where
     }
 
     debug_assert!(first_account_block.is_none() || total_rejects_len > 0);
-    (
+    let (rejects, reviews) = finish_pre_trade_stage(
+        inner.order_review.is_some(),
+        ctx.is_drop_copy(),
+        confirmed,
         merge_reject_lists(rejects_collection, total_rejects_len),
+        reviews,
+    );
+    (
+        rejects,
+        reviews,
         first_account_block,
         mutations,
         lock,
         outcomes,
+    )
+}
+
+fn new_review_rollback_reject(details: String) -> Reject {
+    Reject::new(
+        "Engine",
+        RejectScope::Order,
+        RejectCode::SystemUnavailable,
+        "review rollback failed",
+        details,
     )
 }
 
@@ -1145,10 +1417,38 @@ fn append_pre_trade_policy_result(
     );
 }
 
+fn new_order_review_unavailable_reject() -> Reject {
+    Reject::new(
+        "Engine",
+        RejectScope::Order,
+        RejectCode::MissingRequiredField,
+        "order review flags unavailable",
+        "engine is built without with_order_review",
+    )
+}
+
+fn finish_pre_trade_stage(
+    has_order_review: bool,
+    drop_copy: bool,
+    confirmed: bool,
+    mut rejects: Option<Rejects>,
+    mut reviews: Vec<Reject>,
+) -> (Option<Rejects>, Vec<Reject>) {
+    if drop_copy || confirmed || rejects.is_some() {
+        reviews.clear();
+    } else if !has_order_review && !reviews.is_empty() {
+        rejects = Some(new_order_review_unavailable_reject().into());
+        reviews.clear();
+    }
+    (rejects, reviews)
+}
+
 fn execute_pre_trade_request<Trait: EngineTrait>(
     engine: <Trait::Sync as SyncMode>::Weak<EngineInner<Trait>>,
     ctx: PreTradeContext<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
     order: Trait::Order,
+    mut reviews: Vec<Reject>,
+    confirmed: bool,
 ) -> Result<PreTradeReservation, Rejects> {
     let Some(engine_ref) = <Trait::Sync as SyncMode>::upgrade(&engine) else {
         return Err(Rejects::new(vec![Reject::new(
@@ -1176,13 +1476,31 @@ fn execute_pre_trade_request<Trait: EngineTrait>(
         return Err(rejects);
     }
 
-    let (rejects, first_account_block, mutations, lock, outcomes) =
-        run_pre_trade_main_stage::<Trait, _>(
-            inner,
-            &ctx,
-            &order,
-            |policy, ctx, order, mutations| policy.perform_pre_trade_check(ctx, order, mutations),
-        );
+    let (rejects, main_reviews, first_account_block, mut mutations, mut lock, mut outcomes) =
+        if reviews
+            .iter()
+            .any(|review| review.mode == RuleMode::ReviewWithoutHold)
+        {
+            (
+                None,
+                Vec::new(),
+                None,
+                Mutations::new(),
+                PreTradeLock::new(),
+                Vec::new(),
+            )
+        } else {
+            run_pre_trade_main_stage::<Trait, _>(
+                inner,
+                &ctx,
+                &order,
+                false,
+                confirmed,
+                |policy, ctx, order, mutations| {
+                    policy.perform_pre_trade_check(ctx, order, mutations)
+                },
+            )
+        };
 
     let block_handle: AccountBlockHandleOf<Trait> =
         AccountBlockHandle::from_inner(inner.blocked_accounts.clone());
@@ -1201,6 +1519,21 @@ fn execute_pre_trade_request<Trait: EngineTrait>(
         return Err(rejects);
     }
 
+    reviews.extend(main_reviews);
+    if reviews
+        .iter()
+        .any(|review| review.mode == RuleMode::ReviewWithoutHold)
+    {
+        let rollback = mutations.rollback_all();
+        if let Some(scope) = rollback.failure().scope() {
+            block_handle.record_mutation_failure(account, scope);
+            return Err(new_review_rollback_reject(rollback.callback_failure_details()).into());
+        }
+        mutations = Mutations::new();
+        lock = PreTradeLock::new();
+        outcomes.clear();
+    }
+
     let reservation_handle = ReservationHandleImpl::new(
         mutations,
         MutationFailureKillSwitch::new(move |scope| {
@@ -1213,6 +1546,7 @@ fn execute_pre_trade_request<Trait: EngineTrait>(
         Box::new(reservation_handle),
         lock,
         outcomes,
+        reviews,
     ))
 }
 
@@ -1235,8 +1569,8 @@ mod tests {
 
     use crate::core::mutation::MutationRollbackResult;
     use crate::core::{
-        ExecutionReportOperation, FinancialImpact, Instrument, OrderOperation,
-        WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
+        ExecutionReportOperation, FinancialImpact, Instrument, OrderOperation, OrderReview,
+        WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation, WithOrderReview,
     };
     use crate::param::{
         AccountGroupId, AccountId, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side,
@@ -1250,7 +1584,7 @@ mod tests {
     use crate::pretrade::{
         AccountBlock, PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeResult,
         PreTradeContext, PreTradeDryRunReport, PreTradePolicy, Reject, RejectCode, RejectScope,
-        Rejects, DEFAULT_POLICY_GROUP_ID,
+        Rejects, RuleMode, DEFAULT_POLICY_GROUP_ID,
     };
     use crate::storage::NoLocking;
     use crate::{
@@ -1261,7 +1595,7 @@ mod tests {
     use super::{AccountAdjustmentBatchError, Engine, FullSyncEngine, LocalEngine};
     use crate::EngineBuildError;
 
-    type TestOrder = WithOrderOperation<()>;
+    type TestOrder = WithOrderOperation<WithOrderReview<()>>;
     type TestReport = WithFinancialImpact<WithExecutionReportOperation<()>>;
     type TestAdjustment = MockAdjustment;
     type MutationHook = Rc<dyn Fn(&mut Mutations)>;
@@ -1940,6 +2274,53 @@ mod tests {
                 MockAdjustment { id: 0, amount: 10 },
                 MockAdjustment { id: 1, amount: 20 },
             ]
+        );
+    }
+
+    #[test]
+    fn apply_account_adjustment_reports_review_entries_as_rejects() {
+        let entries = [
+            Reject::new(
+                "adj_reject",
+                RejectScope::Account,
+                RejectCode::Other,
+                "confirmation required",
+                "ordinary review",
+            )
+            .with_mode(RuleMode::ReviewWithHold)
+            .with_user_data(42),
+            Reject::new(
+                "adj_reject",
+                RejectScope::Order,
+                RejectCode::ReferenceDataUnavailable,
+                "reference data unavailable",
+                "evaluation failed",
+            )
+            .with_mode(RuleMode::ReviewWithoutHold),
+        ];
+        let policy = AdjustmentPolicyMock {
+            reject_on_id: Some((1, Rejects::new(entries.to_vec()))),
+            ..AdjustmentPolicyMock::pass("adj_reject", Rc::new(RefCell::new(Vec::new())))
+        };
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+        let batch = [
+            MockAdjustment { id: 0, amount: 10 },
+            MockAdjustment { id: 1, amount: 20 },
+            MockAdjustment { id: 2, amount: 30 },
+        ];
+
+        let error = engine
+            .apply_account_adjustment(AccountId::from_u64(99224416), &batch)
+            .expect_err("review entries must reject the batch");
+
+        assert_eq!(error.failed_adjustment_index, 1);
+        assert_eq!(
+            &error.rejects[..],
+            &entries.map(|entry| entry.with_mode(RuleMode::Reject))
         );
     }
 
@@ -5301,7 +5682,13 @@ mod tests {
             .build()
             .expect("engine must build");
         let order = WithOrderOperation {
-            inner: (),
+            inner: WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed: false,
+                    already_held: false,
+                },
+            },
             operation: OrderOperation {
                 instrument: Instrument::new(
                     Asset::new("AAPL").expect("asset code must be valid"),
@@ -5340,7 +5727,13 @@ mod tests {
             .expect("engine must build");
 
         let order = WithOrderOperation {
-            inner: (),
+            inner: WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed: false,
+                    already_held: false,
+                },
+            },
             operation: OrderOperation {
                 instrument: Instrument::new(
                     Asset::new("AAPL").expect("asset code must be valid"),
@@ -5383,7 +5776,13 @@ mod tests {
             .expect("engine must build");
 
         let order = WithOrderOperation {
-            inner: (),
+            inner: WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed: false,
+                    already_held: false,
+                },
+            },
             operation: OrderOperation {
                 instrument: Instrument::new(
                     Asset::new("AAPL").expect("asset code must be valid"),
@@ -5417,7 +5816,13 @@ mod tests {
             reserved_notional: Rc::new(RefCell::new(None)),
         };
         let order = WithOrderOperation {
-            inner: (),
+            inner: WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed: false,
+                    already_held: false,
+                },
+            },
             operation: OrderOperation {
                 instrument: Instrument::new(
                     Asset::new("AAPL").expect("asset code must be valid"),
@@ -5447,7 +5852,13 @@ mod tests {
 
     fn order_with_settlement(settlement: &str) -> TestOrder {
         WithOrderOperation {
-            inner: (),
+            inner: WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed: false,
+                    already_held: false,
+                },
+            },
             operation: OrderOperation {
                 instrument: Instrument::new(
                     Asset::new("AAPL").expect("asset code must be valid"),
@@ -6205,7 +6616,7 @@ mod tests {
     struct AdjustmentPolicyMock {
         name: &'static str,
         seen: Rc<RefCell<Vec<MockAdjustment>>>,
-        reject_on_id: Option<u32>,
+        reject_on_id: Option<(u32, Rejects)>,
         on_apply: Option<AdjustmentHook>,
     }
 
@@ -6224,10 +6635,17 @@ mod tests {
             seen: Rc<RefCell<Vec<MockAdjustment>>>,
             reject_on_id: u32,
         ) -> Self {
+            let reject = Reject::new(
+                name,
+                RejectScope::Order,
+                RejectCode::Other,
+                "account adjustment rejected",
+                "mock account adjustment policy rejected the adjustment",
+            );
             Self {
                 name,
                 seen,
-                reject_on_id: Some(reject_on_id),
+                reject_on_id: Some((reject_on_id, Rejects::from(reject))),
                 on_apply: None,
             }
         }
@@ -6266,14 +6684,10 @@ mod tests {
             if let Some(ref on_apply) = self.on_apply {
                 on_apply(mutations);
             }
-            if self.reject_on_id == Some(adjustment.id) {
-                return Err(Rejects::from(Reject::new(
-                    self.name,
-                    RejectScope::Order,
-                    RejectCode::Other,
-                    "account adjustment rejected",
-                    "mock account adjustment policy rejected the adjustment",
-                )));
+            if let Some((id, rejects)) = &self.reject_on_id {
+                if *id == adjustment.id {
+                    return Err(rejects.clone());
+                }
             }
             Ok(PolicyAccountAdjustmentResult::default())
         }

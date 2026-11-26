@@ -130,6 +130,7 @@ struct Instrument;
 struct OrderMargin;
 struct OrderOperation;
 struct OrderPosition;
+struct OrderReview;
 struct PositionImpact;
 struct Trade;
 
@@ -173,6 +174,7 @@ struct Reject;
 
 enum class RejectCode : std::uint16_t;
 enum class RejectScope : std::uint8_t;
+enum class RuleMode : std::uint8_t;
 
 }  // namespace openpit::reject
 

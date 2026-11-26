@@ -55,8 +55,8 @@ func TestNewNativeRejectListReplacesInvalidScope(t *testing.T) {
 	if got.Reason != "custom policy callback failed" {
 		t.Errorf("fallback reason = %q, want callback failure", got.Reason)
 	}
-	if got.Details != "reject scope is invalid" {
-		t.Errorf("fallback details = %q, want invalid scope", got.Details)
+	if got.Details != "reject scope or mode is invalid" {
+		t.Errorf("fallback details = %q, want invalid scope or mode", got.Details)
 	}
 }
 
@@ -88,6 +88,24 @@ func TestNewNativeRejectListReplacesWholeBatchOnInvalidScope(t *testing.T) {
 	got := reject.NewFromHandle(native.PretradeRejectListGet(list, 0))
 	if got.Code != reject.CodeSystemUnavailable || got.Policy != "openpit.callback" {
 		t.Fatalf("fallback reject = %#v", got)
+	}
+}
+
+func TestNewNativeRejectListReplacesInvalidMode(t *testing.T) {
+	for _, mode := range []reject.RuleMode{254, 255} {
+		input := reject.Reject{
+			Code:  reject.CodeRiskLimitExceeded,
+			Scope: reject.ScopeOrder,
+			Mode:  mode,
+		}
+		list := NewNativeRejectList([]reject.Reject{input})
+		got := reject.CopyListFromHandle(list)
+		native.DestroyPretradeRejectList(list)
+		if len(got) != 1 || got[0].Code != reject.CodeSystemUnavailable ||
+			got[0].Mode != reject.RuleModeReject ||
+			got[0].Details != "reject scope or mode is invalid" {
+			t.Fatalf("NewNativeRejectList() for mode %v = %#v, want a marshalling reject", mode, got)
+		}
 	}
 }
 

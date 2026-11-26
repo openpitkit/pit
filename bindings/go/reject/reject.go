@@ -29,6 +29,23 @@ const (
 	ScopeAccount Scope = native.RejectScopeAccount
 )
 
+// RuleMode specifies the action to take when a pre-trade rule is breached.
+// Its zero value is RuleModeReject. An unknown mode replaces the policy's entire
+// result with a CodeSystemUnavailable reject.
+type RuleMode uint8
+
+const (
+	// RuleModeReject rejects the order.
+	RuleModeReject RuleMode = native.RuleModeReject
+	// RuleModeReviewWithHold requires human review. Commit to keep holds
+	// only if every mark is with-hold. Any without-hold mark clears them.
+	// Keep the order unsent until approval and a fresh run with Confirmed.
+	RuleModeReviewWithHold RuleMode = native.RuleModeReviewWithHold
+	// RuleModeReviewWithoutHold requires human review with nothing held.
+	// The reservation carries no mutations.
+	RuleModeReviewWithoutHold RuleMode = native.RuleModeReviewWithoutHold
+)
+
 // Code is a stable machine-readable reject code.
 type Code native.PretradeRejectCode
 
@@ -87,7 +104,7 @@ const (
 	CodeOther                           Code = native.RejectCodeOther
 )
 
-// Reject represents a single pre-trade check rejection.
+// Reject represents a single pre-trade rejection or review mark.
 type Reject struct {
 	// Human-readable reject reason.
 	Reason string
@@ -102,9 +119,16 @@ type Reject struct {
 	Code Code
 	// Reject scope.
 	Scope Scope
+	// Mode defaults to RuleModeReject. It specifies rejection, review with
+	// holds, or review without holds. Evaluation failures are always hard rejects.
+	// An unknown mode from a custom policy replaces that policy's entire
+	// result with a CodeSystemUnavailable reject.
+	Mode RuleMode
 }
 
-// New creates a Reject with the given fields.
+// New creates a Reject with mode RuleModeReject. Set Mode for review.
+// In pre-trade, holds survive review only if
+// every mark is RuleModeReviewWithHold. Any RuleModeReviewWithoutHold clears them.
 func New(
 	code Code, // stable machine-readable reject code
 	policy string, // policy name that produced the reject
@@ -128,6 +152,7 @@ func NewFromHandle(handle native.PretradeReject) Reject {
 	return Reject{
 		Code:     Code(native.PretradeRejectGetCode(handle)),
 		Scope:    Scope(native.PretradeRejectGetScope(handle)),
+		Mode:     RuleMode(native.PretradeRejectGetMode(handle)),
 		Policy:   native.PretradeRejectGetPolicy(handle).Safe(),
 		Reason:   native.PretradeRejectGetReason(handle).Safe(),
 		Details:  native.PretradeRejectGetDetails(handle).Safe(),
@@ -141,6 +166,7 @@ func (r Reject) NewHandle() native.PretradeReject {
 	return native.CreatePretradeReject(
 		native.PretradeRejectCode(r.Code),
 		native.PretradeRejectScope(r.Scope),
+		native.PretradeRuleMode(r.Mode),
 		native.NewStringView(r.Policy),
 		native.NewStringView(r.Reason),
 		native.NewStringView(r.Details),

@@ -122,6 +122,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
     account_len: usize,
     account_asset: *const OpenPitPretradePoliciesRateLimitAccountAssetBarrier,
     account_asset_len: usize,
+    instance: *const crate::engine::OpenPitPolicyInstance,
     out_error: OpenPitOutError,
 ) -> bool {
     if builder.is_null() {
@@ -276,7 +277,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
     };
     let policy = RateLimitPolicy::new(settings, storage)
         .with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
-    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
+    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy, instance) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
@@ -622,6 +623,7 @@ mod tests {
             position: Default::default(),
             margin: Default::default(),
             user_data: std::ptr::null_mut(),
+            review: Default::default(),
         }
     }
 
@@ -661,6 +663,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -682,6 +685,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 &mut out_error,
             )
         });
@@ -703,6 +707,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -874,6 +879,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         };
@@ -922,6 +928,7 @@ mod tests {
                 account.len(),
                 account_asset.as_ptr(),
                 account_asset.len(),
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -980,6 +987,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -1038,6 +1046,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -1096,6 +1105,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -1155,6 +1165,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -1239,6 +1250,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });

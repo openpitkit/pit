@@ -70,16 +70,20 @@ describe("Engine", () => {
     const start = engine.startPreTrade(makeOrder());
     expect(start.ok).toBe(true);
     expect(start.rejects).toHaveLength(0);
+    expect(start.reviews).toEqual([]);
 
     const request = start.request;
     expect(request).toBeDefined();
+    expect(request!.reviews()).toEqual([]);
 
     const execute = request!.execute();
     expect(execute.ok).toBe(true);
     expect(execute.rejects).toHaveLength(0);
+    expect(execute.reviews).toEqual([]);
 
     const reservation = execute.reservation;
     expect(reservation).toBeDefined();
+    expect(reservation!.reviews()).toEqual([]);
 
     // The lock payload is readable while the reservation is live.
     const lock = reservation!.lock();

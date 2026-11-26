@@ -105,6 +105,8 @@ func validateDriverResult(
 // both are nil and err is set. Finalize an accepted request via
 // AsyncRequest.Execute or AsyncRequest.Close (both route through the same
 // per-account queue).
+// If the request's Reviews() returns marks, obtain a human decision before
+// sending the order.
 func (e *AsyncEngine) StartPreTrade(
 	ctx context.Context,
 	order model.Order,
@@ -160,6 +162,8 @@ func (t *startPreTradeTask) abort(err error) { t.f.Resolve(nil, nil, err) }
 // ExecutePreTrade enqueues a full pre-trade pipeline call. Account-ID
 // requirements and the future's tuple shape match StartPreTrade, except the
 // accepted value is a non-nil *AsyncReservation.
+// If the reservation's Reviews() returns marks, obtain a human decision
+// before sending the order.
 func (e *AsyncEngine) ExecutePreTrade(
 	ctx context.Context,
 	order model.Order,

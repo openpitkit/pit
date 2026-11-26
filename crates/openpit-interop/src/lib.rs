@@ -49,6 +49,7 @@ pub mod financial_impact;
 pub mod order_margin;
 pub mod order_operation;
 pub mod order_position;
+pub mod order_review;
 
 pub use account_adjustment_amount::AccountAdjustmentAmountAccess;
 pub use account_adjustment_bounds::AccountAdjustmentBoundsAccess;
@@ -67,3 +68,4 @@ pub use financial_impact::{FinancialImpactAccess, PopulatedFinancialImpact};
 pub use order_margin::{OrderMarginAccess, PopulatedOrderMargin};
 pub use order_operation::{OrderOperationAccess, PopulatedOrderOperation};
 pub use order_position::{OrderPositionAccess, PopulatedOrderPosition};
+pub use order_review::{OrderReviewAccess, PopulatedOrderReview};

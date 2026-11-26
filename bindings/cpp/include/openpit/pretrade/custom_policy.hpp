@@ -68,6 +68,11 @@
 //         const accountadjustment::AccountAdjustment&, tx::Mutations&,
 //         AccountOutcomes&) const
 //
+// Each start hook can return at most one entry. If several entries apply,
+// return an effective reject (`RuleMode::Reject` or an evaluation failure)
+// ahead of any review mark. Among review marks, prefer `ReviewWithoutHold`
+// over `ReviewWithHold`.
+//
 // The policy name is supplied to `CustomPolicy` itself. A direct handler does
 // not need a `Name()` method. Adapter handlers do expose `Name()` through their
 // client policy; when present, it must match the constructor name so
@@ -101,11 +106,11 @@ struct PreTradePolicyDeleter {
 // releasing `list` on the way out. `list` is always a fresh list created one
 // line earlier by `openpit_create_pretrade_reject_list`, never the shared
 // accept sentinel, so the only reachable cause is a reject carrying an
-// unknown scope.
+// unknown scope or mode.
 [[noreturn]] inline void ThrowRejectPushFailure(
     OpenPitPretradeRejectList* list) {
   openpit_destroy_pretrade_reject_list(list);
-  throw std::invalid_argument("reject scope is invalid");
+  throw std::invalid_argument("reject scope or mode is invalid");
 }
 
 class CustomPolicyAccess final {

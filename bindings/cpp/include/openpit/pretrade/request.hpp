@@ -54,6 +54,20 @@ class Request {
 
   [[nodiscard]] ExecuteResult Execute();
 
+  /// Returns the start-stage review marks. A non-empty list requires a human
+  /// decision before sending the order. Throws `Error` for an empty or
+  /// executed request. After `Execute()`, read marks from the reservation.
+  [[nodiscard]] std::vector<::openpit::pretrade::Reject> Reviews() const {
+    OpenPitSharedString* error = nullptr;
+    OpenPitPretradeRejectList* reviews =
+        openpit_pretrade_pre_trade_request_get_reviews(RequireHandle(), &error);
+    if (reviews == nullptr) {
+      ::openpit::detail::ThrowFromSharedString(
+          error, "openpit_pretrade_pre_trade_request_get_reviews failed");
+    }
+    return detail::ListAccess::DrainRejects(reviews);
+  }
+
  private:
   friend class ::openpit::detail::NativeAccess;
 
@@ -87,7 +101,8 @@ struct ExecuteResult {
   std::optional<Reservation> reservation;
   std::vector<::openpit::pretrade::Reject> rejects;
 
-  // Whether the order passed and a reservation is available.
+  /// Returns whether a reservation is available. If its `Reviews()` is
+  /// non-empty, a human decision is required before sending the order.
   [[nodiscard]] bool Passed() const noexcept { return reservation.has_value(); }
 };
 

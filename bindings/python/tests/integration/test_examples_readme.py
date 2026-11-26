@@ -103,7 +103,12 @@ def test_readme_hello_world() -> None:
     )
 
     result = engine.execute_pre_trade(order=order)
-    if result.ok:
+    if result.reviews:
+        # Keep the order unsent; after approval, rerun with
+        # OrderReview(confirmed=True). Set already_held=True if the
+        # reservation retained a hold.
+        result.reservation.commit()
+    elif result.ok:
         # Send the order to the venue, then commit or roll the reservation back.
         result.reservation.commit()
     else:
@@ -231,42 +236,40 @@ def test_readme_quickstart() -> None:
 
     reservation = execute_result.reservation
 
-    # 5. If the request is successfully sent to the venue, it must be committed.
-    # The rollback must be called otherwise to revert all performed reservations.
-    try:
-        send_order_to_venue(order)
-    except Exception:
-        reservation.rollback()
-        raise
+    # 5. Commit on successful submission and roll back on failure.
+    if execute_result.reviews:
+        # Leave unsent. After approval, rerun with OrderReview(confirmed=True).
+        reservation.commit()
+    else:
+        try:
+            send_order_to_venue(order)
+        except Exception:
+            reservation.rollback()
+            raise
 
-    reservation.commit()
+        reservation.commit()
 
-    # 6. The order goes to the venue and returns with an execution report.
-    report = openpit.ExecutionReport(
-        operation=openpit.ExecutionReportOperation(
-            instrument=openpit.Instrument(
-                "AAPL",
-                "USD",
+        # 6. The order goes to the venue and returns with an execution report.
+        report = openpit.ExecutionReport(
+            operation=openpit.ExecutionReportOperation(
+                instrument=openpit.Instrument("AAPL", "USD"),
+                account_id=openpit.param.AccountId.from_int(99224416),
+                side=openpit.param.Side.BUY,
             ),
-            account_id=openpit.param.AccountId.from_int(99224416),
-            side=openpit.param.Side.BUY,
-        ),
-        financial_impact=openpit.FinancialImpact(
-            pnl=openpit.param.Pnl("-50"),
-            fee=openpit.param.Fee("3.4"),
-        ),
-    )
+            financial_impact=openpit.FinancialImpact(
+                pnl=openpit.param.Pnl("-50"),
+                fee=openpit.param.Fee("3.4"),
+            ),
+        )
 
-    result = engine.apply_execution_report(report=report)
-    for outcome in result.account_pnls:
-        print(f"account P&L outcome for {outcome.account_id}")
-    for outcome in result.account_adjustments:
-        print(f"account adjustment from group {outcome.policy_group_id}")
+        result = engine.apply_execution_report(report=report)
+        for outcome in result.account_pnls:
+            print(f"account P&L outcome for {outcome.account_id}")
+        for outcome in result.account_adjustments:
+            print(f"account adjustment from group {outcome.policy_group_id}")
 
-    # 7. After each execution report is applied, the system may report that it has
-    # been determined in advance that all subsequent requests will be rejected if
-    # the account status does not change.
-    assert not result.account_blocks
+        # 7. An execution report can block new orders.
+        assert not result.account_blocks
 
 
 class BlockedAccountPolicy(openpit.pretrade.Policy):
@@ -502,7 +505,12 @@ def test_docs_guides_engine_finalize_reservations() -> None:
     def send_order(order: openpit.Order) -> None:
         _ = order
 
-    if execute_result:
+    if execute_result.reviews:
+        # Keep the order unsent; after approval, rerun with
+        # OrderReview(confirmed=True). Set already_held=True if the
+        # reservation retained a hold.
+        execute_result.reservation.commit()
+    elif execute_result.ok:
         reservation = execute_result.reservation
         try:
             send_order(order)

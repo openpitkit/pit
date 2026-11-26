@@ -15,11 +15,18 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import type { Reject, RejectCode, RejectScope } from "@openpit/engine/reject";
+import type {
+  Reject,
+  RejectCode,
+  RejectScope,
+  RuleMode,
+} from "@openpit/engine/reject";
 
 declare const reject: Reject;
 
 const code: RejectCode = reject.code;
 const scope: RejectScope = reject.scope;
+const mode: RuleMode = reject.mode;
 void code;
 void scope;
+void mode;

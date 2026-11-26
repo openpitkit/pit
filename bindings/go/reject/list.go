@@ -28,7 +28,7 @@ func NewList(rejects ...Reject) []Reject {
 	return rejects
 }
 
-// NewSingleItemList creates a single-element reject list.
+// NewSingleItemList creates a single-element list with mode RuleModeReject.
 func NewSingleItemList(
 	code Code, // stable machine-readable reject code
 	policy string, // policy name that produced the reject
@@ -41,13 +41,22 @@ func NewSingleItemList(
 
 // NewListFromHandle creates a reject list from a native handle.
 func NewListFromHandle(handle native.PretradeRejectList) ([]Reject, error) {
+	result := CopyListFromHandle(handle)
+	if len(result) == 0 {
+		return nil, errors.New("reject list is not provided")
+	}
+	return result, nil
+}
+
+// CopyListFromHandle copies the native list. Empty lists return nil.
+func CopyListFromHandle(handle native.PretradeRejectList) []Reject {
 	count := native.PretradeRejectListLen(handle)
 	if count == 0 {
-		return nil, errors.New("reject list is not provided")
+		return nil
 	}
 	result := make([]Reject, count)
 	for i := 0; i < count; i++ {
 		result[i] = NewFromHandle(native.PretradeRejectListGet(handle, i))
 	}
-	return result, nil
+	return result
 }

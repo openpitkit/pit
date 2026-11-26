@@ -173,7 +173,7 @@ func buildChainNativeEngine(
 		t.Fatalf("CreateEngineBuilder() error = %v", err)
 	}
 	if err := native.EngineBuilderAddBuiltinOrderValidation(
-		builder, native.PolicyGroupID(model.DefaultPolicyGroupID),
+		builder, native.PolicyGroupID(model.DefaultPolicyGroupID), nil,
 	); err != nil {
 		native.DestroyEngineBuilder(builder)
 		t.Fatalf("EngineBuilderAddBuiltinOrderValidation() error = %v", err)
@@ -207,7 +207,7 @@ func addChainProbePolicy(
 		native.DestroyEngineBuilder(builder)
 		t.Fatalf("StartPreTrade() error = %v", err)
 	}
-	addErr := native.EngineBuilderAddPreTradePolicy(builder, policy)
+	addErr := native.EngineBuilderAddPreTradePolicy(builder, policy, nil)
 	native.DestroyPretradePreTradePolicy(policy)
 	if addErr != nil {
 		native.DestroyEngineBuilder(builder)
@@ -236,7 +236,7 @@ func newChainSpotFundsEngine(t *testing.T) native.Engine {
 	if err != nil {
 		t.Fatalf("CreateEngineBuilder() error = %v", err)
 	}
-	if err := policies.BuildSpotFunds().Build(builder); err != nil {
+	if err := policies.BuildSpotFunds().Build(builder, nil); err != nil {
 		native.DestroyEngineBuilder(builder)
 		t.Fatalf("BuildSpotFunds() error = %v", err)
 	}

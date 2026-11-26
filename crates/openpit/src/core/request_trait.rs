@@ -91,6 +91,25 @@ has_request_field_trait!(HasReduceOnly, reduce_only -> bool);
 
 has_request_field_trait!(HasClosePosition, close_position -> bool);
 
+has_request_field_trait!(
+    /// Provides the caller's confirmation for pre-trade review.
+    ///
+    /// An absent confirmation means `false`. An access failure is returned
+    /// as a [`RequestFieldAccessError`].
+    HasConfirmed,
+    confirmed -> bool
+);
+
+has_request_field_trait!(
+    /// Provides the caller's assertion that the order's reservation is already
+    /// held by an earlier committed with-hold review run.
+    ///
+    /// An absent value means `false`. An access failure is returned as a
+    /// [`RequestFieldAccessError`].
+    HasAlreadyHeld,
+    already_held -> bool
+);
+
 has_request_field_trait!(HasAutoBorrow, auto_borrow -> bool);
 
 has_request_field_trait!(HasPnl, pnl -> Pnl);

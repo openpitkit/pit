@@ -18,7 +18,7 @@
 use crate::param::{parse_string_view, OpenPitParamAccountId};
 use crate::OpenPitStringView;
 use openpit::pretrade::{
-    AccountBlock, AccountBlockOutcome, Reject, RejectCode, RejectScope, Rejects,
+    AccountBlock, AccountBlockOutcome, Reject, RejectCode, RejectScope, Rejects, RuleMode,
 };
 
 /// Raw reject-scope code accepted from C callers.
@@ -30,6 +30,19 @@ pub type OpenPitPretradeRejectScope = u8;
 pub const OPENPIT_PRETRADE_REJECT_SCOPE_ORDER: OpenPitPretradeRejectScope = 1;
 /// The reject applies to account state rather than to one order only.
 pub const OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT: OpenPitPretradeRejectScope = 2;
+
+/// Raw rule-mode code accepted from C callers.
+///
+/// Zero means not set and is imported as `Reject`. Outputs always use 1-3.
+pub type OpenPitPretradeRuleMode = u8;
+
+/// Reject the order when the rule is breached.
+pub const OPENPIT_PRETRADE_RULE_MODE_REJECT: OpenPitPretradeRuleMode = 1;
+/// Require human review. The reservation retains holds and policy results
+/// only if every review mark in the run is with-hold.
+pub const OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD: OpenPitPretradeRuleMode = 2;
+/// Require human review and discard the reservation's holds and policy results.
+pub const OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD: OpenPitPretradeRuleMode = 3;
 
 /// Raw stable classification code for a reject.
 ///
@@ -169,6 +182,9 @@ pub struct OpenPitPretradeReject {
     pub code: OpenPitPretradeRejectCode,
     /// Reject scope.
     pub scope: OpenPitPretradeRejectScope,
+    /// Rule mode. Zero imports as `Reject`; values above 3 are invalid.
+    /// Outputs always use 1-3.
+    pub mode: OpenPitPretradeRuleMode,
 }
 
 impl OpenPitPretradeReject {
@@ -180,6 +196,7 @@ impl OpenPitPretradeReject {
             user_data: inner.user_data,
             code: export_reject_code(inner.code),
             scope: export_reject_scope(inner.scope.clone()),
+            mode: export_rule_mode(inner.mode),
         }
     }
 
@@ -192,7 +209,8 @@ impl OpenPitPretradeReject {
                 import_string(self.reason),
                 import_string(self.details),
             )
-            .with_user_data(self.user_data),
+            .with_user_data(self.user_data)
+            .with_mode(import_rule_mode(self.mode)?),
         )
     }
 }
@@ -377,6 +395,23 @@ fn import_reject_scope(value: OpenPitPretradeRejectScope) -> Option<RejectScope>
     }
 }
 
+fn export_rule_mode(value: RuleMode) -> OpenPitPretradeRuleMode {
+    match value {
+        RuleMode::Reject => OPENPIT_PRETRADE_RULE_MODE_REJECT,
+        RuleMode::ReviewWithHold => OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+        RuleMode::ReviewWithoutHold => OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+    }
+}
+
+pub(crate) fn import_rule_mode(value: OpenPitPretradeRuleMode) -> Option<RuleMode> {
+    match value {
+        0 | OPENPIT_PRETRADE_RULE_MODE_REJECT => Some(RuleMode::Reject),
+        OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD => Some(RuleMode::ReviewWithHold),
+        OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD => Some(RuleMode::ReviewWithoutHold),
+        _ => None,
+    }
+}
+
 fn import_string(ptr: OpenPitStringView) -> String {
     if ptr.ptr.is_null() {
         return String::default();
@@ -433,7 +468,7 @@ pub extern "C" fn openpit_pretrade_reject_list_get_accept_sentinel(
 /// `openpit_pretrade_reject_list_get_accept_sentinel`.
 ///
 /// Use it to tell the two `false` outcomes of
-/// `openpit_pretrade_reject_list_push` apart: an unknown reject scope is a bad
+/// `openpit_pretrade_reject_list_push` apart: an unknown reject scope or mode is a bad
 /// reject payload, while the accept list is a bad target pointer.
 ///
 /// Contract:
@@ -468,10 +503,10 @@ pub extern "C" fn openpit_destroy_pretrade_reject_list(rejects: *mut OpenPitPret
 /// Contract:
 /// - `list` must be a valid non-null pointer;
 /// - string views in `reject` are copied before this function returns;
-/// - returns `true` after appending a reject with a valid scope;
+/// - returns `true` after appending a reject with a valid scope and mode;
 /// - returns `false` and leaves the list unchanged when `reject` carries an
-///   unknown scope, or when `list` is the immutable accept list returned by
-///   `openpit_pretrade_reject_list_get_accept_sentinel`;
+///   unknown scope or mode, or when `list` is the immutable accept list
+///   returned by `openpit_pretrade_reject_list_get_accept_sentinel`;
 /// - call `openpit_pretrade_reject_list_is_accept_sentinel` to separate those
 ///   two outcomes: the first is a bad reject payload, the second is a bad
 ///   target pointer, and reporting one as the other hides the real defect;
@@ -846,6 +881,7 @@ mod tests {
             user_data: 55usize,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         assert!(openpit_pretrade_reject_list_push(list, reject));
         assert_eq!(openpit_pretrade_reject_list_len(list), 1);
@@ -858,6 +894,7 @@ mod tests {
             user_data: 0,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         assert!(openpit_pretrade_reject_list_get(list, 0, &mut first));
         assert_eq!(first.code, OPENPIT_PRETRADE_REJECT_CODE_OTHER);
@@ -876,6 +913,7 @@ mod tests {
             user_data: 77usize,
             code: OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         let imported = view.to_reject().expect("valid scope");
         assert_eq!(imported.policy, "policy");
@@ -1018,6 +1056,7 @@ mod tests {
             user_data: 0,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         assert!(!openpit_pretrade_reject_list_push(sentinel, reject));
         assert_eq!(openpit_pretrade_reject_list_len(sentinel), 0);
@@ -1052,6 +1091,7 @@ mod tests {
             user_data: 0,
             code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: u8::MAX,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
 
         assert!(!openpit_pretrade_reject_list_push(list, reject));
@@ -1071,6 +1111,81 @@ mod tests {
             code: u16::MAX,
         };
         assert_eq!(block.to_block().code, RejectCode::Other);
+    }
+
+    #[test]
+    fn rule_mode_roundtrip_covers_all_ffi_values() {
+        for (mode, wire) in [
+            (RuleMode::Reject, OPENPIT_PRETRADE_RULE_MODE_REJECT),
+            (
+                RuleMode::ReviewWithHold,
+                OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            ),
+            (
+                RuleMode::ReviewWithoutHold,
+                OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+            ),
+        ] {
+            let reject = Reject::new(
+                "policy",
+                RejectScope::Order,
+                RejectCode::RiskLimitExceeded,
+                "limit",
+                "details",
+            )
+            .with_mode(mode);
+            let exported = OpenPitPretradeReject::from_reject(&reject);
+            assert_eq!(exported.mode, wire);
+            assert_eq!(exported.to_reject().expect("valid mode").mode, mode);
+
+            let list = openpit_create_pretrade_reject_list(1);
+            assert!(openpit_pretrade_reject_list_push(list, exported));
+            let mut stored = exported;
+            assert!(openpit_pretrade_reject_list_get(list, 0, &mut stored));
+            assert_eq!(stored.mode, wire);
+            openpit_destroy_pretrade_reject_list(list);
+        }
+    }
+
+    #[test]
+    fn reject_list_push_rejects_invalid_modes_without_appending() {
+        let list = openpit_create_pretrade_reject_list(1);
+        let mut reject = OpenPitPretradeReject {
+            policy: OpenPitStringView::from_utf8("policy"),
+            reason: OpenPitStringView::from_utf8("reason"),
+            details: OpenPitStringView::from_utf8("details"),
+            user_data: 0,
+            code: OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+            scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+        };
+        assert!(openpit_pretrade_reject_list_push(list, reject));
+        for mode in [4, u8::MAX] {
+            reject.mode = mode;
+            assert!(reject.to_reject().is_none());
+            assert!(!openpit_pretrade_reject_list_push(list, reject));
+            assert_eq!(openpit_pretrade_reject_list_len(list), 1);
+        }
+        assert_eq!(unsafe { &*list }.items[0].mode, RuleMode::Reject);
+        openpit_destroy_pretrade_reject_list(list);
+    }
+
+    #[test]
+    fn zero_record_mode_imports_as_reject() {
+        let reject = Reject::new(
+            "policy",
+            RejectScope::Order,
+            RejectCode::RiskLimitExceeded,
+            "limit",
+            "details",
+        );
+        let mut wire = OpenPitPretradeReject::from_reject(&reject);
+        wire.mode = 0;
+        let list = openpit_create_pretrade_reject_list(1);
+        assert!(openpit_pretrade_reject_list_push(list, wire));
+        assert!(openpit_pretrade_reject_list_get(list, 0, &mut wire));
+        assert_eq!(wire.mode, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+        openpit_destroy_pretrade_reject_list(list);
     }
 
     #[test]

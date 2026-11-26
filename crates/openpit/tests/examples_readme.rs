@@ -58,10 +58,16 @@ fn example_readme_hello_world() -> Result<(), Box<dyn std::error::Error>> {
         price: Some(Price::from_str("185")?),
     };
 
-    // The verdict: either a reservation to finalize once the venue answers,
-    // or the rejects that stopped the order.
     match engine.execute_pre_trade(order) {
-        Ok(mut reservation) => reservation.commit(),
+        Ok(mut reservation) if !reservation.reviews().is_empty() => {
+            // Leave unsent. After approval, rerun with the order-review reader
+            // enabled, confirmed set, and already_held set if a hold was kept.
+            reservation.commit();
+        }
+        Ok(mut reservation) => {
+            // The venue accepted the order, so the reserved state stays.
+            reservation.commit();
+        }
         Err(rejects) => println!("order rejected: {rejects}"),
     }
 

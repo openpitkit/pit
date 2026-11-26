@@ -30,7 +30,7 @@ use std::{cell::RefCell, rc::Rc};
 use js_sys::Array;
 use openpit::param::AccountId;
 use openpit::pretrade::{
-    DropCopyOperation, PreTradeDryRunReport, PreTradeRequest, PreTradeReservation, Rejects,
+    DropCopyOperation, PreTradeDryRunReport, PreTradeRequest, PreTradeReservation, Reject, Rejects,
 };
 use openpit::{AccountAdjustmentBatchError, AccountAdjustmentBatchResult, PostTradeResult};
 use wasm_bindgen::convert::TryFromJsValue;
@@ -50,8 +50,8 @@ type SharedRequest = Rc<RefCell<Option<(PreTradeRequest<Order>, LifecycleToken)>
 type SharedReservation = Rc<RefCell<Option<(PreTradeReservation, LifecycleToken)>>>;
 type SharedDropCopyOperation = Rc<RefCell<Option<(DropCopyOperation, LifecycleToken)>>>;
 
-/// Maps a core rejects list to an array of binding rejects.
-fn convert_rejects(rejects: &Rejects) -> Vec<JsReject> {
+/// Maps core rejects or review marks to binding records.
+fn convert_rejects(rejects: &[Reject]) -> Vec<JsReject> {
     rejects.iter().map(JsReject::from_core).collect()
 }
 
@@ -80,11 +80,14 @@ fn lifecycle_error(message: &str) -> JsValue {
 pub struct JsStartResult {
     request: Option<JsRequest>,
     rejects: Vec<JsReject>,
+    reviews: Vec<JsReject>,
 }
 
 #[wasm_bindgen(js_class = StartResult)]
 impl JsStartResult {
-    /// Whether the start stage accepted the order.
+    /// Whether the start stage had no rejects. A non-empty `reviews` means
+    /// the order needs a human decision before it can be sent. Inspect the
+    /// execute result as well because the main stage can add marks.
     #[wasm_bindgen(getter, js_name = ok)]
     pub fn ok(&self) -> bool {
         self.rejects.is_empty()
@@ -103,14 +106,23 @@ impl JsStartResult {
     pub fn rejects(&self) -> Vec<JsReject> {
         self.rejects.clone()
     }
+
+    /// Start-stage marks. A non-empty array requires a human decision before
+    /// sending the order. Inspect the execute result for the final marks.
+    #[wasm_bindgen(getter, js_name = reviews)]
+    pub fn reviews(&self) -> Vec<JsReject> {
+        self.reviews.clone()
+    }
 }
 
 impl JsStartResult {
     /// Builds an accepted start result wrapping the request handle.
     pub(crate) fn accepted(request: PreTradeRequest<Order>, lifecycle: LifecycleToken) -> Self {
+        let reviews = convert_rejects(request.reviews());
         Self {
             request: Some(JsRequest::new(request, lifecycle)),
             rejects: Vec::new(),
+            reviews,
         }
     }
 
@@ -119,6 +131,7 @@ impl JsStartResult {
         Self {
             request: None,
             rejects: convert_rejects(rejects),
+            reviews: Vec::new(),
         }
     }
 }
@@ -133,11 +146,13 @@ impl JsStartResult {
 pub struct JsExecuteResult {
     reservation: Option<JsReservation>,
     rejects: Vec<JsReject>,
+    reviews: Vec<JsReject>,
 }
 
 #[wasm_bindgen(js_class = ExecuteResult)]
 impl JsExecuteResult {
-    /// Whether the main stage accepted the order.
+    /// Whether the order had no rejects. Check `reviews` before sending.
+    /// A non-empty array requires a human decision even when `ok` is true.
     #[wasm_bindgen(getter, js_name = ok)]
     pub fn ok(&self) -> bool {
         self.rejects.is_empty()
@@ -156,14 +171,24 @@ impl JsExecuteResult {
     pub fn rejects(&self) -> Vec<JsReject> {
         self.rejects.clone()
     }
+
+    /// Marks from the stages that ran. A non-empty array requires a human
+    /// decision before sending. Commit the reservation now, leave the order
+    /// unsent, and run it again with `review.confirmed` after approval.
+    #[wasm_bindgen(getter, js_name = reviews)]
+    pub fn reviews(&self) -> Vec<JsReject> {
+        self.reviews.clone()
+    }
 }
 
 impl JsExecuteResult {
     /// Builds an accepted execute result wrapping the reservation handle.
     pub(crate) fn accepted(reservation: PreTradeReservation, lifecycle: LifecycleToken) -> Self {
+        let reviews = convert_rejects(reservation.reviews());
         Self {
             reservation: Some(JsReservation::new(reservation, lifecycle)),
             rejects: Vec::new(),
+            reviews,
         }
     }
 
@@ -172,6 +197,7 @@ impl JsExecuteResult {
         Self {
             reservation: None,
             rejects: convert_rejects(rejects),
+            reviews: Vec::new(),
         }
     }
 }
@@ -191,12 +217,33 @@ pub struct JsRequest {
 
 #[wasm_bindgen(js_class = Request)]
 impl JsRequest {
+    /// Returns the start-stage marks. A non-empty array requires a human
+    /// decision before sending. Inspect the execute result for the final marks.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the request has already been executed or
+    /// its owning engine is re-entered from one of its callbacks.
+    #[wasm_bindgen(js_name = reviews)]
+    pub fn reviews(&self) -> Result<Vec<JsReject>, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        let request = self.inner.borrow();
+        let (request, _) = request
+            .as_ref()
+            .ok_or_else(|| lifecycle_error("request has already been executed"))?;
+        Ok(convert_rejects(request.reviews()))
+    }
+
     /// Runs the main stage and returns a [`JsExecuteResult`].
     ///
     /// # Errors
     ///
     /// Throws `LifecycleError` when the request has already been executed or
     /// this request's owning engine is re-entered from one of its callbacks.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return
+    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
+    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
+    /// invalid domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = execute)]
     pub fn execute(&self) -> Result<JsExecuteResult, JsValue> {
         let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
@@ -246,9 +293,9 @@ impl Drop for JsRequest {
 
 /// Single-use handle for reserved pre-trade state.
 ///
-/// `lock()` and `accountAdjustments()` may be read while the reservation is
-/// live. `commit()` and `rollback()` each consume the handle; calling either a
-/// second time (or after the other) throws `LifecycleError`.
+/// `lock()`, `accountAdjustments()`, and `reviews()` may be read while the
+/// reservation is live. `commit()` and `rollback()` each consume the handle;
+/// calling either a second time (or after the other) throws `LifecycleError`.
 ///
 /// A mutation finalizer - a `Mutation` commit or rollback callback - has no
 /// right to fail: the decision is already made and the state it finalizes was
@@ -271,6 +318,25 @@ pub struct JsReservation {
 
 #[wasm_bindgen(js_class = Reservation)]
 impl JsReservation {
+    /// Returns the marks from the stages that ran. A non-empty array requires
+    /// a human decision before sending. Commit now, leave the order unsent,
+    /// and run it again with `review.confirmed` after approval. This applies
+    /// even to a reservation with no holds.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the reservation has been finalized or its
+    /// owning engine is re-entered from one of its callbacks.
+    #[wasm_bindgen(js_name = reviews)]
+    pub fn reviews(&self) -> Result<Vec<JsReject>, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        let reservation = self.inner.borrow();
+        let (reservation, _) = reservation
+            .as_ref()
+            .ok_or_else(|| lifecycle_error("reservation has already been finalized"))?;
+        Ok(convert_rejects(reservation.reviews()))
+    }
+
     /// Returns the lock payload accumulated for this reservation.
     ///
     /// # Errors
@@ -623,7 +689,8 @@ pub struct JsDryRunReport {
 
 #[wasm_bindgen(js_class = DryRunReport)]
 impl JsDryRunReport {
-    /// Whether the order would pass.
+    /// Whether the simulated stages had no rejects. A non-empty `reviews`
+    /// means a human decision is required before sending the order.
     #[wasm_bindgen(getter, js_name = isPass)]
     pub fn is_pass(&self) -> bool {
         self.inner.is_pass()
@@ -634,8 +701,15 @@ impl JsDryRunReport {
     pub fn rejects(&self) -> Vec<JsReject> {
         self.inner
             .rejects()
-            .map(convert_rejects)
+            .map(|rejects| convert_rejects(rejects))
             .unwrap_or_default()
+    }
+
+    /// Marks from the simulated stages. A non-empty array requires a human
+    /// decision before sending the order, even when `isPass` is true.
+    #[wasm_bindgen(getter, js_name = reviews)]
+    pub fn reviews(&self) -> Vec<JsReject> {
+        convert_rejects(self.inner.reviews())
     }
 
     /// Returns the lock payload the main stage would produce.

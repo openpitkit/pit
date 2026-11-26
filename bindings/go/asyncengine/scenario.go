@@ -49,10 +49,13 @@ const (
 
 // OperationResult provides the reads shared by accepted pre-trade operations.
 // It has no lifecycle methods and is valid only while its accepted-operation
-// hook is running.
+// hook is running, except for the verdict reads documented on OrderCheckResult.
 type OperationResult interface {
 	Lock() (pretrade.Lock, error)
 	AccountAdjustments() ([]accountadjustment.Outcome, error)
+	// Reviews returns review marks. A non-empty list requires a human
+	// decision before sending the order. Drop-copy exposes no review marks.
+	Reviews() ([]reject.Reject, error)
 }
 
 // BlockingOperationResult provides the reads from an accepted operation that
@@ -71,8 +74,11 @@ type DropCopyResult interface {
 }
 
 // OrderCheckResult provides the complete verdict of a non-mutating order
-// check. Passed and Rejects remain readable after the hook returns; the
-// operation reads are available only while the hook is running.
+// check. Passed, Rejects and Reviews remain readable after the hook returns.
+// Lock, AccountAdjustments and AccountBlock are available during the hook.
+// If a live run returns a hold for review, commit its reservation to retain
+// the hold and keep the order unsent until approval and a fresh run
+// with Confirmed.
 type OrderCheckResult interface {
 	BlockingOperationResult
 	Passed() bool
@@ -183,6 +189,7 @@ type PreTradeHooks[State any] struct {
 	// OnRejected handles a rejected pre-trade operation and ends the chain.
 	OnRejected func(context.Context, State, []reject.Reject) error
 	// OnReserved resolves an accepted reservation.
+	// A non-empty Reviews() requires a human decision before sending the order.
 	OnReserved func(context.Context, State, OperationResult) (Decision, error)
 }
 
@@ -878,6 +885,10 @@ func (t *chainTask[State]) checkOrder(
 		return fmt.Errorf("async chain check order: %w", err)
 	}
 	passed, err := report.IsPass()
+	var reviews []reject.Reject
+	if err == nil {
+		reviews, err = report.Reviews()
+	}
 	if err != nil {
 		return fmt.Errorf("async chain check order verdict: %w", err)
 	}
@@ -892,7 +903,7 @@ func (t *chainTask[State]) checkOrder(
 		}
 	}
 	result := &dryRunOperationResult{
-		rejects: rejects, report: report, available: true, passed: passed,
+		rejects: rejects, reviews: reviews, report: report, available: true, passed: passed,
 	}
 	defer result.invalidate()
 	err = onChecked(ctx, state, result)
@@ -1039,6 +1050,15 @@ func (r *reservationOperationResult) AccountAdjustments() ([]accountadjustment.O
 	return r.reservation.AccountAdjustments()
 }
 
+func (r *reservationOperationResult) Reviews() ([]reject.Reject, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.available || r.reservation == nil {
+		return nil, ErrChainResultUnavailable
+	}
+	return r.reservation.Reviews()
+}
+
 type dropCopyOperationResult struct {
 	mu        sync.Mutex
 	operation *pretrade.DropCopyOperation
@@ -1069,6 +1089,15 @@ func (r *dropCopyOperationResult) AccountAdjustments() ([]accountadjustment.Outc
 	return r.operation.AccountAdjustments()
 }
 
+func (r *dropCopyOperationResult) Reviews() ([]reject.Reject, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.available || r.operation == nil {
+		return nil, ErrChainResultUnavailable
+	}
+	return nil, nil
+}
+
 func (r *dropCopyOperationResult) AccountBlock() (*reject.AccountBlock, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1090,6 +1119,7 @@ func (r *dropCopyOperationResult) IsAccountBlocked() (bool, error) {
 type dryRunOperationResult struct {
 	mu        sync.Mutex
 	rejects   []reject.Reject
+	reviews   []reject.Reject
 	report    *pretrade.DryRunReport
 	available bool
 	passed    bool
@@ -1111,6 +1141,12 @@ func (r *dryRunOperationResult) Rejects() []reject.Reject {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]reject.Reject(nil), r.rejects...)
+}
+
+func (r *dryRunOperationResult) Reviews() ([]reject.Reject, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]reject.Reject(nil), r.reviews...), nil
 }
 
 func (r *dryRunOperationResult) Lock() (pretrade.Lock, error) {

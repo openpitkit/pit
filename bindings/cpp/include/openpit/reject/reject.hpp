@@ -44,6 +44,19 @@ enum class RejectScope : std::uint8_t {
   Account = 2,
 };
 
+/// Controls how the engine handles a policy finding.
+enum class RuleMode : std::uint8_t {
+  /// Rejects the order.
+  Reject = OPENPIT_PRETRADE_RULE_MODE_REJECT,
+  /// Requires human review. Only an all-with-hold run retains holds and
+  /// policy results. Any without-hold mark clears both. Commit immediately
+  /// and rerun pre-trade with the order confirmed before sending it.
+  ReviewWithHold = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+  /// Requires human review. The returned reservation carries no holds or
+  /// policy results. A start-stage mark skips the main stage.
+  ReviewWithoutHold = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+};
+
 // Stable machine-readable reject classification. Unknown incoming codes map
 // to `Other`.
 //
@@ -113,6 +126,10 @@ struct Reject {
   std::uintptr_t userData = 0;
   RejectCode code = RejectCode::Other;
   RejectScope scope = RejectScope::Order;
+  /// Defaults to rejection. In pre-trade, holds and policy results survive
+  /// review only if every mark is `ReviewWithHold`. Any `ReviewWithoutHold`
+  /// clears both. Evaluation failures always reject.
+  RuleMode mode = RuleMode::Reject;
 
   Reject() = default;
 
@@ -141,6 +158,7 @@ struct Reject {
     out.userData = raw.user_data;
     out.code = static_cast<RejectCode>(raw.code);
     out.scope = static_cast<RejectScope>(raw.scope);
+    out.mode = static_cast<RuleMode>(raw.mode);
     return out;
   }
 
@@ -154,6 +172,7 @@ struct Reject {
         static_cast<std::uint16_t>(code));
     raw.scope = static_cast<OpenPitPretradeRejectScope>(
         static_cast<std::uint8_t>(scope));
+    raw.mode = static_cast<OpenPitPretradeRuleMode>(mode);
     return raw;
   }
 };

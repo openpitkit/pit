@@ -22,7 +22,7 @@ use super::reject::AccountBlock;
 use crate::core::account_control::DeferredAccountOperations;
 use crate::core::{
     AccountControl, AccountGroups, AccountGroupsHandle, Accounts, BlockedAccounts, HasAccountId,
-    OperationSnapshot,
+    HasAlreadyHeld, HasConfirmed, OperationSnapshot,
 };
 use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
@@ -117,6 +117,10 @@ impl DropCopyStartMutationRecorder {
 /// [`AccountGroupId`](crate::param::AccountGroupId) through
 /// [`account_group`](Self::account_group).
 ///
+/// Also carries the order-review flags through [`confirmed`](Self::confirmed)
+/// and [`already_held`](Self::already_held), read once per operation when the
+/// engine is configured with `with_order_review`.
+///
 /// Order data the engine does not need itself, and mutations, are passed as
 /// explicit method arguments and intentionally do not live inside this context.
 pub struct PreTradeContext<StorageFactory>
@@ -127,6 +131,8 @@ where
     /// account identifier could not be read from the order.
     pub account_control: Option<AccountControl<StorageFactory>>,
     group_lookup: OperationSnapshot<StorageFactory>,
+    confirmed: Result<bool, RequestFieldAccessError>,
+    already_held: Result<bool, RequestFieldAccessError>,
     drop_copy: Option<Box<DropCopyState<StorageFactory>>>,
 }
 
@@ -138,10 +144,14 @@ where
         account_control: Option<AccountControl<StorageFactory>>,
         account_groups: AccountGroupsHandle<StorageFactory>,
         account: Result<AccountId, RequestFieldAccessError>,
+        confirmed: Result<bool, RequestFieldAccessError>,
+        already_held: Result<bool, RequestFieldAccessError>,
     ) -> Self {
         Self {
             account_control,
             group_lookup: OperationSnapshot::new(account_groups, account, None),
+            confirmed,
+            already_held,
             drop_copy: None,
         }
     }
@@ -151,10 +161,14 @@ where
         accounts: Accounts<StorageFactory>,
         account_groups: AccountGroupsHandle<StorageFactory>,
         account: Result<AccountId, RequestFieldAccessError>,
+        confirmed: Result<bool, RequestFieldAccessError>,
+        already_held: Result<bool, RequestFieldAccessError>,
     ) -> Self {
         Self {
             account_control,
             group_lookup: OperationSnapshot::new(account_groups, account, Some(accounts)),
+            confirmed,
+            already_held,
             drop_copy: None,
         }
     }
@@ -169,12 +183,16 @@ where
         accounts: Accounts<StorageFactory>,
         account_groups: AccountGroupsHandle<StorageFactory>,
         account: AccountId,
+        confirmed: Result<bool, RequestFieldAccessError>,
+        already_held: Result<bool, RequestFieldAccessError>,
     ) -> Self {
         let account_operations = DeferredAccountOperations::default();
         let account_control = account_control.with_deferred_operations(account_operations.clone());
         Self {
             account_control: Some(account_control.clone()),
             group_lookup: OperationSnapshot::new(account_groups, Ok(account), Some(accounts)),
+            confirmed,
+            already_held,
             drop_copy: Some(Box::new(DropCopyState {
                 account_control,
                 account_operations,
@@ -184,12 +202,13 @@ where
     }
 
     /// Creates a standalone context for testing a [`PreTradePolicy`] outside an
-    /// engine.
+    /// engine, mirroring an engine without `with_order_review`.
     ///
     /// `order` is read exactly once, here, for the fields the engine itself
     /// needs - the same single read the engine performs when an operation
-    /// starts. Those fields are the bound on `Order`, and a field the engine
-    /// starts reading for itself later joins it: a test order is expected to
+    /// starts. Fields the engine always reads are the bound on `Order`;
+    /// review flags, read only with `with_order_review`, are the bound of
+    /// [`Self::new_with_order_review`]. A test order is expected to
     /// implement the whole engine-read accessor set, not only the accessors the
     /// policy under test happens to use. Taking the order rather than a
     /// pre-read value is deliberate - it is what makes the context and the
@@ -209,11 +228,77 @@ where
         StorageFactory: Default,
         Order: HasAccountId,
     {
+        Self::new_with_flags(account_control, order.account_id(), Ok(false), Ok(false))
+    }
+
+    /// Creates a standalone test context mirroring an engine configured with
+    /// `with_order_review`.
+    ///
+    /// Reads the account identifier and both review flags once. Accessors
+    /// preserve read errors, so a policy can be tested with unreadable fields.
+    /// The context uses the same empty, private registry as [`Self::new`].
+    pub fn new_with_order_review<Order>(
+        account_control: Option<AccountControl<StorageFactory>>,
+        order: &Order,
+    ) -> Self
+    where
+        StorageFactory: Default,
+        Order: HasAccountId + HasConfirmed + HasAlreadyHeld,
+    {
+        Self::new_with_flags(
+            account_control,
+            order.account_id(),
+            order.confirmed(),
+            order.already_held(),
+        )
+    }
+
+    fn new_with_flags(
+        account_control: Option<AccountControl<StorageFactory>>,
+        account: Result<AccountId, RequestFieldAccessError>,
+        confirmed: Result<bool, RequestFieldAccessError>,
+        already_held: Result<bool, RequestFieldAccessError>,
+    ) -> Self
+    where
+        StorageFactory: Default,
+    {
         let builder = StorageBuilder::new(StorageFactory::default());
         let handle = AccountGroupsHandle::from_inner(StorageFactory::new_shared(
             AccountGroups::new(&builder),
         ));
-        Self::with_groups(account_control, handle, order.account_id())
+        Self::with_groups(account_control, handle, account, confirmed, already_held)
+    }
+
+    /// Returns the operation's confirmation flag, read once at its start.
+    ///
+    /// Without `with_order_review`, the engine runs no review flow and stores
+    /// `Ok(false)`: absent flags mean not confirmed and not held by contract.
+    /// Deferred execution uses the same value as the start stage.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from the order's single accessor read.
+    /// `start_pre_trade` and dry-run reject on a read error before any policy
+    /// runs; drop-copy and [`Self::new_with_order_review`] pass the error
+    /// through.
+    pub fn confirmed(&self) -> Result<bool, RequestFieldAccessError> {
+        self.confirmed.clone()
+    }
+
+    /// Returns the operation's already-held flag, read once at its start.
+    ///
+    /// Without `with_order_review`, the engine runs no review flow and stores
+    /// `Ok(false)`: absent flags mean not confirmed and not held by contract.
+    /// Deferred execution uses the same value as the start stage.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from the order's single accessor read.
+    /// `start_pre_trade` and dry-run reject on a read error before any policy
+    /// runs; drop-copy and [`Self::new_with_order_review`] pass the error
+    /// through.
+    pub fn already_held(&self) -> Result<bool, RequestFieldAccessError> {
+        self.already_held.clone()
     }
 
     /// Returns the operation's account.

@@ -24,11 +24,11 @@ use crate::param::{
 use crate::pretrade::PreTradeLock;
 
 use super::{
-    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportFillFee,
-    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
-    HasExecutionReportPositionSide, HasFee, HasInstrument, HasOrderCollateralAsset,
-    HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly,
-    HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument,
+    HasAccountId, HasAlreadyHeld, HasAutoBorrow, HasClosePosition, HasConfirmed,
+    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
+    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
+    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
+    HasReduceOnly, HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -64,6 +64,8 @@ impl_request_has_field_passthrough!(
     inner,
     HasReduceOnly, reduce_only, bool;
     HasClosePosition, close_position, bool;
+    HasConfirmed, confirmed, bool;
+    HasAlreadyHeld, already_held, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
@@ -99,6 +101,8 @@ impl_request_has_field_passthrough!(
     HasTradeAmount, trade_amount, crate::param::TradeAmount;
     HasReduceOnly, reduce_only, bool;
     HasClosePosition, close_position, bool;
+    HasConfirmed, confirmed, bool;
+    HasAlreadyHeld, already_held, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasRemainingReservedQuantity, remaining_reserved_quantity, Quantity;
     HasPreTradeLock, lock, PreTradeLock;
@@ -160,6 +164,8 @@ impl_request_has_field_passthrough!(
     HasTradeAmount, trade_amount, crate::param::TradeAmount;
     HasReduceOnly, reduce_only, bool;
     HasClosePosition, close_position, bool;
+    HasConfirmed, confirmed, bool;
+    HasAlreadyHeld, already_held, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
@@ -243,6 +249,8 @@ impl_request_has_field_passthrough!(
     HasTradeAmount, trade_amount, crate::param::TradeAmount;
     HasReduceOnly, reduce_only, bool;
     HasClosePosition, close_position, bool;
+    HasConfirmed, confirmed, bool;
+    HasAlreadyHeld, already_held, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
@@ -293,10 +301,13 @@ impl_request_has_field!(
 mod tests {
     use crate::param::{AccountId, Asset, Fee, MonetaryAmount, Quantity};
     use crate::pretrade::PreTradeLock;
-    use crate::HasExecutionReportFillFee;
+    use crate::{
+        HasAlreadyHeld, HasConfirmed, HasExecutionReportFillFee, OrderReview, WithOrderReview,
+    };
 
     use super::{
-        ExecutionReportFillDetails, ExecutionReportOperation, WithExecutionReportOperation,
+        ExecutionReportFillDetails, ExecutionReportOperation, WithExecutionReportFillDetails,
+        WithExecutionReportOperation,
     };
 
     fn fill() -> ExecutionReportFillDetails {
@@ -307,6 +318,23 @@ mod tests {
             lock: PreTradeLock::default(),
             is_final: false,
         }
+    }
+
+    #[test]
+    fn execution_report_fill_details_forwards_review_flags() {
+        let report = WithExecutionReportFillDetails {
+            inner: WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed: true,
+                    already_held: true,
+                },
+            },
+            fill: fill(),
+        };
+
+        assert_eq!(report.confirmed(), Ok(true));
+        assert_eq!(report.already_held(), Ok(true));
     }
 
     #[test]

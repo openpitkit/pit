@@ -237,7 +237,7 @@ func (b *RateLimitReadyBuilder) AccountAssetBarriers(
 
 // Build registers the built-in rate-limit policy on the given engine
 // builder.
-func (b *RateLimitReadyBuilder) Build(builder native.EngineBuilder) error {
+func (b *RateLimitReadyBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
 	if b.err != nil {
 		return b.err
 	}
@@ -248,6 +248,7 @@ func (b *RateLimitReadyBuilder) Build(builder native.EngineBuilder) error {
 		b.assetBarriers,
 		b.accountBarriers,
 		b.accountAssetBarriers,
+		instance,
 	)
 	runtime.KeepAlive(b)
 	return err

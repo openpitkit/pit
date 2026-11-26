@@ -139,6 +139,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
     broker_len: usize,
     account: *const OpenPitPretradePoliciesPnlBoundsAccountBarrier,
     account_len: usize,
+    instance: *const crate::engine::OpenPitPolicyInstance,
     out_error: OpenPitOutError,
 ) -> bool {
     if builder.is_null() {
@@ -279,7 +280,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
     };
     let policy = PnlBoundsKillSwitchPolicy::new(settings, storage)
         .with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
-    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
+    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy, instance) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
@@ -706,6 +707,7 @@ mod tests {
             position: Default::default(),
             margin: Default::default(),
             user_data: std::ptr::null_mut(),
+            review: Default::default(),
         }
     }
 
@@ -744,6 +746,7 @@ mod tests {
                 broker.len(),
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -766,6 +769,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 &mut out_error,
             )
         };
@@ -794,6 +798,7 @@ mod tests {
                 1,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 &mut out_error,
             )
         };
@@ -820,6 +825,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 1,
+                std::ptr::null(),
                 &mut out_error,
             )
         };
@@ -846,6 +852,7 @@ mod tests {
                 broker.len(),
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -902,6 +909,7 @@ mod tests {
                 broker.len(),
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });

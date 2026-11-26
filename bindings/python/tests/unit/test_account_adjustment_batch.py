@@ -34,7 +34,10 @@ class PassAdjustmentCheck(openpit.pretrade.Policy):
 
 
 class RejectOnPendingPolicy(openpit.pretrade.Policy):
-    def __init__(self) -> None:
+    def __init__(
+        self, *, mode: openpit.pretrade.RuleMode = openpit.pretrade.RuleMode.REJECT
+    ) -> None:
+        self.mode = mode
         self.seen_pending: list[str | None] = []
 
     @property
@@ -67,6 +70,7 @@ class RejectOnPendingPolicy(openpit.pretrade.Policy):
                         reason="blocked",
                         details="pending value 2 is forbidden",
                         scope=openpit.pretrade.RejectScope.ACCOUNT,
+                        mode=self.mode,
                     ),
                 ),
             )
@@ -118,11 +122,15 @@ def test_pre_trade_passes_with_empty_adjustment_result() -> None:
 
 
 @pytest.mark.unit
-def test_pre_trade_rejects_batch() -> None:
+@pytest.mark.parametrize(
+    "mode",
+    [openpit.pretrade.RuleMode.REJECT, openpit.pretrade.RuleMode.REVIEW_WITH_HOLD],
+)
+def test_pre_trade_rejects_batch(mode: openpit.pretrade.RuleMode) -> None:
     engine = (
         openpit.Engine.builder()
         .no_sync()
-        .pre_trade(policy=RejectOnPendingPolicy())
+        .pre_trade(policy=RejectOnPendingPolicy(mode=mode))
         .build()
     )
 
@@ -135,6 +143,7 @@ def test_pre_trade_rejects_batch() -> None:
     assert result.failed_index == 0
     assert len(result.rejects) == 1
     assert result.rejects[0].code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
+    assert result.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
     assert result.rejects[0].reason == "blocked"
     assert not result
 

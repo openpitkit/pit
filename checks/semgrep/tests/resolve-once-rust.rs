@@ -52,6 +52,30 @@ fn mixed_context_and_renamed_payload(
     request.account_id();
 }
 
+fn engine_context_alias_with_return<Trait>(
+    ctx: &PreTradeContextOf<Trait>,
+    order: &Trait::Order,
+) -> (Option<Rejects>, Vec<Reject>)
+where
+    Trait: EngineTrait,
+{
+    // ok: operation-account-read-once
+    ctx.account_id();
+    // ruleid: operation-account-read-once
+    order.account_id();
+    (None, Vec::new())
+}
+
+fn engine_context_alias_without_return<Trait>(ctx: &PreTradeContextOf<Trait>, order: &Trait::Order)
+where
+    Trait: EngineTrait,
+{
+    // ok: operation-account-read-once
+    ctx.account_id();
+    // ruleid: operation-account-read-once
+    order.account_id();
+}
+
 fn misleading_context_name(ctx: Report) -> Option<Result> {
     // ruleid: operation-account-read-once
     ctx.account_id();

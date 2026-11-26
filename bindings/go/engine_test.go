@@ -26,10 +26,119 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 	"go.openpit.dev/openpit/tx"
 )
+
+func TestPolicyInstanceRegistration(t *testing.T) {
+	if (reject.Reject{}).Mode != reject.RuleModeReject {
+		t.Fatal("zero record mode must be Reject")
+	}
+	builtin := func() *policies.OrderSizeLimitReadyBuilder {
+		return policies.BuildOrderSizeLimit().BrokerBarrier(policies.OrderSizeBrokerBarrier{
+			Limit: policies.OrderSizeLimit{MaxQuantity: optional.Some(mustOrderNativeQuantity(t, "0"))},
+		})
+	}
+	for _, mode := range []reject.RuleMode{reject.RuleModeReject, reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		for _, custom := range []bool{false, true} {
+			builder := NewEngineBuilder().FullSync()
+			options := []InstanceOption{InstanceName("named-instance"), InstanceMode(mode)}
+			var ready *ReadyEngineBuilder
+			if custom {
+				policy := &reviewTestPolicy{}
+				policy.start = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, policy.Name(), "limit", "details", reject.ScopeOrder)
+				ready = builder.PreTrade(policy, options...)
+			} else {
+				ready = builder.Builtin(builtin(), options...)
+			}
+			engine, err := ready.Build()
+			if err != nil {
+				t.Fatalf("instance Build() error = %v", err)
+			}
+			request, rejects, err := engine.StartPreTrade(newValidOrderForNativeE2E(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == reject.RuleModeReject {
+				if request != nil || len(rejects) != 1 || rejects[0].Mode != reject.RuleModeReject {
+					t.Fatalf("default instance must reject: request=%v, rejects=%v", request, rejects)
+				}
+			} else {
+				if request == nil || len(rejects) != 0 {
+					t.Fatalf("review instance must pass: request=%v, rejects=%v", request, rejects)
+				}
+				marks, err := request.Reviews()
+				if err != nil || len(marks) != 1 || marks[0].Mode != mode || marks[0].Policy == "named-instance" {
+					t.Fatalf("review instance marks=%v, error=%v, want mode %v and policy name", marks, err, mode)
+				}
+				request.Close()
+			}
+			engine.Stop()
+		}
+	}
+	defaultEngine, err := NewEngineBuilder().FullSync().Builtin(builtin()).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, rejects, err := defaultEngine.StartPreTrade(newValidOrderForNativeE2E(t))
+	if err != nil || request != nil || len(rejects) != 1 || rejects[0].Mode != reject.RuleModeReject {
+		t.Fatalf("registration without options must reject: %v, %v, %v", request, rejects, err)
+	}
+	defaultEngine.Stop()
+	if engine, err := NewEngineBuilder().FullSync().Builtin(builtin(), InstanceMode(reject.RuleMode(3))).Build(); engine != nil || err == nil || !strings.Contains(err.Error(), "invalid instance mode: 3") {
+		t.Fatalf("invalid instance mode Build() = %v, %v; want nil engine and caller value 3", engine, err)
+	}
+	if engine, err := NewEngineBuilder().FullSync().Builtin(builtin(), InstanceName("size-\xff")).Build(); engine != nil || err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("invalid UTF-8 instance Build() = %v, %v; want nil engine and UTF-8 error", engine, err)
+	}
+	_, err = NewEngineBuilder().FullSync().Builtin(builtin()).Builtin(builtin()).Build()
+	var buildError *EngineBuildError
+	if !errors.As(err, &buildError) || buildError.Code != EngineBuildErrorDuplicatePolicyName {
+		t.Fatalf("duplicate default instances error=%v, want DuplicatePolicyName", err)
+	}
+	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		review := policies.BuildOrderSizeLimit().BrokerBarrier(policies.OrderSizeBrokerBarrier{
+			Limit: policies.OrderSizeLimit{MaxQuantity: optional.Some(mustOrderNativeQuantity(t, "100"))},
+		})
+		engine, err := NewEngineBuilder().FullSync().
+			Builtin(builtin(), InstanceName("size-reject")).
+			Builtin(review, InstanceName("size-review"), InstanceMode(mode)).Build()
+		if err != nil {
+			t.Fatalf("distinct instance names must build: %v", err)
+		}
+		barrier := func(quantity string) *policies.OrderSizeBrokerBarrier {
+			return &policies.OrderSizeBrokerBarrier{
+				Limit: policies.OrderSizeLimit{MaxQuantity: optional.Some(mustOrderNativeQuantity(t, quantity))},
+			}
+		}
+		if err := engine.Configure().OrderSizeLimit("size-reject", barrier("100"), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Configure().OrderSizeLimit("size-review", barrier("0"), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		request, rejects, err := engine.StartPreTrade(newValidOrderForNativeE2E(t))
+		if err != nil || request == nil || len(rejects) != 0 {
+			t.Fatalf("review-only breach must pass: %v, %v, %v", request, rejects, err)
+		}
+		marks, err := request.Reviews()
+		if err != nil || len(marks) != 1 || marks[0].Mode != mode || marks[0].Policy != "OrderSizeLimitPolicy" || marks[0].Code != reject.CodeOrderQtyExceedsLimit || marks[0].Scope != reject.ScopeOrder {
+			t.Fatalf("named review marks = %v, %v", marks, err)
+		}
+		request.Close()
+		if err := engine.Configure().OrderSizeLimit("size-reject", barrier("0"), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		request, rejects, err = engine.StartPreTrade(newValidOrderForNativeE2E(t))
+		if err != nil || request != nil || len(rejects) != 1 || rejects[0].Mode != reject.RuleModeReject {
+			t.Fatalf("reject-instance breach must reject: %v, %v, %v", request, rejects, err)
+		}
+		engine.Stop()
+	}
+}
 
 func TestEngineBuilderCloseIsIdempotent(*testing.T) {
 	builder := NewEngineBuilder().
@@ -347,6 +456,6 @@ func (p *engineTestRejectingAdjustmentPolicy) ApplyAccountAdjustment(
 
 type engineTestFailingBuilder struct{}
 
-func (*engineTestFailingBuilder) Build(_ native.EngineBuilder) error {
+func (*engineTestFailingBuilder) Build(_ native.EngineBuilder, _ *native.PolicyInstance) error {
 	return errors.New("forced")
 }

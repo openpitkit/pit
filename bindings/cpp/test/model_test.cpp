@@ -239,6 +239,7 @@ TEST(ModelOrder, EmptyOrderHasNoGroups) {
   EXPECT_FALSE(restored.operation.has_value());
   EXPECT_FALSE(restored.margin.has_value());
   EXPECT_FALSE(restored.position.has_value());
+  EXPECT_FALSE(restored.review.has_value());
   EXPECT_EQ(restored.userData, 0u);
 }
 

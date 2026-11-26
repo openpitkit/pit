@@ -22,7 +22,8 @@ use crate::core::mutation::MutationFailureKillSwitch;
 use crate::Mutations;
 use std::marker::PhantomData;
 
-type RequestExecutor = Box<dyn FnOnce() -> Result<PreTradeReservation, Rejects>>;
+type RequestExecutor =
+    Box<dyn FnOnce(Vec<crate::pretrade::Reject>) -> Result<PreTradeReservation, Rejects>>;
 
 pub(crate) struct RequestHandleImpl<Order> {
     execute: RequestExecutor,
@@ -39,9 +40,12 @@ impl<Order> RequestHandleImpl<Order> {
 }
 
 impl<Order> RequestHandle<Order> for RequestHandleImpl<Order> {
-    fn execute(self: Box<Self>) -> Result<PreTradeReservation, Rejects> {
+    fn execute(
+        self: Box<Self>,
+        reviews: Vec<crate::pretrade::Reject>,
+    ) -> Result<PreTradeReservation, Rejects> {
         let this = *self;
-        (this.execute)()
+        (this.execute)(reviews)
     }
 }
 
@@ -237,7 +241,8 @@ mod tests {
         let called = Rc::new(RefCell::new(false));
         let called_clone = Rc::clone(&called);
         let handle: Box<RequestHandleImpl<()>> =
-            Box::new(RequestHandleImpl::new(Box::new(move || {
+            Box::new(RequestHandleImpl::new(Box::new(move |reviews| {
+                assert!(reviews.is_empty());
                 *called_clone.borrow_mut() = true;
                 Err(Rejects::new(vec![Reject::new(
                     "test",
@@ -248,7 +253,7 @@ mod tests {
                 )]))
             })));
 
-        let result = handle.execute();
+        let result = handle.execute(Vec::new());
         assert!(result.is_err());
         assert!(*called.borrow());
     }

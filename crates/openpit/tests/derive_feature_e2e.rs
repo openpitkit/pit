@@ -5,8 +5,8 @@ use openpit::pretrade::policies::{
     PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,
 };
 use openpit::{
-    Engine, HasAccountId, HasFee, HasInstrument, HasPnl, Instrument, RequestFieldAccessError,
-    RequestFields,
+    Engine, HasAccountId, HasConfirmed, HasFee, HasInstrument, HasPnl, Instrument,
+    RequestFieldAccessError, RequestFields,
 };
 
 trait HasStrategyTag {
@@ -44,6 +44,12 @@ struct DerivedOrder {
 impl HasAccountId for DerivedOrder {
     fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
         Ok(AccountId::from_u64(0))
+    }
+}
+
+impl HasConfirmed for DerivedOrder {
+    fn confirmed(&self) -> Result<bool, RequestFieldAccessError> {
+        Ok(false)
     }
 }
 

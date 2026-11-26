@@ -22,6 +22,7 @@ import (
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/reject"
 )
 
 // ErrReservationClosed is returned by Reservation accessors once the
@@ -168,6 +169,20 @@ func (r *Reservation) Lock() (Lock, error) {
 	result := newLockFromHandle(handle)
 	native.DestroyPretradePreTradeLock(handle)
 	return result, nil
+}
+
+// Reviews returns a copy of the review marks from both pre-trade stages.
+// A non-empty list requires a human decision before sending the order.
+// For review with a hold, commit the reservation to retain the hold and keep
+// the order unsent until approval and a fresh run with Confirmed.
+// Returns ErrReservationClosed after Close.
+func (r *Reservation) Reviews() ([]reject.Reject, error) {
+	if r.handle == nil {
+		return nil, ErrReservationClosed
+	}
+	handle := native.PretradePreTradeReservationGetReviews(r.handle)
+	defer native.DestroyPretradeRejectList(handle)
+	return reject.CopyListFromHandle(handle), nil
 }
 
 // AccountAdjustments returns the account-adjustment outcomes produced by the

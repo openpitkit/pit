@@ -28,6 +28,7 @@
 #include "openpit/pretrade/drop_copy_operation.hpp"
 #include "openpit/pretrade/dry_run_report.hpp"
 #include "openpit/pretrade/start_result.hpp"
+#include "openpit/reject/reject.hpp"
 #include "openpit/string.hpp"
 
 #include <openpit.h>
@@ -60,7 +61,20 @@ namespace openpit {
 class Configurator;
 class EngineBuilder;
 
+/// Identity and mode of one policy registration.
+/// An empty name uses the policy name; the mode defaults to Reject.
+struct PolicyInstance {
+  std::string name;
+  reject::RuleMode mode = reject::RuleMode::Reject;
+};
+
 namespace detail {
+
+inline OpenPitPolicyInstance PolicyInstanceToNative(
+    const PolicyInstance& instance) {
+  return {MakeStringView(instance.name),
+          static_cast<OpenPitPretradeRuleMode>(instance.mode)};
+}
 
 template <typename>
 struct DependentFalse : std::false_type {};
@@ -70,7 +84,9 @@ struct HasAddTo : std::false_type {};
 
 template <typename T>
 struct HasAddTo<T, std::void_t<decltype(std::declval<const T&>().AddTo(
-                       std::declval<EngineBuilder&>()))>> : std::true_type {};
+                       std::declval<EngineBuilder&>(),
+                       std::declval<const PolicyInstance&>()))>>
+    : std::true_type {};
 
 // Rejects a base reference that would otherwise slice a derived payload.
 template <typename BaseType, typename PayloadType,
@@ -663,12 +679,18 @@ class EngineBuilder {
   // Registers either a built-in policy configuration or a custom pre-trade
   // policy wrapper. Registration throws `openpit::Error` on a boundary or
   // configuration failure. Returns `*this` for chaining.
+  // The optional instance supplies a registration name and mode. An empty
+  // name uses the policy name; the mode defaults to RuleMode::Reject.
+  // A cast mode value above RuleMode::ReviewWithoutHold or a name that is not
+  // valid UTF-8 throws `openpit::Error` from this call. A mode cast to zero
+  // registers as RuleMode::Reject (the C ABI's "not set" value).
   template <typename Policy>
-  EngineBuilder& Add(const Policy& policy) {
+  EngineBuilder& Add(const Policy& policy,
+                     const PolicyInstance& instance = PolicyInstance{}) {
     if constexpr (detail::HasAddTo<Policy>::value) {
-      policy.AddTo(*this);
+      policy.AddTo(*this, instance);
     } else {
-      AddPreTradePolicy(policy);
+      AddPreTradePolicy(policy, instance);
     }
     return *this;
   }
@@ -677,11 +699,18 @@ class EngineBuilder {
   // its own reference; the caller keeps ownership of the policy object.
   // Throws `openpit::Error` on a boundary failure. Returns `*this` for
   // chaining.
+  // The optional instance supplies a registration name and mode. An empty
+  // name uses the policy name; the mode defaults to RuleMode::Reject.
+  // A cast mode value above RuleMode::ReviewWithoutHold or a name that is not
+  // valid UTF-8 throws `openpit::Error` from this call. A mode cast to zero
+  // registers as RuleMode::Reject (the C ABI's "not set" value).
   template <typename Policy>
-  EngineBuilder& AddPreTradePolicy(const Policy& policy) {
+  EngineBuilder& AddPreTradePolicy(
+      const Policy& policy, const PolicyInstance& instance = PolicyInstance{}) {
+    const auto rawInstance = detail::PolicyInstanceToNative(instance);
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_pre_trade_policy(
-            m_handle.Get(), detail::Native(policy), &error)) {
+            m_handle.Get(), detail::Native(policy), &rawInstance, &error)) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_builder_add_pre_trade_policy failed");
     }

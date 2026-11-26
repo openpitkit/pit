@@ -65,6 +65,6 @@ pub use policy_result::{
 };
 pub use post_trade_context::PostTradeContext;
 pub use post_trade_result::PostTradeResult;
-pub use reject::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
+pub use reject::{AccountBlock, Reject, RejectCode, RejectScope, Rejects, RuleMode};
 pub use request::PreTradeRequest;
 pub use reservation::PreTradeReservation;

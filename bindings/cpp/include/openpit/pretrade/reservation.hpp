@@ -21,6 +21,7 @@
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/native_access.hpp"
 #include "openpit/error.hpp"
+#include "openpit/pretrade/detail/lists.hpp"
 #include "openpit/pretrade/detail/request.hpp"
 #include "openpit/pretrade/pre_trade_lock.hpp"
 
@@ -76,6 +77,13 @@ class Reservation {
   [[nodiscard]] PreTradeLock Lock() const {
     return ::openpit::detail::FromNative<PreTradeLock>(
         openpit_pretrade_pre_trade_reservation_get_lock(RequireHandle()));
+  }
+
+  /// Returns the review marks from both stages. A non-empty list requires a
+  /// human decision before sending the order.
+  [[nodiscard]] std::vector<::openpit::pretrade::Reject> Reviews() const {
+    return detail::ListAccess::DrainRejects(
+        openpit_pretrade_pre_trade_reservation_get_reviews(RequireHandle()));
   }
 
   [[nodiscard]] std::vector<::openpit::accountadjustment::Outcome>

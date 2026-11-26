@@ -20,8 +20,8 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 
 /// Inert verdict of a pre-trade dry-run.
 ///
-/// A dry-run runs every pre-trade policy against the current engine state and
-/// reports what *would* happen, with zero effect on that state: no rate-limit
+/// A dry-run runs the applicable pre-trade stages against current engine state
+/// and reports what *would* happen, with zero effect on that state: no rate-limit
 /// budget is spent, no reservation or hold is applied, and no account is
 /// blocked. Repeating a dry-run never moves engine state.
 ///
@@ -30,12 +30,13 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// there is nothing to finalize - so it exposes no `commit`/`rollback` methods.
 /// The fields describe the outcome the equivalent real call would have produced:
 ///
-/// - [`is_pass`](Self::is_pass) / [`rejects`](Self::rejects): whether the order
-///   would have been admitted, and the rejects it would have collected
-///   otherwise.
+/// - [`is_pass`](Self::is_pass) / [`rejects`](Self::rejects): whether the stages
+///   produce no effective rejects, and the rejects collected otherwise.
+/// - [`reviews`](Self::reviews): review marks requiring a human decision even
+///   when `is_pass()` is true. Callers inspect these before submission.
 /// - [`lock`](Self::lock): the [`PreTradeLock`] the main stage would have
 ///   produced (empty when the start stage would have rejected, or when no
-///   policy locks anything).
+///   policy locks anything, or a without-hold review is returned).
 /// - [`account_adjustments`](Self::account_adjustments): the per-asset
 ///   `held`/`available` outcomes the main stage would have produced, with the
 ///   same numbers a real reservation would report for the same order and state.
@@ -66,8 +67,12 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// // A dry-run leaves the engine untouched: a later real call behaves as if
 /// // the dry-run never happened.
 /// let report = engine.execute_pre_trade_dry_run(order.clone());
-/// if report.is_pass() {
+/// if report.is_pass() && report.reviews().is_empty() {
 ///     let mut reservation = engine.start_pre_trade(order)?.execute()?;
+///     if reservation.reviews().is_empty() {
+///         // Send the order to the venue only when no human decision is needed.
+///     }
+///     // Commit both paths. Review keeps holds only for all with-hold marks.
 ///     reservation.commit();
 /// }
 /// # Ok(())
@@ -77,6 +82,7 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 pub struct PreTradeDryRunReport {
     would_be_lock: PreTradeLock,
     would_be_account_adjustments: Vec<AccountAdjustmentOutcome>,
+    reviews: Vec<super::Reject>,
     would_be_account_block: Option<AccountBlock>,
     rejects: Option<Rejects>,
 }
@@ -87,18 +93,21 @@ impl PreTradeDryRunReport {
         would_be_lock: PreTradeLock,
         would_be_account_adjustments: Vec<AccountAdjustmentOutcome>,
         would_be_account_block: Option<AccountBlock>,
+        reviews: Vec<super::Reject>,
     ) -> Self {
         Self {
             would_be_lock,
             would_be_account_adjustments,
             would_be_account_block,
             rejects,
+            reviews,
         }
     }
 
-    /// Returns `true` when the order would have been admitted by all stages.
+    /// Returns `true` when the executed stages produce no effective rejects.
     ///
-    /// Equivalent to `self.rejects().is_none()`.
+    /// Equivalent to `self.rejects().is_none()`. Review marks do not change this
+    /// value; inspect [`Self::reviews`] before deciding to send the order.
     pub fn is_pass(&self) -> bool {
         self.rejects.is_none()
     }
@@ -109,10 +118,19 @@ impl PreTradeDryRunReport {
         self.rejects.as_ref()
     }
 
+    /// Returns review marks from the stages that would run, in policy order.
+    ///
+    /// Effective rejects discard all marks. Any without-hold mark leaves the
+    /// reported lock and account adjustments empty.
+    pub fn reviews(&self) -> &[super::Reject] {
+        &self.reviews
+    }
+
     /// Returns the lock context the main stage would have produced.
     ///
     /// Empty when the start stage would have rejected (the main stage never
-    /// runs in that case) or when no policy locks a price.
+    /// runs in that case), any without-hold review is returned, or no policy
+    /// locks a price.
     pub fn lock(&self) -> &PreTradeLock {
         &self.would_be_lock
     }
@@ -122,7 +140,7 @@ impl PreTradeDryRunReport {
     ///
     /// The numbers match what a real reservation would report for the same order
     /// and engine state. Empty when the start stage would have rejected or when
-    /// no policy reports an adjustment.
+    /// any without-hold review is returned, or no policy reports an adjustment.
     pub fn account_adjustments(&self) -> &[AccountAdjustmentOutcome] {
         &self.would_be_account_adjustments
     }

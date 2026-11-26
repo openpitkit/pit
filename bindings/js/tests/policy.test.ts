@@ -60,7 +60,7 @@ import {
   AccountOutcomeEntry,
   PnlOutcomeAmount,
 } from "@openpit/engine/accountadjustment";
-import { AccountBlock } from "@openpit/engine/reject";
+import { AccountBlock, RuleMode } from "@openpit/engine/reject";
 import { Mutation } from "@openpit/engine/tx";
 
 const ACCOUNT = 99224416;
@@ -126,6 +126,192 @@ const sellGate: Policy = {
     return null;
   },
 };
+
+describe("custom policy review modes", () => {
+  it.each([
+    { mode: RuleMode.Reject },
+    { mode: RuleMode.ReviewWithHold },
+    { mode: RuleMode.ReviewWithoutHold },
+    {},
+    { mode: undefined },
+    { mode: null },
+  ])("round-trips %o through both stages", (modeFields) => {
+    const { mode } = modeFields;
+    const entry: PolicyReject = {
+      code: REJECT_CODE,
+      reason: "order needs scrutiny",
+      details: "review test",
+      ...(modeFields as Pick<PolicyReject, "mode">),
+    };
+    const engine = Engine.builder()
+      .preTrade({
+        name: "rule-mode",
+        checkPreTradeStart: (_ctx, order: Order) =>
+          order.operation?.side === "SELL" ? [entry] : [],
+        performPreTradeCheck: () => ({ rejects: [entry] }),
+      })
+      .build();
+
+    const start = engine.startPreTrade(order("SELL"));
+    const main = engine.executePreTrade(order("BUY"));
+    if (mode === undefined || mode === null || mode === RuleMode.Reject) {
+      expect(start.ok).toBe(false);
+      expect(main.ok).toBe(false);
+      expect(start.rejects.map((reject) => reject.mode)).toEqual([
+        RuleMode.Reject,
+      ]);
+      expect(main.rejects.map((reject) => reject.mode)).toEqual([
+        RuleMode.Reject,
+      ]);
+      expect(start.reviews).toEqual([]);
+      expect(main.reviews).toEqual([]);
+      return;
+    }
+
+    expect(start.ok).toBe(true);
+    expect(main.ok).toBe(true);
+    expect(start.reviews.map((review) => review.mode)).toEqual([mode]);
+    expect(main.reviews.map((review) => review.mode)).toEqual([mode]);
+    const request = start.request!;
+    expect(request.reviews().map((review) => review.mode)).toEqual([mode]);
+    const executed = request.execute();
+    const expected = mode === RuleMode.ReviewWithHold ? [mode, mode] : [mode];
+    expect(executed.reviews.map((review) => review.mode)).toEqual(expected);
+    expect(() => request.reviews()).toThrow(LifecycleError);
+    const reservation = executed.reservation!;
+    expect(reservation.reviews().map((review) => review.mode)).toEqual(
+      expected,
+    );
+    reservation.commit();
+    expect(() => reservation.reviews()).toThrow(LifecycleError);
+    expect(executed.reviews.map((review) => review.mode)).toEqual(expected);
+    main.reservation!.commit();
+  });
+
+  it.each([
+    ["reject", RangeError],
+    ["Review", RangeError],
+    [" Reject", RangeError],
+    [1, TypeError],
+  ] as const)("fails closed on invalid mode %s", (mode, causeType) => {
+    const entry: PolicyReject = {
+      code: REJECT_CODE,
+      reason: "invalid mode",
+      details: "",
+      mode: mode as RuleMode,
+    };
+    const startHook = () => [entry];
+    const mainHook = () => ({ rejects: [entry] });
+    const startEngine = Engine.builder()
+      .preTrade({
+        name: "invalid-start-mode",
+        checkPreTradeStart: startHook,
+        checkPreTradeStartDryRun: startHook,
+        performPreTradeCheck: () => null,
+      })
+      .build();
+    const mainEngine = Engine.builder()
+      .preTrade({
+        name: "invalid-main-mode",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: mainHook,
+        performPreTradeCheckDryRun: mainHook,
+      })
+      .build();
+    const input = order("BUY");
+
+    for (const run of [
+      () => startEngine.startPreTrade(input),
+      () => startEngine.executePreTrade(input),
+      () => startEngine.startPreTradeDryRun(input),
+      () => startEngine.executePreTradeDryRun(input),
+      () => mainEngine.startPreTrade(input).request!.execute(),
+      () => mainEngine.executePreTrade(input),
+      () => mainEngine.executePreTradeDryRun(input),
+    ]) {
+      let failure: unknown;
+      try {
+        run();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(PolicyCallbackError);
+      const callbackError = failure as PolicyCallbackError;
+      expect(callbackError.cause).toBeInstanceOf(causeType);
+      expect((callbackError.cause as Error).message).toContain("reject.mode");
+      expect(callbackError.result).toBeUndefined();
+    }
+  });
+
+  it.each([RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold])(
+    "applies %s to main-stage policy results live and in dry-run",
+    (mode) => {
+      const engine = Engine.builder()
+        .preTrade({
+          name: "review-result",
+          checkPreTradeStart: () => [],
+          performPreTradeCheck: () => ({
+            rejects: [
+              { code: REJECT_CODE, reason: "review", details: "", mode },
+            ],
+            lockPrices: ["11"],
+            accountAdjustments: [new AccountOutcomeEntry("USD")],
+          }),
+        })
+        .build();
+      const report = engine.executePreTradeDryRun(order("BUY"));
+      const execute = engine.executePreTrade(order("BUY"));
+      expect(report.isPass).toBe(true);
+      expect(execute.ok).toBe(true);
+      const reservation = execute.reservation!;
+      const keepsOutput = mode === RuleMode.ReviewWithHold;
+      for (const result of [report, reservation]) {
+        expect(result.lock().size()).toBe(keepsOutput ? 1 : 0);
+        expect(
+          result.accountAdjustments().map(({ entry }) => entry.asset),
+        ).toEqual(keepsOutput ? ["USD"] : []);
+      }
+      expect(report.reviews.map((review) => review.mode)).toEqual([mode]);
+      reservation.commit();
+    },
+  );
+
+  it("reports evaluation failures and adjustment-batch entries as hard rejects", () => {
+    const mark: PolicyReject = {
+      code: REJECT_CODE,
+      reason: "review",
+      details: "",
+      mode: RuleMode.ReviewWithHold,
+    };
+    const engine = Engine.builder()
+      .preTrade({
+        name: "effective-rejects",
+        checkPreTradeStart: () => [mark],
+        performPreTradeCheck: () => ({
+          rejects: [{ ...mark, code: "SystemUnavailable" }],
+        }),
+        applyAccountAdjustment: () => ({ rejects: [mark] }),
+      })
+      .build();
+    const execute = engine.executePreTrade(order("BUY"));
+    const report = engine.executePreTradeDryRun(order("BUY"));
+    expect(execute.ok).toBe(false);
+    expect(report.isPass).toBe(false);
+    for (const result of [execute, report]) {
+      expect(result.reviews).toEqual([]);
+      expect(result.rejects).toHaveLength(1);
+      expect(result.rejects[0]!.code).toBe("SystemUnavailable");
+      expect(result.rejects[0]!.mode).toBe(RuleMode.Reject);
+    }
+    const batch = engine.applyAccountAdjustment(ACCOUNT, [
+      { operation: { asset: "USD" } },
+    ]);
+    expect(batch.ok).toBe(false);
+    expect(batch.rejects.map((reject) => reject.mode)).toEqual([
+      RuleMode.Reject,
+    ]);
+  });
+});
 
 describe("runtime custom policy", () => {
   it("reports an unreadable pre-trade operation account explicitly", () => {

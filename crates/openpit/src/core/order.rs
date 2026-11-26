@@ -19,11 +19,11 @@ use crate::param::{AccountId, Asset, Leverage, PositionSide, Price, Side, TradeA
 use crate::{impl_request_has_field, impl_request_has_field_passthrough};
 
 use crate::{
-    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
-    HasOrderPrice, HasPnl, HasPreTradeLock, HasReduceOnly, HasRemainingReservedQuantity, HasSide,
-    HasTradeAmount, Instrument, RequestFieldAccessError,
+    HasAccountId, HasAlreadyHeld, HasAutoBorrow, HasClosePosition, HasConfirmed,
+    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
+    HasExecutionReportPositionSide, HasFee, HasInstrument, HasOrderCollateralAsset,
+    HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl, HasPreTradeLock, HasReduceOnly,
+    HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -41,6 +41,22 @@ pub struct OrderOperation {
     /// `None` means the order should execute at market price.
     pub price: Option<Price>,
     pub side: Side,
+}
+
+/// `OrderOperation` carries no review group, so the order is unconfirmed by
+/// contract.
+impl HasConfirmed for OrderOperation {
+    fn confirmed(&self) -> Result<bool, RequestFieldAccessError> {
+        Ok(false)
+    }
+}
+
+/// `OrderOperation` carries no review group, so `already_held` is `false` by
+/// contract.
+impl HasAlreadyHeld for OrderOperation {
+    fn already_held(&self) -> Result<bool, RequestFieldAccessError> {
+        Ok(false)
+    }
 }
 
 /// Adds main operation parameters that describe side, instrument, price, and amount.
@@ -63,6 +79,8 @@ impl_request_has_field_passthrough!(
     inner,
     HasReduceOnly, reduce_only, bool;
     HasClosePosition, close_position, bool;
+    HasConfirmed, confirmed, bool;
+    HasAlreadyHeld, already_held, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
@@ -97,6 +115,8 @@ impl_request_has_field_passthrough!(
     HasTradeAmount, trade_amount, TradeAmount;
     HasOrderPrice, price, Option<Price>;
     HasSide, side, Side;
+    HasConfirmed, confirmed, bool;
+    HasAlreadyHeld, already_held, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
@@ -209,6 +229,8 @@ impl_request_has_field_passthrough!(
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasReduceOnly, reduce_only, bool;
     HasClosePosition, close_position, bool;
+    HasConfirmed, confirmed, bool;
+    HasAlreadyHeld, already_held, bool;
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
     HasRemainingReservedQuantity, remaining_reserved_quantity, crate::param::Quantity;
@@ -221,11 +243,122 @@ impl_request_has_field_passthrough!(
 
 //--------------------------------------------------------------------------------------------------
 
+/// Data: pre-trade review parameters for an order.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrderReview {
+    /// Whether the caller has already confirmed the order for pre-trade review.
+    pub confirmed: bool,
+    /// Whether the order's reservation is already held by an earlier committed
+    /// with-hold review run.
+    pub already_held: bool,
+}
+
+/// Adds pre-trade review parameters to an order.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WithOrderReview<Inner> {
+    /// Order data that provides the other request fields.
+    pub inner: Inner,
+    /// Review parameters provided by this wrapper.
+    pub review: OrderReview,
+}
+
+impl_request_has_field!(
+    OrderReview,
+    WithOrderReview,
+    review,
+    HasConfirmed, confirmed, bool, confirmed;
+    HasAlreadyHeld, already_held, bool, already_held;
+);
+impl_request_has_field_passthrough!(
+    WithOrderReview,
+    inner,
+    HasInstrument, instrument, &Instrument;
+);
+impl_request_has_field_passthrough!(
+    WithOrderReview,
+    inner,
+    HasAccountId, account_id, AccountId;
+    HasTradeAmount, trade_amount, TradeAmount;
+    HasOrderPrice, price, Option<Price>;
+    HasSide, side, Side;
+    HasOrderPositionSide, position_side, Option<PositionSide>;
+    HasReduceOnly, reduce_only, bool;
+    HasClosePosition, close_position, bool;
+    HasAutoBorrow, auto_borrow, bool;
+    HasPnl, pnl, crate::param::Pnl;
+    HasFee, fee, crate::param::Fee;
+    HasRemainingReservedQuantity, remaining_reserved_quantity, crate::param::Quantity;
+    HasPreTradeLock, lock, crate::pretrade::PreTradeLock;
+    HasOrderLeverage, leverage, Option<Leverage>;
+    HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
+    HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
+    HasExecutionReportIsFinal, is_final, bool;
+    HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>;
+);
+
+//--------------------------------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use crate::param::Asset;
 
-    use super::{HasOrderCollateralAsset, OrderMargin, WithOrderMargin};
+    use super::{
+        HasAlreadyHeld, HasConfirmed, HasOrderCollateralAsset, OrderMargin, OrderReview,
+        WithOrderMargin, WithOrderReview,
+    };
+
+    #[test]
+    fn with_order_review_reads_flags_from_review_group() {
+        for (confirmed, already_held) in [(true, false), (false, true)] {
+            let order = WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed,
+                    already_held,
+                },
+            };
+
+            assert_eq!(order.confirmed(), Ok(confirmed));
+            assert_eq!(order.already_held(), Ok(already_held));
+        }
+    }
+
+    #[test]
+    fn order_operation_defaults_review_flags_and_wrapper_forwards_them() {
+        use crate::param::{AccountId, Quantity, Side, TradeAmount};
+        use crate::{Instrument, OrderOperation, WithOrderOperation};
+
+        let operation = OrderOperation {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("must be valid"),
+                Asset::new("USD").expect("must be valid"),
+            ),
+            account_id: AccountId::from_u64(42),
+            side: Side::Buy,
+            trade_amount: TradeAmount::Quantity(Quantity::from_str("1").expect("must be valid")),
+            price: None,
+        };
+        assert_eq!(operation.confirmed(), Ok(false));
+        assert_eq!(operation.already_held(), Ok(false));
+
+        let wrapped = WithOrderOperation {
+            inner: WithOrderReview {
+                inner: (),
+                review: OrderReview {
+                    confirmed: true,
+                    already_held: true,
+                },
+            },
+            operation,
+        };
+        assert_eq!(wrapped.confirmed(), Ok(true));
+        assert_eq!(wrapped.already_held(), Ok(true));
+    }
 
     #[test]
     fn collateral_asset_returns_some_when_set() {

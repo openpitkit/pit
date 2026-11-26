@@ -37,6 +37,23 @@ class RejectScope(_enum.StrEnum):
 
 
 @enum.unique
+class RuleMode(_enum.StrEnum):
+    """Enforcement mode of a pre-trade rule."""
+
+    REJECT = "Reject"
+    REVIEW_WITH_HOLD = "ReviewWithHold"
+    REVIEW_WITHOUT_HOLD = "ReviewWithoutHold"
+
+    @classmethod
+    # @typing.override
+    def _missing_(cls, value: object) -> RuleMode | None:
+        raise ValueError(
+            "reject.mode must be 'Reject', 'ReviewWithHold', or "
+            f"'ReviewWithoutHold', got {value!r}"
+        )
+
+
+@enum.unique
 class RejectCode(_enum.StrEnum):
     """Stable machine-readable reject codes used across built-in and custom policies."""
 
@@ -93,6 +110,18 @@ class RejectCode(_enum.StrEnum):
 
 RejectScope.ORDER.__doc__ = "Reject that applies only to the current order."
 RejectScope.ACCOUNT.__doc__ = "Reject that applies at account scope."
+
+RuleMode.REJECT.__doc__ = "Reject the order and roll back prepared mutations."
+RuleMode.REVIEW_WITH_HOLD.__doc__ = (
+    "Require a human decision. If all marks are with-hold, the reservation "
+    "keeps the run's holds and policy results (mutations, lock prices, and "
+    "account adjustments). Commit immediately and send only after a fresh run "
+    "with the order confirmed and no review marks or rejects."
+)
+RuleMode.REVIEW_WITHOUT_HOLD.__doc__ = (
+    "Require a human decision and return a reservation without holds, "
+    "mutations, lock prices, or account adjustments."
+)
 
 RejectCode.MISSING_REQUIRED_FIELD.__doc__ = "A required field is absent."
 RejectCode.INVALID_FIELD_FORMAT.__doc__ = "A field exists but has an invalid format."

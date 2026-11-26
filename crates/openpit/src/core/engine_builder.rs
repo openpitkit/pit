@@ -21,12 +21,14 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 
-use super::engine::{Engine, EngineInner};
+use super::engine::{Engine, EngineInner, OrderReviewReader, RegisteredPolicy};
 use super::engine_trait::EngineTraitOf;
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
-use super::{AccountCurrencies, AccountGroups, BlockedAccounts, ConfigRegistry};
+use super::{
+    AccountCurrencies, AccountGroups, BlockedAccounts, ConfigRegistry, HasAlreadyHeld, HasConfirmed,
+};
 use crate::marketdata::MarketDataSync;
-use crate::pretrade::PreTradePolicy;
+use crate::pretrade::{PreTradePolicy, RuleMode};
 use crate::storage::{LockingPolicyFactory, StorageBuilder};
 
 // ─── MarketDataSyncOf ────────────────────────────────────────────────────────
@@ -164,6 +166,8 @@ impl<
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EngineBuildError {
+    /// A review-mode instance requires an order-review reader.
+    OrderReviewRequired { name: String },
     /// Duplicate policy name across registered policy sets.
     DuplicatePolicyName { name: String },
     /// Duplicate non-default `policy_group_id` across registered policies.
@@ -179,6 +183,12 @@ pub enum EngineBuildError {
 impl Display for EngineBuildError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::OrderReviewRequired { name } => {
+                write!(
+                    formatter,
+                    "order review required for policy instance: {name}"
+                )
+            }
             Self::DuplicatePolicyName { name } => {
                 write!(formatter, "duplicate policy name: {name}")
             }
@@ -197,9 +207,27 @@ impl std::error::Error for EngineBuildError {}
 
 // ─── EngineBuilder ───────────────────────────────────────────────────────────
 
+/// Registration settings for one policy instance.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PolicyInstance {
+    /// Instance name; `None` uses the policy's [`PreTradePolicy::name`].
+    pub name: Option<String>,
+    /// Instance mode, defaulting to [`RuleMode::Reject`].
+    pub mode: RuleMode,
+}
+
+fn order_review_flags<Order: HasConfirmed + HasAlreadyHeld>(
+    order: &Order,
+) -> (
+    Result<bool, crate::RequestFieldAccessError>,
+    Result<bool, crate::RequestFieldAccessError>,
+) {
+    (order.confirmed(), order.already_held())
+}
+
 /// Fluent builder for [`Engine`].
 ///
-/// Policies are evaluated in registration order. Policy names must be unique
+/// Policies are evaluated in registration order. Instance names must be unique
 /// across start-stage, main-stage, and account-adjustment sets;
 /// [`ReadyEngineBuilder::build`] returns [`EngineBuildError::DuplicatePolicyName`]
 /// otherwise.
@@ -209,7 +237,9 @@ impl std::error::Error for EngineBuildError {}
 /// ```rust
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::time::Duration;
-/// use openpit::{WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation};
+/// use openpit::{
+///     WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation, WithOrderReview,
+/// };
 /// use openpit::pretrade::policies::{
 ///     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
 ///     PnlBoundsKillSwitchSettings, RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
@@ -218,7 +248,7 @@ impl std::error::Error for EngineBuildError {}
 /// use openpit::Engine;
 /// use openpit::param::{AccountId, Asset, Pnl};
 ///
-/// type MyOrder = WithOrderOperation<()>;
+/// type MyOrder = WithOrderOperation<WithOrderReview<()>>;
 /// type MyReport = WithFinancialImpact<WithExecutionReportOperation<()>>;
 ///
 /// let builder = Engine::builder::<MyOrder, MyReport, ()>().no_sync();
@@ -264,6 +294,7 @@ impl std::error::Error for EngineBuildError {}
 /// # }
 /// ```
 pub struct EngineBuilder<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static> {
+    order_review: Option<OrderReviewReader<Order>>,
     _marker: PhantomData<(Order, ExecutionReport, AccountAdjustment)>,
 }
 
@@ -274,8 +305,30 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
+            order_review: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Enables engine reads of `confirmed` and `already_held`, once per run.
+    ///
+    /// `start_pre_trade` and dry-run reject an unreadable flag before any
+    /// policy runs; drop-copy passes each read result through its context.
+    /// Every instance whose mode is not [`RuleMode::Reject`] requires this
+    /// reader, otherwise `build` returns
+    /// [`EngineBuildError::OrderReviewRequired`]. The order's [`HasConfirmed`]
+    /// and [`HasAlreadyHeld`] bounds apply only to this method.
+    /// With it, the engine ignores every mark of a `confirmed` order while
+    /// every instance runs.
+    /// Without this reader, a run whose policies return a review mark and no
+    /// reject is rejected with
+    /// [`crate::pretrade::RejectCode::MissingRequiredField`], except in drop-copy.
+    pub fn with_order_review(mut self) -> Self
+    where
+        Order: HasConfirmed + HasAlreadyHeld,
+    {
+        self.order_review = Some(order_review_flags::<Order>);
+        self
     }
 
     /// Applies a custom synchronization mode and advances to
@@ -312,6 +365,7 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
                 AccountCurrencies::new(&storage_builder),
             );
         SyncedEngineBuilder {
+            order_review: self.order_review,
             pre_trade_policies: Vec::new(),
             storage_builder,
             blocked_accounts,
@@ -372,6 +426,14 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
 
 // ─── SyncedEngineBuilder ─────────────────────────────────────────────────────
 
+type PolicyConfigEntries<StorageLockingPolicyFactory> = Vec<(
+    String,
+    (
+        RuleMode,
+        crate::core::ConfigEntry<StorageLockingPolicyFactory>,
+    ),
+)>;
+
 /// Engine builder with a synchronization mode applied.
 ///
 /// Obtained from [`EngineBuilder::sync`], [`EngineBuilder::full_sync`],
@@ -394,8 +456,11 @@ pub struct SyncedEngineBuilder<
     Sync: SyncMode,
 > {
     pre_trade_policies: Vec<
-        Box<<Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>>,
+        RegisteredPolicy<
+            <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
+        >,
     >,
+    order_review: Option<OrderReviewReader<Order>>,
     storage_builder: StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     blocked_accounts:
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
@@ -409,10 +474,7 @@ pub struct SyncedEngineBuilder<
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
             AccountCurrencies<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         >,
-    config_entries: Vec<(
-        String,
-        crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>,
-    )>,
+    config_entries: PolicyConfigEntries<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     _marker: PhantomData<(Order, ExecutionReport, AccountAdjustment)>,
 }
 
@@ -484,7 +546,7 @@ where
     /// policies are registered normally but are not runtime-configurable in
     /// this release.
     pub fn pre_trade<Policy>(
-        mut self,
+        self,
         policy: Policy,
     ) -> ReadyEngineBuilder<Order, ExecutionReport, AccountAdjustment, Sync>
     where
@@ -492,12 +554,67 @@ where
             <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
         >,
     {
-        let obj = policy.into_policy_object();
-        if let Some(entry) = obj.built_in_config_entry() {
-            self.config_entries.push((obj.name().to_owned(), entry));
-        }
-        self.pre_trade_policies.push(obj);
+        self.pre_trade_instance(policy, PolicyInstance::default())
+    }
+
+    /// Registers a policy instance with an optional name and a mode, advancing
+    /// to the ready builder.
+    ///
+    /// `None` uses the policy's own `name()`. The instance name is the key for
+    /// uniqueness ([`EngineBuildError::DuplicatePolicyName`]) and runtime
+    /// configuration through [`Engine::configure`]. Reject records keep the
+    /// policy's own name in their `policy` field. A mode other than
+    /// [`RuleMode::Reject`] requires [`EngineBuilder::with_order_review`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::time::Duration;
+    /// use openpit::{Engine, OrderOperation, PolicyInstance};
+    /// use openpit::pretrade::policies::{
+    ///     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
+    /// };
+    ///
+    /// let builder = Engine::builder::<OrderOperation, (), ()>().no_sync();
+    /// let settings = RateLimitSettings::new(None, [], [], [])?;
+    /// let first =
+    ///     RateLimitPolicy::new(settings.clone(), builder.storage_builder());
+    /// let second = RateLimitPolicy::new(settings, builder.storage_builder());
+    /// let engine = builder
+    ///     .pre_trade_instance(first, PolicyInstance {
+    ///         name: Some("first".to_owned()),
+    ///         ..PolicyInstance::default()
+    ///     })
+    ///     .pre_trade_instance(second, PolicyInstance {
+    ///         name: Some("second".to_owned()),
+    ///         ..PolicyInstance::default()
+    ///     })
+    ///     .build()?;
+    /// for (name, max_orders) in [("first", 10), ("second", 20)] {
+    ///     let settings = RateLimitSettings::new(Some(RateLimitBrokerBarrier {
+    ///         limit: RateLimit { max_orders, window: Duration::from_secs(1) },
+    ///     }), [], [], [])?;
+    ///     engine.configure().rate_limit(name, |current| {
+    ///         *current = settings;
+    ///         Ok::<_, std::convert::Infallible>(())
+    ///     })?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn pre_trade_instance<Policy>(
+        self,
+        policy: Policy,
+        instance: PolicyInstance,
+    ) -> ReadyEngineBuilder<Order, ExecutionReport, AccountAdjustment, Sync>
+    where
+        Policy: IntoPolicyObject<
+            <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
+        >,
+    {
         ReadyEngineBuilder {
+            order_review: self.order_review,
             pre_trade_policies: self.pre_trade_policies,
             storage_builder: self.storage_builder,
             blocked_accounts: self.blocked_accounts,
@@ -506,6 +623,7 @@ where
             config_entries: self.config_entries,
             _marker: PhantomData,
         }
+        .pre_trade_instance(policy, instance)
     }
 }
 
@@ -529,8 +647,11 @@ pub struct ReadyEngineBuilder<
     Sync: SyncMode,
 > {
     pre_trade_policies: Vec<
-        Box<<Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>>,
+        RegisteredPolicy<
+            <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
+        >,
     >,
+    order_review: Option<OrderReviewReader<Order>>,
     storage_builder: StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     blocked_accounts:
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
@@ -544,10 +665,7 @@ pub struct ReadyEngineBuilder<
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
             AccountCurrencies<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         >,
-    config_entries: Vec<(
-        String,
-        crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>,
-    )>,
+    config_entries: PolicyConfigEntries<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     _marker: PhantomData<(Order, ExecutionReport, AccountAdjustment)>,
 }
 
@@ -591,17 +709,40 @@ where
     /// Supported built-in policies are registered with their runtime settings
     /// cell. Custom policies are registered normally but are not
     /// runtime-configurable in this release.
-    pub fn pre_trade<Policy>(mut self, policy: Policy) -> Self
+    pub fn pre_trade<Policy>(self, policy: Policy) -> Self
+    where
+        Policy: IntoPolicyObject<
+            <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
+        >,
+    {
+        self.pre_trade_instance(policy, PolicyInstance::default())
+    }
+
+    /// Registers an additional named policy instance with a mode.
+    ///
+    /// `None` uses the policy's own `name()`. The instance name is the key for
+    /// uniqueness ([`EngineBuildError::DuplicatePolicyName`]) and runtime
+    /// configuration through [`Engine::configure`]. Reject records keep the
+    /// policy's own name in their `policy` field. A mode other than
+    /// [`RuleMode::Reject`] requires [`EngineBuilder::with_order_review`].
+    pub fn pre_trade_instance<Policy>(mut self, policy: Policy, instance: PolicyInstance) -> Self
     where
         Policy: IntoPolicyObject<
             <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
         >,
     {
         let obj = policy.into_policy_object();
+        // fallback(approved): an unnamed instance takes the policy's own name, as documented above.
+        let name = instance.name.unwrap_or_else(|| obj.name().to_owned());
         if let Some(entry) = obj.built_in_config_entry() {
-            self.config_entries.push((obj.name().to_owned(), entry));
+            self.config_entries
+                .push((name.clone(), (instance.mode, entry)));
         }
-        self.pre_trade_policies.push(obj);
+        self.pre_trade_policies.push(RegisteredPolicy {
+            name,
+            policy: obj,
+            mode: instance.mode,
+        });
         self
     }
 
@@ -612,16 +753,30 @@ where
         Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, Sync>>,
         EngineBuildError,
     > {
-        ensure_unique_policy_names(self.pre_trade_policies.iter().map(|p| p.name()))?;
-        ensure_unique_group_ids(self.pre_trade_policies.iter().map(|p| p.policy_group_id()))?;
-        // Duplicate policy names are rejected above, so the registry's keys are
-        // already unique; collecting into the map cannot drop a distinct cell.
+        ensure_unique_policy_names(self.pre_trade_policies.iter().map(|p| p.name.as_str()))?;
+        ensure_unique_group_ids(
+            self.pre_trade_policies
+                .iter()
+                .map(|p| p.policy.policy_group_id()),
+        )?;
+        if self.order_review.is_none() {
+            if let Some(instance) = self
+                .pre_trade_policies
+                .iter()
+                .find(|p| p.mode != RuleMode::Reject)
+            {
+                return Err(EngineBuildError::OrderReviewRequired {
+                    name: instance.name.clone(),
+                });
+            }
+        }
         let config_registry =
             <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::new_shared(
-                ConfigRegistry::from_entries(self.config_entries.into_iter().collect()),
+                ConfigRegistry::from_entries(self.config_entries),
             );
         Ok(Engine::from_inner(<Sync as SyncMode>::new_strong(
             EngineInner {
+                order_review: self.order_review,
                 pre_trade_policies: self.pre_trade_policies,
                 blocked_accounts: self.blocked_accounts,
                 account_groups: self.account_groups,

@@ -38,6 +38,7 @@ use super::*;
 pub extern "C" fn openpit_engine_builder_add_builtin_order_validation_policy(
     builder: *mut crate::engine::OpenPitEngineBuilder,
     policy_group_id: u16,
+    instance: *const crate::engine::OpenPitPolicyInstance,
     out_error: OpenPitOutError,
 ) -> bool {
     if builder.is_null() {
@@ -48,6 +49,7 @@ pub extern "C" fn openpit_engine_builder_add_builtin_order_validation_policy(
         unsafe { &mut *builder },
         OrderValidationPolicy::new()
             .with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id)),
+        instance,
     ) {
         Ok(()) => true,
         Err(err) => {
@@ -141,6 +143,7 @@ mod tests {
             position: Default::default(),
             margin: Default::default(),
             user_data: std::ptr::null_mut(),
+            review: Default::default(),
         }
     }
 
@@ -169,6 +172,7 @@ mod tests {
             openpit_engine_builder_add_builtin_order_validation_policy(
                 builder,
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });
@@ -182,6 +186,7 @@ mod tests {
         let ok = openpit_engine_builder_add_builtin_order_validation_policy(
             std::ptr::null_mut(),
             0,
+            std::ptr::null(),
             &mut out_error,
         );
         assert!(!ok);

@@ -1113,14 +1113,14 @@ func newAdministrativePnlChainNativeEngine(t *testing.T) native.Engine {
 
 func buildAdministrativePnlChainNativeEngine(
 	t *testing.T,
-	build func(native.EngineBuilder) error,
+	build func(native.EngineBuilder, *native.PolicyInstance) error,
 ) native.Engine {
 	t.Helper()
 	builder, err := native.CreateEngineBuilder(native.SyncPolicyAccount)
 	if err != nil {
 		t.Fatalf("CreateEngineBuilder() error = %v", err)
 	}
-	if err := build(builder); err != nil {
+	if err := build(builder, nil); err != nil {
 		native.DestroyEngineBuilder(builder)
 		t.Fatalf("BuildSpotFundsPnlBoundsKillSwitch() error = %v", err)
 	}

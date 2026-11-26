@@ -64,6 +64,7 @@ func (r *DryRunReport) Close() {
 }
 
 // IsPass reports whether the order would have passed every pre-trade stage.
+// Before sending, also check Reviews for marks requiring a human decision.
 //
 // Returns ErrDryRunReportClosed after Close: a fabricated verdict either way
 // would be acted on as if the dry-run had produced it.
@@ -86,17 +87,23 @@ func (r *DryRunReport) Rejects() ([]reject.Reject, error) {
 		return nil, ErrDryRunReportClosed
 	}
 	handle := native.PretradePreTradeDryRunReportGetRejects(r.handle)
-	count := native.PretradeRejectListLen(handle)
-	if count == 0 {
-		native.DestroyPretradeRejectList(handle)
-		return nil, nil
+	defer native.DestroyPretradeRejectList(handle)
+	return reject.CopyListFromHandle(handle), nil
+}
+
+// Reviews returns a copy of the review marks the order would have collected.
+// A non-empty list requires a human decision before sending the order.
+// If a live run returns a hold for review, commit its reservation to retain
+// the hold and keep the order unsent until approval and a fresh run
+// with Confirmed.
+// Returns ErrDryRunReportClosed after Close.
+func (r *DryRunReport) Reviews() ([]reject.Reject, error) {
+	if r.handle == nil {
+		return nil, ErrDryRunReportClosed
 	}
-	result := make([]reject.Reject, count)
-	for i := 0; i < count; i++ {
-		result[i] = reject.NewFromHandle(native.PretradeRejectListGet(handle, i))
-	}
-	native.DestroyPretradeRejectList(handle)
-	return result, nil
+	handle := native.PretradePreTradeDryRunReportGetReviews(r.handle)
+	defer native.DestroyPretradeRejectList(handle)
+	return reject.CopyListFromHandle(handle), nil
 }
 
 // Lock returns a snapshot of the lock the main stage would have produced.

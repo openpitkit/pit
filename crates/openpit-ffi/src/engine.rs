@@ -31,13 +31,28 @@ use crate::last_error::{write_error, OpenPitOutError};
 use crate::order::{import_order, OpenPitOrder, Order};
 use crate::param::OpenPitParamAccountId;
 use crate::reject::{
-    blocks_to_list_owned, rejects_to_list_owned, OpenPitPretradeAccountBlockList,
-    OpenPitPretradeRejectList,
+    blocks_to_list_owned, import_rule_mode, rejects_to_list_owned, OpenPitPretradeAccountBlockList,
+    OpenPitPretradeRejectList, OpenPitPretradeRuleMode,
 };
 use crate::write_error_format;
 use crate::OpenPitStringView;
 use openpit::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
 use openpit::pretrade::Rejects;
+use openpit::PolicyInstance;
+
+/// Registration identity and mode of one pre-trade policy instance.
+///
+/// A null instance uses the policy's name and `Reject`. A null or empty name
+/// uses the policy's name; otherwise the UTF-8 name is copied during the add
+/// call. Mode 0 means `Reject`; modes above 3 fail through `out_error` and
+/// register nothing. A non-null instance and its name bytes must remain
+/// readable for the duration of the add call.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct OpenPitPolicyInstance {
+    pub name: OpenPitStringView,
+    pub mode: OpenPitPretradeRuleMode,
+}
 
 //--------------------------------------------------------------------------------------------------
 
@@ -313,8 +328,8 @@ impl OpenPitEngineBuildError {
 
 //--------------------------------------------------------------------------------------------------
 
-/// Registers a built-in pre-trade policy on the builder via `pre_trade`. When
-/// the policy is configurable, `pre_trade` records its settings cell for the
+/// Registers a pre-trade policy on the builder via `pre_trade_instance`. When
+/// the policy is configurable, registration records its settings cell for the
 /// `openpit_engine_configure_*` entry points; non-configurable policies are
 /// simply registered.
 pub(crate) fn add_pre_trade_policy_to_builder(
@@ -326,14 +341,31 @@ pub(crate) fn add_pre_trade_policy_to_builder(
             openpit_interop::EngineLocking,
         > + Send
         + 'static,
+    instance: *const OpenPitPolicyInstance,
 ) -> Result<(), String> {
+    let instance = if instance.is_null() {
+        PolicyInstance::default()
+    } else {
+        let instance = unsafe { &*instance };
+        let name = if instance.name.ptr.is_null() || instance.name.len == 0 {
+            None
+        } else {
+            Some(
+                unsafe { crate::policy::cstr_arg(instance.name) }
+                    .ok_or_else(|| "instance name is not valid UTF-8".to_string())?,
+            )
+        };
+        let mode = import_rule_mode(instance.mode)
+            .ok_or_else(|| format!("invalid instance mode: {}", instance.mode))?;
+        PolicyInstance { name, mode }
+    };
     let state = builder
         .inner
         .take()
         .ok_or_else(|| "engine builder is no longer available".to_string())?;
     builder.inner = Some(match state {
-        BuilderState::Synced(b) => BuilderState::Ready(b.pre_trade(policy)),
-        BuilderState::Ready(b) => BuilderState::Ready(b.pre_trade(policy)),
+        BuilderState::Synced(b) => BuilderState::Ready(b.pre_trade_instance(policy, instance)),
+        BuilderState::Ready(b) => BuilderState::Ready(b.pre_trade_instance(policy, instance)),
     });
     Ok(())
 }
@@ -396,6 +428,7 @@ pub extern "C" fn openpit_create_engine_builder(
 
     let state = BuilderState::Synced(
         openpit::EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
+            .with_order_review()
             .sync(openpit_interop::EngineLocking::new(mode)),
     );
     Box::into_raw(Box::new(OpenPitEngineBuilder {
@@ -565,6 +598,8 @@ pub extern "C" fn openpit_destroy_engine(engine: *mut OpenPitEngine) {
 ///
 /// Success:
 /// - returns `Passed` when the order passed this stage; read `out_request`;
+/// - `Passed` with non-empty `openpit_pretrade_pre_trade_request_get_reviews`
+///   is not permission to send the order;
 /// - returns `Rejected` when the order was rejected; read `out_rejects` if not
 ///   null.
 ///
@@ -649,6 +684,8 @@ pub extern "C" fn openpit_engine_start_pre_trade(
 ///
 /// Success:
 /// - returns `Passed` when the order passed this stage; read `out_reservation`;
+/// - `Passed` with non-empty `openpit_pretrade_pre_trade_reservation_get_reviews`
+///   is not permission to send the order;
 /// - returns `Rejected` when the order was rejected is not null; read
 ///   `out_rejects`.
 ///
@@ -969,10 +1006,49 @@ pub extern "C" fn openpit_engine_execute_pre_trade_dry_run(
 }
 
 #[no_mangle]
+/// Returns the review marks collected by the start stage.
+///
+/// Success:
+/// - returns a non-null `OpenPitPretradeRejectList`, empty when there are no marks.
+///
+/// Error:
+/// - returns null when `request` is null or its content has been consumed by
+///   `openpit_pretrade_pre_trade_request_execute`;
+/// - on error, if `out_error` is not null, it is filled with a caller-owned
+///   `OpenPitSharedString` that MUST be destroyed by the caller.
+///
+/// Ownership:
+/// - the caller owns the returned list and MUST release it with
+///   `openpit_destroy_pretrade_reject_list`;
+/// - the returned list is detached from the request state.
+///
+/// After execute, read marks with
+/// `openpit_pretrade_pre_trade_reservation_get_reviews`: the main stage may add
+/// marks that require a human decision before submitting the order.
+pub extern "C" fn openpit_pretrade_pre_trade_request_get_reviews(
+    request: *const OpenPitPretradePreTradeRequest,
+    out_error: OpenPitOutError,
+) -> *mut OpenPitPretradeRejectList {
+    if request.is_null() {
+        write_error(out_error, "request is null");
+        return std::ptr::null_mut();
+    }
+    let Some(inner) = (unsafe { &*request }).inner.as_ref() else {
+        write_error(out_error, "pre-trade request already consumed");
+        return std::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(rejects_to_list_owned(Rejects::new(
+        inner.reviews().to_vec(),
+    ))))
+}
+
+#[no_mangle]
 /// Executes a deferred request returned by `openpit_engine_start_pre_trade`.
 ///
 /// Success:
 /// - returns `Passed` when the order passed this stage; read `out_reservation`;
+/// - `Passed` with non-empty `openpit_pretrade_pre_trade_reservation_get_reviews`
+///   is not permission to send the order;
 /// - returns `Rejected` when the order was rejected and `out_rejects` is not
 ///   null; read `out_rejects`.
 ///
@@ -1117,6 +1193,31 @@ pub extern "C" fn openpit_pretrade_pre_trade_reservation_rollback(
     }
     reservation.finalized = true;
     reservation.inner.rollback();
+}
+
+#[no_mangle]
+/// Returns the reservation's review marks in stage and policy order.
+///
+/// Contract:
+/// - `reservation` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - always returns a caller-owned `OpenPitPretradeRejectList`, empty when
+///   there are no marks; release it with `openpit_destroy_pretrade_reject_list`;
+/// - marks require a human decision before submission. With-hold marks retain
+///   policy results; any without-hold mark leaves the reservation without them.
+///
+/// Lifetime contract:
+/// - the returned list is detached from the reservation state.
+pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_reviews(
+    reservation: *const OpenPitPretradePreTradeReservation,
+) -> *mut OpenPitPretradeRejectList {
+    assert!(
+        !reservation.is_null(),
+        "pre-trade reservation pointer is null"
+    );
+    Box::into_raw(Box::new(rejects_to_list_owned(Rejects::new(
+        unsafe { &*reservation }.inner.reviews().to_vec(),
+    ))))
 }
 
 #[no_mangle]
@@ -1362,11 +1463,37 @@ pub extern "C" fn openpit_destroy_pretrade_drop_copy_operation(
 /// - this function never fails;
 /// - equivalent to "the rejects list returned by
 ///   `openpit_pretrade_pre_trade_dry_run_report_get_rejects` is empty".
+/// - `true` with non-empty `openpit_pretrade_pre_trade_dry_run_report_get_reviews`
+///   is not permission to send the order.
 pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_is_pass(
     report: *const OpenPitPretradePreTradeDryRunReport,
 ) -> bool {
     assert!(!report.is_null(), "dry-run report pointer is null");
     unsafe { &*report }.inner.is_pass()
+}
+
+#[no_mangle]
+/// Returns the review marks the order would have collected.
+///
+/// `is_pass == true` with a non-empty list returned by
+/// `openpit_pretrade_pre_trade_dry_run_report_get_reviews` is not permission to send.
+/// Any without-hold mark leaves the lock and account adjustments empty.
+///
+/// Contract:
+/// - `report` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - always returns a caller-owned `OpenPitPretradeRejectList`, empty when
+///   there are no marks; release it with `openpit_destroy_pretrade_reject_list`.
+///
+/// Lifetime contract:
+/// - the returned list is detached from the report state.
+pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_get_reviews(
+    report: *const OpenPitPretradePreTradeDryRunReport,
+) -> *mut OpenPitPretradeRejectList {
+    assert!(!report.is_null(), "dry-run report pointer is null");
+    Box::into_raw(Box::new(rejects_to_list_owned(Rejects::new(
+        unsafe { &*report }.inner.reviews().to_vec(),
+    ))))
 }
 
 #[no_mangle]
@@ -3398,6 +3525,7 @@ mod tests {
                 user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             },
         );
         rejects
@@ -3426,6 +3554,7 @@ mod tests {
                 user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             },
         );
         rejects
@@ -3446,6 +3575,7 @@ mod tests {
             user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         crate::reject::openpit_pretrade_reject_list_push(rejects, reject);
         rejects
@@ -3466,6 +3596,7 @@ mod tests {
             user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         crate::reject::openpit_pretrade_reject_list_push(rejects, reject);
         rejects
@@ -3570,7 +3701,12 @@ mod tests {
         };
         assert!(!policy.is_null(), "failed to create counting policy");
         assert!(
-            openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut()),
+            openpit_engine_builder_add_pre_trade_policy(
+                builder,
+                policy,
+                std::ptr::null(),
+                std::ptr::null_mut()
+            ),
             "failed to add counting policy"
         );
         openpit_destroy_pretrade_pre_trade_policy(policy);
@@ -3865,7 +4001,12 @@ mod tests {
         };
         assert!(!policy.is_null(), "failed to create refusing policy");
         assert!(
-            openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut()),
+            openpit_engine_builder_add_pre_trade_policy(
+                builder,
+                policy,
+                std::ptr::null(),
+                std::ptr::null_mut()
+            ),
             "failed to add refusing policy"
         );
         openpit_destroy_pretrade_pre_trade_policy(policy);
@@ -4064,7 +4205,12 @@ mod tests {
             )
         };
         assert!(!policy.is_null(), "failed to create policy");
-        let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
+        let ok = openpit_engine_builder_add_pre_trade_policy(
+            builder,
+            policy,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        );
         assert!(ok, "failed to add policy");
         openpit_destroy_pretrade_pre_trade_policy(policy);
         let engine =
@@ -4095,6 +4241,7 @@ mod tests {
         let ok = crate::policy::openpit_engine_builder_add_pre_trade_policy(
             builder,
             policy,
+            std::ptr::null(),
             std::ptr::null_mut(),
         );
         assert!(ok, "failed to add policy");
@@ -4127,6 +4274,7 @@ mod tests {
         assert!(crate::policy::openpit_engine_builder_add_pre_trade_policy(
             builder,
             policy,
+            std::ptr::null(),
             std::ptr::null_mut(),
         ));
         crate::policy::openpit_destroy_pretrade_pre_trade_policy(policy);
@@ -4151,7 +4299,12 @@ mod tests {
             )
         };
         assert!(!policy.is_null(), "failed to create policy");
-        let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
+        let ok = openpit_engine_builder_add_pre_trade_policy(
+            builder,
+            policy,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        );
         assert!(ok, "failed to add policy");
         openpit_destroy_pretrade_pre_trade_policy(policy);
         let engine =
@@ -4175,7 +4328,12 @@ mod tests {
             )
         };
         assert!(!policy.is_null(), "failed to create policy");
-        let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
+        let ok = openpit_engine_builder_add_pre_trade_policy(
+            builder,
+            policy,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        );
         assert!(ok, "failed to add policy");
         openpit_destroy_pretrade_pre_trade_policy(policy);
         let engine =
@@ -4200,7 +4358,12 @@ mod tests {
         };
         assert!(!policy.is_null(), "failed to create passthrough policy");
         assert!(
-            openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut()),
+            openpit_engine_builder_add_pre_trade_policy(
+                builder,
+                policy,
+                std::ptr::null(),
+                std::ptr::null_mut()
+            ),
             "failed to add passthrough policy"
         );
         openpit_destroy_pretrade_pre_trade_policy(policy);
@@ -4242,6 +4405,7 @@ mod tests {
             user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         assert!(openpit_pretrade_reject_list_get(list, index, &mut reject));
         reject
@@ -4342,6 +4506,7 @@ mod tests {
         assert!(openpit_engine_builder_add_pre_trade_policy(
             builder,
             pass_policy,
+            std::ptr::null(),
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(pass_policy);
@@ -4382,11 +4547,13 @@ mod tests {
         assert!(openpit_engine_builder_add_pre_trade_policy(
             dup_builder,
             first,
+            std::ptr::null(),
             std::ptr::null_mut()
         ));
         assert!(openpit_engine_builder_add_pre_trade_policy(
             dup_builder,
             second,
+            std::ptr::null(),
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(first);
@@ -4432,6 +4599,7 @@ mod tests {
         assert!(openpit_engine_builder_add_pre_trade_policy(
             builder,
             pass_policy,
+            std::ptr::null(),
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(pass_policy);
@@ -4452,7 +4620,12 @@ mod tests {
             )
         };
         assert!(!policy.is_null());
-        let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
+        let ok = openpit_engine_builder_add_pre_trade_policy(
+            builder,
+            policy,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        );
         assert!(!ok);
         openpit_destroy_pretrade_pre_trade_policy(policy);
         openpit_destroy_engine_builder(builder);
@@ -5039,6 +5212,7 @@ mod tests {
             policy: OpenPitStringView::not_set(),
             user_data: 0,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         assert!(openpit_pretrade_reject_list_get(rejects, 0, &mut reject));
         assert_eq!(
@@ -5080,6 +5254,7 @@ mod tests {
             policy: OpenPitStringView::not_set(),
             user_data: 0,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         assert!(openpit_pretrade_reject_list_get(
             rejects,
@@ -5346,6 +5521,7 @@ mod tests {
         assert!(openpit_engine_builder_add_pre_trade_policy(
             builder,
             policy,
+            std::ptr::null(),
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(policy);
@@ -5693,6 +5869,7 @@ mod tests {
                 user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             },
         );
         rejects
@@ -5713,7 +5890,12 @@ mod tests {
             )
         };
         assert!(!policy.is_null(), "failed to create policy");
-        let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
+        let ok = openpit_engine_builder_add_pre_trade_policy(
+            builder,
+            policy,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        );
         assert!(ok, "failed to add policy");
         openpit_destroy_pretrade_pre_trade_policy(policy);
         let engine =

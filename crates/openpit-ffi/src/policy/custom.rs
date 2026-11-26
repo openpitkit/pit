@@ -82,11 +82,15 @@ pub type OpenPitPretradePreTradePolicy = PolicyHandle<UnifiedPreTradePolicy>;
 /// - If the callback wants to keep any data from `order`, it must copy that
 ///   data before returning.
 /// - Return a non-null empty list to accept the order.
-/// - Return a non-empty reject list to reject the order.
+/// - Return a non-empty list of rejects or review marks. Review modes request
+///   human review; effective rejects stop the order.
 /// - Return null only when the callback could not evaluate the order. The
 ///   engine converts it to a fatal `SystemUnavailable` reject.
-/// - A rejected order must set explicit `code` and `scope` values in every
+/// - If `openpit_pretrade_reject_list_push` refuses an item, do not return the
+///   list as-is; release it and return null for a fatal `SystemUnavailable` reject.
+/// - Set explicit `code` and `scope` values in every
 ///   list item.
+///   The record `mode` is optional; zero means `Reject`.
 /// - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
 ///   allocation-free accepted result. Other returned lists transfer ownership
 ///   to the engine and must be created with
@@ -120,15 +124,22 @@ pub type OpenPitPretradePreTradePolicyCheckPreTradeStartFn =
 ///   `openpit_pretrade_pre_trade_result_push_account_adjustment`. Neither push
 ///   carries a `policy_group_id`; the engine assigns the policy group. The
 ///   callback must not store or use `out_result` after return.
-/// - The reject channel and the `out_result` channel are independent. The
-///   engine keeps `out_result` when the callback accepts. Drop-copy also keeps
-///   it with ordinary, non-enforcing rejects; evaluation-failure rejects abort
-///   drop-copy and discard it.
+/// - An effective reject discards every review mark in live pre-trade and
+///   dry-run. Live pre-trade also discards all holds and policy results.
+///   Dry-run still reports its collected lock and outcomes. Without an
+///   effective reject, a without-hold mark in either stage clears all holds
+///   and policy results. Otherwise, they are kept. Drop-copy keeps results
+///   with review marks of either mode and with ordinary, non-enforcing rejects.
+///   Evaluation failures abort drop-copy and discard the results.
 /// - Return a non-null empty list to accept the order.
-/// - Return a non-empty reject list to reject the order.
+/// - Return a non-empty list of rejects or review marks. Review modes request
+///   human review; effective rejects stop the order.
 /// - Return null only when the callback could not evaluate the order. The
 ///   engine converts it to a fatal `SystemUnavailable` reject.
-/// - Every returned reject must contain explicit `code` and `scope` values.
+/// - If `openpit_pretrade_reject_list_push` refuses an item, do not return the
+///   list as-is; release it and return null for a fatal `SystemUnavailable` reject.
+/// - Every returned item must contain explicit `code` and `scope`.
+///   The record `mode` is optional; zero means `Reject`.
 /// - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
 ///   allocation-free accepted result. Other returned lists transfer ownership
 ///   to the engine and must be created with
@@ -341,41 +352,14 @@ unsafe impl Sync for CustomPreTradePolicy {}
 
 type StorageFactory = openpit_interop::StorageLockingPolicyFactory;
 
-impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::EngineLocking>
-    for CustomPreTradePolicy
-{
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn policy_group_id(&self) -> PolicyGroupId {
-        self.policy_group_id
-    }
-
-    fn check_pre_trade_start(
+impl CustomPreTradePolicy {
+    fn call_main_stage_check(
         &self,
-        ctx: &PreTradeContext<StorageFactory>,
-        order: &Order,
-    ) -> Result<(), Rejects> {
-        let Some(check_fn) = self.check_pre_trade_start_fn else {
-            return Ok(());
-        };
-        let input = export_order(order);
-        let c_ctx =
-            (ctx as *const PreTradeContext<StorageFactory>).cast::<OpenPitPretradeContext>();
-        let rejects = unsafe { check_fn(c_ctx, &input, self.user_data) };
-        import_reject_list_result(rejects)
-    }
-
-    fn perform_pre_trade_check(
-        &self,
+        check_fn: OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,
         ctx: &PreTradeContext<StorageFactory>,
         order: &Order,
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
-        let Some(check_fn) = self.perform_pre_trade_check_fn else {
-            return Ok(None);
-        };
         let mut mutations_handle = OpenPitMutations {
             mutations: mutations as *mut Mutations,
         };
@@ -413,6 +397,45 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
             }),
         }
     }
+}
+
+impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::EngineLocking>
+    for CustomPreTradePolicy
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn policy_group_id(&self) -> PolicyGroupId {
+        self.policy_group_id
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        ctx: &PreTradeContext<StorageFactory>,
+        order: &Order,
+    ) -> Result<(), Rejects> {
+        let Some(check_fn) = self.check_pre_trade_start_fn else {
+            return Ok(());
+        };
+        let input = export_order(order);
+        let c_ctx =
+            (ctx as *const PreTradeContext<StorageFactory>).cast::<OpenPitPretradeContext>();
+        let rejects = unsafe { check_fn(c_ctx, &input, self.user_data) };
+        import_reject_list_result(rejects)
+    }
+
+    fn perform_pre_trade_check(
+        &self,
+        ctx: &PreTradeContext<StorageFactory>,
+        order: &Order,
+        mutations: &mut Mutations,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        let Some(check_fn) = self.perform_pre_trade_check_fn else {
+            return Ok(None);
+        };
+        self.call_main_stage_check(check_fn, ctx, order, mutations)
+    }
 
     fn check_pre_trade_start_dry_run(
         &self,
@@ -440,34 +463,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         let Some(check_fn) = self.perform_pre_trade_check_dry_run_fn else {
             return self.perform_pre_trade_check(ctx, order, mutations);
         };
-        let mut mutations_handle = OpenPitMutations {
-            mutations: mutations as *mut Mutations,
-        };
-        let mut out_result = OpenPitPretradePreTradeResult {
-            lock_prices: Vec::new(),
-            account_adjustments: Vec::new(),
-        };
-        let input = export_order(order);
-        let c_ctx =
-            (ctx as *const PreTradeContext<StorageFactory>).cast::<OpenPitPretradeContext>();
-        let rejects = unsafe {
-            check_fn(
-                c_ctx,
-                &input,
-                &mut mutations_handle,
-                &mut out_result,
-                self.user_data,
-            )
-        };
-        import_reject_list_result(rejects)?;
-        if out_result.lock_prices.is_empty() && out_result.account_adjustments.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(PolicyPreTradeResult {
-                account_adjustments: out_result.account_adjustments.into(),
-                lock_prices: out_result.lock_prices.into(),
-            }))
-        }
+        self.call_main_stage_check(check_fn, ctx, order, mutations)
     }
 
     fn apply_execution_report(
@@ -1113,6 +1109,7 @@ mod tests {
                     price: None,
                 }),
                 position: openpit_interop::OrderPositionAccess::Absent,
+                review: openpit_interop::OrderReviewAccess::Absent,
                 margin: openpit_interop::OrderMarginAccess::Absent,
             },
             std::ptr::null_mut(),
@@ -1330,6 +1327,7 @@ mod tests {
                 user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             },
         ));
         rejects
@@ -1379,6 +1377,7 @@ mod tests {
             user_data: 0,
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
         };
         assert!(crate::reject::openpit_pretrade_reject_list_get(
             rejects,
@@ -1458,6 +1457,7 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(
             std::ptr::null_mut(),
             policy,
+            std::ptr::null(),
             &mut out_error,
         );
         assert!(!ok);
@@ -1475,6 +1475,7 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(
             builder,
             std::ptr::null_mut(),
+            std::ptr::null(),
             &mut out_error,
         );
         assert!(!ok);
@@ -1672,6 +1673,7 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(
             builder,
             pre_trade_policy,
+            std::ptr::null(),
             std::ptr::null_mut(),
         );
         assert!(ok, "{}", cstr_to_string(std::ptr::null_mut()));
@@ -1695,6 +1697,7 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(
             builder,
             account_policy,
+            std::ptr::null(),
             std::ptr::null_mut(),
         );
         assert!(ok, "{}", cstr_to_string(std::ptr::null_mut()));
@@ -1740,6 +1743,7 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(
             builder,
             check_policy,
+            std::ptr::null(),
             std::ptr::null_mut(),
         );
         assert!(ok, "{}", cstr_to_string(std::ptr::null_mut()));
@@ -1811,6 +1815,7 @@ mod tests {
         assert!(openpit_engine_builder_add_pre_trade_policy(
             builder,
             pre_trade_policy,
+            std::ptr::null(),
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(pre_trade_policy);
@@ -1833,6 +1838,7 @@ mod tests {
         assert!(openpit_engine_builder_add_pre_trade_policy(
             builder,
             account_policy,
+            std::ptr::null(),
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(account_policy);
@@ -1917,6 +1923,7 @@ mod tests {
                 user_data: 0,
                 code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
                 scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             },
         );
         rejects
@@ -1943,6 +1950,7 @@ mod tests {
             assert!(openpit_engine_builder_add_pre_trade_policy(
                 builder,
                 policy,
+                std::ptr::null(),
                 std::ptr::null_mut()
             ));
             openpit_destroy_pretrade_pre_trade_policy(policy);
@@ -1961,6 +1969,339 @@ mod tests {
         policy: *mut OpenPitPretradePreTradePolicy,
     ) -> *mut crate::engine::OpenPitEngine {
         build_engine_with_custom_policies(&[policy])
+    }
+
+    unsafe extern "C" fn review_start_check_fn(
+        _ctx: *const OpenPitPretradeContext,
+        _order: *const OpenPitOrder,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let mode = unsafe { *user_data.cast::<crate::reject::OpenPitPretradeRuleMode>() };
+        if mode == crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT {
+            return accepted_rejects();
+        }
+        let list = crate::reject::openpit_create_pretrade_reject_list(1);
+        assert!(crate::reject::openpit_pretrade_reject_list_push(
+            list,
+            crate::reject::OpenPitPretradeReject {
+                policy: OpenPitStringView::from_utf8("custom.review"),
+                reason: OpenPitStringView::from_utf8("limit breached"),
+                details: OpenPitStringView::from_utf8("requires confirmation"),
+                user_data: 42,
+                code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                mode,
+            },
+        ));
+        list
+    }
+
+    unsafe extern "C" fn review_main_check_fn(
+        ctx: *const OpenPitPretradeContext,
+        order: *const OpenPitOrder,
+        _mutations: *mut OpenPitMutations,
+        out_result: *mut OpenPitPretradePreTradeResult,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        unsafe {
+            assert!(
+                crate::account_outcome::openpit_pretrade_pre_trade_result_push_lock_price(
+                    out_result,
+                    crate::param::OpenPitParamPrice(
+                        openpit::param::Price::from_str("125")
+                            .expect("price")
+                            .to_decimal()
+                            .into(),
+                    ),
+                    std::ptr::null_mut(),
+                )
+            );
+            assert!(
+                crate::account_outcome::openpit_pretrade_pre_trade_result_push_account_adjustment(
+                    out_result,
+                    crate::account_outcome::OpenPitAccountOutcomeEntry {
+                        asset: OpenPitStringView::from_utf8("USD"),
+                        held: crate::account_outcome::OpenPitOutcomeAmountOptional {
+                            is_set: true,
+                            value: crate::account_outcome::OpenPitOutcomeAmount {
+                                delta: crate::param::OpenPitParamPositionSize(
+                                    openpit::param::PositionSize::from_str("10")
+                                        .expect("position size")
+                                        .to_decimal()
+                                        .into(),
+                                ),
+                                absolute: crate::param::OpenPitParamPositionSize(
+                                    openpit::param::PositionSize::from_str("20")
+                                        .expect("position size")
+                                        .to_decimal()
+                                        .into(),
+                                ),
+                            },
+                        },
+                        ..Default::default()
+                    },
+                    std::ptr::null_mut(),
+                )
+            );
+            review_start_check_fn(ctx, order, user_data)
+        }
+    }
+
+    fn build_engine_with_review_policy(
+        mode: &mut crate::reject::OpenPitPretradeRuleMode,
+    ) -> *mut crate::engine::OpenPitEngine {
+        let policy = unsafe {
+            openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
+                OpenPitStringView::from_utf8("custom.review"),
+                7,
+                Some(review_start_check_fn),
+                Some(review_start_check_fn),
+                Some(review_main_check_fn),
+                Some(review_main_check_fn),
+                None,
+                None,
+                None,
+                custom_free_user_data_fn,
+                (mode as *mut crate::reject::OpenPitPretradeRuleMode).cast(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!policy.is_null());
+        build_engine_with_custom_policy(policy)
+    }
+
+    fn assert_review_list(
+        list: *mut OpenPitPretradeRejectList,
+        expected_len: usize,
+        mode: crate::reject::OpenPitPretradeRuleMode,
+    ) {
+        assert!(!list.is_null());
+        assert_eq!(
+            crate::reject::openpit_pretrade_reject_list_len(list),
+            expected_len
+        );
+        for index in 0..expected_len {
+            let mut mark = crate::reject::OpenPitPretradeReject {
+                policy: OpenPitStringView::not_set(),
+                reason: OpenPitStringView::not_set(),
+                details: OpenPitStringView::not_set(),
+                user_data: 0,
+                code: 0,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            };
+            assert!(crate::reject::openpit_pretrade_reject_list_get(
+                list, index, &mut mark
+            ));
+            assert_eq!(mark.mode, mode);
+            assert_eq!(mark.user_data, 42);
+            assert_eq!(string_view_to_string(mark.policy), "custom.review");
+            assert_eq!(string_view_to_string(mark.reason), "limit breached");
+        }
+        crate::reject::openpit_destroy_pretrade_reject_list(list);
+    }
+
+    #[test]
+    fn review_getters_return_detached_lists_for_empty_and_review_results() {
+        use crate::engine::*;
+        use crate::reject::*;
+
+        for mut mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = build_engine_with_review_policy(&mut mode);
+            let order = sample_order();
+            let order = export_order(&order);
+            let mut request = std::ptr::null_mut();
+            assert_eq!(
+                openpit_engine_start_pre_trade(
+                    engine,
+                    &order,
+                    &mut request,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                OpenPitPretradeStatus::Passed
+            );
+            let start_marks =
+                openpit_pretrade_pre_trade_request_get_reviews(request, std::ptr::null_mut());
+            let mut reservation = std::ptr::null_mut();
+            assert_eq!(
+                openpit_pretrade_pre_trade_request_execute(
+                    request,
+                    &mut reservation,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                OpenPitPretradeStatus::Passed
+            );
+            openpit_destroy_pretrade_pre_trade_request(request);
+            let marks = openpit_pretrade_pre_trade_reservation_get_reviews(reservation);
+            openpit_destroy_pretrade_pre_trade_reservation(reservation);
+
+            let mut report = std::ptr::null_mut();
+            assert!(openpit_engine_execute_pre_trade_dry_run(
+                engine,
+                &order,
+                &mut report,
+                std::ptr::null_mut(),
+            ));
+            assert!(openpit_pretrade_pre_trade_dry_run_report_is_pass(report));
+            let rejects = openpit_pretrade_pre_trade_dry_run_report_get_rejects(report);
+            assert_eq!(openpit_pretrade_reject_list_len(rejects), 0);
+            openpit_destroy_pretrade_reject_list(rejects);
+            let dry_marks = openpit_pretrade_pre_trade_dry_run_report_get_reviews(report);
+            openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+            openpit_destroy_engine(engine);
+
+            let count = usize::from(mode != OPENPIT_PRETRADE_RULE_MODE_REJECT);
+            let total = if mode == OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD {
+                2
+            } else {
+                count
+            };
+            assert_review_list(start_marks, count, mode);
+            assert_review_list(marks, total, mode);
+            assert_review_list(dry_marks, total, mode);
+        }
+    }
+
+    #[test]
+    fn request_review_getter_reports_consumed_request() {
+        use crate::engine::*;
+        use crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD;
+
+        let mut mode = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD;
+        let engine = build_engine_with_review_policy(&mut mode);
+        let order = sample_order();
+        let order = export_order(&order);
+        let mut request = std::ptr::null_mut();
+        assert_eq!(
+            openpit_engine_start_pre_trade(
+                engine,
+                &order,
+                &mut request,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ),
+            OpenPitPretradeStatus::Passed
+        );
+        let mut reservation = std::ptr::null_mut();
+        assert_eq!(
+            openpit_pretrade_pre_trade_request_execute(
+                request,
+                &mut reservation,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ),
+            OpenPitPretradeStatus::Passed
+        );
+        let mut error = std::ptr::null_mut();
+        assert!(openpit_pretrade_pre_trade_request_get_reviews(request, &mut error).is_null());
+        assert_eq!(cstr_to_string(error), "pre-trade request already consumed");
+        openpit_destroy_pretrade_pre_trade_request(request);
+        openpit_destroy_pretrade_pre_trade_reservation(reservation);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn request_review_getter_reports_null_request() {
+        use crate::engine::openpit_pretrade_pre_trade_request_get_reviews;
+
+        let mut error = std::ptr::null_mut();
+        assert!(
+            openpit_pretrade_pre_trade_request_get_reviews(std::ptr::null(), &mut error).is_null()
+        );
+        assert_eq!(cstr_to_string(error), "request is null");
+    }
+
+    #[test]
+    fn dry_run_review_keeps_the_same_policy_result_as_live_execution() {
+        use crate::account_outcome::*;
+        use crate::engine::*;
+        use crate::pre_trade_lock::*;
+
+        let mut mode = crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD;
+        let engine = build_engine_with_review_policy(&mut mode);
+        let order = sample_order();
+        let order = export_order(&order);
+        let mut reservation = std::ptr::null_mut();
+        assert_eq!(
+            openpit_engine_execute_pre_trade(
+                engine,
+                &order,
+                &mut reservation,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ),
+            OpenPitPretradeStatus::Passed
+        );
+        let mut report = std::ptr::null_mut();
+        assert!(openpit_engine_execute_pre_trade_dry_run(
+            engine,
+            &order,
+            &mut report,
+            std::ptr::null_mut(),
+        ));
+        let live_lock = openpit_pretrade_pre_trade_reservation_get_lock(reservation);
+        let dry_lock = openpit_pretrade_pre_trade_dry_run_report_get_lock(report);
+        for lock in [live_lock, dry_lock] {
+            assert_eq!(openpit_pretrade_pre_trade_lock_len(lock), 1);
+            let mut price = crate::param::OpenPitParamPrice::default();
+            let mut prices = std::ptr::null_mut();
+            assert_eq!(
+                openpit_pretrade_pre_trade_lock_prices_of(
+                    lock,
+                    7,
+                    &mut price,
+                    &mut prices,
+                    std::ptr::null_mut(),
+                ),
+                OpenPitPretradePreTradeLockPricesStatus::One
+            );
+            assert_eq!(
+                price.to_param().expect("price"),
+                openpit::param::Price::from_str("125").expect("price")
+            );
+            openpit_destroy_pretrade_pre_trade_lock(lock);
+        }
+        let live_outcomes =
+            openpit_pretrade_pre_trade_reservation_get_account_adjustments(reservation);
+        let dry_outcomes =
+            openpit_pretrade_pre_trade_dry_run_report_get_account_adjustments(report);
+        for outcomes in [live_outcomes, dry_outcomes] {
+            assert_eq!(
+                unsafe { openpit_account_adjustment_outcome_list_len(outcomes) },
+                1
+            );
+            let mut outcome = OpenPitAccountAdjustmentOutcome::default();
+            assert!(unsafe {
+                openpit_account_adjustment_outcome_list_get(outcomes, 0, &mut outcome)
+            });
+            assert_eq!(outcome.policy_group_id, 7);
+            assert_eq!(string_view_to_string(outcome.entry.asset), "USD");
+            assert!(outcome.entry.held.is_set);
+            assert_eq!(
+                outcome.entry.held.value.delta.to_param().expect("delta"),
+                openpit::param::PositionSize::from_str("10").expect("delta")
+            );
+            assert_eq!(
+                outcome
+                    .entry
+                    .held
+                    .value
+                    .absolute
+                    .to_param()
+                    .expect("absolute"),
+                openpit::param::PositionSize::from_str("20").expect("absolute")
+            );
+            unsafe { openpit_destroy_account_adjustment_outcome_list(outcomes) };
+        }
+        openpit_destroy_pretrade_pre_trade_reservation(reservation);
+        openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+        openpit_destroy_engine(engine);
     }
 
     fn build_engine_with_account_rate_limit(
@@ -1986,6 +2327,7 @@ mod tests {
                 1,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null_mut(),
             )
         });

@@ -19,9 +19,9 @@
  * `@openpit/engine/reject` - business rejects and account-block types.
  *
  * Exposes the `Reject` value returned on a pipeline result, the stable
- * {@link RejectCode} and {@link RejectScope} vocabularies, the out-of-band
- * `AccountBlock`, and the `AccountControl` handle a policy uses to block
- * accounts from a callback.
+ * {@link RejectCode}, {@link RejectScope}, and {@link RuleMode} vocabularies,
+ * the out-of-band `AccountBlock`, and the `AccountControl` handle a policy
+ * uses to block accounts from a callback.
  *
  * A reject is NOT an exception: `engine.startPreTrade()` and `request.execute()`
  * return rejects on the result object. The {@link AccountBlockError} thrown by
@@ -57,7 +57,7 @@ export {
 
 // String-discriminated reject vocabularies: value sets plus derived union
 // types.
-export { RejectCode, RejectScope } from "../types.js";
+export { RejectCode, RejectScope, RuleMode } from "../types.js";
 
 // The admin-block error and its discriminant. Canonically part of the typed
 // error hierarchy, re-exported here as reject-domain types (same class

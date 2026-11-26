@@ -53,8 +53,152 @@ import (
 // - https://wiki.openpit.dev/Policy-API/
 // - https://wiki.openpit.dev/Pre-trade-Pipeline/
 // - https://wiki.openpit.dev/Pre-Trade-Lock/
+// - https://wiki.openpit.dev/Review-Mode/
 // - https://wiki.openpit.dev/Spot-Funds/
 // If this file changes, update every linked documentation snippet.
+
+// Source: https://wiki.openpit.dev/Review-Mode/#go
+// Keep this example in sync with the matching wiki example.
+type ApprovalPolicy struct{}
+
+func (*ApprovalPolicy) Close() {}
+
+func (*ApprovalPolicy) Name() string { return "ApprovalPolicy" }
+
+func (*ApprovalPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
+func (*ApprovalPolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
+	return nil
+}
+
+func (p *ApprovalPolicy) PerformPreTradeCheck(
+	_ pretrade.Context,
+	_ model.Order,
+	_ tx.Mutations,
+	_ pretrade.Result,
+) []reject.Reject {
+	return reject.NewSingleItemList(
+		reject.CodeComplianceRestriction,
+		p.Name(),
+		"approval required",
+		"obtain a human decision before sending",
+		reject.ScopeOrder,
+	)
+}
+
+func (*ApprovalPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
+	return nil
+}
+
+func (*ApprovalPolicy) ApplyAccountAdjustment(
+	accountadjustment.Context,
+	param.AccountID,
+	model.AccountAdjustment,
+	tx.Mutations,
+	pretrade.AccountOutcomes,
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
+}
+
+func runReviewExample() error {
+	policy := &ApprovalPolicy{}
+	engine, err := NewEngineBuilder().FullSync().
+		PreTrade(
+			policy,
+			InstanceName("approval"),
+			InstanceMode(reject.RuleModeReviewWithoutHold),
+		).
+		Build()
+	if err != nil {
+		return err
+	}
+	defer engine.Stop()
+
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		return err
+	}
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		return err
+	}
+	quantity, err := param.NewQuantityFromString("10")
+	if err != nil {
+		return err
+	}
+	price, err := param.NewPriceFromString("25")
+	if err != nil {
+		return err
+	}
+	order := model.NewOrder()
+	operation := order.EnsureOperationView()
+	operation.SetInstrument(param.NewInstrument(aapl, usd))
+	operation.SetAccountID(param.NewAccountIDFromUint64(99224416))
+	operation.SetSide(param.SideBuy)
+	operation.SetTradeAmount(param.NewQuantityTradeAmount(quantity))
+	operation.SetPrice(price)
+
+	sent := 0
+	run := func(order model.Order) ([]reject.Reject, error) {
+		reservation, rejects, err := engine.ExecutePreTrade(order)
+		if err != nil {
+			return nil, err
+		}
+		if len(rejects) != 0 {
+			return nil, fmt.Errorf("order rejected: %v", rejects)
+		}
+		defer reservation.Close()
+		reviews, err := reservation.Reviews()
+		if err != nil {
+			return nil, err
+		}
+		if len(reviews) != 0 {
+			reservation.CommitAndClose()
+			return reviews, nil
+		}
+
+		// Stand-in for a successful venue send.
+		sent++
+		reservation.CommitAndClose()
+		return nil, nil
+	}
+
+	reviews, err := run(order)
+	if err != nil {
+		return err
+	}
+	if len(reviews) != 1 || reviews[0].Mode != reject.RuleModeReviewWithoutHold {
+		return fmt.Errorf("expected one review mark without hold, got %v", reviews)
+	}
+	if sent != 0 {
+		return fmt.Errorf("expected an unsent order")
+	}
+
+	// A human approved the same order.
+	review := order.EnsureReviewView()
+	review.SetConfirmed(true)
+	reviews, err = run(order)
+	if err != nil {
+		return err
+	}
+	if len(reviews) != 0 || sent != 1 {
+		return fmt.Errorf("expected the confirmed order to pass and be sent once")
+	}
+	return nil
+}
+
+func TestExampleWikiReviewMode(t *testing.T) {
+	if err := runReviewExample(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // --- Policy-API: Custom Order and Execution Report Models ---
 
@@ -865,6 +1009,20 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	}
 	defer reservation.Close()
 
+	reviews, err := reservation.Reviews()
+	if err != nil {
+		t.Fatalf("Reviews() error = %v", err)
+	}
+	if len(reviews) > 0 {
+		// Leave unsent. After approval, set confirmation and rerun the order:
+		// review := order.EnsureReviewView()
+		// review.SetConfirmed(true)
+		reservation.Commit()
+		return
+	}
+
+	// 5. If the request is successfully sent to the venue, it must be committed.
+	// The rollback must be called otherwise to revert all performed reservations.
 	reservation.Commit()
 
 	report := model.NewExecutionReport()
@@ -2812,13 +2970,20 @@ func TestExampleWikiDryRunVerdict(t *testing.T) {
 	}
 	defer report.Close()
 
+	reviews, err := report.Reviews()
+	if err != nil {
+		t.Fatalf("Reviews() error = %v", err)
+	}
 	pass, err := report.IsPass()
 	if err != nil {
 		t.Fatalf("IsPass() error = %v", err)
 	}
-	if pass {
-		fmt.Println("order would be admitted")
-	} else {
+	switch {
+	case len(reviews) > 0:
+		fmt.Println("order would require a human decision before sending")
+	case pass:
+		fmt.Println("order had no rejects or review marks in the simulation")
+	default:
 		rejects, err := report.Rejects()
 		if err != nil {
 			t.Fatalf("Rejects() error = %v", err)

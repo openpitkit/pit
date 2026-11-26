@@ -53,7 +53,7 @@ from .._openpit import (
 )
 from ..param import Price
 from . import policies
-from ._enum import RejectCode, RejectScope
+from ._enum import RejectCode, RejectScope, RuleMode
 from .policy import (
     Context,
     Policy,
@@ -70,6 +70,7 @@ DEFAULT_POLICY_GROUP_ID: PolicyGroupId = _DEFAULT_POLICY_GROUP_ID
 
 RejectCode.__module__ = __name__
 RejectScope.__module__ = __name__
+RuleMode.__module__ = __name__
 
 
 Context.__doc__ = """
@@ -97,12 +98,16 @@ ExecuteResult.__doc__ = """
 Result of ``Request.execute`` or ``Engine.execute_pre_trade``.
 
 Attributes:
-    ok: ``True`` when all evaluated stages accepted the order.
+    ok: ``True`` when the evaluated stages produced no effective rejects.
+        Same as ``bool(result)``. Check ``reviews`` before submission.
     reservation: ``Reservation`` on success, otherwise ``None``.
     rejects: Ordered list of business rejects when ``ok`` is ``False``.
+    reviews: Ordered review marks. A non-empty list requires a human decision
+        before submission. See ``Reservation.reviews`` for the review lifecycle.
 
-Successful results must be finalized by committing or rolling back the
-reservation. Failed results never contain a reservation.
+If there are review marks, commit the reservation immediately and keep the
+order unsent. The reservation keeps holds and policy results only if every
+review mark is with-hold.
 """
 
 PostTradeResult.__doc__ = """
@@ -156,7 +161,7 @@ does not re-arm account PnL or another position.
 """
 
 Reject.__doc__ = """
-Business reject returned by start-stage or main-stage checks.
+Reject or review mark returned by start-stage or main-stage checks.
 
 Rejects are normal policy outcomes, not exceptional failures.
 
@@ -166,6 +171,12 @@ Attributes:
     details: Diagnostic text intended for logs and operators.
     policy: Name of the policy that produced the reject.
     scope: ``RejectScope.ORDER`` or ``RejectScope.ACCOUNT``.
+    mode: ``RuleMode`` for the pre-trade start and main stages. Both stages
+        report evaluation failures as ``RuleMode.REJECT``. Any
+        account-adjustment entry rejects the batch and is reported as
+        ``RuleMode.REJECT``. Drop copy applies bookkeeping in every mode,
+        aborts on evaluation failures, and omits review marks and their
+        account blocks.
     user_data: Opaque caller-defined integer token copied from custom rejects.
 """
 
@@ -175,21 +186,29 @@ Deferred main-stage request handle produced by ``Engine.start_pre_trade``.
 The handle is single-use. Calling ``execute`` more than once raises
 ``RuntimeError``. Keep the handle only while the caller is ready to enter the
 main stage; it represents a snapshot of the submitted order.
+
+``reviews`` contains start-stage review marks and raises ``RuntimeError``
+after execution. Execute the request and inspect the result's ``reviews``
+before acting on the order.
 """
 
 Reservation.__doc__ = """
 Single-use reservation handle returned by successful main-stage execution.
 
-Call ``commit`` only after the order has been accepted by the downstream venue
-or transport. Call ``rollback`` when submission fails or the caller decides not
-to send the order. Calling either finalizer more than once raises
-``RuntimeError``. Both accessors below raise ``RuntimeError`` after the
-reservation is finalized, so read them before committing or rolling back.
+When ``reviews`` is empty, call ``commit`` after the downstream venue or
+transport accepts the order. Call ``rollback`` if submission fails or the
+order will not be sent. Calling either finalizer more than once raises
+``RuntimeError``. Read the accessors before finalizing the reservation.
 
 Attributes:
     lock: Current reservation ``Lock`` payload.
     account_adjustments: List of ``AccountAdjustmentOutcome`` objects captured
         by the reservation.
+    reviews: Review marks from the evaluated stages. A non-empty list requires
+        a human decision before submission. Commit immediately and keep the
+        order unsent. The reservation keeps holds and policy results only if
+        every review mark is with-hold. Approval requires a fresh run with
+        ``OrderReview(confirmed=True)``.
 """
 
 DropCopyOperation.__doc__ = """
@@ -231,9 +250,13 @@ StartResult.__doc__ = """
 Result of ``Engine.start_pre_trade``.
 
 Attributes:
-    ok: ``True`` when start-stage checks accepted the order.
+    ok: ``True`` when the start stage produced no effective rejects. Same as
+        ``bool(result)``. Check ``reviews`` before submission.
     request: Deferred ``Request`` on success, otherwise ``None``.
     rejects: Merged start-stage reject list when ``ok`` is ``False``.
+    reviews: Start-stage review marks. A non-empty list requires a human
+        decision before submission. Execute the request to get the final
+        verdict and inspect the executed reservation's ``reviews``.
 """
 
 AccountAdjustmentBatchResult.__doc__ = """
@@ -268,10 +291,13 @@ engine state: no rate-limit budget is spent, no reservation or hold is
 applied, and no account is blocked.
 
 Attributes:
-    is_pass: ``True`` when the order would have been admitted by all stages.
-        Equivalent to ``bool(report)``.
+    is_pass: ``True`` when the evaluated stages would produce no effective
+        rejects. Same as ``bool(report)``. Check ``reviews`` before submission.
     rejects: List of ``Reject`` objects when ``is_pass`` is ``False``,
         otherwise ``None``.
+    reviews: Review marks that a live run would return. A non-empty list
+        requires a human decision before submission. In a live run, follow
+        the lifecycle described by ``Reservation.reviews``.
     lock: ``Lock`` the main stage would have produced. Empty when the start
         stage would have rejected or no policy locks a price.
     account_adjustments: List of ``AccountAdjustmentOutcome`` objects the
@@ -334,6 +360,7 @@ __all__ = [
     "Rejects",
     "RejectCode",
     "RejectScope",
+    "RuleMode",
     "Request",
     "Reservation",
     "StartResult",

@@ -164,7 +164,12 @@ order = openpit.Order(
 )
 
 result = engine.execute_pre_trade(order=order)
-if result.ok:
+if result.reviews:
+    # Keep the order unsent; after approval, rerun with
+    # OrderReview(confirmed=True). Set already_held=True if the
+    # reservation retained a hold.
+    result.reservation.commit()
+elif result.ok:
     # Send the order to the venue, then commit or roll the reservation back.
     result.reservation.commit()
 else:

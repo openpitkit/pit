@@ -102,12 +102,12 @@ validated strings. The full input contract is on
 <!-- Test mirror: bindings/js/tests/examples.readme.test.ts -->
 
 ```ts
+import { Engine } from "@openpit/engine";
+import { TradeAmount } from "@openpit/engine/param";
 import {
-  Engine,
   OrderSizeBrokerBarrier,
-  TradeAmount,
   buildOrderSizeLimit,
-} from "@openpit/engine";
+} from "@openpit/engine/pretrade/policies";
 
 // Build the engine once, at start-up: one broker-wide fat-finger cap.
 const engine = Engine.builder()
@@ -132,7 +132,11 @@ const result = engine.executePreTrade({
   },
 });
 
-if (result.ok) {
+if (result.reviews.length > 0) {
+  // Leave unsent. After approval, rerun with review.confirmed set.
+  // Set review.alreadyHeld as well if this reservation retained a hold.
+  result.reservation?.commit();
+} else if (result.ok) {
   // Send the order to the venue, then commit or roll the reservation back.
   result.reservation?.commit();
 } else {

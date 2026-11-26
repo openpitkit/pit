@@ -26,11 +26,11 @@ use openpit::{
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
     HasAccountAdjustmentPnlOperation, HasAccountAdjustmentPositionLeverage, HasAccountId,
-    HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
-    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
-    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
-    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
+    HasAlreadyHeld, HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition,
+    HasCollateralAsset, HasConfirmed, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
+    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
     HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
@@ -38,6 +38,7 @@ use crate::{
     AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
     ExecutionReportFillAccess, ExecutionReportOperationAccess, ExecutionReportPositionImpactAccess,
     FinancialImpactAccess, OrderMarginAccess, OrderOperationAccess, OrderPositionAccess,
+    OrderReviewAccess,
 };
 
 /// Root order aggregate carrying access groups for all order fields.
@@ -46,6 +47,9 @@ pub struct Order {
     pub operation: OrderOperationAccess,
     pub position: OrderPositionAccess,
     pub margin: OrderMarginAccess,
+    /// Review parameters. An absent group means the order is unconfirmed
+    /// and not held.
+    pub review: OrderReviewAccess,
 }
 
 impl Default for Order {
@@ -54,6 +58,7 @@ impl Default for Order {
             operation: OrderOperationAccess::Absent,
             position: OrderPositionAccess::Absent,
             margin: OrderMarginAccess::Absent,
+            review: OrderReviewAccess::Absent,
         }
     }
 }
@@ -97,6 +102,18 @@ impl HasOrderPositionSide for Order {
 impl HasReduceOnly for Order {
     fn reduce_only(&self) -> Result<bool, RequestFieldAccessError> {
         self.position.reduce_only()
+    }
+}
+
+impl HasConfirmed for Order {
+    fn confirmed(&self) -> Result<bool, RequestFieldAccessError> {
+        self.review.confirmed()
+    }
+}
+
+impl HasAlreadyHeld for Order {
+    fn already_held(&self) -> Result<bool, RequestFieldAccessError> {
+        self.review.already_held()
     }
 }
 
@@ -424,6 +441,18 @@ impl<Request: HasReduceOnly, Payload> HasReduceOnly for RequestWithPayload<Reque
     }
 }
 
+impl<Request: HasConfirmed, Payload> HasConfirmed for RequestWithPayload<Request, Payload> {
+    fn confirmed(&self) -> Result<bool, RequestFieldAccessError> {
+        self.request.confirmed()
+    }
+}
+
+impl<Request: HasAlreadyHeld, Payload> HasAlreadyHeld for RequestWithPayload<Request, Payload> {
+    fn already_held(&self) -> Result<bool, RequestFieldAccessError> {
+        self.request.already_held()
+    }
+}
+
 impl<Request: HasClosePosition, Payload> HasClosePosition for RequestWithPayload<Request, Payload> {
     fn close_position(&self) -> Result<bool, RequestFieldAccessError> {
         self.request.close_position()
@@ -668,7 +697,7 @@ mod tests {
     use crate::{
         AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess,
         AccountAdjustmentOperationAccess, OrderMarginAccess, OrderOperationAccess,
-        OrderPositionAccess, PopulatedOrderOperation,
+        OrderPositionAccess, PopulatedOrderOperation, PopulatedOrderReview,
     };
 
     fn populated_order() -> Order {
@@ -687,6 +716,7 @@ mod tests {
             }),
             position: OrderPositionAccess::Absent,
             margin: OrderMarginAccess::Absent,
+            review: OrderReviewAccess::Absent,
         }
     }
 
@@ -725,6 +755,28 @@ mod tests {
     fn order_absent_position_returns_none_for_optional_side() {
         let order = populated_order();
         assert_eq!(order.position_side().expect("position_side"), None);
+    }
+
+    #[test]
+    fn order_and_payload_wrapper_forward_confirmation() {
+        let mut order = populated_order();
+        assert_eq!(order.confirmed(), Ok(false));
+        assert_eq!(order.already_held(), Ok(false));
+        let wrapped = RequestWithPayload::new(order.clone(), ());
+        assert_eq!(wrapped.confirmed(), Ok(false));
+        assert_eq!(wrapped.already_held(), Ok(false));
+
+        for (confirmed, already_held) in [(true, false), (false, true)] {
+            order.review = OrderReviewAccess::Populated(PopulatedOrderReview {
+                confirmed,
+                already_held,
+            });
+            assert_eq!(order.confirmed(), Ok(confirmed));
+            assert_eq!(order.already_held(), Ok(already_held));
+            let wrapped = RequestWithPayload::new(order.clone(), ());
+            assert_eq!(wrapped.confirmed(), Ok(confirmed));
+            assert_eq!(wrapped.already_held(), Ok(already_held));
+        }
     }
 
     #[test]

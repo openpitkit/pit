@@ -115,7 +115,7 @@ pub fn is_reject_code_evaluation_failure(value: &str) -> Result<bool, JsValue> {
     Ok(parse_reject_code(value)?.is_evaluation_failure())
 }
 
-/// Read-only rejection record produced by the engine.
+/// Read-only reject or review mark produced by the engine.
 #[wasm_bindgen(js_name = Reject)]
 #[derive(Clone)]
 pub struct JsReject {
@@ -124,6 +124,7 @@ pub struct JsReject {
     details: String,
     policy: String,
     scope: String,
+    mode: String,
     user_data: u64,
 }
 
@@ -167,6 +168,20 @@ impl JsReject {
         self.scope.clone()
     }
 
+    /// The reported rule mode.
+    ///
+    /// Start, execute, and dry-run results report evaluation failures as
+    /// `"Reject"`. An account-adjustment batch fails on any entry, including
+    /// review marks, and reports every entry of a failed batch as `"Reject"`.
+    #[wasm_bindgen(
+        getter,
+        js_name = mode,
+        unchecked_return_type = "import(\"../types.js\").RuleMode"
+    )]
+    pub fn mode(&self) -> String {
+        self.mode.clone()
+    }
+
     /// The opaque caller-defined token (`0` means unset) as a `bigint`.
     ///
     /// The core token is `usize`, so on wasm32 this is a 32-bit value.
@@ -190,6 +205,7 @@ impl JsReject {
                 RejectScope::Account => "account",
             }
             .to_owned(),
+            mode: reject.mode.as_str().to_owned(),
             user_data: reject.user_data as u64,
         }
     }

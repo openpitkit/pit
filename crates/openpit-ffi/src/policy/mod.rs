@@ -593,12 +593,14 @@ fn get_policy_arc<P: ?Sized>(
 pub extern "C" fn openpit_engine_builder_add_pre_trade_policy(
     builder: *mut crate::engine::OpenPitEngineBuilder,
     policy: *mut OpenPitPretradePreTradePolicy,
+    instance: *const crate::engine::OpenPitPolicyInstance,
     out_error: OpenPitOutError,
 ) -> bool {
     let result = get_policy_arc(builder, policy).and_then(|(b, policy)| {
         crate::engine::add_pre_trade_policy_to_builder(
             unsafe { &mut *b },
             DynPreTradePolicy { inner: policy },
+            instance,
         )
     });
     match result {
@@ -760,6 +762,7 @@ mod tests {
                     price: None,
                 }),
                 position: openpit_interop::OrderPositionAccess::Absent,
+                review: openpit_interop::OrderReviewAccess::Absent,
                 margin: openpit_interop::OrderMarginAccess::Absent,
             },
             std::ptr::null_mut(),

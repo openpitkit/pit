@@ -23,8 +23,9 @@ to a downstream venue or broker adapter. A typical flow:
 5. Commit or roll back the returned reservation.
 6. Feed `openpit.ExecutionReport` objects back into the engine.
 
-Pre-trade decisions stay explicit: policy rejects are returned as business
-results, while invalid API usage remains an exception.
+Pre-trade result objects expose both effective rejects and review marks.
+The [engine guide](guides/engine.md) describes instance modes and the
+confirmed rerun. Invalid API usage raises an exception.
 
 ## Key features
 
@@ -67,17 +68,21 @@ order = openpit.Order(
 )
 
 result = engine.execute_pre_trade(order=order)
-if not result:
-    raise RuntimeError(result.rejects[0].reason)
-
-try:
-    # Replace pass with the application's venue-send call.
-    pass
-except Exception:
-    result.reservation.rollback()
-    raise
-else:
+if result.reviews:
+    # Keep the order unsent; after approval, rerun with
+    # OrderReview(confirmed=True).
     result.reservation.commit()
+elif result.ok:
+    try:
+        # Replace pass with the application's venue-send call.
+        pass
+    except Exception:
+        result.reservation.rollback()
+        raise
+    else:
+        result.reservation.commit()
+else:
+    raise RuntimeError(result.rejects[0].reason)
 ```
 
 ```{toctree}

@@ -31,6 +31,7 @@
 // - https://wiki.openpit.dev/Policies/
 // - https://wiki.openpit.dev/Spot-Funds/
 // - https://wiki.openpit.dev/Policy-API/
+// - https://wiki.openpit.dev/Review-Mode/
 //
 // Run `npm run build` first: these tests import the built package.
 // Imports are hoisted because TypeScript forbids in-body imports; everything
@@ -83,7 +84,7 @@ import {
   RateLimitBrokerBarrier,
 } from "@openpit/engine/pretrade/policies";
 import { Quote, QuoteTtl } from "@openpit/engine/marketdata";
-import { AccountBlock } from "@openpit/engine/reject";
+import { AccountBlock, RuleMode } from "@openpit/engine/reject";
 import { type AccountAdjustmentContext } from "@openpit/engine/accountadjustment";
 
 // A structurally valid AAPL/USD buy used by the pipeline/getting-started
@@ -106,6 +107,79 @@ function sharedOrder(): OrderInit {
 function persistHistoricalOrderMetadata(order: OrderInit): void {
   void order;
 }
+
+describe("Review-Mode.md wiki example", () => {
+  it("sends only after the engine discards review marks on confirmation", () => {
+    // Source: https://wiki.openpit.dev/Review-Mode/#javascript
+    // Keep this example in sync with the matching wiki example.
+    const state = { sent: 0 };
+    const policy: Policy = {
+      name: "ApprovalPolicy",
+      checkPreTradeStart: () => [],
+      performPreTradeCheck() {
+        return {
+          rejects: [
+            {
+              code: "ComplianceRestriction",
+              reason: "approval required",
+              details: "obtain a human decision before sending",
+            },
+          ],
+        };
+      },
+    };
+
+    const engine = Engine.builder()
+      .preTrade(policy, { name: "approval", mode: RuleMode.ReviewWithoutHold })
+      .build();
+    const order = new Order();
+    order.operation = {
+      underlyingAsset: "AAPL",
+      settlementAsset: "USD",
+      accountId: 99_224_416n,
+      side: "BUY",
+      tradeAmount: TradeAmount.quantity("10"),
+      price: "25",
+    };
+
+    function run(order: Order) {
+      const result = engine.executePreTrade(order);
+      const reservation = result.reservation;
+      if (!result.ok || !reservation) {
+        throw new Error(`order rejected: ${result.rejects[0]?.reason}`);
+      }
+      const reviews = result.reviews;
+      if (reviews.length > 0) {
+        reservation.commit();
+        return reviews;
+      }
+
+      // Stand-in for a successful venue send.
+      state.sent++;
+      reservation.commit();
+      return reviews;
+    }
+
+    const reviews = run(order);
+    if (
+      reviews.length !== 1 ||
+      reviews[0]?.mode !== RuleMode.ReviewWithoutHold
+    ) {
+      throw new Error("expected one review mark without hold");
+    }
+    const sentBeforeApproval = state.sent;
+    if (sentBeforeApproval !== 0) {
+      throw new Error("expected an unsent order");
+    }
+
+    // A human approved the same order.
+    const confirmedOrder = order.clone();
+    confirmedOrder.review = { confirmed: true };
+    if (run(confirmedOrder).length !== 0 || state.sent !== 1) {
+      throw new Error("expected the confirmed order to pass and be sent once");
+    }
+  });
+});
 
 describe("Domain-Types.md wiki examples", () => {
   it("creates validated value objects", () => {
@@ -428,46 +502,54 @@ describe("Getting-Started.md wiki examples", () => {
     // const execute = engine.executePreTrade(order);
 
     // 5. If the request is successfully sent to the venue, commit; roll back
-    // otherwise to revert all performed reservations.
+    // otherwise to revert all performed reservations. A review mark is not
+    // permission to send: commit now, keep the order unsent, and run it again
+    // with review.confirmed after approval.
     const reservation = execute.reservation;
     if (reservation === undefined) {
       throw new Error("accepted execute result is missing its reservation");
     }
-    try {
-      // sendOrderToVenue(order);
+    if (execute.reviews.length > 0) {
       reservation.commit();
-    } catch (err) {
-      reservation.rollback();
-      throw err;
-    }
+    } else {
+      try {
+        // sendOrderToVenue(order);
+        reservation.commit();
+      } catch (err) {
+        reservation.rollback();
+        throw err;
+      }
 
-    // 6. The order goes to the venue and returns with an execution report.
-    const report: ExecutionReportInit = {
-      operation: {
-        underlyingAsset: "AAPL",
-        settlementAsset: "USD",
-        accountId: 99224416,
-        side: "BUY",
-      },
-      financialImpact: { pnl: "-50", fee: "3.4" },
-    };
+      // 6. The order goes to the venue and returns with an execution report.
+      const report: ExecutionReportInit = {
+        operation: {
+          underlyingAsset: "AAPL",
+          settlementAsset: "USD",
+          accountId: 99224416,
+          side: "BUY",
+        },
+        financialImpact: { pnl: "-50", fee: "3.4" },
+      };
 
-    const result = engine.applyExecutionReport(report);
-    for (const outcome of result.accountPnls) {
-      console.log(`account P&L outcome for ${outcome.accountId.toString()}`);
-    }
-    for (const outcome of result.accountAdjustments) {
-      console.log(`account adjustment from group ${outcome.policyGroupId}`);
-    }
+      const result = engine.applyExecutionReport(report);
+      for (const outcome of result.accountPnls) {
+        console.log(`account P&L outcome for ${outcome.accountId.toString()}`);
+      }
+      for (const outcome of result.accountAdjustments) {
+        console.log(`account adjustment from group ${outcome.policyGroupId}`);
+      }
 
-    // 7. A non-empty accountBlocks means a kill switch has fired for the account.
-    if (result.accountBlocks.length > 0) {
-      console.log("halt new orders until the blocked state is cleared");
+      // 7. A non-empty accountBlocks means a kill switch has fired for the
+      // account.
+      if (result.accountBlocks.length > 0) {
+        console.log("halt new orders until the blocked state is cleared");
+      }
+
+      expect(result.accountBlocks).toHaveLength(0);
     }
 
     expect(start.ok).toBe(true);
     expect(execute.ok).toBe(true);
-    expect(result.accountBlocks).toHaveLength(0);
   });
 
   it("runs the start + main shortcut", () => {

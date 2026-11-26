@@ -25,14 +25,19 @@
 namespace openpit::pretrade {
 
 using RejectScope = ::openpit::reject::RejectScope;
+using RuleMode = ::openpit::reject::RuleMode;
 using RejectCode = ::openpit::reject::RejectCode;
 using Reject = ::openpit::reject::Reject;
 using ::openpit::reject::IsEvaluationFailure;
 
-/// Rejections produced by one custom-policy callback.
+/// Rejects and review marks produced by a custom-policy callback. Pre-trade
+/// and dry-run results expose marks through `Reviews()` when the order passes.
+/// Any entry rejects an account-adjustment batch. Drop-copy neither enforces
+/// nor returns review marks.
 struct PolicyDecision {
   std::vector<Reject> rejects;
 
+  /// Returns whether the decision has any entries, including review marks.
   [[nodiscard]] bool IsRejected() const noexcept { return !rejects.empty(); }
 
   void Push(Reject reject) { rejects.push_back(std::move(reject)); }

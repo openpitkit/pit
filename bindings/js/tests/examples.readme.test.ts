@@ -100,7 +100,11 @@ describe("README Quick Start example", () => {
       },
     });
 
-    if (result.ok) {
+    if (result.reviews.length > 0) {
+      // Leave unsent. After approval, rerun with review.confirmed set.
+      // Set review.alreadyHeld as well if this reservation retained a hold.
+      result.reservation?.commit();
+    } else if (result.ok) {
       // Send the order to the venue, then commit or roll the reservation back.
       result.reservation?.commit();
     } else {

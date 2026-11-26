@@ -769,11 +769,30 @@ TEST(EngineRequest, ExecutePassesThenCommit) {
 
   openpit::pretrade::StartResult start = engine.StartPreTrade(order);
   ASSERT_TRUE(start.request.has_value());
+  EXPECT_TRUE(start.request->Reviews().empty());
 
   openpit::pretrade::ExecuteResult executed = start.request->Execute();
   EXPECT_TRUE(executed.Passed());
   ASSERT_TRUE(executed.reservation.has_value());
+  EXPECT_TRUE(executed.reservation->Reviews().empty());
   EXPECT_NO_THROW(executed.reservation->Commit());
+}
+
+TEST(EngineRequest, ReviewsRejectsEmptyAndConsumedRequests) {
+  const openpit::pretrade::Request empty;
+  EXPECT_THROW(static_cast<void>(empty.Reviews()), openpit::Error);
+
+  Engine engine = SingleOrderEngine();
+  auto started = engine.StartPreTrade(TestOrder(1));
+  ASSERT_TRUE(started.Passed());
+  auto executed = started.request->Execute();
+  ASSERT_TRUE(executed.Passed());
+  try {
+    static_cast<void>(started.request->Reviews());
+    FAIL() << "expected an error for a consumed request";
+  } catch (const openpit::Error& error) {
+    EXPECT_EQ(error.Message(), "pre-trade request already consumed");
+  }
 }
 
 TEST(EngineRequest, SecondDeferredFlowIsRejectedAtStart) {

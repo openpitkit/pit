@@ -417,7 +417,7 @@ func (b *SpotFundsReadyBuilder) PolicyGroupID(groupID model.PolicyGroupID) *Spot
 }
 
 // Build registers the built-in spot funds policy on the given engine builder.
-func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder) error {
+func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
 	var marketDataHandle native.MarketDataService
 	if b.marketData != nil {
 		var err error
@@ -451,6 +451,7 @@ func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder) error {
 		uint8(b.pricingSource),
 		nativeOverrides,
 		native.PolicyGroupID(b.policyGroupID),
+		instance,
 	)
 	runtime.KeepAlive(b)
 	return err
@@ -459,14 +460,14 @@ func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder) error {
 // Build registers the built-in spot funds policy on the given engine builder in
 // limit-only mode (market orders rejected with UnsupportedOrderType).
 // Equivalent to building without calling [SpotFundsBuilder.WithMarketOrders].
-func (b *SpotFundsBuilder) Build(builder native.EngineBuilder) error {
-	return b.builder.Build(builder)
+func (b *SpotFundsBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
+	return b.builder.Build(builder, instance)
 }
 
 // Build registers the built-in spot-funds P&L bounds kill-switch preset on the
 // given engine builder. The preset uses TrackOnly and therefore does not reject
 // reservations for insufficient funds.
-func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBuilder) error {
+func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
 	var marketDataHandle native.MarketDataService
 	if b.marketData != nil {
 		var err error
@@ -483,6 +484,7 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBu
 		b.globalBarrier,
 		b.accountGroupBarriers,
 		b.accountBarriers,
+		instance,
 	)
 	runtime.KeepAlive(b)
 	return err
@@ -491,8 +493,8 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBu
 // Build registers the built-in spot-funds P&L bounds kill-switch preset on the
 // given engine builder. The preset uses TrackOnly and therefore does not reject
 // reservations for insufficient funds.
-func (b *SpotFundsPnlBoundsKillSwitchBuilder) Build(builder native.EngineBuilder) error {
-	return b.builder.Build(builder)
+func (b *SpotFundsPnlBoundsKillSwitchBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
+	return b.builder.Build(builder, instance)
 }
 
 // NativeSpotFundsLimitMode translates a [SpotFundsLimitMode] into the

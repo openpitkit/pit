@@ -21,8 +21,9 @@ use std::ffi::c_void;
 
 use openpit::param::AccountId;
 use openpit_interop::{
-    OrderMarginAccess, OrderOperationAccess, OrderPositionAccess, PopulatedOrderMargin,
-    PopulatedOrderOperation, PopulatedOrderPosition, RequestWithPayload,
+    OrderMarginAccess, OrderOperationAccess, OrderPositionAccess, OrderReviewAccess,
+    PopulatedOrderMargin, PopulatedOrderOperation, PopulatedOrderPosition, PopulatedOrderReview,
+    RequestWithPayload,
 };
 
 use crate::instrument::{import_instrument, parse_asset_view, OpenPitInstrument};
@@ -67,6 +68,19 @@ fn import_position(value: OpenPitOrderPositionOptional) -> Result<OrderPositionA
         position_side: import_position_side(value.value.position_side)?,
         reduce_only: import_bool(value.value.reduce_only)?.unwrap_or(false),
         close_position: import_bool(value.value.close_position)?.unwrap_or(false),
+    }))
+}
+
+fn import_review(value: OpenPitOrderReviewOptional) -> Result<OrderReviewAccess, String> {
+    if !value.is_set {
+        return Ok(OrderReviewAccess::Absent);
+    }
+
+    Ok(OrderReviewAccess::Populated(PopulatedOrderReview {
+        // fallback(approved): NOT_SET in a set review group means not confirmed
+        confirmed: import_bool(value.value.confirmed)?.unwrap_or(false),
+        // fallback(approved): NOT_SET in a set review group means not held
+        already_held: import_bool(value.value.already_held)?.unwrap_or(false),
     }))
 }
 
@@ -133,6 +147,17 @@ pub struct OpenPitOrderMargin {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// Optional pre-trade review group for an order.
+pub struct OpenPitOrderReview {
+    /// Whether the caller confirmed the order. `NOT_SET` means not confirmed.
+    pub confirmed: OpenPitTriBool,
+    /// Whether an earlier committed with-hold review run already holds the
+    /// order's reservation. `NOT_SET` means not held.
+    pub already_held: OpenPitTriBool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 /// Full caller-owned order payload.
 pub struct OpenPitOrder {
     /// Optional main operation group.
@@ -152,6 +177,8 @@ pub struct OpenPitOrder {
     /// receives the carrying value, including policy callbacks and adjustment
     /// callbacks.
     pub user_data: *mut c_void,
+    /// Optional review group. An absent group means not confirmed and not held.
+    pub review: OpenPitOrderReviewOptional,
 }
 
 define_optional!(
@@ -166,6 +193,10 @@ define_optional!(
     optional = OpenPitOrderPositionOptional,
     value = OpenPitOrderPosition
 );
+define_optional!(
+    optional = OpenPitOrderReviewOptional,
+    value = OpenPitOrderReview
+);
 
 pub(crate) fn import_order(value: &OpenPitOrder) -> Result<Order, String> {
     // The engine works with owned domain objects, so decoding a borrowed order
@@ -178,6 +209,7 @@ pub(crate) fn import_order(value: &OpenPitOrder) -> Result<Order, String> {
             },
             position: import_position(value.position)?,
             margin: import_margin(value.margin)?,
+            review: import_review(value.review)?,
         },
         value.user_data,
     ))
@@ -259,11 +291,23 @@ pub(crate) fn export_order(value: &Order) -> OpenPitOrder {
         OrderMarginAccess::Absent => OpenPitOrderMarginOptional::default(),
     };
 
+    let review = match &value.request.review {
+        OrderReviewAccess::Populated(review) => OpenPitOrderReviewOptional {
+            is_set: true,
+            value: OpenPitOrderReview {
+                confirmed: export_bool(review.confirmed),
+                already_held: export_bool(review.already_held),
+            },
+        },
+        OrderReviewAccess::Absent => OpenPitOrderReviewOptional::default(),
+    };
+
     OpenPitOrder {
         operation,
         margin,
         position,
         user_data: value.payload,
+        review,
     }
 }
 
@@ -284,14 +328,15 @@ mod tests {
     use openpit::param::{Asset, Price, Quantity, Side, Volume};
     use openpit::{HasInstrument, HasOrderPrice, HasTradeAmount};
     use openpit_interop::{
-        OrderMarginAccess, OrderOperationAccess, OrderPositionAccess, PopulatedOrderMargin,
-        PopulatedOrderOperation, PopulatedOrderPosition, RequestWithPayload,
+        OrderMarginAccess, OrderOperationAccess, OrderPositionAccess, OrderReviewAccess,
+        PopulatedOrderMargin, PopulatedOrderOperation, PopulatedOrderPosition,
+        PopulatedOrderReview, RequestWithPayload,
     };
 
     use super::{
         export_order, import_order, OpenPitOrder, OpenPitOrderMargin, OpenPitOrderMarginOptional,
         OpenPitOrderOperation, OpenPitOrderOperationOptional, OpenPitOrderPosition,
-        OpenPitOrderPositionOptional,
+        OpenPitOrderPositionOptional, OpenPitOrderReview, OpenPitOrderReviewOptional,
     };
     use crate::param::{
         OpenPitParamAccountIdOptional, OpenPitParamLeverage, OpenPitParamPrice,
@@ -360,6 +405,7 @@ mod tests {
                 },
             },
             user_data: std::ptr::null_mut(),
+            review: OpenPitOrderReviewOptional::default(),
         }
     }
 
@@ -417,6 +463,103 @@ mod tests {
     }
 
     #[test]
+    fn review_group_roundtrip_covers_absent_and_all_tri_bool_values() {
+        use crate::param::{
+            OPENPIT_TRI_BOOL_FALSE, OPENPIT_TRI_BOOL_NOT_SET, OPENPIT_TRI_BOOL_TRUE,
+        };
+        use openpit::{HasAlreadyHeld, HasConfirmed};
+
+        let mut order = sample_order();
+        let imported = import_order(&order).expect("absent group must import");
+        assert_eq!(imported.request.review, OrderReviewAccess::Absent);
+        assert!(!imported.confirmed().expect("absent means not confirmed"));
+        assert_eq!(imported.already_held(), Ok(false));
+        assert!(!export_order(&imported).review.is_set);
+
+        for (
+            confirmed,
+            already_held,
+            expected_confirmed,
+            expected_held,
+            exported_confirmed,
+            exported_held,
+        ) in [
+            (
+                OPENPIT_TRI_BOOL_NOT_SET,
+                OPENPIT_TRI_BOOL_TRUE,
+                false,
+                true,
+                OPENPIT_TRI_BOOL_FALSE,
+                OPENPIT_TRI_BOOL_TRUE,
+            ),
+            (
+                OPENPIT_TRI_BOOL_FALSE,
+                OPENPIT_TRI_BOOL_TRUE,
+                false,
+                true,
+                OPENPIT_TRI_BOOL_FALSE,
+                OPENPIT_TRI_BOOL_TRUE,
+            ),
+            (
+                OPENPIT_TRI_BOOL_TRUE,
+                OPENPIT_TRI_BOOL_NOT_SET,
+                true,
+                false,
+                OPENPIT_TRI_BOOL_TRUE,
+                OPENPIT_TRI_BOOL_FALSE,
+            ),
+            (
+                OPENPIT_TRI_BOOL_TRUE,
+                OPENPIT_TRI_BOOL_FALSE,
+                true,
+                false,
+                OPENPIT_TRI_BOOL_TRUE,
+                OPENPIT_TRI_BOOL_FALSE,
+            ),
+        ] {
+            order.review = OpenPitOrderReviewOptional {
+                is_set: true,
+                value: OpenPitOrderReview {
+                    confirmed,
+                    already_held,
+                },
+            };
+            let imported = import_order(&order).expect("valid review group");
+            assert_eq!(
+                imported.request.review,
+                OrderReviewAccess::Populated(PopulatedOrderReview {
+                    confirmed: expected_confirmed,
+                    already_held: expected_held,
+                })
+            );
+            assert_eq!(imported.confirmed(), Ok(expected_confirmed));
+            assert_eq!(imported.already_held(), Ok(expected_held));
+            let exported = export_order(&imported);
+            assert!(exported.review.is_set);
+            assert_eq!(exported.review.value.confirmed, exported_confirmed);
+            assert_eq!(exported.review.value.already_held, exported_held);
+            assert_eq!(
+                import_order(&exported).expect("roundtrip").request.review,
+                imported.request.review
+            );
+        }
+
+        order.review.value.confirmed = u8::MAX;
+        assert!(import_order(&order).is_err());
+        order.review.value.confirmed = OPENPIT_TRI_BOOL_TRUE;
+        order.review.value.already_held = u8::MAX;
+        assert!(import_order(&order).is_err());
+        order.review.is_set = false;
+        assert_eq!(
+            import_order(&order)
+                .expect("unset payload is ignored")
+                .request
+                .review,
+            OrderReviewAccess::Absent
+        );
+    }
+
+    #[test]
     fn export_order_produces_readable_views() {
         let order = RequestWithPayload::new(
             openpit_interop::Order {
@@ -438,6 +581,7 @@ mod tests {
                     collateral_asset: Some(Asset::new("USD").expect("valid")),
                     auto_borrow: false,
                 }),
+                review: OrderReviewAccess::Absent,
             },
             std::ptr::null_mut(),
         );
@@ -484,6 +628,7 @@ mod tests {
                 },
             },
             user_data: std::ptr::null_mut(),
+            review: OpenPitOrderReviewOptional::default(),
         };
 
         let imported = import_order(&order).expect("order must import");

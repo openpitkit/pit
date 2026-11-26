@@ -36,6 +36,7 @@ export {
   OrderOperation,
   OrderPosition,
   OrderMargin,
+  OrderReview,
   // Execution report model.
   ExecutionReport,
   ExecutionReportOperation,
@@ -61,6 +62,7 @@ export type {
   OrderOperationInit,
   OrderPositionInit,
   OrderMarginInit,
+  OrderReviewInit,
   ExecutionReportInit,
   ExecutionReportOperationInit,
   ExecutionReportFillDetailsInit,

@@ -70,11 +70,25 @@ func newAsyncRequest(
 	}
 }
 
+// Reviews returns a copy of the start-stage review marks. A non-empty list
+// requires a human decision before sending the order. Execute closes the
+// request, so read the final marks from the returned reservation. A closed
+// request returns pretrade.ErrRequestClosed.
+// If Execute returns a hold for review, commit the reservation to retain the
+// hold and keep the order unsent until approval and a fresh run with Confirmed.
+func (r *AsyncRequest) Reviews() ([]reject.Reject, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inner.Reviews()
+}
+
 // Execute enqueues the main-stage call against this request. The result
 // future mirrors the synchronous main-stage tuple (see
 // AsyncEngine.ExecutePreTrade): a non-nil *AsyncReservation on accept, a
 // non-nil rejects slice on a policy reject, or a set error on transport
 // failure.
+// If the reservation's Reviews() returns marks, obtain a human decision
+// before sending the order.
 //
 // The same engine's hooks, Submit closures, observer callbacks, and Exclusive
 // callbacks must not call this method synchronously.

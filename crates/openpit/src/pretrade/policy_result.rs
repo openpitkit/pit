@@ -99,6 +99,9 @@ pub struct AccountBlockOutcomes {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyConfigurationResult {
     /// Account blocks exposed by the accepted configuration operation.
+    /// A review instance's block whose code is not an evaluation failure
+    /// ([`super::RejectCode::is_evaluation_failure`]) is dropped by the engine,
+    /// neither recorded nor returned.
     pub account_blocks: Vec<AccountBlock>,
 }
 

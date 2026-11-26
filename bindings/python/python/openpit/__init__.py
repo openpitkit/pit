@@ -106,6 +106,7 @@ from .core import (
     OrderMargin,
     OrderOperation,
     OrderPosition,
+    OrderReview,
 )
 from .param import AdjustmentAmount, Leverage, MonetaryAmount, PositionMode
 from .pretrade import PostTradeResult
@@ -195,8 +196,14 @@ Returns:
     request handle, or failure result with one or more business rejects.
 
 Raises:
-    TypeError: If ``order`` is not an order object.
-    RejectError: If a Python policy callback fails unexpectedly.
+    TypeError: If ``order`` is not an order object or a policy returns
+        a non-iterable value other than ``None``.
+    ValueError: If a policy return value has an invalid reject field.
+    AttributeError: If a policy return value lacks a required reject field.
+    OverflowError: If a policy return value has a ``user_data`` token that
+        fits in 64 bits but exceeds the platform's word size.
+    Exception: Exceptions from policy callbacks or from Python code invoked
+        while reading their return values keep their original type.
     """,
 )
 _set_doc(
@@ -210,9 +217,27 @@ Returns:
     openpit.pretrade.ExecuteResult: Success result with a reservation, or
     failure result with start-stage or main-stage rejects.
 
-The returned reservation is still explicit: callers must call
-``commit()`` after external order submission succeeds or ``rollback()``
-otherwise.
+Raises:
+    TypeError: If ``order`` is not an order object, a start-stage policy returns
+        a non-iterable value other than ``None``, or a main-stage policy return
+        value has a non-iterable collection or an incompatible field type.
+    ValueError: If a policy return value has an invalid field.
+    openpit.param.ParamError: If a numeric field in a policy return value fails
+        domain parsing or exceeds the supported decimal range.
+    AttributeError: If a policy return value lacks a required attribute.
+    OverflowError: If a policy return value has a ``user_data`` token that
+        fits in 64 bits but exceeds the platform's word size.
+    Exception: Exceptions from policy callbacks, from mutation rollback callbacks,
+        or from Python code invoked while reading policy return values keep their
+        original type.
+
+Check ``result.reviews`` before submission. If there are review marks, commit
+the reservation immediately and keep the order unsent. The reservation keeps
+holds and policy results only if every review mark is with-hold. Committing
+an empty reservation is harmless. After approval, rerun with
+``OrderReview(confirmed=True)``. If the result is successful and there are no
+review marks, commit after successful submission or roll back if the order
+will not be sent.
     """,
 )
 _set_doc(
@@ -537,6 +562,7 @@ __all__ = [
     "OrderMargin",
     "OrderOperation",
     "OrderPosition",
+    "OrderReview",
     "PostTradeResult",
     "PositionMode",
     "RejectError",

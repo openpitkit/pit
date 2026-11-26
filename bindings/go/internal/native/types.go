@@ -61,6 +61,8 @@ type OrderOperation = C.OpenPitOrderOperation
 type OrderOperationOptional = C.OpenPitOrderOperationOptional
 type OrderPosition = C.OpenPitOrderPosition
 type OrderPositionOptional = C.OpenPitOrderPositionOptional
+type OrderReview = C.OpenPitOrderReview
+type OrderReviewOptional = C.OpenPitOrderReviewOptional
 type ParamAccountID = C.OpenPitParamAccountId
 type ParamAccountIDOptional = C.OpenPitParamAccountIdOptional
 type ParamAdjustmentAmount = C.OpenPitParamAdjustmentAmount
@@ -135,6 +137,7 @@ type PretradeReject = C.OpenPitPretradeReject
 type PretradeRejectCode = C.OpenPitPretradeRejectCode
 type PretradeRejectList = *C.OpenPitPretradeRejectList
 type PretradeRejectScope = C.OpenPitPretradeRejectScope
+type PretradeRuleMode = C.OpenPitPretradeRuleMode
 type SharedString = *C.OpenPitSharedString
 type SharedBytes = *C.OpenPitSharedBytes
 type BytesView = C.OpenPitBytesView
@@ -424,6 +427,12 @@ const (
 const (
 	RejectScopeOrder   = C.OPENPIT_PRETRADE_REJECT_SCOPE_ORDER
 	RejectScopeAccount = C.OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT
+)
+
+const (
+	RuleModeReject            = 0
+	RuleModeReviewWithHold    = 1
+	RuleModeReviewWithoutHold = 2
 )
 
 const (

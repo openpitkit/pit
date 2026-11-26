@@ -67,6 +67,7 @@ def test_execute_dry_run_passes_on_valid_order() -> None:
     assert bool(report)
     assert report.rejects is None
     assert report.account_block is None
+    assert report.reviews == []
 
 
 @pytest.mark.unit
@@ -76,6 +77,7 @@ def test_start_dry_run_passes_on_valid_order() -> None:
     assert report.is_pass
     assert bool(report)
     assert report.rejects is None
+    assert report.reviews == []
 
 
 @pytest.mark.unit
@@ -299,6 +301,4 @@ def test_custom_policy_normal_hooks_not_called_on_dry_run_when_override_present(
     result = engine.execute_pre_trade(order=conftest.make_order())
     assert result.ok
     result.reservation.rollback()
-    assert (
-        not _dry_run_check_called
-    ), "perform_pre_trade_check_dry_run was called during a real execution"
+    assert not _dry_run_check_called, "dry-run hook ran during live execution"

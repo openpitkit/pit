@@ -13,11 +13,18 @@ def test_request_execute_is_single_use() -> None:
         .builtin(openpit.pretrade.policies.build_order_validation())
         .build()
     )
-    request = engine.start_pre_trade(order=conftest.make_order()).request
+    start = engine.start_pre_trade(order=conftest.make_order())
+    request = start.request
+    assert request is not None
+    assert start.reviews == request.reviews == []
     first = request.execute()
     assert first.ok
+    assert first.reservation is not None
+    assert first.reviews == first.reservation.reviews == []
     first.reservation.rollback()
 
+    with pytest.raises(RuntimeError, match="already been executed"):
+        _ = request.reviews
     with pytest.raises(RuntimeError, match="already been executed"):
         request.execute()
 
@@ -36,6 +43,8 @@ def test_reservation_finalize_is_single_use() -> None:
 
     with pytest.raises(RuntimeError, match="already been finalized"):
         reservation.rollback()
+    with pytest.raises(RuntimeError, match="already been finalized"):
+        _ = reservation.reviews
 
 
 @pytest.mark.unit

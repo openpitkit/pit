@@ -26,7 +26,35 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
 )
+
+// InstanceOption sets the identity or mode of one policy registration.
+// Without options, registration uses the policy name and RuleModeReject.
+type InstanceOption func(*native.PolicyInstance)
+
+// InstanceName sets the registration name used by runtime configuration.
+// An empty name uses the policy name; invalid UTF-8 is reported by Build.
+func InstanceName(name string) InstanceOption {
+	return func(instance *native.PolicyInstance) { instance.Name = name }
+}
+
+// InstanceMode sets the registration mode. Its zero value is RuleModeReject;
+// an unknown value is reported by Build.
+func InstanceMode(mode reject.RuleMode) InstanceOption {
+	return func(instance *native.PolicyInstance) { instance.Mode = native.PretradeRuleMode(mode) }
+}
+
+func policyInstance(options []InstanceOption) *native.PolicyInstance {
+	if len(options) == 0 {
+		return nil
+	}
+	instance := &native.PolicyInstance{}
+	for _, option := range options {
+		option(instance)
+	}
+	return instance
+}
 
 //------------------------------------------------------------------------------
 // EngineBuilder
@@ -111,17 +139,15 @@ func (b *SyncedEngineBuilder) MarketData(defaultTTL marketdata.QuoteTTL) *market
 
 // PreTrade registers pre-trade policies and advances the builder to
 // ReadyEngineBuilder.
-func (b *SyncedEngineBuilder) PreTrade(policy ...pretrade.Policy) *ReadyEngineBuilder {
+func (b *SyncedEngineBuilder) PreTrade(policy pretrade.Policy, options ...InstanceOption) *ReadyEngineBuilder {
 	rb := newReadyEngineBuilder(b)
-	for _, p := range policy {
-		rb.addPreTradePolicy(p)
-	}
+	rb.addPreTradePolicy(policy, policyInstance(options))
 	return rb
 }
 
 // Builtin registers a built-in entity on the builder.
-func (b *SyncedEngineBuilder) Builtin(builtinReadyBuilder builtinReadyBuilder) *ReadyEngineBuilder {
-	return newReadyEngineBuilder(b).Builtin(builtinReadyBuilder)
+func (b *SyncedEngineBuilder) Builtin(builtinReadyBuilder builtinReadyBuilder, options ...InstanceOption) *ReadyEngineBuilder {
+	return newReadyEngineBuilder(b).Builtin(builtinReadyBuilder, options...)
 }
 
 //------------------------------------------------------------------------------
@@ -137,10 +163,10 @@ type AccountSyncedEngineBuilder struct {
 // PreTrade registers pre-trade policies and advances to
 // AccountSyncReadyEngineBuilder.
 func (b *AccountSyncedEngineBuilder) PreTrade(
-	policy ...pretrade.Policy,
+	policy pretrade.Policy, options ...InstanceOption,
 ) *AccountSyncReadyEngineBuilder {
 	return &AccountSyncReadyEngineBuilder{
-		ReadyEngineBuilder: b.SyncedEngineBuilder.PreTrade(policy...),
+		ReadyEngineBuilder: b.SyncedEngineBuilder.PreTrade(policy, options...),
 	}
 }
 
@@ -148,9 +174,10 @@ func (b *AccountSyncedEngineBuilder) PreTrade(
 // AccountSyncReadyEngineBuilder.
 func (b *AccountSyncedEngineBuilder) Builtin(
 	builtinReadyBuilder builtinReadyBuilder,
+	options ...InstanceOption,
 ) *AccountSyncReadyEngineBuilder {
 	return &AccountSyncReadyEngineBuilder{
-		ReadyEngineBuilder: b.SyncedEngineBuilder.Builtin(builtinReadyBuilder),
+		ReadyEngineBuilder: b.SyncedEngineBuilder.Builtin(builtinReadyBuilder, options...),
 	}
 }
 
@@ -267,28 +294,23 @@ func (e *EngineBuildError) Error() string {
 }
 
 // PreTrade appends additional pre-trade policies to an already-ready builder.
-func (b *ReadyEngineBuilder) PreTrade(policy ...pretrade.Policy) *ReadyEngineBuilder {
-	for _, p := range policy {
-		// Every policy must go through addPolicy even after a previous
-		// failure so that the builder takes responsibility for releasing
-		// it.
-		b.addPreTradePolicy(p)
-	}
+func (b *ReadyEngineBuilder) PreTrade(policy pretrade.Policy, options ...InstanceOption) *ReadyEngineBuilder {
+	b.addPreTradePolicy(policy, policyInstance(options))
 	return b
 }
 
 // Builtin registers a built-in entity on the builder.
-func (b *ReadyEngineBuilder) Builtin(builtinReadyBuilder builtinReadyBuilder) *ReadyEngineBuilder {
+func (b *ReadyEngineBuilder) Builtin(builtinReadyBuilder builtinReadyBuilder, options ...InstanceOption) *ReadyEngineBuilder {
 	if b.err != nil {
 		return b
 	}
-	if err := builtinReadyBuilder.Build(b.handle); err != nil {
+	if err := builtinReadyBuilder.Build(b.handle, policyInstance(options)); err != nil {
 		b.err = err
 	}
 	return b
 }
 
-func (b *ReadyEngineBuilder) addPreTradePolicy(policy pretrade.Policy) {
+func (b *ReadyEngineBuilder) addPreTradePolicy(policy pretrade.Policy, instance *native.PolicyInstance) {
 	scheduleClose := func() { b.unfinished = append(b.unfinished, policy) }
 
 	if b.err != nil {
@@ -310,7 +332,7 @@ func (b *ReadyEngineBuilder) addPreTradePolicy(policy pretrade.Policy) {
 	defer native.DestroyPretradePreTradePolicy(handle)
 
 	if err := native.EngineBuilderAddPreTradePolicy(
-		b.handle, handle,
+		b.handle, handle, instance,
 	); err != nil {
 		// No scheduleClose is needed here: the deferred release above
 		// drops the last reference to the policy and the native Drop path
@@ -333,9 +355,9 @@ type AccountSyncReadyEngineBuilder struct {
 // PreTrade appends additional pre-trade policies and preserves the
 // AccountSync return type so the chain can still reach BuildAsync.
 func (b *AccountSyncReadyEngineBuilder) PreTrade(
-	policy ...pretrade.Policy,
+	policy pretrade.Policy, options ...InstanceOption,
 ) *AccountSyncReadyEngineBuilder {
-	b.ReadyEngineBuilder.PreTrade(policy...)
+	b.ReadyEngineBuilder.PreTrade(policy, options...)
 	return b
 }
 
@@ -343,8 +365,9 @@ func (b *AccountSyncReadyEngineBuilder) PreTrade(
 // return type so the chain can still reach BuildAsync.
 func (b *AccountSyncReadyEngineBuilder) Builtin(
 	builtinReadyBuilder builtinReadyBuilder,
+	options ...InstanceOption,
 ) *AccountSyncReadyEngineBuilder {
-	b.ReadyEngineBuilder.Builtin(builtinReadyBuilder)
+	b.ReadyEngineBuilder.Builtin(builtinReadyBuilder, options...)
 	return b
 }
 
@@ -383,5 +406,5 @@ func (e engineBuilderPolicyAddError) Error() string {
 }
 
 type builtinReadyBuilder interface {
-	Build(native.EngineBuilder) error
+	Build(native.EngineBuilder, *native.PolicyInstance) error
 }

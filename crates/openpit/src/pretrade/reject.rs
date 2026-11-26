@@ -36,7 +36,8 @@ pub enum RejectScope {
     Order,
     /// Account-level reject signal.
     ///
-    /// Only the pre-trade stages derive an account block from this scope.
+    /// Only effective rejects in the pre-trade stages derive an account block
+    /// from this scope. Review marks never latch a block.
     /// [`crate::Engine::start_pre_trade`] and
     /// [`crate::Engine::execute_pre_trade`] record the start-stage block.
     /// [`crate::pretrade::PreTradeRequest::execute`] records the main-stage
@@ -57,6 +58,50 @@ pub enum RejectScope {
     /// A policy that intends to reject only the current request without
     /// latching a block on the account must return [`RejectScope::Order`].
     Account,
+}
+
+/// Enforcement mode of a rule in the pre-trade start and main stages.
+///
+/// Both stages report evaluation failures as [`RuleMode::Reject`]. The caller
+/// must inspect `reviews()` before sending an order.
+///
+/// In account adjustment, any entry rejects the batch and is reported as
+/// [`RuleMode::Reject`]. Drop copy applies bookkeeping regardless of the mode.
+/// It aborts on evaluation failures and suppresses review marks and any
+/// account blocks they would otherwise trigger.
+///
+/// # Examples
+///
+/// ```
+/// use openpit::pretrade::{Reject, RejectCode, RejectScope, RuleMode};
+///
+/// let review = Reject::new("Risk", RejectScope::Order, RejectCode::Other,
+///     "human decision required", "limit needs confirmation")
+///     .with_mode(RuleMode::ReviewWithoutHold);
+/// assert_eq!(review.mode, RuleMode::ReviewWithoutHold);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RuleMode {
+    /// Reject the order and roll back prepared mutations.
+    #[default]
+    Reject,
+    /// Request a human decision. Keep the run's holds and policy results only
+    /// if every review mark is `ReviewWithHold`.
+    ReviewWithHold,
+    /// Request a human decision. Any `ReviewWithoutHold` mark makes the
+    /// reservation discard the run's holds and policy results.
+    ReviewWithoutHold,
+}
+
+impl RuleMode {
+    /// Returns the stable string representation of this mode.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reject => "Reject",
+            Self::ReviewWithHold => "ReviewWithHold",
+            Self::ReviewWithoutHold => "ReviewWithoutHold",
+        }
+    }
 }
 
 /// Standardized reject code for blocked orders.
@@ -341,7 +386,7 @@ impl Display for RejectCode {
     }
 }
 
-/// Single rejection record returned by checks.
+/// Single rejection or review record returned by checks.
 ///
 /// # Examples
 ///
@@ -384,6 +429,9 @@ pub struct Reject {
     pub code: RejectCode,
     /// Reject scope.
     pub scope: RejectScope,
+    /// Enforcement mode for pre-trade start and main stages. See [`RuleMode`]
+    /// for evaluation failures, account adjustments, and drop copy.
+    pub mode: RuleMode,
 }
 
 impl Display for Reject {
@@ -402,7 +450,7 @@ impl std::error::Error for Reject {}
 ///
 /// Implements `Deref` to `[Reject]` for direct element access. Equality
 /// compares only the reject list and deliberately ignores the attached policy
-/// result, which is auxiliary drop-copy output rather than part of the verdict.
+/// result, which carries reservation or drop-copy output rather than the verdict.
 ///
 /// [`PreTradeRequest::execute`]: crate::pretrade::PreTradeRequest::execute
 #[derive(Clone, Debug)]
@@ -430,9 +478,14 @@ impl Rejects {
 
     /// Attaches the policy output computed before these rejects were produced.
     ///
-    /// Drop-copy consumes this output when the rejects are non-enforcing.
-    /// Ordinary pre-trade paths continue to ignore it.
-    #[doc(hidden)]
+    /// A marks-only `Err(Rejects)` from a [`RuleMode::Reject`] instance must carry
+    /// this output so the engine retains its lock prices and account
+    /// adjustments. Outside drop-copy, for a review-mode instance, the engine
+    /// discards the output and rolls back the instance's mutations (dry-run
+    /// discards them without callbacks). Unless an evaluation failure occurs,
+    /// drop-copy keeps every instance's mutations and consumes the output for
+    /// every mode. Ordinary pre-trade ignores it when the collection contains
+    /// an effective reject.
     pub fn with_policy_result(mut self, result: super::PolicyPreTradeResult) -> Self {
         self.policy_result = Some(Box::new(result));
         self
@@ -444,6 +497,49 @@ impl Rejects {
 
     pub(crate) fn into_parts(self) -> (Vec<Reject>, Option<super::PolicyPreTradeResult>) {
         (self.rejects, self.policy_result.map(|result| *result))
+    }
+
+    pub(crate) fn into_batch_rejects(mut self) -> Self {
+        for entry in &mut self.rejects {
+            entry.mode = RuleMode::Reject;
+        }
+        self
+    }
+
+    pub(crate) fn into_classified(
+        self,
+        instance_mode: RuleMode,
+    ) -> (
+        Vec<Reject>,
+        Vec<Reject>,
+        Option<super::PolicyPreTradeResult>,
+    ) {
+        let (entries, result) = self.into_parts();
+        let mut rejects = Vec::new();
+        let mut reviews = Vec::new();
+        for mut entry in entries {
+            entry.mode = effective_rule_mode(instance_mode, entry.mode, entry.code);
+            if entry.mode == RuleMode::Reject {
+                rejects.push(entry);
+            } else {
+                reviews.push(entry);
+            }
+        }
+        (rejects, reviews, result)
+    }
+}
+
+fn effective_rule_mode(
+    instance_mode: RuleMode,
+    record_mode: RuleMode,
+    code: RejectCode,
+) -> RuleMode {
+    if code.is_evaluation_failure() {
+        RuleMode::Reject
+    } else if record_mode == RuleMode::Reject {
+        instance_mode
+    } else {
+        record_mode
     }
 }
 
@@ -538,6 +634,10 @@ impl PartialEq for AccountBlock {
 impl Eq for AccountBlock {}
 
 impl AccountBlock {
+    pub(crate) fn is_effective(&self, instance_mode: RuleMode) -> bool {
+        effective_rule_mode(instance_mode, RuleMode::Reject, self.code) == RuleMode::Reject
+    }
+
     /// Creates an account block with human-readable reason and details.
     pub fn new(
         policy: impl Into<String>,
@@ -580,12 +680,13 @@ impl From<AccountBlock> for Reject {
             user_data: block.user_data,
             code: block.code,
             scope: RejectScope::Account,
+            mode: RuleMode::Reject,
         }
     }
 }
 
 impl Reject {
-    /// Creates a reject with human-readable reason and details.
+    /// Creates a reject with human-readable reason and details in `Reject` mode.
     pub fn new(
         policy: impl Into<String>,
         scope: RejectScope,
@@ -600,7 +701,16 @@ impl Reject {
             policy: policy.into(),
             user_data: 0,
             scope,
+            mode: RuleMode::Reject,
         }
+    }
+
+    /// Sets the enforcement mode for pre-trade start and main stages.
+    /// See [`RuleMode`] for evaluation failures, account adjustments, and drop
+    /// copy.
+    pub fn with_mode(mut self, mode: RuleMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Returns a copy of this reject with caller-defined opaque token.
@@ -619,7 +729,14 @@ impl Reject {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountBlock, RejectCode};
+    use super::{AccountBlock, RejectCode, RuleMode};
+
+    #[test]
+    fn rule_mode_as_str_is_stable_for_all_values() {
+        assert_eq!(RuleMode::Reject.as_str(), "Reject");
+        assert_eq!(RuleMode::ReviewWithHold.as_str(), "ReviewWithHold");
+        assert_eq!(RuleMode::ReviewWithoutHold.as_str(), "ReviewWithoutHold");
+    }
 
     #[test]
     fn account_block_equality_ignores_engine_provenance() {
@@ -787,6 +904,64 @@ mod tests {
             "details",
         );
         assert_eq!(reject.user_data, 0);
+        assert_eq!(reject.mode, super::RuleMode::Reject);
+    }
+
+    #[test]
+    fn classification_normalizes_evaluation_failures_and_preserves_review_modes() {
+        use super::{Reject, RejectScope, Rejects, RuleMode};
+
+        let cases = [
+            (RejectCode::Other, false),
+            (RejectCode::InsufficientFunds, false),
+            (RejectCode::RateLimitExceeded, false),
+            (RejectCode::PositionLimitExceeded, false),
+            (RejectCode::PnlKillSwitchTriggered, false),
+            (RejectCode::MissingRequiredField, true),
+            (RejectCode::UnknownInstrument, true),
+            (RejectCode::UnknownAccount, true),
+            (RejectCode::UnknownVenue, true),
+            (RejectCode::UnknownClearingAccount, true),
+            (RejectCode::UnknownCollateralAsset, true),
+            (RejectCode::RiskConfigurationMissing, true),
+            (RejectCode::ReferenceDataUnavailable, true),
+            (RejectCode::OrderValueCalculationFailed, true),
+            (RejectCode::SystemUnavailable, true),
+            (RejectCode::MarkPriceUnavailable, true),
+            (RejectCode::ArithmeticOverflow, true),
+        ];
+        for (code, evaluation_failure) in cases {
+            for mode in [
+                RuleMode::Reject,
+                RuleMode::ReviewWithHold,
+                RuleMode::ReviewWithoutHold,
+            ] {
+                let entry = Reject::new("Risk", RejectScope::Account, code, "reason", "details")
+                    .with_mode(mode)
+                    .with_user_data(42);
+                let (rejects, reviews, result) =
+                    Rejects::from(entry.clone()).into_classified(RuleMode::Reject);
+                assert!(result.is_none());
+                if evaluation_failure || mode == RuleMode::Reject {
+                    assert_eq!(rejects, vec![entry.with_mode(RuleMode::Reject)]);
+                    assert!(reviews.is_empty());
+                } else {
+                    assert!(rejects.is_empty());
+                    assert_eq!(reviews, vec![entry]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn account_block_conversion_always_rejects() {
+        let block =
+            super::AccountBlock::new("Risk", RejectCode::AccountBlocked, "reason", "details")
+                .with_user_data(42);
+        let reject = super::Reject::from(block);
+        assert_eq!(reject.mode, super::RuleMode::Reject);
+        assert_eq!(reject.scope, super::RejectScope::Account);
+        assert_eq!(reject.user_data, 42);
     }
 
     #[test]

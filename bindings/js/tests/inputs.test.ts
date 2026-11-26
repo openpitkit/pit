@@ -21,8 +21,14 @@ import { describe, expect, it } from "vitest";
 // first.
 import { Engine } from "@openpit/engine";
 import { AccountId, Price, TradeAmount } from "@openpit/engine/param";
-import { Order, OrderOperation, type OrderInit } from "@openpit/engine/model";
+import {
+  Order,
+  OrderOperation,
+  OrderReview,
+  type OrderInit,
+} from "@openpit/engine/model";
 import { buildOrderValidation } from "@openpit/engine/pretrade/policies";
+import { RuleMode } from "@openpit/engine/reject";
 
 // Builds the engine the whole module shares: a single order-validation policy,
 // enough to exercise the start and main pre-trade stages.
@@ -55,6 +61,70 @@ function runFlow(
 }
 
 describe("plain-object inputs", () => {
+  it("normalizes review inputs for custom policy callbacks", () => {
+    const seen: (boolean | undefined)[] = [];
+    const seenHeld: (boolean | undefined)[] = [];
+    const engine = Engine.builder()
+      .preTrade({
+        name: "order-confirmation",
+        checkPreTradeStart: (_ctx, order: Order) => {
+          seen.push(order.review?.confirmed);
+          seenHeld.push(order.review?.alreadyHeld);
+          return order.review?.confirmed
+            ? []
+            : [
+                {
+                  code: "Custom",
+                  reason: "needs approval",
+                  details: "",
+                  mode: RuleMode.ReviewWithoutHold,
+                },
+              ];
+        },
+        performPreTradeCheck: () => null,
+      })
+      .build();
+    const operation = { accountId: 99224416 };
+    const group = new OrderReview();
+    group.confirmed = true;
+    group.alreadyHeld = true;
+    const wrapped = new Order();
+    wrapped.operation = operation;
+    wrapped.review = group;
+
+    for (const input of [
+      { operation },
+      { operation, review: { confirmed: false, alreadyHeld: true } },
+      // Exercise explicit undefined supplied by JavaScript callers.
+      {
+        operation,
+        review: { confirmed: undefined, alreadyHeld: true },
+      } as unknown as OrderInit,
+    ]) {
+      const result = engine.executePreTrade(input);
+      expect(result.reviews.map((review) => review.mode)).toEqual([
+        RuleMode.ReviewWithoutHold,
+      ]);
+      result.reservation!.commit();
+    }
+    for (const input of [
+      { operation, review: { confirmed: true, alreadyHeld: false } },
+      // Exercise explicit undefined supplied by JavaScript callers.
+      {
+        operation,
+        review: { confirmed: true, alreadyHeld: undefined },
+      } as unknown as OrderInit,
+      wrapped,
+    ]) {
+      const result = engine.executePreTrade(input);
+      expect(result.ok).toBe(true);
+      expect(result.reviews).toEqual([]);
+      result.reservation!.commit();
+    }
+    expect(seen).toEqual([undefined, false, false, true, true, true]);
+    expect(seenHeld).toEqual([undefined, true, true, false, false, true]);
+  });
+
   it("runs the full pre-trade flow with an order given as object literals", () => {
     // The entire order is plain object literals plus primitive values: the
     // account id as a number, the side and price as strings. The only wrapper

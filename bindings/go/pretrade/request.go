@@ -25,7 +25,7 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-// ErrRequestClosed is returned by Execute once the request has been released.
+// ErrRequestClosed is returned by Execute and Reviews after Close.
 var ErrRequestClosed = errors.New("pre-trade request already closed")
 
 // Request is a pre-trade check request returned by the engine.
@@ -67,8 +67,30 @@ func (r *Request) Close() {
 	r.handle = nil
 }
 
+// Reviews returns a copy of the start-stage review marks. A non-empty list
+// requires a human decision before sending the order.
+// If the main stage returns a hold for review, commit the reservation to
+// retain the hold and keep the order unsent until approval and a fresh run
+// with Confirmed.
+//
+// After Execute, read the marks from the returned reservation. Reviews returns
+// the native error after Execute and ErrRequestClosed after Close.
+func (r *Request) Reviews() ([]reject.Reject, error) {
+	if r.handle == nil {
+		return nil, ErrRequestClosed
+	}
+	handle, err := native.PretradePreTradeRequestGetReviews(r.handle)
+	if err != nil {
+		return nil, err
+	}
+	defer native.DestroyPretradeRejectList(handle)
+	return reject.CopyListFromHandle(handle), nil
+}
+
 // Execute runs the main stage of the pre-trade pipeline against this
 // request and, on accept, produces a reservation.
+// If the reservation's Reviews() returns marks, obtain a human decision
+// before sending the order.
 //
 // Execute does not close the request; the caller must still call Close on
 // it afterwards, regardless of Execute's outcome.

@@ -97,6 +97,7 @@ func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {
 		"details-a",
 		ScopeOrder,
 	)
+	base.Mode = RuleModeReviewWithHold
 	const userData uintptr = 0xfeed
 	withUserData := base.WithUserData(userData)
 
@@ -111,6 +112,9 @@ func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {
 	}
 	if withUserData.Scope != base.Scope {
 		t.Fatalf("copy Scope = %v, want %v", withUserData.Scope, base.Scope)
+	}
+	if withUserData.Mode != base.Mode {
+		t.Fatalf("copy Mode = %v, want %v", withUserData.Mode, base.Mode)
 	}
 	if withUserData.Policy != base.Policy {
 		t.Fatalf("copy Policy = %q, want %q", withUserData.Policy, base.Policy)
@@ -132,12 +136,16 @@ func TestRejectNewWithUserDataInitialisesAllFields(t *testing.T) {
 		"details-b",
 		ScopeAccount,
 	).WithUserData(userData)
+	rej.Mode = RuleModeReviewWithoutHold
 
 	if rej.Code != CodeRiskLimitExceeded {
 		t.Fatalf("Code = %v, want %v", rej.Code, CodeRiskLimitExceeded)
 	}
 	if rej.Scope != ScopeAccount {
 		t.Fatalf("Scope = %v, want %v", rej.Scope, ScopeAccount)
+	}
+	if rej.Mode != RuleModeReviewWithoutHold {
+		t.Fatalf("Mode = %v, want RuleModeReviewWithoutHold", rej.Mode)
 	}
 	if rej.Policy != "policy-b" {
 		t.Fatalf("Policy = %q, want %q", rej.Policy, "policy-b")

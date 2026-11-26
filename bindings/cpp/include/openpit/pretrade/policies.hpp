@@ -259,7 +259,10 @@ class OrderSizeLimitPolicy {
   }
 
   // Registers the policy on `builder`. Throws `openpit::Error` on failure.
-  void AddTo(::openpit::EngineBuilder& builder) const {
+  void AddTo(::openpit::EngineBuilder& builder,
+             const ::openpit::PolicyInstance& instance = {}) const {
+    const auto rawInstance =
+        ::openpit::detail::PolicyInstanceToNative(instance);
     OpenPitPretradePoliciesOrderSizeBrokerBarrier brokerRaw{};
     const OpenPitPretradePoliciesOrderSizeBrokerBarrier* brokerPtr = nullptr;
     if (m_broker) {
@@ -300,7 +303,7 @@ class OrderSizeLimitPolicy {
     if (!openpit_engine_builder_add_builtin_order_size_limit_policy(
             ::openpit::detail::Native(builder), m_policyGroupId, brokerPtr,
             assetRaw.data(), assetRaw.size(), accountAssetRaw.data(),
-            accountAssetRaw.size(), &error)) {
+            accountAssetRaw.size(), &rawInstance, &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_order_size_limit_policy failed");
@@ -325,10 +328,14 @@ class OrderValidationPolicy {
     return *this;
   }
 
-  void AddTo(::openpit::EngineBuilder& builder) const {
+  void AddTo(::openpit::EngineBuilder& builder,
+             const ::openpit::PolicyInstance& instance = {}) const {
+    const auto rawInstance =
+        ::openpit::detail::PolicyInstanceToNative(instance);
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_order_validation_policy(
-            ::openpit::detail::Native(builder), m_policyGroupId, &error)) {
+            ::openpit::detail::Native(builder), m_policyGroupId, &rawInstance,
+            &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_order_validation_policy failed");
@@ -404,7 +411,10 @@ class PnlBoundsKillSwitchPolicy {
     return *this;
   }
 
-  void AddTo(::openpit::EngineBuilder& builder) const {
+  void AddTo(::openpit::EngineBuilder& builder,
+             const ::openpit::PolicyInstance& instance = {}) const {
+    const auto rawInstance =
+        ::openpit::detail::PolicyInstanceToNative(instance);
     std::vector<OpenPitPretradePoliciesPnlBoundsBarrier> brokerRaw;
     brokerRaw.reserve(m_brokerBarriers.size());
     for (const PnlBoundsBrokerBarrier& barrier : m_brokerBarriers) {
@@ -439,7 +449,7 @@ class PnlBoundsKillSwitchPolicy {
     if (!openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
             ::openpit::detail::Native(builder), m_policyGroupId,
             brokerRaw.data(), brokerRaw.size(), accountRaw.data(),
-            accountRaw.size(), &error)) {
+            accountRaw.size(), &rawInstance, &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy "
@@ -574,7 +584,10 @@ class RateLimitPolicy {
     return *this;
   }
 
-  void AddTo(::openpit::EngineBuilder& builder) const {
+  void AddTo(::openpit::EngineBuilder& builder,
+             const ::openpit::PolicyInstance& instance = {}) const {
+    const auto rawInstance =
+        ::openpit::detail::PolicyInstanceToNative(instance);
     OpenPitPretradePoliciesRateLimitBrokerBarrier brokerRaw{};
     const OpenPitPretradePoliciesRateLimitBrokerBarrier* brokerPtr = nullptr;
     if (m_broker) {
@@ -620,7 +633,7 @@ class RateLimitPolicy {
             ::openpit::detail::Native(builder), m_policyGroupId, brokerPtr,
             assetRaw.data(), assetRaw.size(), accountRaw.data(),
             accountRaw.size(), accountAssetRaw.data(), accountAssetRaw.size(),
-            &error)) {
+            &rawInstance, &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_engine_builder_add_builtin_rate_limit_policy failed");
     }
@@ -882,7 +895,10 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
   }
 
   /// Registers the policy on `builder`.
-  void AddTo(::openpit::EngineBuilder& builder) const {
+  void AddTo(::openpit::EngineBuilder& builder,
+             const ::openpit::PolicyInstance& instance = {}) const {
+    const auto rawInstance =
+        ::openpit::detail::PolicyInstanceToNative(instance);
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier globalRaw{};
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier* globalPtr = nullptr;
     if (m_globalBarrier) {
@@ -909,7 +925,7 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
     if (!openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
             ::openpit::detail::Native(builder), m_marketData, m_policyGroupId,
             globalPtr, accountGroupRaw.data(), accountGroupRaw.size(),
-            accountRaw.data(), accountRaw.size(), &error)) {
+            accountRaw.data(), accountRaw.size(), &rawInstance, &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_"
@@ -960,7 +976,10 @@ class SpotFundsPolicy {
     return *this;
   }
 
-  void AddTo(::openpit::EngineBuilder& builder) const {
+  void AddTo(::openpit::EngineBuilder& builder,
+             const ::openpit::PolicyInstance& instance = {}) const {
+    const auto rawInstance =
+        ::openpit::detail::PolicyInstanceToNative(instance);
     std::vector<OpenPitPretradePoliciesSpotFundsOverride> overridesRaw;
     overridesRaw.reserve(m_overrides.size());
     for (const SpotFundsOverride& override : m_overrides) {
@@ -975,7 +994,7 @@ class SpotFundsPolicy {
     if (!openpit_engine_builder_add_builtin_spot_funds_policy(
             ::openpit::detail::Native(builder), m_marketData, slippagePtr,
             static_cast<std::uint8_t>(m_pricingSource), overridesRaw.data(),
-            overridesRaw.size(), m_policyGroupId, &error)) {
+            overridesRaw.size(), m_policyGroupId, &rawInstance, &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_engine_builder_add_builtin_spot_funds_policy failed");
     }

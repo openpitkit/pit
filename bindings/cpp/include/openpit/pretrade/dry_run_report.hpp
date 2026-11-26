@@ -43,6 +43,8 @@ class DryRunReport {
     return static_cast<bool>(m_handle);
   }
 
+  /// Returns whether there are no effective rejects. Non-empty `Reviews()`
+  /// still requires a human decision before sending the order.
   [[nodiscard]] bool Passed() const {
     return openpit_pretrade_pre_trade_dry_run_report_is_pass(RequireHandle());
   }
@@ -50,6 +52,13 @@ class DryRunReport {
   [[nodiscard]] std::vector<::openpit::pretrade::Reject> Rejects() const {
     return detail::ListAccess::DrainRejects(
         openpit_pretrade_pre_trade_dry_run_report_get_rejects(RequireHandle()));
+  }
+
+  /// Returns the review marks that would require a human decision before
+  /// sending the order.
+  [[nodiscard]] std::vector<::openpit::pretrade::Reject> Reviews() const {
+    return detail::ListAccess::DrainRejects(
+        openpit_pretrade_pre_trade_dry_run_report_get_reviews(RequireHandle()));
   }
 
   [[nodiscard]] ::openpit::pretrade::PreTradeLock Lock() const {

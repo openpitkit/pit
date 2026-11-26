@@ -786,7 +786,7 @@ mod tests {
             .register_group(&[account(1)], group(7))
             .expect("registration must succeed");
 
-        let ctx = PreTradeContext::with_groups(None, handle, Ok(account(1)));
+        let ctx = PreTradeContext::with_groups(None, handle, Ok(account(1)), Ok(false), Ok(false));
         assert_eq!(ctx.account_group(), Some(group(7)));
     }
 
@@ -804,6 +804,8 @@ mod tests {
             None,
             handle,
             Err(crate::RequestFieldAccessError::new("account_id")),
+            Ok(false),
+            Ok(false),
         );
         assert_eq!(ctx.account_group(), None);
     }
@@ -818,7 +820,13 @@ mod tests {
             .register_group(&[account(1)], group(7))
             .expect("registration must succeed");
 
-        let ctx = PreTradeContext::with_groups(None, handle.clone(), Ok(account(1)));
+        let ctx = PreTradeContext::with_groups(
+            None,
+            handle.clone(),
+            Ok(account(1)),
+            Ok(false),
+            Ok(false),
+        );
         // First call populates the cache.
         assert_eq!(ctx.account_group(), Some(group(7)));
 
@@ -856,8 +864,14 @@ mod tests {
             NoLocking::new_shared(AccountCurrencies::new(&builder)),
             NoLocking::new_shared(ConfigRegistry::empty()),
         );
-        let pre_trade =
-            PreTradeContext::with_accounts(None, accounts.clone(), handle.clone(), Ok(account(1)));
+        let pre_trade = PreTradeContext::with_accounts(
+            None,
+            accounts.clone(),
+            handle.clone(),
+            Ok(account(1)),
+            Ok(false),
+            Ok(false),
+        );
         let post_trade =
             PostTradeContext::with_accounts(accounts.clone(), handle.clone(), Ok(account(1)));
         let adjustment = AccountAdjustmentContext::with_accounts(
@@ -922,7 +936,14 @@ mod tests {
         accounts.register_group(&[account(1)], group(3)).unwrap();
         accounts.set_group_currency(group(3), usd);
         accounts.set_group_currency(group(4), eur.clone());
-        let ctx = PreTradeContext::with_accounts(None, accounts.clone(), handle, Ok(account(1)));
+        let ctx = PreTradeContext::with_accounts(
+            None,
+            accounts.clone(),
+            handle,
+            Ok(account(1)),
+            Ok(false),
+            Ok(false),
+        );
         let native = ctx.operation_snapshot();
         let first = native.shared_reader();
         let native_copy = native.clone();

@@ -148,6 +148,20 @@ where
     /// Returning `Ok(())` allows the engine to continue building the deferred
     /// request. Returning [`Rejects`] contributes rejects to the start-stage
     /// reject result.
+    ///
+    /// The instance mode set by
+    /// [`pre_trade_instance`](crate::ReadyEngineBuilder::pre_trade_instance)
+    /// decides how the engine treats plain rejects. A policy that does not
+    /// count state need not handle modes itself. A counting policy may set a
+    /// record's mode through [`Reject::with_mode`](super::Reject::with_mode);
+    /// an explicit review mode is preserved in every instance. For its own
+    /// marks, such a policy returns at most one per mode per run: the
+    /// highest-priority violated axis of that mode. The engine does not limit
+    /// the number of marks from a review instance and retains them on the
+    /// request rather than rejecting it.
+    /// With [`crate::EngineBuilder::with_order_review`], under the order's
+    /// `confirmed` flag the engine runs every instance and ignores marks, so
+    /// a policy need not read the flag for that purpose.
     fn check_pre_trade_start(
         &self,
         _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
@@ -169,6 +183,9 @@ where
     /// mutates immediately (for example, consuming a rate-limit budget) MUST
     /// override this method with a read-only variant that returns the same
     /// verdict without the mutation.
+    ///
+    /// Instance and record modes follow [`Self::check_pre_trade_start`],
+    /// including the one-mark-per-mode rule for a counting policy's own marks.
     fn check_pre_trade_start_dry_run(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
@@ -181,6 +198,17 @@ where
     ///
     /// Policies may inspect the order, append mutations to be committed or
     /// rolled back later, and return one or more rejects.
+    ///
+    /// Instance and record modes follow [`Self::check_pre_trade_start`],
+    /// including the one-mark-per-mode rule for a counting policy's own marks.
+    /// An `Err` with only marks from a review-mode instance means its
+    /// contribution is invalid: its mutations are rolled back before the next
+    /// instance runs, and its policy result is ignored. A counting policy's
+    /// marks-only `Err` in a [`Reject`](super::RuleMode::Reject) instance keeps
+    /// its mutations and must attach lock prices and account adjustments
+    /// through [`Rejects::with_policy_result`] so the engine retains them.
+    /// Effective rejects discard all review marks and roll back mutations.
+    /// Drop-copy keeps segments and policy results unless evaluation fails.
     ///
     /// # Rollback safety
     ///
@@ -214,6 +242,13 @@ where
     /// override this method with a read-only emulation that reports the same
     /// verdict, lock prices, and outcome entries while pushing nothing to
     /// `mutations` and touching no storage.
+    ///
+    /// Instance modes, record modes, and policy results follow
+    /// [`Self::perform_pre_trade_check`]. A review instance's marks-only error
+    /// discards its contribution; a counting policy's marks-only error in a
+    /// [`Reject`](super::RuleMode::Reject) instance must attach its would-be
+    /// lock prices and adjustments through [`Rejects::with_policy_result`].
+    /// Every mutation segment is discarded without invoking any callback.
     fn perform_pre_trade_check_dry_run(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,

@@ -31,6 +31,8 @@ struct StartResult {
   std::optional<Request> request;
   std::vector<::openpit::pretrade::Reject> rejects;
 
+  /// Returns whether a request is available. If its `Reviews()` is non-empty,
+  /// a human decision is required before sending the order.
   [[nodiscard]] bool Passed() const noexcept { return request.has_value(); }
 };
 

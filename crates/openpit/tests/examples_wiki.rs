@@ -43,11 +43,111 @@ use openpit::{
 // - https://wiki.openpit.dev/Policy-API/
 // - https://wiki.openpit.dev/Pre-trade-Pipeline/
 // - https://wiki.openpit.dev/Pre-Trade-Lock/
+// - https://wiki.openpit.dev/Review-Mode/
 // - https://wiki.openpit.dev/Spot-Funds/
 // - https://wiki.openpit.dev/Storage/
 // If this file changes, update every linked documentation snippet.
 
 type PitExecutionReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
+
+// Source: https://wiki.openpit.dev/Review-Mode/#rust
+// Keep this example in sync with the matching wiki example.
+mod review_mode_example {
+    use std::cell::Cell;
+
+    use openpit::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount};
+    use openpit::pretrade::{
+        PolicyPreTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope,
+        Rejects, RuleMode,
+    };
+    use openpit::storage::NoLocking;
+    use openpit::{
+        Engine, Instrument, LocalSync, Mutations, OrderOperation, OrderReview, PolicyInstance,
+        WithOrderReview,
+    };
+
+    type ReviewOrder = WithOrderReview<OrderOperation>;
+
+    struct ApprovalPolicy;
+
+    impl PreTradePolicy<ReviewOrder, (), (), LocalSync> for ApprovalPolicy {
+        fn name(&self) -> &str {
+            "ApprovalPolicy"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &PreTradeContext<NoLocking>,
+            _order: &ReviewOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            Err(Reject::new(
+                self.name(),
+                RejectScope::Order,
+                RejectCode::ComplianceRestriction,
+                "approval required",
+                "obtain a human decision before sending",
+            )
+            .into())
+        }
+    }
+
+    #[test]
+    fn example_wiki_review_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let engine = Engine::builder::<ReviewOrder, (), ()>()
+            .with_order_review()
+            .no_sync()
+            .pre_trade_instance(
+                ApprovalPolicy,
+                PolicyInstance {
+                    name: Some("approval".to_owned()),
+                    mode: RuleMode::ReviewWithoutHold,
+                },
+            )
+            .build()?;
+
+        let mut order = ReviewOrder {
+            inner: OrderOperation {
+                instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+                account_id: AccountId::from_u64(99224416),
+                side: Side::Buy,
+                trade_amount: TradeAmount::Quantity(Quantity::from_str("10")?),
+                price: Some(Price::from_str("25")?),
+            },
+            review: OrderReview {
+                confirmed: false,
+                already_held: false,
+            },
+        };
+
+        let sent = Cell::new(0);
+        let run = |order| -> Result<Vec<Reject>, Rejects> {
+            let mut reservation = engine.execute_pre_trade(order)?;
+            let reviews = reservation.reviews().to_vec();
+            if !reviews.is_empty() {
+                reservation.commit();
+                return Ok(reviews);
+            }
+
+            // Stand-in for a successful venue send.
+            sent.set(sent.get() + 1);
+            reservation.commit();
+            Ok(reviews)
+        };
+
+        let reviews = run(order.clone())?;
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].mode, RuleMode::ReviewWithoutHold);
+        assert_eq!(sent.get(), 0);
+
+        // A human approved the same order.
+        order.review.confirmed = true;
+        let confirmed_reviews = run(order)?;
+        assert!(confirmed_reviews.is_empty());
+        assert_eq!(sent.get(), 1);
+        Ok(())
+    }
+}
 
 fn aapl_usd_order(quantity: &str, price: &str) -> OrderOperation {
     OrderOperation {
@@ -485,6 +585,13 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
 
     // Optional shortcut for the same two-stage flow:
     // let reservation = engine.execute_pre_trade(order)?;
+
+    if !reservation.reviews().is_empty() {
+        // Leave unsent. After approval, rerun with the order-review reader
+        // enabled, confirmed set, and already_held set if a hold was kept.
+        reservation.commit();
+        return Ok(());
+    }
 
     // 7. If the request is successfully sent to the venue, it must be committed.
     // The rollback must be called otherwise to revert all performed reservations.
@@ -2331,8 +2438,10 @@ fn example_wiki_dry_run_verdict() -> Result<(), Box<dyn std::error::Error>> {
     let order = aapl_usd_order("100", "185");
 
     let report = engine.execute_pre_trade_dry_run(order);
-    if report.is_pass() {
-        println!("order would be admitted");
+    if !report.reviews().is_empty() {
+        println!("order would require a human decision before sending");
+    } else if report.is_pass() {
+        println!("order had no rejects or review marks in the simulation");
     } else {
         for reject in report.rejects().unwrap().iter() {
             eprintln!(

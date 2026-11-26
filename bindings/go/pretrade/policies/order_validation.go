@@ -43,9 +43,10 @@ func (b OrderValidationBuilder) PolicyGroupID(groupID model.PolicyGroupID) Order
 
 // Build registers the built-in order-validation policy on the given
 // engine builder.
-func (b OrderValidationBuilder) Build(builder native.EngineBuilder) error {
+func (b OrderValidationBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
 	return native.EngineBuilderAddBuiltinOrderValidation(
 		builder,
 		native.PolicyGroupID(b.policyGroupID),
+		instance,
 	)
 }

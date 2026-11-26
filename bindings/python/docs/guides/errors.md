@@ -10,8 +10,10 @@ Policy rejects are expected outcomes. They are returned in result objects:
 - `ExecuteResult.rejects`
 - `AccountAdjustmentBatchResult.rejects`
 
-Each reject contains a stable code, reason, details, policy name, scope, and an
-optional `user_data` token.
+Each reject contains a stable code, reason, details, policy name, scope,
+effective mode, and an optional `user_data` token. Reviews appear in
+`StartResult.reviews` and `ExecuteResult.reviews`. Evaluation failures
+always appear as rejects.
 
 ```python
 result = engine.execute_pre_trade(order=order)
@@ -30,8 +32,10 @@ Common cases include:
 - `RuntimeError` for lifecycle misuse, such as executing a request twice.
 - `RejectError` for callback-level failures surfaced by the binding.
 
-Do not raise exceptions for normal risk decisions in custom policies. Return
-`PolicyReject` or `PolicyDecision.reject(...)` instead.
+Return `PolicyReject` or `PolicyDecision.reject(...)` for normal risk
+decisions. The optional `PolicyReject(..., mode=None)` argument defaults
+to `Reject`. The builder's instance mode can turn an ordinary policy reject
+into a review mark.
 
 ## `AccountBlockError`
 

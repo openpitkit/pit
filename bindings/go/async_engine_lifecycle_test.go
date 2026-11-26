@@ -20,6 +20,8 @@ package openpit
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -174,6 +176,94 @@ func TestAsyncEngineRequestExecuteCommitLifecycle(t *testing.T) {
 		t.Fatalf("StopGraceful() error = %v", err)
 	}
 	engine.Stop()
+}
+
+func TestAsyncEngineReviewMarks(t *testing.T) {
+	policy := &reviewTestPolicy{}
+	policy.start = reject.NewSingleItemList(
+		reject.CodeRiskLimitExceeded, policy.Name(), "requires review", "from the start stage",
+		reject.ScopeOrder,
+	)
+	policy.start[0].Mode = reject.RuleModeReviewWithHold
+	engine := buildDropCopyAsyncEngine(t, policy)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	defer func() {
+		if err := engine.StopGraceful(ctx); err != nil {
+			t.Errorf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	for _, tc := range []struct {
+		name      string
+		confirmed bool
+		want      []reject.Reject
+	}{
+		{name: "review", want: policy.start},
+		{name: "confirmed", confirmed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			order := newValidOrderForNativeE2E(t)
+			if tc.confirmed {
+				review := order.EnsureReviewView()
+				review.SetConfirmed(true)
+			}
+			request, rejects, err := engine.StartPreTrade(ctx, order).Await(ctx)
+			if err != nil || request == nil || len(rejects) != 0 {
+				t.Fatalf("StartPreTrade() = %v, %v, %v", request, rejects, err)
+			}
+			defer func() { _, _ = request.Close(ctx).Await(ctx) }()
+			assertReviewMarks(t, request.Reviews, tc.want)
+			reservation, rejects, err := request.Execute(ctx).Await(ctx)
+			if err != nil || reservation == nil || len(rejects) != 0 {
+				t.Fatalf("Execute() = %v, %v, %v", reservation, rejects, err)
+			}
+			defer func() { _, _ = reservation.Close(ctx).Await(ctx) }()
+			assertReviewMarks(t, reservation.Reviews, tc.want)
+			if _, err := request.Reviews(); !errors.Is(err, pretrade.ErrRequestClosed) {
+				t.Fatalf("executed AsyncRequest.Reviews() error = %v", err)
+			}
+			if _, err := reservation.RollbackAndClose(ctx).Await(ctx); err != nil {
+				t.Fatalf("RollbackAndClose() error = %v", err)
+			}
+			if _, err := reservation.Reviews(); !errors.Is(err, pretrade.ErrReservationClosed) {
+				t.Fatalf("closed AsyncReservation.Reviews() error = %v", err)
+			}
+
+			check := func(result asyncengine.OperationResult) error {
+				marks, err := result.Reviews()
+				if err != nil {
+					return fmt.Errorf("Reviews() = %v, %w, want %v", marks, err, tc.want)
+				}
+				if !slices.Equal(marks, tc.want) {
+					return fmt.Errorf("Reviews() = %v, <nil>, want %v", marks, tc.want)
+				}
+				return nil
+			}
+			var checked asyncengine.OrderCheckResult
+			chain := asyncengine.Chain(
+				order,
+				func(context.Context) (struct{}, error) { return struct{}{}, nil },
+			).CheckOrder(func(_ context.Context, _ struct{}, result asyncengine.OrderCheckResult) error {
+				checked = result
+				return check(result)
+			}).ExecutePreTrade(asyncengine.PreTradeHooks[struct{}]{
+				OnRejected: func(_ context.Context, _ struct{}, rejects []reject.Reject) error {
+					return fmt.Errorf("chain rejected: %v", rejects)
+				},
+				OnReserved: func(_ context.Context, _ struct{}, result asyncengine.OperationResult) (asyncengine.Decision, error) {
+					return asyncengine.DecisionCommit, check(result)
+				},
+			})
+			if _, err := chain.Run(ctx, engine).Await(ctx); err != nil {
+				t.Fatalf("chain Await() error = %v", err)
+			}
+			if checked == nil {
+				t.Fatal("CheckOrder hook did not receive a verdict")
+			}
+			assertReviewMarks(t, checked.Reviews, tc.want)
+		})
+	}
 }
 
 // buildDropCopyAsyncEngine wraps an AccountSync engine that runs one

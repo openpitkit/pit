@@ -28,6 +28,7 @@ import "C"
 func CreatePretradeReject(
 	code PretradeRejectCode,
 	scope PretradeRejectScope,
+	mode PretradeRuleMode,
 	policy StringView,
 	reason StringView,
 	details StringView,
@@ -40,6 +41,7 @@ func CreatePretradeReject(
 		user_data: C.size_t(userData),
 		code:      code,
 		scope:     scope,
+		mode:      ruleModeToC(mode),
 	}
 }
 
@@ -49,6 +51,18 @@ func PretradeRejectGetCode(reject PretradeReject) PretradeRejectCode {
 
 func PretradeRejectGetScope(reject PretradeReject) PretradeRejectScope {
 	return reject.scope
+}
+
+func PretradeRejectGetMode(reject PretradeReject) PretradeRuleMode {
+	return reject.mode - 1
+}
+
+func ruleModeToC(mode PretradeRuleMode) C.OpenPitPretradeRuleMode {
+	if mode > RuleModeReviewWithoutHold {
+		// Keep unknown values invalid instead of wrapping to C zero (Reject).
+		return C.OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD + 1
+	}
+	return mode + 1
 }
 
 func PretradeRejectGetPolicy(reject PretradeReject) StringView {

@@ -123,6 +123,40 @@ func TestClientRequestExecuteAfterCloseReturnsExportedError(t *testing.T) {
 	}
 }
 
+func TestClientRequestReviews(t *testing.T) {
+	policy := &clientEngineTestStartPolicy{}
+	policy.reviews = reject.NewSingleItemList(
+		reject.CodeRiskLimitExceeded, policy.Name(), "requires review",
+		"from the start stage", reject.ScopeOrder,
+	)
+	policy.reviews[0].Mode = reject.RuleModeReviewWithHold
+	engine, err := NewClientEngineBuilder[
+		clientEngineTestOrder,
+		clientEngineTestReport,
+		clientEngineTestAdjustment,
+	]().
+		FullSync().
+		PreTrade(policy).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	order := clientEngineTestOrder{Order: model.NewOrder()}
+	request, rejects, err := engine.StartPreTrade(order)
+	if err != nil || request == nil || len(rejects) != 0 {
+		t.Fatalf("StartPreTrade() = %v, %v, %v", request, rejects, err)
+	}
+	defer request.Close()
+	assertReviewMarks(t, request.Reviews, policy.reviews)
+
+	request.Close()
+	if _, err := request.Reviews(); !errors.Is(err, ErrClientRequestClosed) {
+		t.Fatalf("closed ClientRequest.Reviews() error = %v, want ErrClientRequestClosed", err)
+	}
+}
+
 func TestClientEnginePassesClientOrderThroughDeferredRequest(t *testing.T) {
 	startPolicy := &clientEngineTestStartPolicy{}
 	mainPolicy := &clientEngineTestMainPolicy{}
@@ -636,6 +670,7 @@ func TestClientEngineDropCopyPayloadMismatchIsEvaluationFailure(t *testing.T) {
 type clientEngineTestStartPolicy struct {
 	order        clientEngineTestOrder
 	report       clientEngineTestReport
+	reviews      []reject.Reject
 	reportCalled bool
 	killSwitch   bool
 }
@@ -830,7 +865,7 @@ func (p *clientEngineTestStartPolicy) CheckPreTradeStart(
 	order clientEngineTestOrder,
 ) []reject.Reject {
 	p.order = order
-	return nil
+	return p.reviews
 }
 
 func (clientEngineTestStartPolicy) PerformPreTradeCheck(

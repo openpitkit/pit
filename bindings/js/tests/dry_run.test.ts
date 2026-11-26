@@ -24,6 +24,7 @@ import { Engine } from "@openpit/engine";
 import { AdjustmentAmount, TradeAmount } from "@openpit/engine/param";
 import { type OrderInit } from "@openpit/engine/model";
 import { type Policy } from "@openpit/engine/pretrade";
+import { RuleMode } from "@openpit/engine/reject";
 import {
   buildOrderValidation,
   buildRateLimit,
@@ -91,8 +92,10 @@ describe("dry-run surface", () => {
     };
 
     const report = engine.executePreTradeDryRun(order);
-    if (report.isPass) {
-      console.log("order would be admitted");
+    if (report.reviews.length > 0) {
+      console.log("order would require a human decision before sending");
+    } else if (report.isPass) {
+      console.log("order had no rejects or review marks in the simulation");
     } else {
       for (const reject of report.rejects) {
         console.log(
@@ -103,7 +106,42 @@ describe("dry-run surface", () => {
 
     expect(report.isPass).toBe(true);
     expect(report.rejects).toEqual([]);
+    expect(report.reviews).toEqual([]);
     expect(report.accountBlock).toBeUndefined();
+  });
+
+  it("reports a start-stage mark in both dry-runs", () => {
+    const engine = Engine.builder()
+      .preTrade({
+        name: "dry-run-review",
+        checkPreTradeStart: () => [],
+        checkPreTradeStartDryRun: () => [
+          {
+            code: "Custom",
+            reason: "start-stage review",
+            details: "",
+            mode: RuleMode.ReviewWithoutHold,
+          },
+        ],
+        performPreTradeCheck: () => null,
+        performPreTradeCheckDryRun: () => {
+          throw new Error(
+            "start-stage without-hold review skips the main stage",
+          );
+        },
+      })
+      .build();
+    const input = makeOrder();
+    for (const report of [
+      engine.startPreTradeDryRun(input),
+      engine.executePreTradeDryRun(input),
+    ]) {
+      expect(report.isPass).toBe(true);
+      expect(report.rejects).toEqual([]);
+      expect(report.reviews.map((review) => review.mode)).toEqual([
+        RuleMode.ReviewWithoutHold,
+      ]);
+    }
   });
 
   it("passes and rejects without mutating the engine", () => {

@@ -15,6 +15,7 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
+import dataclasses
 import gc
 import typing
 
@@ -567,6 +568,62 @@ def test_custom_policy_preserves_pre_trade_result_group_and_lock_prices() -> Non
     assert adjustments[0].entry.asset == "USD"
     assert adjustments[0].entry.held is not None
     assert adjustments[0].entry.held.delta == openpit.param.PositionSize("2")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+def test_main_policy_rule_mode_and_result_round_trip(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    class ReviewPolicy(FullParityPolicy):
+        def perform_pre_trade_check(
+            self, ctx: openpit.pretrade.Context, order: openpit.Order
+        ) -> openpit.pretrade.PolicyPreTradeResult:
+            result = super().perform_pre_trade_check(ctx, order)
+            return dataclasses.replace(
+                result,
+                rejects=(
+                    openpit.pretrade.PolicyReject(
+                        code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                        reason="risk limit reached",
+                        details="main-stage decision",
+                        mode=mode,
+                    ),
+                ),
+            )
+
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=ReviewPolicy()).build()
+    order = conftest.make_order()
+    dry_run = engine.execute_pre_trade_dry_run(order=order)
+    executed = engine.execute_pre_trade(order=order)
+    if mode is openpit.pretrade.RuleMode.REJECT:
+        assert not executed
+        assert not dry_run
+        assert [reject.mode for reject in executed.rejects] == [mode]
+        assert [reject.mode for reject in dry_run.rejects] == [mode]
+        assert executed.reviews == dry_run.reviews == []
+        assert executed.reservation is None
+        return
+
+    assert executed and dry_run
+    assert executed.rejects == []
+    assert dry_run.rejects is None
+    assert executed.reviews[0].mode == mode
+    assert dry_run.reviews[0].mode == mode
+    assert repr(executed) == "ExecuteResult(ok=True, reviews=1)"
+    assert repr(dry_run) == "DryRunReport(pass, reviews=1)"
+    reservation = executed.reservation
+    assert reservation is not None
+    assert reservation.reviews[0].mode == mode
+    for output in (reservation, dry_run):
+        if mode is openpit.pretrade.RuleMode.REVIEW_WITH_HOLD:
+            assert output.lock.entries() == [(7, openpit.param.Price("11"))]
+            assert [a.entry.held.delta for a in output.account_adjustments] == [
+                openpit.param.PositionSize("2")
+            ]
+        else:
+            assert (output.lock.entries(), output.account_adjustments) == ([], [])
+    reservation.commit()
 
 
 @pytest.mark.unit
@@ -1466,9 +1523,8 @@ def test_post_and_adjustment_readers_share_lazy_first_group(
     accounts.unregister_group([account], before)
     accounts.register_group([account], after)
     expected = before if pin_in_callback else after
-    assert (
-        captured[0].account_group == expected
-    ), "adapters must stay lazy and share first resolution"
+    message = "adapters must stay lazy and share first resolution"
+    assert captured[0].account_group == expected, message
     assert captured[0].account_group == expected
 
 

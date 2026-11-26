@@ -94,7 +94,9 @@ func (e *Engine) Stop() {
 // Return contract:
 //   - on accept, returns a non-nil *pretrade.Request; the caller takes
 //     ownership and must release it with Request.Close when done (Execute
-//     does not close the request - see Request.Execute);
+//     does not close the request - see Request.Execute).
+//     If Reviews() returns marks, obtain a human decision before sending
+//     the order.
 //   - on reject, returns a non-nil []reject.Reject; no Request is produced;
 //   - on transport error, returns a Go error; no Request is produced.
 func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, []reject.Reject, error) {
@@ -123,7 +125,9 @@ func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, []reject.R
 //   - on accept, returns a non-nil *pretrade.Reservation; the caller takes
 //     ownership and must resolve it exactly once via CommitAndClose,
 //     RollbackAndClose, or Close (which rolls back any pending mutations
-//     implicitly);
+//     implicitly).
+//     If Reviews() returns marks, obtain a human decision before sending
+//     the order.
 //   - on reject, returns a non-nil []reject.Reject; no Reservation is produced;
 //   - on transport error, returns a Go error; no Reservation is produced.
 func (e *Engine) ExecutePreTrade(

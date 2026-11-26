@@ -66,6 +66,22 @@ func OrderUnsetOrderPosition(o *Order) {
 	OrderPositionOptionalReset(&o.position)
 }
 
+func OrderGetOrderReview(o Order) OrderReviewOptional {
+	return o.review
+}
+
+func OrderGetOrderReviewView(o *Order) *OrderReviewOptional {
+	return &o.review
+}
+
+func OrderSetOrderReview(o *Order, review OrderReview) {
+	OrderReviewOptionalSet(&o.review, review)
+}
+
+func OrderUnsetOrderReview(o *Order) {
+	OrderReviewOptionalReset(&o.review)
+}
+
 func OrderGetOrderMargin(o Order) OrderMarginOptional {
 	return o.margin
 }
@@ -145,6 +161,31 @@ func OrderPositionOptionalGetView(value *OrderPositionOptional) *OrderPosition {
 
 func OrderPositionOptionalSet(value *OrderPositionOptional, position OrderPosition) {
 	value.value = position
+	value.is_set = true
+}
+
+//------------------------------------------------------------------------------
+// OrderReviewOptional
+
+func OrderReviewOptionalReset(value *OrderReviewOptional) {
+	OrderReviewReset(&value.value)
+	value.is_set = false
+}
+
+func OrderReviewOptionalIsSet(value OrderReviewOptional) bool {
+	return bool(value.is_set)
+}
+
+func OrderReviewOptionalGet(value OrderReviewOptional) OrderReview {
+	return value.value
+}
+
+func OrderReviewOptionalGetView(value *OrderReviewOptional) *OrderReview {
+	return &value.value
+}
+
+func OrderReviewOptionalSet(value *OrderReviewOptional, review OrderReview) {
+	value.value = review
 	value.is_set = true
 }
 
@@ -295,6 +336,33 @@ func OrderPositionSetClosePosition(p *OrderPosition, closePosition TriBool) {
 
 func OrderPositionUnsetClosePosition(p *OrderPosition) {
 	p.close_position = TriBoolNotSet
+}
+
+//------------------------------------------------------------------------------
+// OrderReview
+
+func NewOrderReview() OrderReview {
+	return OrderReview{}
+}
+
+func OrderReviewReset(review *OrderReview) {
+	*review = NewOrderReview()
+}
+
+func OrderReviewGetConfirmed(review OrderReview) TriBool {
+	return review.confirmed
+}
+
+func OrderReviewSetConfirmed(review *OrderReview, confirmed TriBool) {
+	review.confirmed = confirmed
+}
+
+func OrderReviewGetAlreadyHeld(review OrderReview) TriBool {
+	return review.already_held
+}
+
+func OrderReviewSetAlreadyHeld(review *OrderReview, alreadyHeld TriBool) {
+	review.already_held = alreadyHeld
 }
 
 //------------------------------------------------------------------------------

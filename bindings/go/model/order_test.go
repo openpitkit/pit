@@ -313,6 +313,98 @@ func TestOrderOperationFieldRoundTrip(t *testing.T) {
 	assertOrderOperationUnset(t, op)
 }
 
+func TestOrderReviewFieldRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		groupSet    bool
+		confirmed   optional.Bool
+		alreadyHeld optional.Bool
+	}{
+		{name: "group absent", confirmed: optional.BoolNone, alreadyHeld: optional.BoolNone},
+		{name: "flags absent", groupSet: true, confirmed: optional.BoolNone, alreadyHeld: optional.BoolNone},
+		{name: "confirmed false", groupSet: true, confirmed: optional.False, alreadyHeld: optional.BoolNone},
+		{name: "confirmed true", groupSet: true, confirmed: optional.True, alreadyHeld: optional.BoolNone},
+		{name: "already held false", groupSet: true, confirmed: optional.BoolNone, alreadyHeld: optional.False},
+		{name: "already held true", groupSet: true, confirmed: optional.BoolNone, alreadyHeld: optional.True},
+		{name: "confirmed false already held true", groupSet: true, confirmed: optional.False, alreadyHeld: optional.True},
+		{name: "confirmed true already held false", groupSet: true, confirmed: optional.True, alreadyHeld: optional.False},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := OrderValues{}
+			if tc.groupSet {
+				values.Review = optional.Some(NewOrderReviewFromValues(OrderReviewValues{
+					Confirmed:   tc.confirmed,
+					AlreadyHeld: tc.alreadyHeld,
+				}))
+			}
+			source := NewOrderFromValues(values)
+			roundTripped := NewOrderFromHandle(source.Handle())
+			review, ok := roundTripped.Values().Review.Get()
+			if ok != tc.groupSet {
+				t.Fatalf("review group set = %v, want %v", ok, tc.groupSet)
+			}
+			if ok && review.Values().Confirmed != tc.confirmed {
+				t.Fatalf("confirmed = %v, want %v", review.Confirmed(), tc.confirmed)
+			}
+			if ok && review.Values().AlreadyHeld != tc.alreadyHeld {
+				t.Fatalf("already held = %v, want %v", review.AlreadyHeld(), tc.alreadyHeld)
+			}
+		})
+	}
+
+	order := NewOrder()
+	view := order.EnsureReviewView()
+	view.SetConfirmed(true)
+	if got := order.Review().MustGet().Confirmed(); got != optional.True {
+		t.Fatalf("confirmed after SetConfirmed(true) = %v", got)
+	}
+	if got := view.Confirmed(); got != optional.True {
+		t.Fatalf("view confirmed after SetConfirmed(true) = %v, want true", got)
+	}
+	if got := view.AlreadyHeld(); got.IsSet() {
+		t.Fatalf("view already held after SetConfirmed(true) = %v, want unset", got)
+	}
+	view.SetAlreadyHeld(true)
+	if got := order.Review().MustGet().AlreadyHeld(); got != optional.True {
+		t.Fatalf("already held after SetAlreadyHeld(true) = %v", got)
+	}
+	view.UnsetConfirmed()
+	if got := view.Confirmed(); got.IsSet() {
+		t.Fatalf("confirmed after UnsetConfirmed() = %v, want unset", got)
+	}
+	if got := view.AlreadyHeld(); got != optional.True {
+		t.Fatalf("view already held after UnsetConfirmed() = %v, want true", got)
+	}
+	view.UnsetAlreadyHeld()
+	if got := view.AlreadyHeld(); got.IsSet() {
+		t.Fatalf("already held after UnsetAlreadyHeld() = %v, want unset", got)
+	}
+
+	review := NewOrderReview()
+	review.SetConfirmed(true)
+	review.SetAlreadyHeld(true)
+	review.UnsetAlreadyHeld()
+	if got := review.AlreadyHeld(); got.IsSet() {
+		t.Fatalf("handle already held after UnsetAlreadyHeld() = %v, want unset", got)
+	}
+	if got := review.Confirmed(); got != optional.True {
+		t.Fatalf("handle confirmed after UnsetAlreadyHeld() = %v, want true", got)
+	}
+	review.SetAlreadyHeld(true)
+	review.UnsetConfirmed()
+	if got := review.Confirmed(); got.IsSet() {
+		t.Fatalf("handle confirmed after UnsetConfirmed() = %v, want unset", got)
+	}
+	if got := review.AlreadyHeld(); got != optional.True {
+		t.Fatalf("handle already held after UnsetConfirmed() = %v, want true", got)
+	}
+
+	order.UnsetReview()
+	if order.Review().IsSet() {
+		t.Fatal("review group still set after UnsetReview()")
+	}
+}
+
 func TestOrderPositionFieldRoundTrip(t *testing.T) {
 	fixture := newOrderFixture(t)
 	position := NewOrderPosition()

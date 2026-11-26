@@ -6,6 +6,181 @@ import openpit
 import pytest
 
 
+class _RejectPolicy(openpit.pretrade.Policy):
+    @property
+    def name(self) -> str:
+        return "RejectPolicy"
+
+    def check_pre_trade_start(
+        self, ctx: openpit.pretrade.Context, order: openpit.Order
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+        return (
+            openpit.pretrade.PolicyReject(
+                code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                reason="limit",
+                details="details",
+            ),
+        )
+
+
+def _order_size_limit(
+    quantity: str = "0",
+) -> openpit.pretrade.policies.OrderSizeLimitReadyBuilder:
+    policies = openpit.pretrade.policies
+    return policies.build_order_size_limit().broker_barrier(
+        policies.OrderSizeBrokerBarrier(
+            limit=policies.OrderSizeLimit(max_quantity=openpit.param.Quantity(quantity))
+        )
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        None,
+        openpit.pretrade.RuleMode.REJECT,
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+        "ReviewWithHold",
+    ],
+)
+@pytest.mark.parametrize("custom", [False, True])
+def test_policy_instance_registration(
+    mode: openpit.pretrade.RuleMode | str | None, custom: bool
+) -> None:
+    builder = openpit.Engine.builder().no_sync()
+    ready = (
+        builder.pre_trade(_RejectPolicy(), name="named-instance", mode=mode)
+        if custom
+        else builder.builtin(_order_size_limit(), name="named-instance", mode=mode)
+    )
+    engine = ready.build()
+    result = engine.start_pre_trade(order=conftest.make_order())
+    if mode is None or mode == "Reject":
+        assert not result.ok
+        assert len(result.rejects) == 1
+        assert result.rejects[0].mode == "Reject"
+    else:
+        assert result.ok
+        assert not result.rejects
+        assert len(result.reviews) == 1
+        assert result.reviews[0].mode == mode
+        assert result.reviews[0].policy == (
+            "RejectPolicy" if custom else "OrderSizeLimitPolicy"
+        )
+
+
+@pytest.mark.unit
+def test_policy_instance_defaults_and_validation() -> None:
+    policies = openpit.pretrade.policies
+    builder = openpit.Engine.builder().no_sync()
+    default_engine = (
+        openpit.Engine.builder().no_sync().builtin(_order_size_limit()).build()
+    )
+    assert not default_engine.start_pre_trade(order=conftest.make_order()).ok
+    validation_ready = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_order_validation())
+    )
+    for invalid in ["reviewwithhold", "reject", "", "Unknown"]:
+        with pytest.raises(ValueError, match="^mode must be") as exc:
+            builder.pre_trade(_RejectPolicy(), mode=invalid)
+        assert "reject.mode" not in str(exc.value)
+        with pytest.raises(ValueError, match="^mode must be"):
+            builder.builtin(_order_size_limit(), mode=invalid)
+        with pytest.raises(ValueError, match="^mode must be"):
+            validation_ready.pre_trade(_RejectPolicy(), mode=invalid)
+        with pytest.raises(ValueError, match="^mode must be"):
+            validation_ready.builtin(_order_size_limit(), mode=invalid)
+    with pytest.raises(ValueError, match="duplicate policy name"):
+        openpit.Engine.builder().no_sync().builtin(_order_size_limit()).builtin(
+            _order_size_limit()
+        ).build()
+    with pytest.raises(ValueError, match="duplicate policy name.*OrderSizeLimitPolicy"):
+        openpit.Engine.builder().no_sync().builtin(
+            _order_size_limit(), name=""
+        ).builtin(_order_size_limit()).build()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_policy_instances_configure_independently(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(_order_size_limit(), name="size-reject")
+        .builtin(_order_size_limit("100"), name="size-review", mode=mode)
+        .build()
+    )
+    for name, quantity in [("size-reject", "100"), ("size-review", "0")]:
+        engine.configure().order_size_limit(
+            name,
+            broker=policies.OrderSizeBrokerBarrier(
+                limit=policies.OrderSizeLimit(
+                    max_quantity=openpit.param.Quantity(quantity)
+                )
+            ),
+        )
+    result = engine.start_pre_trade(order=conftest.make_order())
+    assert result.ok
+    assert not result.rejects
+    assert len(result.reviews) == 1
+    assert result.reviews[0].mode == mode
+    assert result.reviews[0].policy == "OrderSizeLimitPolicy"
+    assert result.reviews[0].code == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+    assert result.reviews[0].scope == openpit.pretrade.RejectScope.ORDER
+    engine.configure().order_size_limit(
+        "size-reject",
+        broker=policies.OrderSizeBrokerBarrier(
+            limit=policies.OrderSizeLimit(max_quantity=openpit.param.Quantity("0"))
+        ),
+    )
+    rejected = engine.start_pre_trade(order=conftest.make_order())
+    assert not rejected.ok
+    assert len(rejected.rejects) == 1
+    assert rejected.rejects[0].mode == "Reject"
+
+
+@pytest.mark.unit
+def test_evaluation_failure_in_review_mode_still_rejects() -> None:
+    class ReviewPolicy(openpit.pretrade.Policy):
+        @property
+        def name(self) -> str:
+            return "ReviewPolicy"
+
+        def check_pre_trade_start(
+            self, ctx: openpit.pretrade.Context, order: openpit.Order
+        ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+            return (
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.REFERENCE_DATA_UNAVAILABLE,
+                    reason="reference data unavailable",
+                    details="could not evaluate start-stage rule",
+                    mode=openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+                ),
+            )
+
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=ReviewPolicy()).build()
+    order = conftest.make_order()
+    start = engine.start_pre_trade(order=order)
+    dry_run = engine.start_pre_trade_dry_run(order=order)
+    assert not start
+    assert not dry_run
+    assert start.request is None
+    assert start.reviews == dry_run.reviews == []
+    assert start.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
+    assert dry_run.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
+
+
 @pytest.mark.unit
 def test_rate_limit_rejects_second_order_in_window() -> None:
     policies = openpit.pretrade.policies
