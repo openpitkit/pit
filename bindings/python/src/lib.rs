@@ -5394,8 +5394,10 @@ fn parse_spot_funds_limit_mode_str(value: &str) -> PyResult<SpotFundsLimitMode> 
     match value {
         "Enforce" => Ok(SpotFundsLimitMode::Enforce),
         "TrackOnly" => Ok(SpotFundsLimitMode::TrackOnly),
+        "ReviewWithHold" => Ok(SpotFundsLimitMode::ReviewWithHold),
+        "ReviewWithoutHold" => Ok(SpotFundsLimitMode::ReviewWithoutHold),
         other => Err(PyValueError::new_err(format!(
-            "limit_mode must be 'Enforce' or 'TrackOnly', got {other:?}"
+            "limit_mode must be 'Enforce', 'TrackOnly', 'ReviewWithHold' or 'ReviewWithoutHold', got {other:?}"
         ))),
     }
 }

@@ -20,6 +20,7 @@
 mod already_held;
 mod position_limit;
 mod properties;
+mod review_funds;
 mod review_pnl;
 mod unrealized;
 
@@ -46,7 +47,7 @@ use crate::{
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
     HasBalanceAsset, HasExecutionReportFillFee, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity,
-    HasSide, Instrument, Mutations, OrderOperation, RequestFieldAccessError,
+    HasSide, Instrument, Mutations, OrderOperation, RequestFieldAccessError, WithOrderReview,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -944,6 +945,83 @@ fn dry_run_check(
     // A dry-run must never register a mutation.
     assert!(mutations.is_empty(), "dry-run must push no mutations");
     result
+}
+
+fn review_check(
+    policy: &TestPolicy,
+    ctx: &PreTradeContext<crate::storage::FullLocking>,
+    order: &WithOrderReview<TestOrder>,
+    mutations: &mut Mutations,
+) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+    <TestPolicy as PreTradePolicy<
+        WithOrderReview<TestOrder>,
+        TestReport,
+        TestAdjustment,
+        FullSync,
+    >>::perform_pre_trade_check(policy, ctx, order, mutations)
+}
+
+fn review_dry_run(
+    policy: &TestPolicy,
+    ctx: &PreTradeContext<crate::storage::FullLocking>,
+    order: &WithOrderReview<TestOrder>,
+    mutations: &mut Mutations,
+) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+    <TestPolicy as PreTradePolicy<
+        WithOrderReview<TestOrder>,
+        TestReport,
+        TestAdjustment,
+        FullSync,
+    >>::perform_pre_trade_check_dry_run(policy, ctx, order, mutations)
+}
+
+fn snapshot(policy: &TestPolicy, order: &TestOrder) -> [Option<Holdings>; 2] {
+    [
+        holdings_of(
+            policy,
+            order.account_id,
+            order.instrument.underlying_asset(),
+        ),
+        holdings_of(
+            policy,
+            order.account_id,
+            order.instrument.settlement_asset(),
+        ),
+    ]
+}
+
+fn account_context(
+    drop_copy: bool,
+    confirmed: bool,
+    already_held: bool,
+) -> PreTradeContext<crate::storage::FullLocking> {
+    use crate::core::{AccountGroups, AccountGroupsHandle};
+    use crate::storage::{FullLocking, LockingPolicyFactory, StorageBuilder};
+    let engine = build_account_pnl_test_engine(settings(0));
+    let accounts = engine.accounts();
+    accounts.set_currency(account(1), asset("USD"));
+    let builder = StorageBuilder::new(FullLocking);
+    let groups =
+        AccountGroupsHandle::from_inner(FullLocking::new_shared(AccountGroups::new(&builder)));
+    if drop_copy {
+        PreTradeContext::with_accounts_and_drop_copy(
+            dummy_control(account(1)),
+            accounts,
+            groups,
+            account(1),
+            Ok(confirmed),
+            Ok(already_held),
+        )
+    } else {
+        PreTradeContext::with_accounts(
+            None,
+            accounts,
+            groups,
+            Ok(account(1)),
+            Ok(confirmed),
+            Ok(already_held),
+        )
+    }
 }
 
 fn apply_adj(
@@ -15288,6 +15366,7 @@ fn account_id_is_not_leaked_into_pnl_bound_block_and_details_name_currency() {
         crate::PnlState::Value(pnl_value("-11")),
         RuleMode::Reject,
         &barrier,
+        None,
         None,
     )
     .expect("the breached PnL bound must create a block");

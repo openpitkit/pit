@@ -62,7 +62,9 @@ extern "C" {
     pub type SpotFundsOverrideIterable;
 
     /// A spot-funds limit mode wire string.
-    #[wasm_bindgen(typescript_type = "\"Enforce\" | \"TrackOnly\" | null | undefined")]
+    #[wasm_bindgen(
+        typescript_type = "\"Enforce\" | \"TrackOnly\" | \"ReviewWithHold\" | \"ReviewWithoutHold\" | null | undefined"
+    )]
     pub type SpotFundsLimitModeLike;
 }
 
@@ -189,9 +191,11 @@ pub(crate) fn parse_limit_mode(value: &JsValue) -> Result<Option<SpotFundsLimitM
     match value.as_str() {
         "Enforce" => Ok(Some(SpotFundsLimitMode::Enforce)),
         "TrackOnly" => Ok(Some(SpotFundsLimitMode::TrackOnly)),
+        "ReviewWithHold" => Ok(Some(SpotFundsLimitMode::ReviewWithHold)),
+        "ReviewWithoutHold" => Ok(Some(SpotFundsLimitMode::ReviewWithoutHold)),
         _ => Err(make_error(
             ErrorKind::Range,
-            "limit mode must be \"Enforce\" or \"TrackOnly\"",
+            "limit mode must be \"Enforce\", \"TrackOnly\", \"ReviewWithHold\" or \"ReviewWithoutHold\"",
             None,
         )),
     }

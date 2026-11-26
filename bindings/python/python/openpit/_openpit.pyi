@@ -2947,6 +2947,10 @@ class Configurator:
         *global_limit_mode* is a
         :class:`~openpit.pretrade.policies.SpotFundsLimitMode`, or ``None`` to
         leave the global insufficient-funds limit mode unchanged.
+        Its values are ``ENFORCE``, ``TRACK_ONLY``, ``REVIEW_WITH_HOLD`` and
+        ``REVIEW_WITHOUT_HOLD``. Review modes request review on insufficient
+        funds with or without a hold respectively; sufficient funds produce
+        a normal hold without a mark.
 
         *account_limit_modes* and *account_group_limit_modes* contain
         :class:`~openpit.pretrade.policies.SpotFundsLimitModeAccountEntry` and

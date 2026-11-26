@@ -379,8 +379,10 @@ const (
 )
 
 const (
-	PretradePoliciesSpotFundsLimitModeEnforce   = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE
-	PretradePoliciesSpotFundsLimitModeTrackOnly = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY
+	PretradePoliciesSpotFundsLimitModeEnforce           = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE
+	PretradePoliciesSpotFundsLimitModeTrackOnly         = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY
+	PretradePoliciesSpotFundsLimitModeReviewWithHold    = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD
+	PretradePoliciesSpotFundsLimitModeReviewWithoutHold = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD
 )
 
 const (

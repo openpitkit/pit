@@ -20,34 +20,6 @@ use crate::{
     HasAlreadyHeld, HasConfirmed, HasOrderPrice, HasTradeAmount, OrderReview, WithOrderReview,
 };
 
-fn review_check(
-    policy: &TestPolicy,
-    ctx: &PreTradeContext<crate::storage::FullLocking>,
-    order: &WithOrderReview<TestOrder>,
-    mutations: &mut Mutations,
-) -> Result<Option<PolicyPreTradeResult>, Rejects> {
-    <TestPolicy as PreTradePolicy<
-        WithOrderReview<TestOrder>,
-        TestReport,
-        TestAdjustment,
-        FullSync,
-    >>::perform_pre_trade_check(policy, ctx, order, mutations)
-}
-
-fn review_dry_run(
-    policy: &TestPolicy,
-    ctx: &PreTradeContext<crate::storage::FullLocking>,
-    order: &WithOrderReview<TestOrder>,
-    mutations: &mut Mutations,
-) -> Result<Option<PolicyPreTradeResult>, Rejects> {
-    <TestPolicy as PreTradePolicy<
-        WithOrderReview<TestOrder>,
-        TestReport,
-        TestAdjustment,
-        FullSync,
-    >>::perform_pre_trade_check_dry_run(policy, ctx, order, mutations)
-}
-
 fn reviewed(inner: TestOrder, confirmed: bool) -> WithOrderReview<TestOrder> {
     WithOrderReview {
         inner,
@@ -74,21 +46,6 @@ fn commit_hold(policy: &TestPolicy, order: &TestOrder) -> PolicyPreTradeResult {
     assert!(!mutations.is_empty());
     assert!(!mutations.commit_all().failed());
     outcome
-}
-
-fn snapshot(policy: &TestPolicy, order: &TestOrder) -> [Option<Holdings>; 2] {
-    [
-        holdings_of(
-            policy,
-            order.account_id,
-            order.instrument.underlying_asset(),
-        ),
-        holdings_of(
-            policy,
-            order.account_id,
-            order.instrument.settlement_asset(),
-        ),
-    ]
 }
 
 pub(super) fn run_rerun_checks<T: std::fmt::Debug + PartialEq>(
@@ -265,33 +222,7 @@ fn independent_position_breach_rejects_without_releasing_the_hold() {
 }
 
 fn account_context(drop_copy: bool, review: bool) -> PreTradeContext<crate::storage::FullLocking> {
-    use crate::core::{AccountGroups, AccountGroupsHandle};
-    use crate::storage::{FullLocking, LockingPolicyFactory, StorageBuilder};
-    let engine = build_account_pnl_test_engine(settings(0));
-    let accounts = engine.accounts();
-    accounts.set_currency(account(1), asset("USD"));
-    let builder = StorageBuilder::new(FullLocking);
-    let groups =
-        AccountGroupsHandle::from_inner(FullLocking::new_shared(AccountGroups::new(&builder)));
-    if drop_copy {
-        PreTradeContext::with_accounts_and_drop_copy(
-            dummy_control(account(1)),
-            accounts,
-            groups,
-            account(1),
-            Ok(review),
-            Ok(review),
-        )
-    } else {
-        PreTradeContext::with_accounts(
-            None,
-            accounts,
-            groups,
-            Ok(account(1)),
-            Ok(review),
-            Ok(review),
-        )
-    }
+    super::account_context(drop_copy, review, review)
 }
 
 #[test]

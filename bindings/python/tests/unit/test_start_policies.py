@@ -488,14 +488,10 @@ def test_pnl_broker_barrier_rejects_invalid_mode(mode: object, suffix: str) -> N
 @pytest.mark.unit
 @pytest.mark.parametrize("native", [False, True], ids=["dataclass", "native"])
 def test_pnl_broker_barrier_ignores_mode_repr_override(native: bool) -> None:
-    class ModeWithRaisingRepr(str):
-        def __repr__(self) -> str:
-            raise RuntimeError("mode __repr__ must not be called")
-
     policies = openpit.pretrade.policies
     asset = openpit.param.Asset("USD")
     lower_bound = openpit.param.Pnl("-100")
-    mode = ModeWithRaisingRepr("Review")
+    mode = conftest.ModeWithRaisingRepr("Review")
 
     with pytest.raises(ValueError) as exc_info:
         if native:

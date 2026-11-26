@@ -149,11 +149,6 @@ where
 
         for (axis, barrier) in SpotFundsPnlBoundsAxis::ALL.into_iter().zip(barriers) {
             for (mode, barrier) in barrier {
-                let evaluation_mode = if reviews.is_some() {
-                    RuleMode::Reject
-                } else {
-                    mode
-                };
                 if let Some(block) = super::rejects::pnl_axis_currency_mismatch_block(
                     axis,
                     account_currency,
@@ -169,26 +164,20 @@ where
                         } else {
                             account_total
                         };
-                        if let Some(mut block) = super::rejects::pnl_axis_block_for_state(
-                            axis,
-                            None,
-                            state,
-                            evaluation_mode,
-                            barrier,
-                        ) {
+                        if let Some(mut block) =
+                            super::rejects::pnl_axis_block_for_state(axis, None, state, barrier)
+                        {
                             if axis == SpotFundsPnlBoundsAxis::AccountTotal
                                 && carry_account_total_provenance
                             {
                                 block.provenance = assertion_token;
                             }
-                            if mode != RuleMode::Reject && matches!(state, PnlState::Value(_)) {
-                                if let Some(marks) = reviews.as_mut() {
-                                    super::rejects::collect_review_mark(
-                                        marks,
-                                        Reject::from(block).with_mode(mode),
-                                    );
-                                }
-                            } else {
+                            if let Some(block) = super::rejects::classify_pnl_block(
+                                mode,
+                                state,
+                                block,
+                                reviews.as_deref_mut(),
+                            ) {
                                 return Some(block);
                             }
                         }
@@ -205,17 +194,14 @@ where
                                 axis,
                                 Some(asset),
                                 state,
-                                evaluation_mode,
                                 barrier,
                             ) {
-                                if mode != RuleMode::Reject && matches!(state, PnlState::Value(_)) {
-                                    if let Some(marks) = reviews.as_mut() {
-                                        super::rejects::collect_review_mark(
-                                            marks,
-                                            Reject::from(block).with_mode(mode),
-                                        );
-                                    }
-                                } else {
+                                if let Some(block) = super::rejects::classify_pnl_block(
+                                    mode,
+                                    state,
+                                    block,
+                                    reviews.as_deref_mut(),
+                                ) {
                                     return Some(block);
                                 }
                             }

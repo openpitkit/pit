@@ -73,6 +73,26 @@ namespace policies = openpit::pretrade::policies;
   return order;
 }
 
+void FundUsd(const Engine& engine, AccountId account) {
+  engine.Accounts().SetCurrency(account, ::openpit::param::Asset("USD"));
+  openpit::accountadjustment::BalanceOperation balance;
+  balance.asset = ::openpit::param::Asset("USD");
+  openpit::accountadjustment::AccountAdjustment adjustment;
+  adjustment.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(balance));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = ::openpit::param::AdjustmentAmount::Absolute(
+      ::openpit::param::PositionSize::FromString("1000"));
+  adjustment.amount = std::move(amount);
+  ASSERT_TRUE(
+      engine
+          .ApplyAccountAdjustment(
+              account,
+              std::vector<openpit::accountadjustment::AccountAdjustment>{
+                  adjustment})
+          .Passed());
+}
+
 // A rate-limit engine that admits a single order on the broker axis: the second
 // pre-trade for any account is rejected with RateLimitExceeded.
 [[nodiscard]] Engine SingleOrderEngine() {
@@ -1833,6 +1853,65 @@ TEST(EngineConfigure, SpotFundsLimitModeUpdateBuildsThroughAccessor) {
       policies::SpotFundsPolicyName, policies::SpotFundsLimitMode::TrackOnly));
 }
 
+TEST(EngineConfigure, SpotFundsLimitModeReviewHolds) {
+  using openpit::pretrade::RuleMode;
+  using policies::SpotFundsLimitMode;
+  for (const auto& test :
+       {std::pair{SpotFundsLimitMode::ReviewWithHold, RuleMode::ReviewWithHold},
+        std::pair{SpotFundsLimitMode::ReviewWithoutHold,
+                  RuleMode::ReviewWithoutHold}}) {
+    const auto mode = test.first;
+    const auto reviewMode = test.second;
+    SCOPED_TRACE(static_cast<int>(mode));
+    EngineBuilder builder(SyncPolicy::None);
+    builder.Add(policies::SpotFundsPolicy{});
+    const auto engine = builder.Build();
+    const auto account = AccountId::FromUint64(1);
+    FundUsd(engine, account);
+    engine.Configure().SpotFundsGlobalLimitMode(policies::SpotFundsPolicyName,
+                                                mode);
+    const auto checkOrder = [&](std::string_view quantity,
+                                std::size_t reviewCount, bool commit) {
+      auto result = engine.ExecutePreTrade(SizedOrder(quantity, "100"));
+      ASSERT_TRUE(result.Passed()) << "funds review must pass";
+      EXPECT_TRUE(result.rejects.empty());
+      ASSERT_TRUE(result.reservation.has_value());
+      const auto reviews = result.reservation->Reviews();
+      EXPECT_EQ(reviews.size(), reviewCount)
+          << "funds review count reflects the hold";
+      if (!reviews.empty()) {
+        EXPECT_EQ(reviews.front().code, RejectCode::InsufficientFunds);
+        EXPECT_EQ(reviews.front().mode, reviewMode);
+      }
+      if (commit) {
+        result.reservation->Commit();
+      } else {
+        result.reservation->Rollback();
+      }
+    };
+    checkOrder("1", 0, false);
+    checkOrder("11", 1, true);
+    checkOrder("1", reviewMode == RuleMode::ReviewWithHold ? 1U : 0U, false);
+  }
+}
+
+TEST(EngineConfigure, SpotFundsLimitModeInvalidIsValidation) {
+  EngineBuilder builder(SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  const auto engine = builder.Build();
+  try {
+    engine.Configure().SpotFundsGlobalLimitMode(
+        policies::SpotFundsPolicyName,
+        static_cast<policies::SpotFundsLimitMode>(4));
+    FAIL() << "invalid funds mode must throw ConfigureError";
+  } catch (const openpit::ConfigureError& error) {
+    EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
+    EXPECT_STREQ(error.what(),
+                 "spot funds limit_mode must be 0 (Enforce), 1 (TrackOnly), 2 "
+                 "(ReviewWithHold) or 3 (ReviewWithoutHold), got 4");
+  }
+}
+
 TEST(EngineConfigure, SpotFundsPositionLimitRoundTrip) {
   EngineBuilder builder(SyncPolicy::None);
   builder.Add(policies::SpotFundsPolicy{});
@@ -1840,23 +1919,7 @@ TEST(EngineConfigure, SpotFundsPositionLimitRoundTrip) {
 
   const AccountId account = AccountId::FromUint64(1);
   const ::openpit::param::Asset aapl("AAPL");
-  engine.Accounts().SetCurrency(account, ::openpit::param::Asset("USD"));
-  openpit::accountadjustment::BalanceOperation balance;
-  balance.asset = ::openpit::param::Asset("USD");
-  openpit::accountadjustment::AccountAdjustment adjustment;
-  adjustment.operation =
-      openpit::accountadjustment::Operation::OfBalance(std::move(balance));
-  openpit::accountadjustment::Amount amount;
-  amount.balance = ::openpit::param::AdjustmentAmount::Absolute(
-      ::openpit::param::PositionSize::FromString("1000"));
-  adjustment.amount = std::move(amount);
-  ASSERT_TRUE(
-      engine
-          .ApplyAccountAdjustment(
-              account,
-              std::vector<openpit::accountadjustment::AccountAdjustment>{
-                  adjustment})
-          .Passed());
+  FundUsd(engine, account);
 
   engine.Configure().SpotFundsPositionLimit(
       policies::SpotFundsPolicyName, account, aapl,

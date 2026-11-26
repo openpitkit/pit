@@ -189,6 +189,23 @@ export const SpotFundsLimitMode = {
   Enforce: "Enforce",
   /** Track funds and holds, but do not reject insufficient funds. */
   TrackOnly: "TrackOnly",
+  /**
+   * Request review on insufficient funds while recording the full hold,
+   * letting available go negative. The InsufficientFunds mark has mode
+   * ReviewWithHold; a final cancel report releases the hold. Sufficient funds
+   * produce no mark. Confirmed orders and drop-copy use TrackOnly without a
+   * mark. Overflow remains a reject.
+   */
+  ReviewWithHold: "ReviewWithHold",
+  /**
+   * Request review on insufficient funds without writing that leg or later
+   * reservation legs. The InsufficientFunds mark has mode ReviewWithoutHold.
+   * Remaining checks use temporary holdings; earlier order mutations are
+   * rolled back and the reservation has empty lock and outcomes. Sufficient
+   * funds produce a normal hold without a mark. Confirmed orders and drop-copy
+   * use TrackOnly without a mark. Overflow remains a reject.
+   */
+  ReviewWithoutHold: "ReviewWithoutHold",
 } as const;
 
 /** Spot-funds insufficient-funds limit mode. */

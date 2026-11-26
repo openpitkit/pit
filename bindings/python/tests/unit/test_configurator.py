@@ -16,6 +16,7 @@
 # Please see https://openpit.dev and the OWNERS file for details.
 
 import datetime
+from unittest.mock import ANY
 
 import conftest
 import openpit
@@ -1184,16 +1185,36 @@ def test_spot_pnl_omitted_mode_is_reject(runtime: bool) -> None:
     assert rejected.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
 
 
-@pytest.mark.parametrize("mode", ["reject", "reviewwithhold", "Unknown", 1, {}])
+@pytest.mark.parametrize(
+    ("mode", "suffix"),
+    [
+        ("reject", ", got 'reject'"),
+        ("reviewwithhold", ", got 'reviewwithhold'"),
+        ("Unknown", ", got 'Unknown'"),
+        (1, ""),
+        ({}, ""),
+        pytest.param(
+            conftest.ModeWithRaisingRepr("Review"),
+            ", got 'Review'",
+            id="repr-override",
+        ),
+        pytest.param(ANY, "", id="equal-to-member"),
+    ],
+)
 @pytest.mark.unit
-def test_spot_pnl_invalid_mode_is_value_error(mode: object) -> None:
+def test_spot_pnl_invalid_mode_is_value_error(mode: object, suffix: str) -> None:
     policies = openpit.pretrade.policies
-    with pytest.raises(ValueError, match="SpotFundsPnlBoundsBarrier.mode must be"):
+    with pytest.raises(ValueError) as caught:
         policies.SpotFundsPnlBoundsBarrier(
             currency=openpit.param.Asset("USD"),
             lower_bound=openpit.param.Pnl("-10"),
             mode=mode,  # type: ignore[arg-type]
         )
+    message = (
+        "SpotFundsPnlBoundsBarrier.mode must be 'Reject', 'ReviewWithHold', "
+        f"or 'ReviewWithoutHold'{suffix}"
+    )
+    assert str(caught.value) == message
 
 
 @pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
@@ -2177,6 +2198,94 @@ def test_spot_funds_position_limit_requires_explicit_limit() -> None:
         )
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mode", "review_mode", "remaining_reviews"),
+    [
+        (
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+            openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+            1,
+        ),
+        (
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITHOUT_HOLD,
+            openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+            0,
+        ),
+    ],
+)
+def test_spot_funds_limit_mode_review_holds(
+    mode: openpit.pretrade.policies.SpotFundsLimitMode,
+    review_mode: openpit.pretrade.RuleMode,
+    remaining_reviews: int,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+    account = openpit.param.AccountId.from_int(42)
+    engine.accounts().set_currency(account, openpit.param.Asset("USD"))
+    adjustment = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize("1000")
+            )
+        ),
+    )
+    assert engine.apply_account_adjustment(account, [adjustment]).ok
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME, global_limit_mode=mode
+    )
+
+    def check_order(quantity: str, review_count: int, *, commit: bool = False) -> None:
+        result = engine.execute_pre_trade(
+            order=conftest.make_order(
+                account_id=account,
+                price=openpit.param.Price("100"),
+                trade_amount=openpit.param.TradeAmount.quantity(quantity),
+            )
+        )
+        assert result.ok, "funds review must pass"
+        assert result.rejects == []
+        assert result.reservation is not None
+        committed = False
+        try:
+            assert (
+                len(result.reviews) == review_count
+            ), "funds review count reflects the hold"
+            if review_count:
+                assert (
+                    result.reviews[0].code
+                    == openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS
+                )
+                assert result.reviews[0].mode == review_mode
+            if commit:
+                result.reservation.commit()
+                committed = True
+        finally:
+            if not committed:
+                result.reservation.rollback()
+
+    check_order("1", 0)
+    check_order("11", 1, commit=True)
+    check_order("1", remaining_reviews)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["Unknown", "reviewwithhold"])
+def test_spot_funds_limit_mode_rejects_invalid_enum_entity(mode: str) -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+    with pytest.raises(TypeError, match="SpotFundsLimitMode"):
+        engine.configure().spot_funds(
+            policies.SpotFundsBuilder.NAME,
+            global_limit_mode=mode,  # type: ignore[arg-type]
+        )
+
+
 def _spot_funds_position_limit_engine() -> (
     tuple[openpit.Engine, openpit.param.AccountId, openpit.param.Asset]
 ):
@@ -2337,16 +2446,38 @@ def test_spot_funds_position_limit_duplicate_is_atomic(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("mode", ["Unknown", "reject", "reviewwithhold", 1, {}])
-def test_spot_funds_position_limit_invalid_mode_is_value_error(mode: object) -> None:
+@pytest.mark.parametrize(
+    ("mode", "suffix"),
+    [
+        ("Unknown", ", got 'Unknown'"),
+        ("reject", ", got 'reject'"),
+        ("reviewwithhold", ", got 'reviewwithhold'"),
+        (1, ""),
+        ({}, ""),
+        pytest.param(
+            conftest.ModeWithRaisingRepr("Review"),
+            ", got 'Review'",
+            id="repr-override",
+        ),
+        pytest.param(ANY, "", id="equal-to-member"),
+    ],
+)
+def test_spot_funds_position_limit_invalid_mode_is_value_error(
+    mode: object, suffix: str
+) -> None:
     policies = openpit.pretrade.policies
-    with pytest.raises(ValueError, match="SpotFundsPositionLimitEntry.mode must be"):
+    with pytest.raises(ValueError) as caught:
         policies.SpotFundsPositionLimitEntry(
             openpit.param.AccountId.from_int(42),
             openpit.param.Asset("AAPL"),
             None,
             mode=mode,  # type: ignore[arg-type]
         )
+    message = (
+        "SpotFundsPositionLimitEntry.mode must be 'Reject', 'ReviewWithHold', "
+        f"or 'ReviewWithoutHold'{suffix}"
+    )
+    assert str(caught.value) == message
 
 
 @pytest.mark.unit

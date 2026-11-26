@@ -22,21 +22,10 @@ package native
 */
 import "C"
 
-import (
-	"fmt"
-	"unsafe"
-)
+import "unsafe"
 
 //------------------------------------------------------------------------------
 // BuiltinRateLimitPolicy
-
-// ValidateRateLimitMode rejects unknown Go modes before native conversion.
-func ValidateRateLimitMode(mode PretradeRuleMode, axis string, index int) error {
-	if mode > RuleModeReviewWithoutHold {
-		return fmt.Errorf("%s[%d] has invalid mode %d", axis, index, mode)
-	}
-	return nil
-}
 
 func NewPretradePoliciesRateLimitBrokerBarrier(
 	mode PretradeRuleMode,
@@ -209,18 +198,17 @@ func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 
 func NewPretradePoliciesSpotFundsPnlBoundsBarrier(
 	mode PretradeRuleMode,
+	label string,
+	index int,
 	currency string,
 	lowerBound ParamPnlOptional,
 	upperBound ParamPnlOptional,
 ) (PretradePoliciesSpotFundsPnlBoundsBarrier, error) {
-	cMode, ok := checkedRuleModeToC(mode)
-	if !ok {
-		return PretradePoliciesSpotFundsPnlBoundsBarrier{}, fmt.Errorf(
-			"SpotFundsPnlBoundsBarrier.mode is invalid: %d", mode,
-		)
+	if err := ValidateRuleMode(mode, label, index); err != nil {
+		return PretradePoliciesSpotFundsPnlBoundsBarrier{}, err
 	}
 	return PretradePoliciesSpotFundsPnlBoundsBarrier{
-		mode:        cMode,
+		mode:        ruleModeToC(mode),
 		currency:    importString(currency),
 		lower_bound: lowerBound,
 		upper_bound: upperBound,

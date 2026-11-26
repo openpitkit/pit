@@ -471,7 +471,7 @@ func EngineConfigureSpotFundsPositionLimit(
 ) (ConfigureError, error) {
 	cMode, ok := checkedRuleModeToC(mode)
 	if !ok {
-		return nil, fmt.Errorf("position_limit mode is invalid: %d", mode)
+		return nil, fmt.Errorf("position_limit has invalid mode %d", mode)
 	}
 	var outError ConfigureError
 	if !C.openpit_engine_configure_spot_funds_position_limit(

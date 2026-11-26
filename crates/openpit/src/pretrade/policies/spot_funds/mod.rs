@@ -245,6 +245,7 @@ where
             mode,
             current_barrier,
             provenance,
+            None,
         ) else {
             continue;
         };
@@ -319,7 +320,7 @@ pub(crate) fn account_pnl_membership_change_block<StorageFactory>(
 where
     StorageFactory: LockingPolicyFactory,
 {
-    market_data::rule_modes().into_iter().find_map(|mode| {
+    RuleMode::ALL.into_iter().find_map(|mode| {
         let previous =
             settings.pnl_barrier_for(mode, account_id, previous_group, previous_currency);
         let current = settings.pnl_barrier_for(mode, account_id, current_group, current_currency);
@@ -340,7 +341,14 @@ where
         let (state, provenance) = pnl
             .with(&account_id, |entry| (entry.state, entry.assertion_token))
             .unwrap_or((crate::PnlState::Value(Pnl::ZERO), None));
-        rejects::account_pnl_block_for_state(current_currency, state, mode, current, provenance)
+        rejects::account_pnl_block_for_state(
+            current_currency,
+            state,
+            mode,
+            current,
+            provenance,
+            None,
+        )
     })
 }
 
@@ -379,7 +387,8 @@ fn release_account_pnl_lease<StorageFactory>(
 /// reservation they cannot cover fails through the regular
 /// [`crate::pretrade::RejectCode::InsufficientFunds`] path; under
 /// [`SpotFundsLimitMode::TrackOnly`] it is recorded and `available` goes
-/// negative.
+/// negative. Review modes emit an `InsufficientFunds` mark, with or without
+/// recording a hold; see [`SpotFundsLimitMode`].
 ///
 /// A position limit in `Reject` mode rejects an order whose projected
 /// position exceeds its inclusive bound with
@@ -1000,6 +1009,9 @@ where
     /// registering rollback, and success returns `Ok(None)` with no outcome
     /// entries or lock price. The flag does not validate the hold or require
     /// `confirmed`; a rejection leaves the existing hold untouched.
+    /// A breached review-mode P&L barrier, position limit or fund control
+    /// yields no review mark under `already_held`: the result is `Ok(None)`
+    /// and nothing is written.
     fn perform_pre_trade_check(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,

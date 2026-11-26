@@ -19,17 +19,11 @@
 
 /// Selects how the spot-funds control reacts to insufficient available funds.
 ///
-/// This enum is `Copy` and behaves like a small value type. It chooses between
-/// gating a reservation on funds and merely accounting for it; it never encodes
-/// the funds themselves, only the policy applied when a reservation would exceed
-/// what is available.
-///
-/// The two modes differ only on the insufficiency path; the bookkeeping is
-/// identical. In both modes the reservation is recorded against the account's
-/// available balance, positions, average entry price and realized PnL evolve the
-/// same way. The mode decides whether a shortfall is a hard reject
-/// ([`Enforce`](Self::Enforce)) or a tracked overshoot
-/// ([`TrackOnly`](Self::TrackOnly)).
+/// This `Copy` value selects the policy applied when a reservation exceeds
+/// available funds. The four modes have identical bookkeeping when funds are
+/// sufficient. On a shortfall they reject, track the overshoot, or request
+/// review with or without a hold. Positions, average entry price and realized
+/// PnL evolve identically through execution reports in every mode.
 ///
 /// # Examples
 ///
@@ -60,4 +54,26 @@ pub enum SpotFundsLimitMode {
     /// Arithmetic overflow is still surfaced as an integrity guard and is not
     /// suppressed by this mode.
     TrackOnly,
+
+    /// Request review on insufficient funds while recording the full hold.
+    ///
+    /// A shortfall drives `available` negative as in [`Self::TrackOnly`] and
+    /// emits an `InsufficientFunds` mark with `RuleMode::ReviewWithHold`.
+    /// Sufficient funds produce no mark. A confirmed order behaves as
+    /// [`Self::TrackOnly`], without a mark; drop-copy always uses that mode.
+    /// Arithmetic overflow remains a reject. A final cancel report releases
+    /// the hold through the normal execution path.
+    ReviewWithHold,
+
+    /// Request review on insufficient funds without writing that leg or later
+    /// reservation legs.
+    ///
+    /// A shortfall emits an `InsufficientFunds` mark with
+    /// `RuleMode::ReviewWithoutHold`. Remaining checks use temporary holdings
+    /// as in [`Self::TrackOnly`]; the engine rolls back earlier order mutations
+    /// and returns a reservation with empty lock and outcomes. Sufficient funds
+    /// produce a normal hold without a mark. Confirmed orders and drop-copy
+    /// behave as [`Self::TrackOnly`], without a mark.
+    /// Overflow remains a reject.
+    ReviewWithoutHold,
 }

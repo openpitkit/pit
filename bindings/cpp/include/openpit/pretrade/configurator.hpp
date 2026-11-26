@@ -410,6 +410,9 @@ class Configurator {
         ::openpit::accountadjustment::detail::PnlStateAccess::Native(reason));
   }
 
+  /// Sets the global insufficient-funds mode: Enforce, TrackOnly,
+  /// ReviewWithHold, or ReviewWithoutHold. Unknown modes throw ConfigureError
+  /// with ConfigureErrorKind::Validation, leaving the previous mode unchanged.
   void SpotFundsGlobalLimitMode(
       std::string_view name,
       ::openpit::pretrade::policies::SpotFundsLimitMode mode) const {
@@ -423,6 +426,10 @@ class Configurator {
     }
   }
 
+  /// Pins Enforce, TrackOnly, ReviewWithHold, or ReviewWithoutHold for an
+  /// account; std::nullopt clears the pin and restores the cascade.
+  /// Unknown modes throw ConfigureError with ConfigureErrorKind::Validation,
+  /// leaving the previous mode unchanged.
   void SpotFundsAccountLimitMode(
       std::string_view name, ::openpit::param::AccountId accountId,
       std::optional<::openpit::pretrade::policies::SpotFundsLimitMode> mode)
@@ -474,6 +481,10 @@ class Configurator {
     }
   }
 
+  /// Pins Enforce, TrackOnly, ReviewWithHold, or ReviewWithoutHold for a group;
+  /// std::nullopt clears the pin and restores the global mode.
+  /// Unknown modes throw ConfigureError with ConfigureErrorKind::Validation,
+  /// leaving the previous mode unchanged.
   void SpotFundsAccountGroupLimitMode(
       std::string_view name, ::openpit::param::AccountGroupId accountGroupId,
       std::optional<::openpit::pretrade::policies::SpotFundsLimitMode> mode)

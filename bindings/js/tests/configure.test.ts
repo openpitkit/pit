@@ -942,6 +942,82 @@ describe("runtime configurator", () => {
     );
   });
 
+  it.each([
+    [SpotFundsLimitMode.ReviewWithHold, RuleMode.ReviewWithHold, 1],
+    [SpotFundsLimitMode.ReviewWithoutHold, RuleMode.ReviewWithoutHold, 0],
+  ] as const)(
+    "marks a shortfall under funds mode %s",
+    (mode, reviewMode, remainingReviews) => {
+      const engine = Engine.builder().builtin(buildSpotFunds()).build();
+      engine.accounts().setCurrency(ACCOUNT, "USD");
+      expect(
+        engine.applyAccountAdjustment(ACCOUNT, [
+          {
+            operation: { asset: "USD" },
+            amount: { balance: AdjustmentAmount.absolute("1000") },
+          },
+        ]).ok,
+      ).toBe(true);
+      engine
+        .configure()
+        .spotFunds(SpotFundsBuilder.NAME, { globalLimitMode: mode });
+      const checkOrder = (
+        quantity: string,
+        reviewCount: number,
+        commit = false,
+      ) => {
+        const result = engine.executePreTrade(makeOrder(quantity));
+        expect(result.ok, "funds review must pass").toBe(true);
+        expect(result.rejects).toHaveLength(0);
+        expect(result.reservation).toBeDefined();
+        let committed = false;
+        try {
+          expect(
+            result.reviews,
+            "funds review count reflects the hold",
+          ).toHaveLength(reviewCount);
+          if (reviewCount > 0) {
+            expect(result.reviews[0]?.code).toBe("InsufficientFunds");
+            expect(result.reviews[0]?.mode).toBe(reviewMode);
+          }
+          if (commit) {
+            result.reservation!.commit();
+            committed = true;
+          }
+        } finally {
+          if (!committed) {
+            result.reservation?.rollback();
+          }
+        }
+      };
+      checkOrder("1", 0);
+      checkOrder("11", 1, true);
+      checkOrder("1", remainingReviews);
+    },
+  );
+
+  it.each([
+    [
+      "Unknown",
+      RangeError,
+      'limit mode must be "Enforce", "TrackOnly", "ReviewWithHold" or "ReviewWithoutHold"',
+    ],
+    [
+      "reviewwithhold",
+      RangeError,
+      'limit mode must be "Enforce", "TrackOnly", "ReviewWithHold" or "ReviewWithoutHold"',
+    ],
+    [4, TypeError, "limit mode must be a string"],
+  ] as const)("rejects invalid funds mode %s", (mode, error, message) => {
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+    const configureMode = () =>
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        globalLimitMode: mode as never,
+      });
+    expect(configureMode).toThrow(error);
+    expect(configureMode).toThrow(message);
+  });
+
   it("switches spot funds global limit mode at runtime", () => {
     // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
     // - Spot Funds: Global Limit Mode

@@ -290,9 +290,9 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) GlobalBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier)
+		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier, "global", len(b.globalBarriers))
 		if err != nil {
-			b.err = fmt.Errorf("global[%d]: %w", len(b.globalBarriers), err)
+			b.err = err
 			return b
 		}
 		b.globalBarriers = append(b.globalBarriers, nativeBarrier)
@@ -318,9 +318,9 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) AccountGroupBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier, "account_group", len(b.accountGroupBarriers))
 		if err != nil {
-			b.err = fmt.Errorf("account_group[%d]: %w", len(b.accountGroupBarriers), err)
+			b.err = err
 			return b
 		}
 		b.accountGroupBarriers = append(
@@ -355,9 +355,9 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) AccountBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier, "account", len(b.accountBarriers))
 		if err != nil {
-			b.err = fmt.Errorf("account[%d]: %w", len(b.accountBarriers), err)
+			b.err = err
 			return b
 		}
 		b.accountBarriers = append(
@@ -554,9 +554,13 @@ func NativeSpotFundsLimitModeOption(
 
 func newNativeSpotFundsPnlBoundsBarrier(
 	barrier SpotFundsPnlBoundsBarrier,
+	label string,
+	index int,
 ) (native.PretradePoliciesSpotFundsPnlBoundsBarrier, error) {
 	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
 		native.PretradeRuleMode(barrier.Mode),
+		label,
+		index,
 		barrier.Currency.Handle(),
 		newParamPnlOptionalFromOptional(barrier.LowerBound),
 		newParamPnlOptionalFromOptional(barrier.UpperBound),

@@ -99,6 +99,13 @@ pub enum RuleMode {
 }
 
 impl RuleMode {
+    // Keep the match exhaustive so adding a mode requires updating this list.
+    pub(super) const ALL: [Self; 3] = match Self::Reject {
+        Self::Reject | Self::ReviewWithHold | Self::ReviewWithoutHold => {
+            [Self::Reject, Self::ReviewWithHold, Self::ReviewWithoutHold]
+        }
+    };
+
     /// Returns the stable string representation of this mode.
     pub const fn as_str(self) -> &'static str {
         match self {

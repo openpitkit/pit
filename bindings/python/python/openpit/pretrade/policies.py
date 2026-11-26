@@ -34,6 +34,19 @@ if typing.TYPE_CHECKING:
 
 DEFAULT_POLICY_GROUP_ID = 0
 
+
+def _normalize_rule_mode(value: object, owner: str) -> RuleMode:
+    if value is None:
+        return RuleMode.REJECT
+    message = f"{owner}.mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold'"
+    if not issubclass(type(value), str):
+        raise ValueError(message)
+    try:
+        return RuleMode(str.__str__(value))
+    except ValueError:
+        raise ValueError(f"{message}, got {str.__repr__(value)}") from None
+
+
 OrderSizeLimit.__doc__ = """
 Optional quantity and notional caps for one order.
 
@@ -497,22 +510,9 @@ class PnlBoundsBrokerBarrier:
     mode: RuleMode | None = dataclasses.field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        mode = self.mode
-        if mode is None:
-            object.__setattr__(self, "mode", RuleMode.REJECT)
-            return
-
-        message = (
-            "PnlBoundsBrokerBarrier.mode must be 'Reject', 'ReviewWithHold', "
-            "or 'ReviewWithoutHold'"
+        object.__setattr__(
+            self, "mode", _normalize_rule_mode(self.mode, "PnlBoundsBrokerBarrier")
         )
-        if not issubclass(type(mode), str):
-            raise ValueError(message)
-        try:
-            parsed = RuleMode(str.__str__(mode))
-        except ValueError:
-            raise ValueError(f"{message}, got {str.__repr__(mode)}") from None
-        object.__setattr__(self, "mode", parsed)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -680,10 +680,22 @@ class SpotFundsLimitMode(_enum.StrEnum):
     ``TRACK_ONLY`` always records the reservation,
     letting available funds go negative, and never rejects on insufficiency;
     arithmetic overflow is still surfaced.
+    ``REVIEW_WITH_HOLD`` requests review on insufficiency while recording the
+    full hold, letting available go negative. The ``InsufficientFunds`` mark
+    has mode ``ReviewWithHold``; a final cancel report releases the hold.
+    ``REVIEW_WITHOUT_HOLD`` requests review on insufficiency without writing
+    that leg or later reservation legs. The mark has mode ``ReviewWithoutHold``.
+    Remaining checks use temporary holdings; earlier order mutations are rolled
+    back and the reservation has empty lock and outcomes. With sufficient
+    funds, both review modes produce a normal hold without a mark. Confirmed
+    orders and drop-copy use ``TRACK_ONLY`` without a mark. Overflow remains
+    a reject in both review modes.
     """
 
     ENFORCE = "Enforce"
     TRACK_ONLY = "TrackOnly"
+    REVIEW_WITH_HOLD = "ReviewWithHold"
+    REVIEW_WITHOUT_HOLD = "ReviewWithoutHold"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -734,17 +746,9 @@ class SpotFundsPositionLimitEntry:
     mode: RuleMode | None = dataclasses.field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        try:
-            mode = RuleMode.REJECT if self.mode is None else RuleMode(self.mode)
-        except ValueError:
-            message = (
-                "SpotFundsPositionLimitEntry.mode must be 'Reject', 'ReviewWithHold', "
-                "or 'ReviewWithoutHold'"
-            )
-            if isinstance(self.mode, str):
-                message += f", got {self.mode!r}"
-            raise ValueError(message) from None
-        object.__setattr__(self, "mode", mode)
+        object.__setattr__(
+            self, "mode", _normalize_rule_mode(self.mode, "SpotFundsPositionLimitEntry")
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -871,17 +875,9 @@ class SpotFundsPnlBoundsBarrier:
     mode: RuleMode | None = dataclasses.field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        try:
-            mode = RuleMode.REJECT if self.mode is None else RuleMode(self.mode)
-        except ValueError:
-            message = (
-                "SpotFundsPnlBoundsBarrier.mode must be 'Reject', 'ReviewWithHold', "
-                "or 'ReviewWithoutHold'"
-            )
-            if isinstance(self.mode, str):
-                message += f", got {self.mode!r}"
-            raise ValueError(message) from None
-        object.__setattr__(self, "mode", mode)
+        object.__setattr__(
+            self, "mode", _normalize_rule_mode(self.mode, "SpotFundsPnlBoundsBarrier")
+        )
 
 
 @dataclasses.dataclass(frozen=True)

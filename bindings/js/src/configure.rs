@@ -128,6 +128,12 @@ export interface SpotFundsConfigureOptions {
   globalSlippageBps?: number;
   pricingSource?: import("../types.js").SpotFundsPricingSource | null;
   overrides?: Iterable<SpotFundsOverride> | null;
+  /**
+   * Enforce, TrackOnly, ReviewWithHold or ReviewWithoutHold. Review modes
+   * request review on insufficient funds with or without a hold respectively;
+   * sufficient funds produce a normal hold without a mark. Omit or pass null
+   * to leave the global mode unchanged.
+   */
   globalLimitMode?: import("../types.js").SpotFundsLimitMode | null;
   accountLimitModes?: Iterable<SpotFundsLimitModeAccountEntry> | null;
   accountGroupLimitModes?: Iterable<SpotFundsLimitModeAccountGroupEntry> | null;

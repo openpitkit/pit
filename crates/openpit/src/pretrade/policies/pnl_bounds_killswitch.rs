@@ -611,12 +611,7 @@ where
             };
             let settlement = instrument.settlement_asset();
 
-            let barriers = [
-                RuleMode::Reject,
-                RuleMode::ReviewWithHold,
-                RuleMode::ReviewWithoutHold,
-            ]
-            .map(|mode| {
+            let barriers = RuleMode::ALL.map(|mode| {
                 let key = (settlement.clone(), mode);
                 let broker_barrier = s.broker_barriers.get(&key);
                 let account_barrier = s

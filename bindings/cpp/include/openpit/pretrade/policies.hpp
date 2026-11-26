@@ -58,6 +58,19 @@ enum class SpotFundsPricingSource : std::uint8_t {
 enum class SpotFundsLimitMode : std::uint8_t {
   Enforce = 0,
   TrackOnly = 1,
+  /// Request review on insufficient funds while recording the full hold.
+  /// Available goes negative; the InsufficientFunds mark has ReviewWithHold
+  /// mode. Sufficient funds produce no mark. Confirmed orders and drop-copy
+  /// use TrackOnly without a mark. Overflow remains a reject; a final cancel
+  /// report releases the hold.
+  ReviewWithHold = 2,
+  /// Request review on insufficient funds without writing that leg or later
+  /// reservation legs. The InsufficientFunds mark has ReviewWithoutHold mode.
+  /// Remaining checks use temporary holdings; earlier order mutations are
+  /// rolled back and the reservation has empty lock and outcomes. Sufficient
+  /// funds produce a normal hold without a mark. Confirmed orders and drop-copy
+  /// use TrackOnly without a mark. Overflow remains a reject.
+  ReviewWithoutHold = 3,
 };
 
 inline constexpr std::string_view RateLimitPolicyName = "RateLimitPolicy";

@@ -114,6 +114,14 @@ configurator.spotFunds(SpotFundsBuilder.NAME, {
   ],
 });
 
+for (const mode of ["ReviewWithHold", "ReviewWithoutHold"] as const) {
+  configurator.spotFunds(SpotFundsBuilder.NAME, {
+    globalLimitMode: mode,
+    accountLimitModes: [{ accountId: 42n, mode }],
+    accountGroupLimitModes: [{ accountGroupId: 7, mode }],
+  });
+}
+
 const positionLimitEntry: SpotFundsPositionLimitEntry = {
   accountId: 99_224_416n,
   asset: "AAPL",

@@ -160,6 +160,15 @@ blocked individually in place.
   asset and notional limits by settlement asset, with additive broker caps.
 - `build_spot_funds()`: enforces available-funds checks by default and tracks
   reservations and settlement state.
+  Runtime `SpotFundsLimitMode` values are `ENFORCE`, `TRACK_ONLY`,
+  `REVIEW_WITH_HOLD` and `REVIEW_WITHOUT_HOLD`. The review modes return an
+  `InsufficientFunds` review mark on a shortfall, with the corresponding
+  `RuleMode`. `REVIEW_WITH_HOLD` records the full hold, allowing available
+  funds to go negative; `REVIEW_WITHOUT_HOLD` leaves no hold for the order.
+  Sufficient funds produce a normal hold without a mark. Confirmed orders
+  and drop-copy use `TRACK_ONLY` without a mark. An `already_held` order
+  changes no balances and produces no funds review mark. Overflow remains
+  a reject.
 - `build_spot_funds_pnl_bounds_killswitch()`: enables account P&L bounds with
   Spot Funds in `TRACK_ONLY` mode. This preset records reservations but disables
   the insufficient-funds gate, so available funds may go negative instead of

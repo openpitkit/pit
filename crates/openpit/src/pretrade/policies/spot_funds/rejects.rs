@@ -20,8 +20,8 @@
 
 use crate::param::{Asset, PositionSize};
 use crate::pretrade::policy::{field_access_error_account_adjustment_reject, PolicyName};
-use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
-use crate::PnlHaltReason;
+use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects, RuleMode};
+use crate::{PnlHaltReason, PnlState};
 
 /// Blocks the account when `barrier` is denominated in another currency than
 /// the effective account currency it was resolved with.
@@ -61,40 +61,49 @@ pub(super) fn account_pnl_block_for_barriers<'a>(
     provenance: Option<u64>,
 ) -> Option<AccountBlock> {
     barriers.into_iter().find_map(|(mode, barrier)| {
-        account_pnl_block_for_state(account_currency, state, mode, barrier, provenance)
+        account_pnl_block_for_state(account_currency, state, mode, barrier, provenance, None)
     })
 }
 
 pub(super) fn account_pnl_block_for_state(
     account_currency: Option<&Asset>,
-    state: crate::PnlState,
-    mode: crate::pretrade::RuleMode,
+    state: PnlState,
+    mode: RuleMode,
     barrier: &super::SpotFundsPnlBoundsBarrier,
     provenance: Option<u64>,
+    marks: Option<&mut Vec<Reject>>,
 ) -> Option<AccountBlock> {
     if let Some(block) = account_pnl_barrier_currency_mismatch_block(account_currency, barrier) {
         return Some(block);
     }
-    labelled_pnl_block_for_state(
-        state,
-        mode,
-        barrier,
-        super::super::pnl_bounds::REALIZED_PNL_LABEL,
-    )
-    .map(|block| block.with_provenance(provenance))
+    let block =
+        labelled_pnl_block_for_state(state, barrier, super::super::pnl_bounds::REALIZED_PNL_LABEL)?
+            .with_provenance(provenance);
+    classify_pnl_block(mode, state, block, marks)
+}
+
+pub(super) fn classify_pnl_block(
+    mode: RuleMode,
+    state: PnlState,
+    block: AccountBlock,
+    marks: Option<&mut Vec<Reject>>,
+) -> Option<AccountBlock> {
+    if mode == RuleMode::Reject || matches!(state, PnlState::Halted(_)) {
+        return Some(block);
+    }
+    if let Some(marks) = marks {
+        collect_review_mark(marks, Reject::from(block).with_mode(mode));
+    }
+    None
 }
 
 fn labelled_pnl_block_for_state(
-    state: crate::PnlState,
-    mode: crate::pretrade::RuleMode,
+    state: PnlState,
     barrier: &super::SpotFundsPnlBoundsBarrier,
     label: &str,
 ) -> Option<AccountBlock> {
     match state {
-        crate::PnlState::Value(absolute) => {
-            if mode != crate::pretrade::RuleMode::Reject {
-                return None;
-            }
+        PnlState::Value(absolute) => {
             let sides = super::super::pnl_bounds::breached_sides(
                 barrier.lower_bound,
                 barrier.upper_bound,
@@ -115,7 +124,7 @@ fn labelled_pnl_block_for_state(
                 )
             })
         }
-        crate::PnlState::Halted(reason) => Some(account_pnl_halted_block(
+        PnlState::Halted(reason) => Some(account_pnl_halted_block(
             super::SPOT_FUNDS_POLICY_NAME,
             reason,
         )),
@@ -185,13 +194,12 @@ pub(super) fn pnl_axis_currency_mismatch_block(
 pub(super) fn pnl_axis_block_for_state(
     axis: super::SpotFundsPnlBoundsAxis,
     asset: Option<&Asset>,
-    state: crate::PnlState,
-    mode: crate::pretrade::RuleMode,
+    state: PnlState,
     barrier: &super::SpotFundsPnlBoundsBarrier,
 ) -> Option<AccountBlock> {
     let label = pnl_axis_label(axis);
-    let mut block = labelled_pnl_block_for_state(state, mode, barrier, label)?;
-    if matches!(state, crate::PnlState::Halted(_)) {
+    let mut block = labelled_pnl_block_for_state(state, barrier, label)?;
+    if matches!(state, PnlState::Halted(_)) {
         block.details = format!("{label}: {}", block.details);
     }
     if let Some(asset) = asset {

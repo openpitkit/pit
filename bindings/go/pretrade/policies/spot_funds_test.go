@@ -683,6 +683,56 @@ func TestSpotFundsLimitModeDefaultIsEnforce(t *testing.T) {
 	}
 }
 
+func TestSpotFundsLimitModeReviewHolds(t *testing.T) {
+	for _, test := range []struct {
+		mode             policies.SpotFundsLimitMode
+		reviewMode       reject.RuleMode
+		remainingReviews int
+	}{
+		{policies.SpotFundsLimitModeReviewWithHold, reject.RuleModeReviewWithHold, 1},
+		{policies.SpotFundsLimitModeReviewWithoutHold, reject.RuleModeReviewWithoutHold, 0},
+	} {
+		t.Run(test.mode.String(), func(t *testing.T) {
+			engine, err := openpit.NewEngineBuilder().NoSync().Builtin(policies.BuildSpotFunds()).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			defer engine.Stop()
+			account := param.NewAccountIDFromUint64(42)
+			seedSpotFundsLifecycleAccount(t, engine, account, mustAsset(t, "USD"))
+			if err := engine.Configure().SpotFundsGlobalLimitMode(policies.SpotFundsPolicyName, test.mode); err != nil {
+				t.Fatalf("configure review mode: %v", err)
+			}
+			checkOrder := func(quantity string, reviewCount int, commit bool) {
+				t.Helper()
+				order := spotFundsLifecycleOrder(t, account)
+				operation := order.EnsureOperationView()
+				operation.SetTradeAmount(param.NewQuantityTradeAmount(mustQuantity(t, quantity)))
+				reservation, rejects, err := engine.ExecutePreTrade(order)
+				if reservation != nil {
+					defer reservation.RollbackAndClose()
+				}
+				if err != nil || len(rejects) != 0 || reservation == nil {
+					t.Fatalf("quantity %s: expected pass without rejects, got %v, %v, %v", quantity, reservation, rejects, err)
+				}
+				reviews, err := reservation.Reviews()
+				if err != nil || len(reviews) != reviewCount {
+					t.Fatalf("quantity %s: reviews = %v, error = %v, want %d marks", quantity, reviews, err, reviewCount)
+				}
+				if reviewCount > 0 && (reviews[0].Code != reject.CodeInsufficientFunds || reviews[0].Mode != test.reviewMode) {
+					t.Fatalf("quantity %s: review = %v, want InsufficientFunds with mode %v", quantity, reviews[0], test.reviewMode)
+				}
+				if commit {
+					reservation.Commit()
+				}
+			}
+			checkOrder("1", 0, false)
+			checkOrder("11", 1, true)
+			checkOrder("1", test.remainingReviews, false)
+		})
+	}
+}
+
 func TestSpotFundsLimitModeNativeRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string
@@ -691,6 +741,8 @@ func TestSpotFundsLimitModeNativeRoundTrip(t *testing.T) {
 	}{
 		{"enforce", policies.SpotFundsLimitModeEnforce, native.PretradePoliciesSpotFundsLimitModeEnforce},
 		{"track-only", policies.SpotFundsLimitModeTrackOnly, native.PretradePoliciesSpotFundsLimitModeTrackOnly},
+		{"review-with-hold", policies.SpotFundsLimitModeReviewWithHold, native.PretradePoliciesSpotFundsLimitModeReviewWithHold},
+		{"review-without-hold", policies.SpotFundsLimitModeReviewWithoutHold, native.PretradePoliciesSpotFundsLimitModeReviewWithoutHold},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -742,7 +794,7 @@ func TestSpotFundsConfiguratorPropagatesFfiLimitModeValidation(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	invalidMode := policies.SpotFundsLimitMode(99)
+	invalidMode := policies.SpotFundsLimitMode(4)
 
 	assertConfigureValidationError(
 		t,
@@ -787,13 +839,19 @@ func assertConfigureValidationError(t *testing.T, label string, err error) {
 	if configErr.Kind != configure.ErrorKindValidation {
 		t.Fatalf("%s kind = %v, want Validation", label, configErr.Kind)
 	}
-	const wantMessage = "spot funds limit_mode must be 0 (Enforce) or 1 (TrackOnly), got 99"
+	const wantMessage = "spot funds limit_mode must be 0 (Enforce), 1 (TrackOnly), 2 (ReviewWithHold) or 3 (ReviewWithoutHold), got 4"
 	if configErr.Message != wantMessage {
 		t.Fatalf("%s message = %q, want %q", label, configErr.Message, wantMessage)
 	}
 }
 
 func TestSpotFundsLimitModeString(t *testing.T) {
+	if got := policies.SpotFundsLimitModeReviewWithHold.String(); got != "review-with-hold" {
+		t.Fatalf("ReviewWithHold.String() = %q, want %q", got, "review-with-hold")
+	}
+	if got := policies.SpotFundsLimitModeReviewWithoutHold.String(); got != "review-without-hold" {
+		t.Fatalf("ReviewWithoutHold.String() = %q, want %q", got, "review-without-hold")
+	}
 	if got := policies.SpotFundsLimitModeEnforce.String(); got != "enforce" {
 		t.Fatalf("Enforce.String() = %q, want %q", got, "enforce")
 	}
@@ -1402,22 +1460,30 @@ func TestSpotFundsPnlModesReachPolicy(t *testing.T) {
 
 func TestSpotFundsPnlInvalidModesFailBuild(t *testing.T) {
 	for _, mode := range []reject.RuleMode{3, 255} {
-		t.Run(fmt.Sprintf("mode_%d", mode), func(t *testing.T) {
-			barrier := policies.SpotFundsPnlBoundsBarrier{
-				Mode: mode, Currency: mustAsset(t, "USD"), LowerBound: optional.Some(mustPnl(t, "-10")),
-			}
-			engine, err := openpit.NewEngineBuilder().NoSync().
-				Builtin(policies.BuildSpotFundsPnlBoundsKillSwitch().GlobalBarriers(barrier)).Build()
-			if engine != nil {
-				engine.Stop()
-			}
-			if err == nil || !strings.Contains(err.Error(), "mode is invalid") {
-				t.Fatalf("Build() error = %v, want invalid mode error", err)
-			}
-			if !strings.Contains(err.Error(), fmt.Sprintf("SpotFundsPnlBoundsBarrier.mode is invalid: %d", mode)) {
-				t.Fatalf("Build() error = %v, want field and caller mode %d", err, mode)
-			}
-		})
+		for _, axis := range []string{"global", "account_group"} {
+			t.Run(fmt.Sprintf("%s/mode_%d", axis, mode), func(t *testing.T) {
+				barrier := policies.SpotFundsPnlBoundsBarrier{
+					Mode: mode, Currency: mustAsset(t, "USD"), LowerBound: optional.Some(mustPnl(t, "-10")),
+				}
+				builder := policies.BuildSpotFundsPnlBoundsKillSwitch()
+				var ready *policies.SpotFundsPnlBoundsKillSwitchReadyBuilder
+				if axis == "global" {
+					ready = builder.GlobalBarriers(barrier)
+				} else {
+					ready = builder.AccountGroupBarriers(policies.SpotFundsPnlBoundsAccountGroupBarrier{
+						AccountGroupID: mustAccountGroupID(t, 42), Barrier: barrier,
+					})
+				}
+				engine, err := openpit.NewEngineBuilder().NoSync().Builtin(ready).Build()
+				if engine != nil {
+					engine.Stop()
+				}
+				want := fmt.Sprintf("%s[0] has invalid mode %d", axis, mode)
+				if err == nil || err.Error() != want {
+					t.Fatalf("Build() error = %v, want %q", err, want)
+				}
+			})
+		}
 	}
 }
 
@@ -1440,15 +1506,15 @@ func TestSpotFundsPnlInvalidAccountModeBuildReportsTierAndIndex(t *testing.T) {
 			if engine != nil {
 				engine.Stop()
 			}
-			want := fmt.Sprintf("account[2]: SpotFundsPnlBoundsBarrier.mode is invalid: %d", mode)
-			if err == nil || !strings.Contains(err.Error(), want) {
+			want := fmt.Sprintf("account[2] has invalid mode %d", mode)
+			if err == nil || err.Error() != want {
 				t.Fatalf("Build() error = %v, want %q", err, want)
 			}
 		})
 	}
 }
 
-func TestSpotFundsPnlInvalidAccountModeConfigureReportsTierAndIndex(t *testing.T) {
+func TestSpotFundsPnlInvalidModeConfigureReportsTierAndIndex(t *testing.T) {
 	engine, err := openpit.NewEngineBuilder().NoSync().Builtin(policies.BuildSpotFunds()).Build()
 	if err != nil {
 		t.Fatal(err)
@@ -1461,20 +1527,37 @@ func TestSpotFundsPnlInvalidAccountModeConfigureReportsTierAndIndex(t *testing.T
 		},
 	}
 	for _, mode := range []reject.RuleMode{3, 255} {
-		invalid := valid
-		invalid.AccountID = param.NewAccountIDFromUint64(43)
-		invalid.Barrier.Mode = mode
-		_, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
-			policies.SpotFundsPolicyName, nil, nil,
-			[]policies.SpotFundsPnlBoundsAccountBarrier{valid, invalid},
-		)
-		var configErr *configure.Error
-		if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
-			t.Fatalf("configure error = %v (%T), want Validation", err, err)
-		}
-		want := fmt.Sprintf("account[1]: SpotFundsPnlBoundsBarrier.mode is invalid: %d", mode)
-		if !strings.Contains(configErr.Message, want) {
-			t.Fatalf("configure message = %q, want %q", configErr.Message, want)
+		for _, axis := range []string{"global", "account_group", "account"} {
+			t.Run(fmt.Sprintf("%s/mode_%d", axis, mode), func(t *testing.T) {
+				invalid := valid
+				invalid.AccountID = param.NewAccountIDFromUint64(43)
+				invalid.Barrier.Mode = mode
+				var globals []policies.SpotFundsPnlBoundsBarrier
+				var groups []policies.SpotFundsPnlBoundsAccountGroupBarrier
+				var accounts []policies.SpotFundsPnlBoundsAccountBarrier
+				switch axis {
+				case "global":
+					globals = []policies.SpotFundsPnlBoundsBarrier{valid.Barrier, invalid.Barrier}
+				case "account_group":
+					groups = []policies.SpotFundsPnlBoundsAccountGroupBarrier{
+						{AccountGroupID: mustAccountGroupID(t, 42), Barrier: valid.Barrier},
+						{AccountGroupID: mustAccountGroupID(t, 43), Barrier: invalid.Barrier},
+					}
+				case "account":
+					accounts = []policies.SpotFundsPnlBoundsAccountBarrier{valid, invalid}
+				}
+				_, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+					policies.SpotFundsPolicyName, globals, groups, accounts,
+				)
+				var configErr *configure.Error
+				if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
+					t.Fatalf("configure error = %v (%T), want Validation", err, err)
+				}
+				want := fmt.Sprintf("%s[1] has invalid mode %d", axis, mode)
+				if configErr.Message != want {
+					t.Fatalf("configure message = %q, want %q", configErr.Message, want)
+				}
+			})
 		}
 	}
 }
@@ -1586,7 +1669,7 @@ func TestSpotFundsPnlGlobalListsPatchAllModes(t *testing.T) {
 		if len(barriers) == 2 && !strings.Contains(configErr.Message, "ReviewWithHold") {
 			t.Fatalf("duplicate message = %q, want mode", configErr.Message)
 		}
-		if len(barriers) == 1 && !strings.Contains(configErr.Message, "SpotFundsPnlBoundsBarrier.mode is invalid: 3") {
+		if len(barriers) == 1 && configErr.Message != "global[0] has invalid mode 3" {
 			t.Fatalf("configure message = %q, want field and caller mode 3", configErr.Message)
 		}
 		checkReviews(1)
@@ -2487,7 +2570,7 @@ func TestSpotFundsPositionLimitModes(t *testing.T) {
 					if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
 						t.Fatalf("mode %v: error = %v (%T), want Validation", invalidMode, err, err)
 					}
-					if !strings.Contains(configErr.Message, fmt.Sprintf("position_limit mode is invalid: %d", invalidMode)) {
+					if configErr.Message != fmt.Sprintf("position_limit has invalid mode %d", invalidMode) {
 						t.Fatalf("configure message = %q, want field and caller mode %d", configErr.Message, invalidMode)
 					}
 					checkOrder("1", true, 1)

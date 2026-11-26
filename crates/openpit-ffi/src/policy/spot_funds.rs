@@ -51,6 +51,23 @@ pub const OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE:
 /// never rejects. Arithmetic overflow is still surfaced.
 pub const OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY:
     OpenPitPretradePoliciesSpotFundsLimitMode = 1;
+/// Request review on insufficient funds while recording the full hold.
+/// A shortfall drives `available` negative and emits an `InsufficientFunds`
+/// mark with `ReviewWithHold`. Sufficient funds produce no mark. Confirmed
+/// orders behave as `TrackOnly`, without a mark; drop-copy always uses that
+/// mode. Arithmetic overflow remains a reject. A final cancel report releases
+/// the hold through the normal execution path.
+pub const OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD:
+    OpenPitPretradePoliciesSpotFundsLimitMode = 2;
+/// Request review on insufficient funds without writing that leg or later
+/// reservation legs. A shortfall emits an `InsufficientFunds` mark with
+/// `ReviewWithoutHold`. Remaining checks use temporary holdings as in
+/// `TrackOnly`; earlier order mutations are rolled back and the reservation
+/// has empty lock and outcomes. Sufficient funds produce a normal hold without
+/// a mark. Confirmed orders and drop-copy behave as `TrackOnly`, without a
+/// mark. Overflow remains a reject.
+pub const OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD:
+    OpenPitPretradePoliciesSpotFundsLimitMode = 3;
 
 pub(crate) fn import_spot_funds_limit_mode(
     value: OpenPitPretradePoliciesSpotFundsLimitMode,
@@ -60,8 +77,14 @@ pub(crate) fn import_spot_funds_limit_mode(
         OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY => {
             Ok(SpotFundsLimitMode::TrackOnly)
         }
+        OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD => {
+            Ok(SpotFundsLimitMode::ReviewWithHold)
+        }
+        OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD => {
+            Ok(SpotFundsLimitMode::ReviewWithoutHold)
+        }
         other => Err(OpenPitConfigureError::validation(format!(
-            "spot funds limit_mode must be 0 (Enforce) or 1 (TrackOnly), got {other}"
+            "spot funds limit_mode must be 0 (Enforce), 1 (TrackOnly), 2 (ReviewWithHold) or 3 (ReviewWithoutHold), got {other}"
         ))),
     }
 }
@@ -294,17 +317,7 @@ fn parse_pnl_barrier_or_error(
     index: usize,
     out_error: OpenPitOutError,
 ) -> Option<SpotFundsPnlBoundsBarrier> {
-    let mode = match import_rule_mode(entry.mode) {
-        Some(mode) => mode,
-        None => {
-            write_error_format!(
-                out_error,
-                "{label}[{index}] mode is invalid: {}",
-                entry.mode
-            );
-            return None;
-        }
-    };
+    let mode = parse_rule_mode_or_error(entry.mode, label, index, out_error)?;
     let currency = parse_asset_or_error(entry.currency, label, index, "currency", out_error)?;
     let lower_bound = match parse_optional_pnl_or_error(
         entry.lower_bound,
@@ -339,12 +352,7 @@ fn parse_configure_pnl_barrier(
     label: &str,
     index: usize,
 ) -> Result<SpotFundsPnlBoundsBarrier, OpenPitConfigureError> {
-    let mode = import_rule_mode(entry.mode).ok_or_else(|| {
-        OpenPitConfigureError::validation(format!(
-            "{label}[{index}] mode is invalid: {}",
-            entry.mode
-        ))
-    })?;
+    let mode = parse_configure_rule_mode(entry.mode, label, index)?;
     let currency = parse_configure_asset(entry.currency, label, index, "currency")?;
     let lower_bound = parse_configure_optional_pnl(entry.lower_bound, label, index, "lower_bound")?;
     let upper_bound = parse_configure_optional_pnl(entry.upper_bound, label, index, "upper_bound")?;
@@ -1306,8 +1314,10 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_set_account_pnl(
 /// - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
 ///   added via `openpit_engine_builder_add_builtin_spot_funds_policy`
 ///   registers under its fixed name `"SpotFundsPolicy"`.
-/// - `mode` selects `Enforce` (0; reject on insufficient funds) or `TrackOnly`
-///   (1; always record, allow negative available).
+/// - `mode` selects `Enforce` (0; reject on insufficient funds), `TrackOnly`
+///   (1; always record, allow negative available), `ReviewWithHold` (2; review
+///   a shortfall and record the hold), or `ReviewWithoutHold` (3; review a
+///   shortfall without a hold).
 ///
 /// Success:
 /// - returns `true`; the new global mode applies from the next order onward.
@@ -1364,7 +1374,8 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_global_limit_mode(
 ///   `has_mode` is `false`, any existing per-account override is cleared and
 ///   the cascade falls through to the account-group and global tiers;
 ///   `mode` is ignored. When `has_mode` is `true`, `mode` must select
-///   `Enforce` (0) or `TrackOnly` (1).
+///   `Enforce` (0), `TrackOnly` (1), `ReviewWithHold` (2), or
+///   `ReviewWithoutHold` (3).
 ///
 /// Success / error: as
 /// `openpit_engine_configure_spot_funds_global_limit_mode`.
@@ -1513,7 +1524,8 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
 /// - When `has_mode` is `true`, the group is pinned to `mode`. When `has_mode`
 ///   is `false`, any existing per-account-group override is cleared and the
 ///   cascade falls through to the global tier; `mode` is ignored. When
-///   `has_mode` is `true`, `mode` must select `Enforce` (0) or `TrackOnly` (1).
+///   `has_mode` is `true`, `mode` must select `Enforce` (0), `TrackOnly` (1),
+///   `ReviewWithHold` (2), or `ReviewWithoutHold` (3).
 ///
 /// Success / error: as
 /// `openpit_engine_configure_spot_funds_global_limit_mode`.
@@ -3247,62 +3259,206 @@ mod tests {
     }
 
     #[test]
-    fn configure_spot_funds_limit_modes_happy_path() {
+    fn configure_spot_funds_review_limit_modes_record_expected_holds() {
+        for (mode, review_mode, remaining_review) in [
+            (2, RuleMode::ReviewWithHold, Some(RuleMode::ReviewWithHold)),
+            (3, RuleMode::ReviewWithoutHold, None),
+        ] {
+            let engine = funded_spot_funds_engine();
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_global_limit_mode(
+                    engine,
+                    OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                    mode,
+                    std::ptr::null_mut(),
+                )
+            });
+            assert_funds_order(engine, "1", None, false);
+            assert_funds_order(engine, "11", Some(review_mode), true);
+            assert_funds_order(engine, "1", remaining_review, false);
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    fn funded_spot_funds_engine() -> *mut crate::engine::OpenPitEngine {
+        use crate::account_adjustment::*;
         let engine = engine_with_spot_funds();
-        let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
-
-        assert!(unsafe {
-            openpit_engine_configure_spot_funds_global_limit_mode(
+        assert!(crate::engine::openpit_engine_set_account_currency(
+            engine,
+            42,
+            OpenPitStringView::from_utf8("USD"),
+            null_out_error(),
+        ));
+        let mut adjustment = OpenPitAccountAdjustment::default();
+        adjustment.operation.kind = OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE;
+        adjustment.operation.balance.asset = OpenPitStringView::from_utf8("USD");
+        adjustment.amount.is_set = true;
+        adjustment.amount.value.balance = OpenPitParamAdjustmentAmount {
+            kind: crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE,
+            value: crate::param::OpenPitParamPositionSize(
+                openpit::param::PositionSize::from_str("1000")
+                    .unwrap()
+                    .to_decimal()
+                    .into(),
+            ),
+        };
+        assert_eq!(
+            crate::engine::openpit_engine_apply_account_adjustment(
                 engine,
-                name,
-                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
-                std::ptr::null_mut(),
-            )
-        });
-        assert!(unsafe {
-            openpit_engine_configure_spot_funds_account_limit_mode(
-                engine,
-                name,
                 42,
-                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
-                true,
+                &adjustment,
+                1,
                 std::ptr::null_mut(),
-            )
-        });
-        // Clear the per-account override (has_mode == false).
-        assert!(unsafe {
-            openpit_engine_configure_spot_funds_account_limit_mode(
-                engine,
-                name,
-                42,
-                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
-                false,
                 std::ptr::null_mut(),
-            )
-        });
-        assert!(unsafe {
-            openpit_engine_configure_spot_funds_account_group_limit_mode(
-                engine,
-                name,
-                3,
-                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
-                true,
                 std::ptr::null_mut(),
-            )
-        });
-        // Clear the per-account-group override (has_mode == false).
-        assert!(unsafe {
-            openpit_engine_configure_spot_funds_account_group_limit_mode(
-                engine,
-                name,
-                3,
-                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
-                false,
-                std::ptr::null_mut(),
-            )
-        });
+                null_out_error(),
+            ),
+            OpenPitAccountAdjustmentApplyStatus::Applied
+        );
+        engine
+    }
 
-        crate::engine::openpit_destroy_engine(engine);
+    fn spot_funds_buy_order(quantity: &str) -> crate::order::OpenPitOrder {
+        let mut order = crate::order::OpenPitOrder::default();
+        order.operation.is_set = true;
+        let operation = &mut order.operation.value;
+        operation.account_id.value = 42;
+        operation.account_id.is_set = true;
+        operation.instrument = crate::instrument::OpenPitInstrument {
+            underlying_asset: OpenPitStringView::from_utf8("AAPL"),
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+        };
+        operation.side = crate::param::OPENPIT_PARAM_SIDE_BUY;
+        operation.price.is_set = true;
+        operation.price.value = crate::param::OpenPitParamPrice(
+            openpit::param::Price::from_str("100")
+                .unwrap()
+                .to_decimal()
+                .into(),
+        );
+        operation.trade_amount = crate::param::OpenPitParamTradeAmount {
+            kind: crate::param::OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
+            value: openpit::param::Quantity::from_str(quantity)
+                .unwrap()
+                .to_decimal()
+                .into(),
+        };
+        order
+    }
+
+    fn assert_funds_order(
+        engine: *mut crate::engine::OpenPitEngine,
+        quantity: &str,
+        review_mode: Option<RuleMode>,
+        commit: bool,
+    ) {
+        let order = spot_funds_buy_order(quantity);
+        let mut reservation = std::ptr::null_mut();
+        let mut rejects = std::ptr::null_mut();
+        assert_eq!(
+            crate::engine::openpit_engine_execute_pre_trade(
+                engine,
+                &order,
+                &mut reservation,
+                &mut rejects,
+                null_out_error(),
+            ),
+            crate::engine::OpenPitPretradeStatus::Passed,
+            "funds review must pass"
+        );
+        assert!(rejects.is_null(), "funds review must not reject");
+        assert!(!reservation.is_null());
+        let reviews =
+            crate::engine::openpit_pretrade_pre_trade_reservation_get_reviews(reservation);
+        let items = &unsafe { &*reviews }.items;
+        assert_eq!(
+            items.len(),
+            usize::from(review_mode.is_some()),
+            "funds review count reflects the hold"
+        );
+        if let Some(mode) = review_mode {
+            assert_eq!(
+                items[0].code,
+                openpit::pretrade::RejectCode::InsufficientFunds
+            );
+            assert_eq!(
+                items[0].mode, mode,
+                "funds review preserves the configured mode"
+            );
+        }
+        crate::reject::openpit_destroy_pretrade_reject_list(reviews);
+        if commit {
+            crate::engine::openpit_pretrade_pre_trade_reservation_commit(reservation);
+        } else {
+            crate::engine::openpit_pretrade_pre_trade_reservation_rollback(reservation);
+        }
+        crate::engine::openpit_destroy_pretrade_pre_trade_reservation(reservation);
+    }
+
+    #[test]
+    fn configure_spot_funds_limit_modes_happy_path() {
+        for mode in [
+            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
+            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
+            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = engine_with_spot_funds();
+            let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_global_limit_mode(
+                    engine,
+                    name,
+                    mode,
+                    std::ptr::null_mut(),
+                )
+            });
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_account_limit_mode(
+                    engine,
+                    name,
+                    42,
+                    mode,
+                    true,
+                    std::ptr::null_mut(),
+                )
+            });
+            // Clear the per-account override (has_mode == false).
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_account_limit_mode(
+                    engine,
+                    name,
+                    42,
+                    OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
+                    false,
+                    std::ptr::null_mut(),
+                )
+            });
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_account_group_limit_mode(
+                    engine,
+                    name,
+                    3,
+                    mode,
+                    true,
+                    std::ptr::null_mut(),
+                )
+            });
+            // Clear the per-account-group override (has_mode == false).
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_account_group_limit_mode(
+                    engine,
+                    name,
+                    3,
+                    OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
+                    false,
+                    std::ptr::null_mut(),
+                )
+            });
+
+            crate::engine::openpit_destroy_engine(engine);
+        }
     }
 
     #[test]
@@ -3327,24 +3483,41 @@ mod tests {
 
     #[test]
     fn configure_spot_funds_global_limit_mode_invalid_mode_is_validation() {
-        let engine = engine_with_spot_funds();
-        let mut out_error = std::ptr::null_mut();
-        let ok = unsafe {
-            openpit_engine_configure_spot_funds_global_limit_mode(
-                engine,
-                OpenPitStringView::from_utf8("SpotFundsPolicy"),
-                99,
-                &mut out_error,
-            )
-        };
-        assert!(!ok);
-        assert!(!out_error.is_null());
-        assert_eq!(
-            crate::engine::openpit_configure_error_get_kind(out_error),
-            crate::engine::OpenPitConfigureErrorKind::Validation
-        );
-        crate::engine::openpit_destroy_configure_error(out_error);
-        crate::engine::openpit_destroy_engine(engine);
+        for mode in [4, 99, 255] {
+            let engine = funded_spot_funds_engine();
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_global_limit_mode(
+                    engine,
+                    OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                    2,
+                    std::ptr::null_mut(),
+                )
+            });
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe {
+                openpit_engine_configure_spot_funds_global_limit_mode(
+                    engine,
+                    OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                    mode,
+                    &mut out_error,
+                )
+            };
+            assert!(!ok);
+            assert!(!out_error.is_null());
+            assert_eq!(
+                crate::engine::openpit_configure_error_get_kind(out_error),
+                crate::engine::OpenPitConfigureErrorKind::Validation
+            );
+            let message = crate::engine::openpit_configure_error_get_message(out_error);
+            let expected = format!(
+                "spot funds limit_mode must be 0 (Enforce), 1 (TrackOnly), \
+                 2 (ReviewWithHold) or 3 (ReviewWithoutHold), got {mode}"
+            );
+            assert_eq!(unsafe { cstr_arg(message) }.unwrap(), expected);
+            crate::engine::openpit_destroy_configure_error(out_error);
+            assert_funds_order(engine, "11", Some(RuleMode::ReviewWithHold), false);
+            crate::engine::openpit_destroy_engine(engine);
+        }
     }
 
     #[test]
@@ -3366,26 +3539,45 @@ mod tests {
 
     #[test]
     fn configure_spot_funds_account_limit_mode_invalid_mode_is_validation() {
-        let engine = engine_with_spot_funds();
-        let mut out_error = std::ptr::null_mut();
-        let ok = unsafe {
-            openpit_engine_configure_spot_funds_account_limit_mode(
-                engine,
-                OpenPitStringView::from_utf8("SpotFundsPolicy"),
-                42,
-                99,
-                true,
-                &mut out_error,
-            )
-        };
-        assert!(!ok);
-        assert!(!out_error.is_null());
-        assert_eq!(
-            crate::engine::openpit_configure_error_get_kind(out_error),
-            crate::engine::OpenPitConfigureErrorKind::Validation
-        );
-        crate::engine::openpit_destroy_configure_error(out_error);
-        crate::engine::openpit_destroy_engine(engine);
+        for mode in [4, 99, 255] {
+            let engine = funded_spot_funds_engine();
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_account_limit_mode(
+                    engine,
+                    OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                    42,
+                    OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+                    true,
+                    std::ptr::null_mut(),
+                )
+            });
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe {
+                openpit_engine_configure_spot_funds_account_limit_mode(
+                    engine,
+                    OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                    42,
+                    mode,
+                    true,
+                    &mut out_error,
+                )
+            };
+            assert!(!ok);
+            assert!(!out_error.is_null());
+            assert_eq!(
+                crate::engine::openpit_configure_error_get_kind(out_error),
+                crate::engine::OpenPitConfigureErrorKind::Validation
+            );
+            let message = crate::engine::openpit_configure_error_get_message(out_error);
+            let expected = format!(
+                "spot funds limit_mode must be 0 (Enforce), 1 (TrackOnly), \
+                 2 (ReviewWithHold) or 3 (ReviewWithoutHold), got {mode}"
+            );
+            assert_eq!(unsafe { cstr_arg(message) }.unwrap(), expected);
+            crate::engine::openpit_destroy_configure_error(out_error);
+            assert_funds_order(engine, "11", Some(RuleMode::ReviewWithHold), false);
+            crate::engine::openpit_destroy_engine(engine);
+        }
     }
 
     #[test]
@@ -3532,30 +3724,7 @@ mod tests {
                 });
             }
             for (quantity, passed) in [("1", true), ("3", false)] {
-                let mut order = crate::order::OpenPitOrder::default();
-                order.operation.is_set = true;
-                let operation = &mut order.operation.value;
-                operation.account_id.value = 42;
-                operation.account_id.is_set = true;
-                operation.instrument = crate::instrument::OpenPitInstrument {
-                    underlying_asset: OpenPitStringView::from_utf8("AAPL"),
-                    settlement_asset: OpenPitStringView::from_utf8("USD"),
-                };
-                operation.side = crate::param::OPENPIT_PARAM_SIDE_BUY;
-                operation.price.is_set = true;
-                operation.price.value = crate::param::OpenPitParamPrice(
-                    openpit::param::Price::from_str("100")
-                        .unwrap()
-                        .to_decimal()
-                        .into(),
-                );
-                operation.trade_amount = crate::param::OpenPitParamTradeAmount {
-                    kind: crate::param::OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
-                    value: openpit::param::Quantity::from_str(quantity)
-                        .unwrap()
-                        .to_decimal()
-                        .into(),
-                };
+                let order = spot_funds_buy_order(quantity);
                 let mut report = std::ptr::null_mut();
                 assert!(crate::engine::openpit_engine_execute_pre_trade_dry_run(
                     engine,

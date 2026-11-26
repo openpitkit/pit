@@ -298,7 +298,9 @@ fn op(profile: Profile, exclusions: &'static [Exclusion]) -> BoxedStrategy<Op> {
 fn case(profile: Profile, exclusions: &'static [Exclusion]) -> impl Strategy<Value = Case> {
     let mode = prop_oneof![
         Just(SpotFundsLimitMode::Enforce),
-        Just(SpotFundsLimitMode::TrackOnly)
+        Just(SpotFundsLimitMode::TrackOnly),
+        Just(SpotFundsLimitMode::ReviewWithHold),
+        Just(SpotFundsLimitMode::ReviewWithoutHold),
     ];
     let slots = prop::array::uniform6(universe_slot()).prop_filter(
         "exact execution needs a limited pair",
@@ -357,6 +359,7 @@ struct OpenOrder {
 struct Admission {
     slots: HashMap<Asset, Slot>,
     order: OpenOrder,
+    review: Option<RuleMode>,
 }
 
 // One leg of a fill or a release: held -= consumed, available += consumed +
@@ -390,17 +393,29 @@ impl Model {
             .filter(|step| !step.held.is_zero() || !step.incoming.is_zero())
             .collect();
         let mut after: HashMap<Asset, Slot> = HashMap::new();
+        let mut review = None;
         for (index, step) in steps.iter().enumerate() {
             let key = (order.account_id, step.asset.clone());
             let pre = self.slot(&key);
             let current = after.get(&step.asset).copied().unwrap_or(pre);
-            if matches!(self.mode, SpotFundsLimitMode::Enforce) && !step.held.is_zero() {
+            if !step.held.is_zero() {
                 let spendable = current
                     .available
                     .checked_add(current.held.min(PositionSize::ZERO))
                     .expect("spendable funds");
                 if step.held > spendable {
-                    return Err(RejectCode::InsufficientFunds);
+                    match self.mode {
+                        SpotFundsLimitMode::Enforce => {
+                            return Err(RejectCode::InsufficientFunds);
+                        }
+                        SpotFundsLimitMode::TrackOnly => {}
+                        SpotFundsLimitMode::ReviewWithHold => {
+                            review = Some(RuleMode::ReviewWithHold);
+                        }
+                        SpotFundsLimitMode::ReviewWithoutHold => {
+                            review = Some(RuleMode::ReviewWithoutHold);
+                        }
+                    }
                 }
             }
             let next = Slot {
@@ -440,6 +455,7 @@ impl Model {
         }
         Ok(Admission {
             slots: after,
+            review,
             order: OpenOrder {
                 account_id: order.account_id,
                 instrument: order.instrument.clone(),
@@ -884,13 +900,29 @@ impl Runner {
                     step
                 );
             }
-            (Err(dry), Err(real)) => prop_assert_eq!(
-                dry,
-                real,
-                "dry-run rejects for {:?} at step {}",
-                order,
-                step
-            ),
+            (Err(dry), Err(real)) => {
+                prop_assert_eq!(
+                    dry,
+                    real,
+                    "dry-run rejects for {:?} at step {}",
+                    order,
+                    step
+                );
+                let output = |rejects: &Rejects| {
+                    rejects
+                        .clone()
+                        .into_parts()
+                        .1
+                        .map(|result| (result.lock_prices, result.account_adjustments))
+                };
+                prop_assert_eq!(
+                    output(dry),
+                    output(real),
+                    "dry-run review output for {:?} at step {}",
+                    order,
+                    step
+                );
+            }
             _ => prop_assert!(
                 false,
                 "dry run {:?} differs from real check {:?} for {:?} at step {}",
@@ -901,12 +933,18 @@ impl Runner {
             ),
         }
         let admission = self.model.admit(order);
-        let verdict = real.as_ref().map(|_| ()).map_err(|rejects| {
-            rejects
+        let (rejects, reviews, result) = match &real {
+            Ok(result) => (Vec::new(), Vec::new(), Some(result.clone())),
+            Err(entries) => entries.clone().into_classified(RuleMode::Reject),
+        };
+        let verdict = if rejects.is_empty() {
+            Ok(())
+        } else {
+            Err(rejects
                 .iter()
                 .map(|reject| (reject.code, reject.scope.clone()))
-                .collect::<Vec<_>>()
-        });
+                .collect::<Vec<_>>())
+        };
         let expected = admission
             .as_ref()
             .map(|_| ())
@@ -918,7 +956,23 @@ impl Runner {
             order,
             step
         );
-        if let (Ok(real), Ok(admission)) = (&real, &admission) {
+        let expected_reviews = match &admission {
+            Ok(admission) => admission.review.into_iter().collect::<Vec<_>>(),
+            Err(_) => Vec::new(),
+        };
+        prop_assert_eq!(
+            reviews.iter().map(|review| review.mode).collect::<Vec<_>>(),
+            expected_reviews,
+            "review modes differ from model for {:?} at step {}",
+            order,
+            step
+        );
+        for review in &reviews {
+            prop_assert_eq!(review.code, RejectCode::InsufficientFunds);
+            prop_assert_eq!(&review.scope, &RejectScope::Order);
+        }
+        if let Ok(admission) = &admission {
+            let real = result.expect("an admitted order must carry its policy output");
             prop_assert_eq!(
                 real.lock_prices.as_slice(),
                 &[admission.order.lock],
@@ -928,7 +982,7 @@ impl Runner {
             );
         }
         match admission {
-            Ok(admission) if commit => {
+            Ok(admission) if commit && admission.review != Some(RuleMode::ReviewWithoutHold) => {
                 prop_assert!(
                     !mutations.commit_all().failed(),
                     "commit failed at step {}",
@@ -1215,6 +1269,8 @@ fn already_held_reruns_match_released_model(case: &Case) -> Result<(), TestCaseE
             };
             let mut released = runner.model.clone();
             released.release(open, open.remaining);
+            // A confirmed rerun resolves fund reviews as TrackOnly, and the
+            // model's review-mode verdict already equals TrackOnly's.
             let expected = released
                 .admit(&order.inner)
                 .map(|_| ())

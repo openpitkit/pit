@@ -1026,6 +1026,29 @@ typedef uint8_t OpenPitSettlementUnit;
     ((OpenPitPretradePoliciesSpotFundsLimitMode) 1)
 
 /**
+ * Request review on insufficient funds while recording the full hold. A
+ * shortfall drives `available` negative and emits an `InsufficientFunds` mark
+ * with `ReviewWithHold`. Sufficient funds produce no mark. Confirmed orders
+ * behave as `TrackOnly`, without a mark; drop-copy always uses that mode.
+ * Arithmetic overflow remains a reject. A final cancel report releases the
+ * hold through the normal execution path.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD \
+    ((OpenPitPretradePoliciesSpotFundsLimitMode) 2)
+
+/**
+ * Request review on insufficient funds without writing that leg or later
+ * reservation legs. A shortfall emits an `InsufficientFunds` mark with
+ * `ReviewWithoutHold`. Remaining checks use temporary holdings as in
+ * `TrackOnly`; earlier order mutations are rolled back and the reservation has
+ * empty lock and outcomes. Sufficient funds produce a normal hold without a
+ * mark. Confirmed orders and drop-copy behave as `TrackOnly`, without a mark.
+ * Overflow remains a reject.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD \
+    ((OpenPitPretradePoliciesSpotFundsLimitMode) 3)
+
+/**
  * Bound the sum of unrealized position P&L in the account currency.
  */
 #define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_ACCOUNT_UNREALIZED \
@@ -8401,8 +8424,10 @@ openpit_engine_configure_spot_funds_set_account_pnl(
  * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
  *   added via `openpit_engine_builder_add_builtin_spot_funds_policy`
  *   registers under its fixed name `"SpotFundsPolicy"`.
- * - `mode` selects `Enforce` (0; reject on insufficient funds) or
- *   `TrackOnly` (1; always record, allow negative available).
+ * - `mode` selects `Enforce` (0; reject on insufficient funds), `TrackOnly`
+ *   (1; always record, allow negative available), `ReviewWithHold` (2;
+ *   review a shortfall and record the hold), or `ReviewWithoutHold` (3;
+ *   review a shortfall without a hold).
  *
  * Success:
  * - returns `true`; the new global mode applies from the next order onward.
@@ -8442,8 +8467,8 @@ bool openpit_engine_configure_spot_funds_global_limit_mode(
  * - When `has_mode` is `true`, the account is pinned to `mode`. When
  *   `has_mode` is `false`, any existing per-account override is cleared and
  *   the cascade falls through to the account-group and global tiers; `mode`
- *   is ignored. When `has_mode` is `true`, `mode` must select `Enforce` (0)
- *   or `TrackOnly` (1).
+ *   is ignored. When `has_mode` is `true`, `mode` must select `Enforce` (0),
+ *   `TrackOnly` (1), `ReviewWithHold` (2), or `ReviewWithoutHold` (3).
  *
  * Success / error: as `openpit_engine_configure_spot_funds_global_limit_mode`.
  */
@@ -8522,8 +8547,8 @@ bool openpit_engine_configure_spot_funds_position_limit(
  * - When `has_mode` is `true`, the group is pinned to `mode`. When
  *   `has_mode` is `false`, any existing per-account-group override is
  *   cleared and the cascade falls through to the global tier; `mode` is
- *   ignored. When `has_mode` is `true`, `mode` must select `Enforce` (0) or
- *   `TrackOnly` (1).
+ *   ignored. When `has_mode` is `true`, `mode` must select `Enforce` (0),
+ *   `TrackOnly` (1), `ReviewWithHold` (2), or `ReviewWithoutHold` (3).
  *
  * Success / error: as `openpit_engine_configure_spot_funds_global_limit_mode`.
  */

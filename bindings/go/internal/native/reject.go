@@ -22,6 +22,8 @@ package native
 */
 import "C"
 
+import "fmt"
+
 //------------------------------------------------------------------------------
 // PretradeReject
 
@@ -58,18 +60,27 @@ func PretradeRejectGetMode(reject PretradeReject) PretradeRuleMode {
 }
 
 func ruleModeToC(mode PretradeRuleMode) C.OpenPitPretradeRuleMode {
-	if mode > RuleModeReviewWithoutHold {
+	cMode, ok := checkedRuleModeToC(mode)
+	if !ok {
 		// Keep unknown values invalid instead of wrapping to C zero (Reject).
 		return C.OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD + 1
 	}
-	return mode + 1
+	return cMode
 }
 
 func checkedRuleModeToC(mode PretradeRuleMode) (C.OpenPitPretradeRuleMode, bool) {
 	if mode > RuleModeReviewWithoutHold {
 		return 0, false
 	}
-	return ruleModeToC(mode), true
+	return mode + 1, true
+}
+
+// ValidateRuleMode rejects unknown Go modes before native conversion.
+func ValidateRuleMode(mode PretradeRuleMode, label string, index int) error {
+	if _, ok := checkedRuleModeToC(mode); !ok {
+		return fmt.Errorf("%s[%d] has invalid mode %d", label, index, mode)
+	}
+	return nil
 }
 
 func PretradeRejectGetPolicy(reject PretradeReject) StringView {

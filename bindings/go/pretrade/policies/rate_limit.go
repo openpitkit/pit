@@ -145,7 +145,7 @@ func (b *RateLimitReadyBuilder) BrokerBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "broker", len(b.brokerBarriers)); err != nil {
+		if err := native.ValidateRuleMode(native.PretradeRuleMode(barrier.Mode), "broker", len(b.brokerBarriers)); err != nil {
 			b.err = err
 			return b
 		}
@@ -175,7 +175,7 @@ func (b *RateLimitReadyBuilder) AssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "asset", len(b.assetBarriers)); err != nil {
+		if err := native.ValidateRuleMode(native.PretradeRuleMode(barrier.Mode), "asset", len(b.assetBarriers)); err != nil {
 			b.err = err
 			return b
 		}
@@ -213,7 +213,7 @@ func (b *RateLimitReadyBuilder) AccountBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "account", len(b.accountBarriers)); err != nil {
+		if err := native.ValidateRuleMode(native.PretradeRuleMode(barrier.Mode), "account", len(b.accountBarriers)); err != nil {
 			b.err = err
 			return b
 		}
@@ -249,7 +249,7 @@ func (b *RateLimitReadyBuilder) AccountAssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "account_asset", len(b.accountAssetBarriers)); err != nil {
+		if err := native.ValidateRuleMode(native.PretradeRuleMode(barrier.Mode), "account_asset", len(b.accountAssetBarriers)); err != nil {
 			b.err = err
 			return b
 		}

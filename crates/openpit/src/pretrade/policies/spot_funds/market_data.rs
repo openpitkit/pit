@@ -105,18 +105,27 @@ impl Display for SpotFundsConfigError {
                 write!(f, "spot funds P&L bounds require at least one barrier")
             }
             Self::DuplicatePnlGlobalBarrier { mode } => {
-                write!(f, "duplicate global P&L barrier for mode {mode:?}")
+                write!(f, "duplicate global P&L barrier for mode {}", mode.as_str())
             }
             Self::DuplicatePnlAccountGroupBarrier { mode, .. } => {
-                write!(f, "duplicate account-group P&L barrier for mode {mode:?}")
+                write!(
+                    f,
+                    "duplicate account-group P&L barrier for mode {}",
+                    mode.as_str()
+                )
             }
             Self::DuplicatePnlAccountBarrier { mode, .. } => {
-                write!(f, "duplicate account P&L barrier for mode {mode:?}")
+                write!(
+                    f,
+                    "duplicate account P&L barrier for mode {}",
+                    mode.as_str()
+                )
             }
             Self::DuplicatePositionLimit { asset, mode, .. } => {
                 write!(
                     f,
-                    "duplicate position limit for asset {asset}, mode {mode:?}"
+                    "duplicate position limit for asset {asset}, mode {}",
+                    mode.as_str()
                 )
             }
         }
@@ -206,17 +215,6 @@ pub enum SpotFundsOverrideTarget {
 
 // ─── SpotFundsSettings ────────────────────────────────────────────────────────
 
-pub(super) const fn rule_modes() -> [RuleMode; 3] {
-    // Keep the match exhaustive so adding a mode requires updating this list.
-    match RuleMode::Reject {
-        RuleMode::Reject | RuleMode::ReviewWithHold | RuleMode::ReviewWithoutHold => [
-            RuleMode::Reject,
-            RuleMode::ReviewWithHold,
-            RuleMode::ReviewWithoutHold,
-        ],
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpotFundsPnlBarrierSet {
     global_barriers: HashMap<RuleMode, SpotFundsPnlBoundsBarrier>,
@@ -257,7 +255,7 @@ impl SpotFundsPnlBarrierSet {
         let known_accounts = known_accounts.into_iter().collect::<Vec<_>>();
         let mut changes = Vec::new();
         let mut memberships_by_account = None;
-        for mode in rule_modes() {
+        for mode in RuleMode::ALL {
             let global_changed = previous.global_barrier(mode) != self.global_barrier(mode);
             let mut changed_accounts = std::collections::BTreeSet::new();
             for key in previous
@@ -383,7 +381,7 @@ impl SpotFundsPnlBarrierSet {
         account_group_id: Option<AccountGroupId>,
         account_currency: Option<&'a Asset>,
     ) -> impl Iterator<Item = (RuleMode, &'a SpotFundsPnlBoundsBarrier)> + 'a {
-        rule_modes().into_iter().filter_map(move |mode| {
+        RuleMode::ALL.into_iter().filter_map(move |mode| {
             self.barrier_for(mode, account_id, account_group_id, account_currency)
                 .map(|barrier| (mode, barrier))
         })
@@ -396,7 +394,7 @@ impl SpotFundsPnlBarrierSet {
     }
 
     fn references_account(&self, account_id: AccountId) -> bool {
-        rule_modes()
+        RuleMode::ALL
             .into_iter()
             .any(|mode| self.account_barriers.contains_key(&(account_id, mode)))
     }
@@ -426,8 +424,9 @@ impl SpotFundsPnlBarrierSet {
 /// `instrument` - falling back to the global slippage. The limit mode resolves
 /// per order along an account-centric cascade - per `account_id`, per
 /// `account_group_id`, then global - and decides whether a reservation that
-/// exceeds available funds is rejected ([`SpotFundsLimitMode::Enforce`]) or
-/// merely tracked ([`SpotFundsLimitMode::TrackOnly`]). The validated maps are
+/// exceeds available funds is rejected ([`SpotFundsLimitMode::Enforce`]),
+/// merely tracked ([`SpotFundsLimitMode::TrackOnly`]), or marked for review
+/// with or without a hold (see [`SpotFundsLimitMode`]). The validated maps are
 /// precomputed here so hot-path reads through the policy's settings cell
 /// allocate nothing and never recompute.
 ///
@@ -574,6 +573,8 @@ impl SpotFundsSettings {
     /// [`SpotFundsLimitMode::TrackOnly`] disables the insufficient-funds reject
     /// for orders that resolve to the global tier; [`SpotFundsLimitMode::Enforce`]
     /// restores the gating behavior.
+    /// Review modes mark a shortfall with or without recording the hold; see
+    /// [`SpotFundsLimitMode`].
     pub fn set_global_limit_mode(&mut self, mode: SpotFundsLimitMode) {
         self.global_limit_mode = mode;
     }
@@ -957,7 +958,7 @@ impl SpotFundsSettings {
         account_id: AccountId,
         asset: &Asset,
     ) -> [Option<(RuleMode, Quantity)>; 3] {
-        rule_modes().map(|mode| {
+        RuleMode::ALL.map(|mode| {
             self.position_limits
                 .get(&(account_id, asset.clone(), mode))
                 .map(|&limit| (mode, limit))

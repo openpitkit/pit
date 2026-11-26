@@ -38,7 +38,8 @@ use crate::storage::ConfigCell;
 use crate::Mutations;
 
 use super::rejects::{
-    arithmetic_overflow_reject, insufficient_funds_reject, order_value_calculation_failed_reject,
+    arithmetic_overflow_reject, collect_review_mark, insufficient_funds_reject,
+    order_value_calculation_failed_reject,
 };
 use super::views::OrderRequestView;
 use super::SpotFundsPolicy;
@@ -80,29 +81,16 @@ where
             account_group_id,
             account_currency.as_ref(),
         ) {
-            if let Some(block) = super::rejects::account_pnl_barrier_currency_mismatch_block(
-                account_currency.as_ref(),
-                barrier,
-            ) {
-                return Err(Reject::from(block).into());
-            }
             let state = *realized_state.get_or_insert_with(|| self.account_pnl_state(account_id));
-            // Build the same breach details as Reject mode, then classify the
-            // numeric breach. A halted state always keeps effective Reject.
             if let Some(block) = super::rejects::account_pnl_block_for_state(
                 account_currency.as_ref(),
                 state,
-                RuleMode::Reject,
+                mode,
                 barrier,
                 None,
+                Some(&mut marks),
             ) {
-                if mode == RuleMode::Reject || matches!(state, crate::PnlState::Halted(_)) {
-                    return Err(Reject::from(block).into());
-                }
-                super::rejects::collect_review_mark(
-                    &mut marks,
-                    Reject::from(block).with_mode(mode),
-                );
+                return Err(Reject::from(block).into());
             }
         }
         let barriers = super::SpotFundsPnlBoundsAxis::ALL.map(|axis| {
@@ -487,16 +475,11 @@ where
         let steps = reservation_steps(&legs, &underlying_asset, &settlement_asset, request.side);
 
         // The funds limit mode resolves once per order along the account-centric
-        // cascade (account -> account group -> global) and gates only the `held`
-        // legs below; `incoming`, position, average-entry and realized-PnL
-        // bookkeeping are mode-independent.
-        let (limit_mode, position_limits) = self.reservation_controls(
-            settings,
-            request.account_id,
-            &account_group,
-            ctx.is_drop_copy(),
-            &steps,
-        );
+        // cascade (account -> account group -> global). From a short
+        // `ReviewWithoutHold` leg on, nothing is written: that leg and every
+        // later one go through `reserve_asset_dry_run`.
+        let (limit_mode, position_limits) =
+            self.reservation_controls(settings, request.account_id, &account_group, ctx, &steps)?;
 
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
@@ -506,19 +489,43 @@ where
         // back every mutation pushed so far (see the pre-trade pipeline), undoing
         // earlier steps, so partial reservations never escape. The step order is
         // shared with the dry-run twin so emission order cannot drift.
+        let mut pure_path = false;
+        let mut previous = None;
         for (step, position_limit) in steps.into_iter().zip(position_limits) {
-            self.reserve_asset(
-                request.account_id,
-                &step.asset,
-                step.held,
-                step.incoming,
-                limit_mode,
-                position_limit,
-                ctx.account_control.clone(),
-                mutations,
-                &mut outcome,
-                &mut marks,
-            )?;
+            if !pure_path {
+                if let Some(current) = self.reserve_asset(
+                    request.account_id,
+                    &step.asset,
+                    step.held,
+                    step.incoming,
+                    limit_mode,
+                    position_limit,
+                    ctx.account_control.clone(),
+                    mutations,
+                    &mut outcome,
+                    &mut marks,
+                )? {
+                    pure_path = true;
+                    previous = Some((step.asset.clone(), current));
+                }
+            }
+            if pure_path {
+                let current = previous
+                    .as_ref()
+                    .and_then(|(asset, holdings)| (asset == &step.asset).then_some(*holdings));
+                let after = self.reserve_asset_dry_run(
+                    request.account_id,
+                    &step.asset,
+                    step.held,
+                    step.incoming,
+                    limit_mode,
+                    position_limit,
+                    current,
+                    &mut outcome,
+                    &mut marks,
+                )?;
+                previous = after.map(|holdings| (step.asset, holdings));
+            }
         }
 
         if let Some(p) = legs.lock_price {
@@ -536,7 +543,7 @@ where
     ///
     /// Reuses [`Self::read_order_request`] and
     /// [`Self::compute_reservation_legs`], then computes the would-be holds
-    /// through the pure [`Holdings::try_hold`] - **without** writing them back.
+    /// according to the resolved limit mode, without writing them back.
     /// A temporary per-call view carries the first leg into the second when
     /// both legs touch the same account/asset key, matching the mutating path's
     /// ordered checks while leaving engine state untouched. It pushes nothing
@@ -586,13 +593,8 @@ where
 
         // Resolve the funds limit mode once, exactly as the mutating path does,
         // so a track-only dry-run mirrors a track-only reservation byte for byte.
-        let (limit_mode, position_limits) = self.reservation_controls(
-            settings,
-            request.account_id,
-            &account_group,
-            ctx.is_drop_copy(),
-            &steps,
-        );
+        let (limit_mode, position_limits) =
+            self.reservation_controls(settings, request.account_id, &account_group, ctx, &steps)?;
 
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
@@ -698,35 +700,52 @@ where
         settings: &SpotFundsSettings,
         account_id: AccountId,
         account_info: &impl AccountInfo,
-        is_drop_copy: bool,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         steps: &[ReservationStep; 2],
-    ) -> (
-        SpotFundsLimitMode,
-        [Option<super::position_limit::Check>; 2],
-    ) {
-        if is_drop_copy {
-            return (SpotFundsLimitMode::TrackOnly, [None, None]);
+    ) -> Result<
+        (
+            SpotFundsLimitMode,
+            [Option<super::position_limit::Check>; 2],
+        ),
+        Rejects,
+    > {
+        if ctx.is_drop_copy() {
+            return Ok((SpotFundsLimitMode::TrackOnly, [None, None]));
         }
 
-        (
-            settings.limit_mode_for(account_id, account_info),
+        let mode = settings.limit_mode_for(account_id, account_info);
+        let mode = match mode {
+            SpotFundsLimitMode::ReviewWithHold | SpotFundsLimitMode::ReviewWithoutHold => {
+                if ctx.confirmed().map_err(|error| {
+                    Rejects::from(missing_required_field_reject(self, "confirmed", &error))
+                })? {
+                    SpotFundsLimitMode::TrackOnly
+                } else {
+                    mode
+                }
+            }
+            SpotFundsLimitMode::Enforce | SpotFundsLimitMode::TrackOnly => mode,
+        };
+        Ok((
+            mode,
             super::position_limit::plan(settings, account_id, steps),
-        )
+        ))
     }
 
     /// Read-only twin of [`Self::reserve_asset`].
     ///
-    /// Computes the would-be hold of `amount` for one asset leg through the pure
-    /// [`Holdings::try_hold`] + [`Holdings::reserve_incoming`] on the supplied
-    /// temporary holdings or current storage holdings, emits the same outcome
-    /// entry and the same rejects as [`Self::reserve_asset`], and mutates
-    /// nothing. A step with both amounts zero is a clean no-op.
+    /// Computes the would-be hold of `held_amount` for one asset leg and
+    /// [`Holdings::reserve_incoming`] on the supplied temporary holdings or
+    /// current storage holdings, emits the same outcome entry and the same
+    /// rejects as the live reservation path, and mutates nothing. A step with
+    /// both amounts zero is a clean no-op.
     ///
     /// `limit_mode` selects the hold semantics exactly as the mutating path:
     /// [`SpotFundsLimitMode::Enforce`] gates on available funds through
     /// [`Holdings::try_hold`]; [`SpotFundsLimitMode::TrackOnly`] records the hold
-    /// even when it drives `available` negative through
-    /// [`Holdings::hold_allow_negative`], still surfacing arithmetic overflow.
+    /// even when it drives `available` negative. Both review modes compute that
+    /// same would-be hold on a shortfall and collect the corresponding mark.
+    /// Arithmetic overflow remains a reject in every mode.
     #[allow(clippy::too_many_arguments)]
     fn reserve_asset_dry_run(
         &self,
@@ -752,8 +771,9 @@ where
         let new_holdings = if held_amount.is_zero() {
             current
         } else {
-            hold_with_mode(&current, held_amount, limit_mode)
+            hold_with_mode(&current, held_amount, limit_mode, asset, marks)
                 .map_err(|err| reserve_hold_reject(Self::NAME, err, asset, held_amount))?
+                .0
         };
         // `reserve_incoming` has no solvency gate; the only failure is overflow,
         // mapped to a pre-trade reject like the hold overflow.
@@ -794,6 +814,10 @@ where
     ///
     /// A step with both amounts zero is a clean no-op: no slot is created, no
     /// rollback is registered, and no outcome entry is emitted.
+    /// A short `ReviewWithoutHold` leg writes nothing and returns `Some` with
+    /// its current holdings, handing this and later legs to
+    /// [`Self::reserve_asset_dry_run`]. `None` means no handoff: the leg was
+    /// written or both amounts were zero.
     #[allow(clippy::too_many_arguments)]
     fn reserve_asset(
         &self,
@@ -807,12 +831,12 @@ where
         mutations: &mut Mutations,
         outcome: &mut PolicyPreTradeResult,
         marks: &mut Vec<Reject>,
-    ) -> Result<(), Rejects>
+    ) -> Result<Option<Holdings>, Rejects>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         if held_amount.is_zero() && incoming_amount.is_zero() {
-            return Ok(());
+            return Ok(None);
         }
 
         #[cfg(test)]
@@ -821,21 +845,22 @@ where
         let active_mutation = self.begin_holdings_mutation(account_id);
         let key = (account_id, asset.clone());
         let key_for_remove = key.clone();
-        let (new_holdings, was_new) = self.holdings.with_mut_or_insert_prune_new_if_zero(
-            key.clone(),
-            Holdings::zero,
-            |slot, is_new| {
+        let (new_holdings, was_new, pure_path) = self
+            .holdings
+            .with_mut_or_insert_prune_new_if_zero(key.clone(), Holdings::zero, |slot, is_new| {
                 let current = *slot;
                 // Hold then project incoming within one slot mutation so no
-                // concurrent check observes a half-applied step. The hold honors
-                // the resolved limit mode: Enforce gates on available funds,
-                // TrackOnly records the hold even into a negative available.
-                let held = if held_amount.is_zero() {
-                    Ok(*slot)
+                // concurrent check observes a half-applied step. A short
+                // without-hold review also leaves incoming unwritten.
+                let (held, pure_path) = if held_amount.is_zero() {
+                    (*slot, false)
                 } else {
-                    hold_with_mode(slot, held_amount, limit_mode)
-                        .map_err(|err| reserve_hold_reject(Self::NAME, err, asset, held_amount))
-                }?;
+                    hold_with_mode(slot, held_amount, limit_mode, asset, marks)
+                        .map_err(|err| reserve_hold_reject(Self::NAME, err, asset, held_amount))?
+                };
+                if pure_path {
+                    return Ok((current, is_new, true));
+                }
 
                 held.reserve_incoming(incoming_amount)
                     .map_err(|_| {
@@ -861,10 +886,12 @@ where
                             marks,
                         )?;
                         *slot = new;
-                        Ok((new, is_new))
+                        Ok((new, is_new, false))
                     })
-            },
-        )?;
+            })?;
+        if pure_path {
+            return Ok(Some(new_holdings));
+        }
         // Mirror `mutate_slot`: the prune-new variant only handles freshly
         // inserted entries, so an existing slot that ends up at zero needs an
         // explicit follow-up removal to avoid a phantom entry. An incoming-only
@@ -886,27 +913,55 @@ where
             incoming_amount,
             &new_holdings,
         ));
-        Ok(())
+        Ok(None)
     }
 }
 
-/// Performs one reserve hold under the resolved funds limit mode.
+/// Computes a hold and collects the first insufficient-funds mark per mode.
 ///
-/// [`SpotFundsLimitMode::Enforce`] gates on available funds via
-/// [`Holdings::try_hold`], so an insufficient hold yields
-/// [`HoldError::InsufficientAvailable`]. [`SpotFundsLimitMode::TrackOnly`]
-/// records the hold even into a negative `available` via
-/// [`Holdings::hold_allow_negative`], so the only error it can return is
-/// [`HoldError::ArithmeticOverflow`] - the integrity guard that no mode
-/// suppresses.
+/// Review modes try the enforcing hold first, then compute a negative-available
+/// hold on a shortfall. The returned flag requests the pure path for a short
+/// `ReviewWithoutHold` leg. Arithmetic overflow remains an error in every mode.
 fn hold_with_mode(
     holdings: &Holdings,
     amount: PositionSize,
     limit_mode: SpotFundsLimitMode,
-) -> Result<Holdings, HoldError> {
+    asset: &Asset,
+    marks: &mut Vec<Reject>,
+) -> Result<(Holdings, bool), HoldError> {
     match limit_mode {
-        SpotFundsLimitMode::Enforce => holdings.try_hold(amount),
-        SpotFundsLimitMode::TrackOnly => holdings.hold_allow_negative(amount),
+        SpotFundsLimitMode::Enforce => holdings.try_hold(amount).map(|held| (held, false)),
+        SpotFundsLimitMode::TrackOnly => holdings
+            .hold_allow_negative(amount)
+            .map(|held| (held, false)),
+        SpotFundsLimitMode::ReviewWithHold | SpotFundsLimitMode::ReviewWithoutHold => {
+            match holdings.try_hold(amount) {
+                Ok(held) => Ok((held, false)),
+                Err(HoldError::InsufficientAvailable {
+                    available,
+                    requested,
+                }) => {
+                    let held = holdings.hold_allow_negative(amount)?;
+                    let mode = if limit_mode == SpotFundsLimitMode::ReviewWithHold {
+                        RuleMode::ReviewWithHold
+                    } else {
+                        RuleMode::ReviewWithoutHold
+                    };
+                    collect_review_mark(
+                        marks,
+                        insufficient_funds_reject(
+                            super::SPOT_FUNDS_POLICY_NAME,
+                            asset,
+                            available,
+                            requested,
+                        )
+                        .with_mode(mode),
+                    );
+                    Ok((held, mode == RuleMode::ReviewWithoutHold))
+                }
+                Err(error @ HoldError::ArithmeticOverflow) => Err(error),
+            }
+        }
     }
 }
 

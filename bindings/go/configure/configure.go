@@ -126,7 +126,7 @@ func (c Configurator) RateLimit(
 	if brokers != nil {
 		nativeBrokers = make([]native.PretradePoliciesRateLimitBrokerBarrier, 0, len(brokers))
 		for i, b := range brokers {
-			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(b.Mode), "broker", i); err != nil {
+			if err := native.ValidateRuleMode(native.PretradeRuleMode(b.Mode), "broker", i); err != nil {
 				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
 			}
 			windowNanos := rateLimitWindowNanoseconds(b.Limit)
@@ -142,7 +142,7 @@ func (c Configurator) RateLimit(
 	if assets != nil {
 		nativeAssets = make([]native.PretradePoliciesRateLimitAssetBarrier, 0, len(assets))
 		for i, a := range assets {
-			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(a.Mode), "asset", i); err != nil {
+			if err := native.ValidateRuleMode(native.PretradeRuleMode(a.Mode), "asset", i); err != nil {
 				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
 			}
 			windowNanos := rateLimitWindowNanoseconds(a.Limit)
@@ -159,7 +159,7 @@ func (c Configurator) RateLimit(
 	if accounts != nil {
 		nativeAccounts = make([]native.PretradePoliciesRateLimitAccountBarrier, 0, len(accounts))
 		for i, a := range accounts {
-			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(a.Mode), "account", i); err != nil {
+			if err := native.ValidateRuleMode(native.PretradeRuleMode(a.Mode), "account", i); err != nil {
 				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
 			}
 			windowNanos := rateLimitWindowNanoseconds(a.Limit)
@@ -176,7 +176,7 @@ func (c Configurator) RateLimit(
 	if accountAssets != nil {
 		nativeAccountAssets = make([]native.PretradePoliciesRateLimitAccountAssetBarrier, 0, len(accountAssets))
 		for i, a := range accountAssets {
-			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(a.Mode), "account_asset", i); err != nil {
+			if err := native.ValidateRuleMode(native.PretradeRuleMode(a.Mode), "account_asset", i); err != nil {
 				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
 			}
 			windowNanos := rateLimitWindowNanoseconds(a.Limit)
@@ -488,6 +488,9 @@ func (c Configurator) SpotFunds(
 // SpotFundsGlobalLimitMode sets the global limit mode of the named spot-funds
 // policy at runtime. Enforce rejects a reservation that exceeds available
 // funds; TrackOnly always records it and lets available go negative.
+// ReviewWithHold requests review on a shortfall and records the full hold;
+// ReviewWithoutHold requests review without a hold. With sufficient funds,
+// both review modes record a normal hold without a review mark.
 //
 // The mode is the global tier of the cascade; per-account and
 // per-account-group overrides set via [Configurator.SpotFundsAccountLimitMode]
@@ -741,9 +744,9 @@ func nativeSpotFundsPnlBoundsTiers(
 	if globalBarriers != nil {
 		nativeGlobal = make([]native.PretradePoliciesSpotFundsPnlBoundsBarrier, 0, len(globalBarriers))
 		for index, barrier := range globalBarriers {
-			nativeBarrier, err := nativeSpotFundsPnlBoundsBarrier(barrier)
+			nativeBarrier, err := nativeSpotFundsPnlBoundsBarrier(barrier, "global", index)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("global[%d]: %w", index, err)
+				return nil, nil, nil, err
 			}
 			nativeGlobal = append(nativeGlobal, nativeBarrier)
 		}
@@ -757,9 +760,9 @@ func nativeSpotFundsPnlBoundsTiers(
 			len(accountGroupBarriers),
 		)
 		for index, b := range accountGroupBarriers {
-			barrier, err := nativeSpotFundsPnlBoundsBarrier(b.Barrier)
+			barrier, err := nativeSpotFundsPnlBoundsBarrier(b.Barrier, "account_group", index)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("account_group[%d]: %w", index, err)
+				return nil, nil, nil, err
 			}
 			nativeAccountGroups = append(
 				nativeAccountGroups,
@@ -779,9 +782,9 @@ func nativeSpotFundsPnlBoundsTiers(
 			len(accountBarriers),
 		)
 		for index, b := range accountBarriers {
-			barrier, err := nativeSpotFundsPnlBoundsBarrier(b.Barrier)
+			barrier, err := nativeSpotFundsPnlBoundsBarrier(b.Barrier, "account", index)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("account[%d]: %w", index, err)
+				return nil, nil, nil, err
 			}
 			nativeAccounts = append(
 				nativeAccounts,
@@ -926,9 +929,13 @@ func pnlOptionalToNative(value optional.Option[param.Pnl]) native.ParamPnlOption
 
 func nativeSpotFundsPnlBoundsBarrier(
 	barrier policies.SpotFundsPnlBoundsBarrier,
+	label string,
+	index int,
 ) (native.PretradePoliciesSpotFundsPnlBoundsBarrier, error) {
 	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
 		native.PretradeRuleMode(barrier.Mode),
+		label,
+		index,
 		barrier.Currency.Handle(),
 		pnlOptionalToNative(barrier.LowerBound),
 		pnlOptionalToNative(barrier.UpperBound),

@@ -160,7 +160,7 @@ fn position_limit_upsert_and_clear_change_only_the_named_mode() {
 
 #[test]
 fn duplicate_position_limits_are_atomic_and_display_asset_and_mode() {
-    for mode in super::super::market_data::rule_modes() {
+    for mode in RuleMode::ALL {
         for first in [None, Some(qty("100"))] {
             let mut configured = settings(0);
             configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
@@ -1056,7 +1056,7 @@ fn same_asset_fresh_slot_dry_run_matches_mutating_reject_and_rollback() {
 
 #[test]
 fn same_asset_short_inexact_first_step_transition_fails_closed() {
-    for mode in super::super::market_data::rule_modes() {
+    for mode in RuleMode::ALL {
         let account_id = account(ACCOUNT);
         let usd = asset("USD");
         let mut configured = settings(0);
@@ -1278,7 +1278,7 @@ fn position_limit_engine(
 fn drop_copy_bypasses_limit_and_matches_no_limit_bookkeeping() {
     let account_id = account(ACCOUNT);
     let mut limited_settings = settings(0);
-    for mode in super::super::market_data::rule_modes() {
+    for mode in RuleMode::ALL {
         limited_settings.set_position_limit(account_id, asset("AAPL"), mode, Some(Quantity::ZERO));
     }
     let limited = position_limit_engine(limited_settings);

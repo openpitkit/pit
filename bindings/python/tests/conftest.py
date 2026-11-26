@@ -3,6 +3,11 @@ import openpit
 _DEFAULT_ACCOUNT_ID = openpit.param.AccountId.from_int(99224416)
 
 
+class ModeWithRaisingRepr(str):
+    def __repr__(self) -> str:
+        raise RuntimeError("mode __repr__ must not be called")
+
+
 def make_order(
     *,
     side: openpit.param.Side = openpit.param.Side.BUY,

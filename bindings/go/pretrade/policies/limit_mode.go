@@ -41,6 +41,20 @@ const (
 	// go negative and a shortfall never rejects. Arithmetic overflow is still
 	// surfaced.
 	SpotFundsLimitModeTrackOnly SpotFundsLimitMode = SpotFundsLimitMode(native.PretradePoliciesSpotFundsLimitModeTrackOnly)
+	// SpotFundsLimitModeReviewWithHold requests review on insufficient funds
+	// while recording the full hold, letting available go negative. The
+	// InsufficientFunds mark has mode ReviewWithHold. Sufficient funds produce
+	// no mark. Confirmed orders and drop-copy use TrackOnly without a mark.
+	// Overflow remains a reject; a final cancel report releases the hold.
+	SpotFundsLimitModeReviewWithHold SpotFundsLimitMode = SpotFundsLimitMode(native.PretradePoliciesSpotFundsLimitModeReviewWithHold)
+	// SpotFundsLimitModeReviewWithoutHold requests review on insufficient funds
+	// without writing that leg or later reservation legs. The InsufficientFunds
+	// mark has mode ReviewWithoutHold. Remaining checks use temporary holdings;
+	// earlier order mutations are rolled back and the reservation has empty
+	// lock and outcomes. Sufficient funds produce a normal hold without a mark.
+	// Confirmed orders and drop-copy use TrackOnly without a mark. Overflow
+	// remains a reject.
+	SpotFundsLimitModeReviewWithoutHold SpotFundsLimitMode = SpotFundsLimitMode(native.PretradePoliciesSpotFundsLimitModeReviewWithoutHold)
 )
 
 // Handle exposes the underlying native spot-funds limit mode.
@@ -55,6 +69,10 @@ func (v SpotFundsLimitMode) String() string {
 		return "enforce"
 	case SpotFundsLimitModeTrackOnly:
 		return "track-only"
+	case SpotFundsLimitModeReviewWithHold:
+		return "review-with-hold"
+	case SpotFundsLimitModeReviewWithoutHold:
+		return "review-without-hold"
 	default:
 		return fmt.Sprintf("SpotFundsLimitMode(%d)", uint8(v))
 	}

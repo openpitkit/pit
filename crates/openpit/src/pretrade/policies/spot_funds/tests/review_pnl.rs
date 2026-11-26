@@ -371,6 +371,17 @@ fn review_pnl_each_axis_preserves_marks_outcomes_and_dry_run_parity() {
             assert_eq!(mark.mode, mode);
             assert_eq!(mark.code, RejectCode::PnlKillSwitchTriggered);
             assert_eq!(mark.scope, RejectScope::Account);
+            let rejecting_engine = fixture(axis, &[(RuleMode::Reject, "-10")], false, false);
+            let rejects = rejecting_engine
+                .execute_pre_trade(request.clone())
+                .err()
+                .unwrap();
+            assert_eq!(rejects.len(), 1);
+            assert_eq!(
+                mark.clone().with_mode(RuleMode::Reject),
+                rejects[0],
+                "review payload must match Reject payload: {axis:?}"
+            );
             let mut reservation = engine.execute_pre_trade(request.clone()).unwrap();
             assert_eq!(
                 reservation.reviews(),

@@ -398,23 +398,32 @@ fn bounded_balance_adjustment(
 // ── engine builder ────────────────────────────────────────────────────────────
 
 fn build_engine() -> TestEngine {
-    spot_funds_builder(None).build().expect("engine must build")
+    spot_funds_builder(None, SpotFundsLimitMode::Enforce, true)
+        .build()
+        .expect("engine must build")
 }
 
 fn spot_funds_builder<
     Order: HasAccountId + HasInstrument + HasConfirmed + HasAlreadyHeld + 'static,
 >(
     broker_max_orders: Option<usize>,
+    limit_mode: SpotFundsLimitMode,
+    order_review: bool,
 ) -> ReadyEngineBuilder<Order, TestReport, TestAdjustment, FullSync>
 where
     SpotFundsPolicy<FullSync, FullSync>:
         PreTradePolicy<Order, TestReport, TestAdjustment, FullSync>,
 {
-    let builder = Engine::builder::<Order, TestReport, TestAdjustment>()
-        .with_order_review()
-        .full_sync();
-    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+    let builder = Engine::builder::<Order, TestReport, TestAdjustment>();
+    let builder = if order_review {
+        builder.with_order_review()
+    } else {
+        builder
+    }
+    .full_sync();
+    let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
         .expect("settings must build");
+    settings.set_global_limit_mode(limit_mode);
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
         settings,
         None::<SpotFundsMarketData<FullSync>>,
@@ -1184,7 +1193,7 @@ fn negative_held_blocks_buy_despite_positive_available() {
 // Engine wiring both an immediate-side-effect start-stage policy (rate limit,
 // broker max 1) and an immediate-side-effect main-stage policy (spot funds).
 fn build_rate_limited_engine() -> TestEngine {
-    spot_funds_builder(Some(1))
+    spot_funds_builder(Some(1), SpotFundsLimitMode::Enforce, true)
         .build()
         .expect("engine must build")
 }
@@ -2355,11 +2364,14 @@ impl PreTradePolicy<ReviewOrder, TestReport, TestAdjustment, FullSync> for Revie
 
 fn build_review_engine(
     builder: ReadyEngineBuilder<ReviewOrder, TestReport, TestAdjustment, FullSync>,
+    sibling_review: bool,
 ) -> TestEngine<ReviewOrder> {
-    let engine = builder
-        .pre_trade(ReviewWithHoldPolicy)
-        .build()
-        .expect("review engine must build");
+    let builder = if sibling_review {
+        builder.pre_trade(ReviewWithHoldPolicy)
+    } else {
+        builder
+    };
+    let engine = builder.build().expect("review engine must build");
     seed(&engine, "USD", "10000");
     seed(&engine, "AAPL", "3");
     engine
@@ -2444,8 +2456,220 @@ fn assert_review_balances(engine: &TestEngine<ReviewOrder>, usd: [&str; 3], aapl
 }
 
 #[test]
+fn funds_review_with_hold_commits_and_cancel_releases() {
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::ReviewWithHold, true),
+        false,
+    );
+    seed(&engine, "USD", "100");
+    let dry = engine.execute_pre_trade_dry_run(make_review_order(INITIAL_REVIEW));
+    assert!(dry.is_pass(), "short funds must be reviewable");
+    assert_review_balances(&engine, ["100", "0", "0"], ["3", "0", "0"]);
+
+    let mut reservation = engine
+        .execute_pre_trade(make_review_order(INITIAL_REVIEW))
+        .expect("short funds with hold must return a reservation");
+    assert_eq!(reservation.reviews().len(), 1, "one funds mark per mode");
+    let mark = &reservation.reviews()[0];
+    assert_eq!(mark.code, RejectCode::InsufficientFunds);
+    assert_eq!(mark.mode, RuleMode::ReviewWithHold);
+    assert_eq!(mark.scope, RejectScope::Order);
+    assert_eq!(mark.policy, SpotFundsPolicy::<FullSync, FullSync>::NAME);
+    assert_eq!(dry.reviews(), reservation.reviews());
+    assert_eq!(dry.lock(), reservation.lock());
+    assert_eq!(dry.account_adjustments(), reservation.account_adjustments());
+    assert!(
+        !reservation.lock().is_empty(),
+        "held review must carry its lock"
+    );
+    assert_eq!(reservation.account_adjustments().len(), 2);
+    reservation.commit();
+    assert_review_balances(&engine, ["-1900", "2000", "0"], ["3", "0", "10"]);
+
+    let post = engine.apply_execution_report(&review_cancel_report(reservation.lock()));
+    assert!(
+        post.account_blocks.is_empty(),
+        "held review cancel must succeed"
+    );
+    assert_review_balances(&engine, ["100", "0", "0"], ["3", "0", "0"]);
+}
+
+#[test]
+fn funds_review_with_hold_rollback_restores_seed() {
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::ReviewWithHold, true),
+        false,
+    );
+    seed(&engine, "USD", "100");
+    let mut reservation = engine
+        .execute_pre_trade(make_review_order(INITIAL_REVIEW))
+        .expect("short funds with hold must return a reservation");
+    assert_eq!(reservation.reviews().len(), 1);
+    assert_eq!(reservation.reviews()[0].code, RejectCode::InsufficientFunds);
+    assert_eq!(reservation.reviews()[0].mode, RuleMode::ReviewWithHold);
+    assert_review_balances(&engine, ["-1900", "2000", "0"], ["3", "0", "10"]);
+    reservation.rollback();
+    assert_review_balances(&engine, ["100", "0", "0"], ["3", "0", "0"]);
+}
+
+#[test]
+fn funds_review_without_hold_rolls_back_every_leg() {
+    for short_second_leg in [false, true] {
+        let engine = build_review_engine(
+            spot_funds_builder(None, SpotFundsLimitMode::ReviewWithoutHold, true),
+            false,
+        );
+        seed(&engine, "USD", "100");
+        seed(&engine, "AAPL", "10");
+        let mut order = make_review_order(INITIAL_REVIEW);
+        if short_second_leg {
+            // Selling at a negative price holds AAPL first, then USD.
+            order.operation.side = Side::Sell;
+            order.operation.price = Some(px("-200"));
+        }
+        let dry = engine.execute_pre_trade_dry_run(order.clone());
+        assert!(dry.is_pass(), "without-hold shortfall must be reviewable");
+        assert!(dry.lock().is_empty());
+        assert!(dry.account_adjustments().is_empty());
+        assert_review_balances(&engine, ["100", "0", "0"], ["10", "0", "0"]);
+
+        let mut reservation = engine
+            .execute_pre_trade(order)
+            .expect("short funds without hold must return a reservation");
+        assert_eq!(reservation.reviews().len(), 1, "one funds mark per mode");
+        assert_eq!(reservation.reviews()[0].code, RejectCode::InsufficientFunds);
+        assert_eq!(reservation.reviews()[0].mode, RuleMode::ReviewWithoutHold);
+        assert_eq!(reservation.reviews()[0].scope, RejectScope::Order);
+        assert_eq!(dry.reviews(), reservation.reviews());
+        assert!(
+            reservation.lock().is_empty(),
+            "without-hold lock must be empty"
+        );
+        assert!(
+            reservation.account_adjustments().is_empty(),
+            "without-hold outcomes must be empty"
+        );
+        assert_review_balances(&engine, ["100", "0", "0"], ["10", "0", "0"]);
+        reservation.commit();
+        assert_review_balances(&engine, ["100", "0", "0"], ["10", "0", "0"]);
+    }
+}
+
+#[test]
+fn funds_review_confirmed_rerun_holds_without_marks() {
+    for mode in [
+        SpotFundsLimitMode::ReviewWithHold,
+        SpotFundsLimitMode::ReviewWithoutHold,
+    ] {
+        let engine = build_review_engine(spot_funds_builder(None, mode, true), false);
+        seed(&engine, "USD", "100");
+        let mut pending = engine
+            .execute_pre_trade(make_review_order(INITIAL_REVIEW))
+            .expect("the first short order must be reviewable");
+        assert_eq!(pending.reviews().len(), 1);
+        pending.rollback();
+        assert_review_balances(&engine, ["100", "0", "0"], ["3", "0", "0"]);
+        let reservation = commit_review_run(
+            &engine,
+            OrderReview {
+                confirmed: true,
+                already_held: false,
+            },
+        );
+        assert!(
+            reservation.reviews().is_empty(),
+            "confirmed funds must not mark"
+        );
+        assert!(
+            !reservation.lock().is_empty(),
+            "confirmed funds must retain the lock"
+        );
+        assert_eq!(reservation.account_adjustments().len(), 2);
+        assert_review_balances(&engine, ["-1900", "2000", "0"], ["3", "0", "10"]);
+    }
+}
+
+#[test]
+fn funds_review_already_held_rerun_keeps_the_first_hold() {
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::ReviewWithHold, true),
+        false,
+    );
+    seed(&engine, "USD", "100");
+    let first = commit_review_run(&engine, INITIAL_REVIEW);
+    assert_eq!(first.reviews().len(), 1);
+    assert_eq!(first.reviews()[0].mode, RuleMode::ReviewWithHold);
+    assert_review_balances(&engine, ["-1900", "2000", "0"], ["3", "0", "10"]);
+    let rerun = commit_review_run(&engine, HELD_RERUN);
+    assert!(
+        rerun.reviews().is_empty(),
+        "held funds rerun must drop review marks"
+    );
+    assert!(
+        rerun.lock().is_empty(),
+        "held funds rerun must not return another lock"
+    );
+    assert!(rerun.account_adjustments().is_empty());
+    assert_review_balances(&engine, ["-1900", "2000", "0"], ["3", "0", "10"]);
+}
+
+#[test]
+fn funds_review_without_reader_returns_the_engine_reject() {
+    let expected = vec![Reject::new(
+        "Engine",
+        RejectScope::Order,
+        RejectCode::MissingRequiredField,
+        "order review flags unavailable",
+        "engine is built without with_order_review",
+    )];
+    for mode in [
+        SpotFundsLimitMode::ReviewWithHold,
+        SpotFundsLimitMode::ReviewWithoutHold,
+    ] {
+        let engine = build_review_engine(spot_funds_builder(None, mode, false), false);
+        seed(&engine, "USD", "100");
+        let dry = engine.execute_pre_trade_dry_run(make_review_order(INITIAL_REVIEW));
+        assert!(!dry.is_pass());
+        assert_eq!(dry.rejects().unwrap().to_vec(), expected);
+        assert!(dry.reviews().is_empty());
+        let rejects = engine
+            .execute_pre_trade(make_review_order(INITIAL_REVIEW))
+            .err()
+            .expect("funds review requires the engine's order review reader");
+        assert_eq!(rejects.to_vec(), expected);
+        assert_review_balances(&engine, ["100", "0", "0"], ["3", "0", "0"]);
+    }
+}
+
+#[test]
+fn funds_review_sufficient_funds_match_enforce() {
+    for mode in [
+        SpotFundsLimitMode::Enforce,
+        SpotFundsLimitMode::ReviewWithHold,
+        SpotFundsLimitMode::ReviewWithoutHold,
+    ] {
+        let engine = build_review_engine(spot_funds_builder(None, mode, true), false);
+        let dry = engine.execute_pre_trade_dry_run(make_review_order(INITIAL_REVIEW));
+        assert!(dry.is_pass());
+        assert!(dry.reviews().is_empty(), "sufficient funds must not mark");
+        let reservation = commit_review_run(&engine, INITIAL_REVIEW);
+        assert!(
+            reservation.reviews().is_empty(),
+            "sufficient funds must not mark"
+        );
+        assert_eq!(dry.lock(), reservation.lock());
+        assert_eq!(dry.account_adjustments(), reservation.account_adjustments());
+        assert_eq!(reservation.account_adjustments().len(), 2);
+        assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+    }
+}
+
+#[test]
 fn review_with_hold_records_the_hold() {
-    let engine = build_review_engine(spot_funds_builder(None));
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::Enforce, true),
+        true,
+    );
     let mut reservation = engine
         .execute_pre_trade(make_review_order(INITIAL_REVIEW))
         .expect("review with hold must return a reservation");
@@ -2465,7 +2689,10 @@ fn review_with_hold_records_the_hold() {
 
 #[test]
 fn rerun_with_both_flags_leaves_balances_unchanged() {
-    let engine = build_review_engine(spot_funds_builder(None));
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::Enforce, true),
+        true,
+    );
     commit_review_run(&engine, INITIAL_REVIEW);
     assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
 
@@ -2483,7 +2710,7 @@ fn rerun_with_both_flags_leaves_balances_unchanged() {
 #[test]
 fn rerun_rejects_on_a_breached_pnl_barrier_and_keeps_the_hold() {
     let group = AccountGroupId::from_u32(17).expect("valid group id");
-    let engine = build_review_engine(pnl_killswitch_builder(group));
+    let engine = build_review_engine(pnl_killswitch_builder(group), true);
     engine
         .accounts()
         .register_group(&[account()], group)
@@ -2512,7 +2739,10 @@ fn rerun_rejects_on_a_breached_pnl_barrier_and_keeps_the_hold() {
 
 #[test]
 fn cancel_with_the_first_lock_releases_the_held_review() {
-    let engine = build_review_engine(spot_funds_builder(None));
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::Enforce, true),
+        true,
+    );
     assert_review_balances(&engine, ["10000", "0", "0"], ["3", "0", "0"]);
     let first = commit_review_run(&engine, INITIAL_REVIEW);
     assert_eq!(first.reviews().len(), 1);
@@ -2531,7 +2761,10 @@ fn cancel_with_the_first_lock_releases_the_held_review() {
 
 #[test]
 fn execution_report_with_the_rerun_lock_blocks_loudly() {
-    let engine = build_review_engine(spot_funds_builder(None));
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::Enforce, true),
+        true,
+    );
     commit_review_run(&engine, INITIAL_REVIEW);
     let rerun = commit_review_run(&engine, HELD_RERUN);
     assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
@@ -2553,7 +2786,10 @@ fn execution_report_with_the_rerun_lock_blocks_loudly() {
 #[test]
 fn review_run_and_rerun_each_spend_rate_limit() {
     for max_orders in [1, 2] {
-        let engine = build_review_engine(spot_funds_builder(Some(max_orders)));
+        let engine = build_review_engine(
+            spot_funds_builder(Some(max_orders), SpotFundsLimitMode::Enforce, true),
+            true,
+        );
         let first = commit_review_run(&engine, INITIAL_REVIEW);
         assert_eq!(first.reviews().len(), 1);
         assert_eq!(first.reviews()[0].mode, RuleMode::ReviewWithHold);
