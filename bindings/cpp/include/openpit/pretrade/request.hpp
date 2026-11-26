@@ -27,17 +27,21 @@
 
 #include <openpit.h>
 
+#include <cstddef>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace openpit::pretrade {
 
-// Outcome of running the full pre-trade pipeline (`ExecutePreTrade` or
-// `Request::Execute`): exactly one channel is populated. A `reservation` means
-// the order passed and reserved state awaits resolution; a non-empty `rejects`
-// means it was rejected. Runtime failures throw instead of producing this
-// value.
+/// Outcome of running the full pre-trade pipeline (`ExecutePreTrade` or
+/// `Request::Execute`): exactly one channel is populated. A `reservation` means
+/// the order passed and reserved state awaits resolution; a non-empty `rejects`
+/// means it was rejected. The engine's reserved review-rollback report is a
+/// rejected result; callback exceptions otherwise propagate as documented by
+/// `ExecutePreTrade` and `Request::Execute`. Runtime boundary failures throw
+/// `openpit::Error` instead of producing this value.
 struct ExecuteResult;
 
 // Deferred pre-trade request returned by `StartPreTrade`. Move-only RAII:
@@ -52,6 +56,21 @@ class Request {
     return static_cast<bool>(m_handle);
   }
 
+  /// Runs the main-stage pre-trade checks.
+  ///
+  /// If discarding a review instance's tentative state fails, returns the
+  /// rejected result with policy "Engine", scope `RejectScope::Order`, code
+  /// `RejectCode::SystemUnavailable`, and reason "review rollback failed",
+  /// instead of throwing the rollback callback's exception. The engine kill
+  /// switch is armed; later policies still ran. A policy callback exception in
+  /// the same call takes precedence and propagates. Any other mutation rollback
+  /// failure, including ordinary reject compensation, propagates with its
+  /// original exception type, unless a review rollback in the same call also
+  /// failed: then the full reject list is returned and nothing is thrown.
+  ///
+  /// This identity is the engine's reserved report. A custom policy emitting
+  /// it is treated as the engine, so a mutation rollback exception parked in
+  /// the same call is not thrown.
   [[nodiscard]] ExecuteResult Execute();
 
   /// Returns the start-stage review marks. A non-empty list requires a human
@@ -106,6 +125,44 @@ struct ExecuteResult {
   [[nodiscard]] bool Passed() const noexcept { return reservation.has_value(); }
 };
 
+namespace detail {
+
+// Drops a parked mutation-callback exception when a rejected execute carries
+// the engine's reserved review-rollback report. Reads the raw list without
+// decoding it, so a path that still rethrows cannot lose the exception.
+inline void DiscardReviewRollbackException(
+    OpenPitPretradeStatus status, const OpenPitPretradeRejectList* rejects,
+    ::openpit::detail::CallbackExceptionScope& callbackExceptions) noexcept {
+  if (status != OpenPitPretradeStatus_Rejected ||
+      !callbackExceptions.HasPendingMutation() || rejects == nullptr) {
+    return;
+  }
+  const auto equals = [](OpenPitStringView view,
+                         std::string_view expected) noexcept {
+    return view.ptr != nullptr &&
+           std::string_view(reinterpret_cast<const char*>(view.ptr),
+                            view.len) == expected;
+  };
+  const std::size_t count = openpit_pretrade_reject_list_len(rejects);
+  for (std::size_t index = 0; index < count; ++index) {
+    OpenPitPretradeReject raw{};
+    // The engine's reserved review-rollback report must stay equal to
+    // new_review_rollback_reject in the core.
+    if (openpit_pretrade_reject_list_get(rejects, index, &raw) &&
+        equals(raw.policy, "Engine") &&
+        raw.scope ==
+            static_cast<OpenPitPretradeRejectScope>(RejectScope::Order) &&
+        raw.code == static_cast<OpenPitPretradeRejectCode>(
+                        RejectCode::SystemUnavailable) &&
+        equals(raw.reason, "review rollback failed")) {
+      callbackExceptions.DiscardPending();
+      return;
+    }
+  }
+}
+
+}  // namespace detail
+
 [[nodiscard]] inline ExecuteResult Request::Execute() {
   OpenPitPretradePreTradeReservation* reservation = nullptr;
   OpenPitPretradeRejectList* rejects = nullptr;
@@ -116,6 +173,7 @@ struct ExecuteResult {
   const OpenPitPretradeStatus status =
       openpit_pretrade_pre_trade_request_execute(request, &reservation,
                                                  &rejects, &error);
+  detail::DiscardReviewRollbackException(status, rejects, callbackExceptions);
   if (callbackExceptions.HasPending()) {
     openpit_destroy_pretrade_pre_trade_reservation(reservation);
     openpit_destroy_pretrade_reject_list(rejects);

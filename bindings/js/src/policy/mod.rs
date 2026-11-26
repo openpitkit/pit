@@ -29,7 +29,10 @@
 //! Instead the adapter captures the thrown value in a thread-local,
 //! operation-scoped stack, returns a hard reject into the engine
 //! core, and lets the core unwind normally. The engine entry point then wraps
-//! the first captured exception together with any reconciled result.
+//! the captured exception together with any reconciled result. The first
+//! failure wins, except that a non-mutation failure replaces a parked mutation
+//! one; the execute entry points may return the engine's reserved
+//! review-rollback reject instead of throwing.
 //!
 //! The builtin policy builders live in the sibling modules and are re-exported
 //! through this module; their JS surface is described in their own files.
@@ -463,10 +466,12 @@ extern "C" {
 
 /// One nested binding operation's callback-error capture state.
 enum CallbackErrorFrame {
-    /// Capture the first error raised while this operation is active.
+    /// Capture the first error, allowing a non-mutation error to replace a
+    /// mutation error.
     Capture {
         engine_id: u64,
         error: Option<JsValue>,
+        mutation_origin: bool,
     },
     /// Ignore callback errors while an implicit destructor rollback runs.
     Suppress { engine_id: u64 },
@@ -528,6 +533,17 @@ fn abandoned_frame_error() -> JsValue {
     internal_error(report.as_deref().unwrap_or(UNAVAILABLE_PANIC_REPORT))
 }
 
+// The engine's reserved review-rollback report must stay equal to
+// new_review_rollback_reject in the core.
+fn has_review_rollback_reject(rejects: &Rejects) -> bool {
+    rejects.iter().any(|reject| {
+        reject.policy == "Engine"
+            && reject.scope == RejectScope::Order
+            && reject.code == RejectCode::SystemUnavailable
+            && reject.reason == "review rollback failed"
+    })
+}
+
 /// Why an operation that ran JS callbacks must report a failure.
 ///
 /// The two variants are decided structurally, not by inspecting the thrown
@@ -536,7 +552,10 @@ fn abandoned_frame_error() -> JsValue {
 /// an internal error is still reported as a wrapped callback failure.
 pub(crate) enum CallbackFailure {
     /// A JS callback threw; the value is wrapped with the completed result.
-    Thrown(JsValue),
+    Thrown {
+        cause: JsValue,
+        mutation_origin: bool,
+    },
     /// A panic abandoned the operation; its report is surfaced verbatim.
     Abandoned(JsValue),
 }
@@ -545,7 +564,7 @@ impl CallbackFailure {
     /// Builds the error to throw, attaching `result` only to a wrapped throw.
     pub(crate) fn into_error(self, result: JsValue) -> JsValue {
         match self {
-            Self::Thrown(cause) => policy_callback_error(cause, result),
+            Self::Thrown { cause, .. } => policy_callback_error(cause, result),
             Self::Abandoned(report) => report,
         }
     }
@@ -594,7 +613,7 @@ impl CallbackErrorScope {
         })
     }
 
-    /// Starts an operation that captures its first callback error.
+    /// Starts an operation that captures callback errors with their origin.
     ///
     /// # Errors
     ///
@@ -608,6 +627,7 @@ impl CallbackErrorScope {
             frames.push(CallbackErrorFrame::Capture {
                 engine_id,
                 error: None,
+                mutation_origin: false,
             });
             Ok(Self {
                 epoch: PANIC_EPOCH.with(Cell::get),
@@ -640,7 +660,7 @@ impl CallbackErrorScope {
         PANIC_EPOCH.with(Cell::get) != self.epoch
     }
 
-    /// Finishes this operation and returns its first captured failure.
+    /// Finishes this operation and returns its captured failure.
     ///
     /// Reports the panic instead when a panic abandoned this scope's frame:
     /// the operation ran on after an internal failure, so its result is not
@@ -652,9 +672,31 @@ impl CallbackErrorScope {
             return Some(CallbackFailure::Abandoned(abandoned_frame_error()));
         }
         CALLBACK_ERRORS.with(|frames| match frames.borrow_mut().pop() {
-            Some(CallbackErrorFrame::Capture { error, .. }) => error.map(CallbackFailure::Thrown),
+            Some(CallbackErrorFrame::Capture {
+                error,
+                mutation_origin,
+                ..
+            }) => error.map(|cause| CallbackFailure::Thrown {
+                cause,
+                mutation_origin,
+            }),
             Some(CallbackErrorFrame::Suppress { .. }) | None => None,
         })
+    }
+
+    /// Finishes a rejected execute and returns the failure it must report.
+    ///
+    /// A mutation callback failure is not reported when the rejects carry the
+    /// engine's reserved review-rollback report. An abandoned frame and a
+    /// policy callback failure are always reported.
+    pub(crate) fn finish_execute(self, rejects: &Rejects) -> Option<CallbackFailure> {
+        match self.finish() {
+            Some(CallbackFailure::Thrown {
+                mutation_origin: true,
+                ..
+            }) if has_review_rollback_reject(rejects) => None,
+            failure => failure,
+        }
     }
 }
 
@@ -668,17 +710,28 @@ impl Drop for CallbackErrorScope {
     }
 }
 
-/// Records the first JS callback error in the innermost active operation.
+/// Records the first non-mutation JS error in the innermost operation.
+/// It takes precedence over an earlier mutation callback error.
 ///
 /// When no operation is active (or an implicit destructor rollback is being
 /// suppressed), the value is intentionally discarded so it cannot poison a
 /// later unrelated engine call.
 pub(crate) fn set_callback_error(error: JsValue) {
+    set_callback_failure(error, false);
+}
+
+fn set_callback_failure(error: JsValue, mutation_origin: bool) {
     CALLBACK_ERRORS.with(|frames| {
         let mut frames = frames.borrow_mut();
-        if let Some(CallbackErrorFrame::Capture { error: pending, .. }) = frames.last_mut() {
-            if pending.is_none() {
+        if let Some(CallbackErrorFrame::Capture {
+            error: pending,
+            mutation_origin: pending_mutation,
+            ..
+        }) = frames.last_mut()
+        {
+            if pending.is_none() || (*pending_mutation && !mutation_origin) {
                 *pending = Some(error);
+                *pending_mutation = mutation_origin;
             }
         }
     });
@@ -687,7 +740,10 @@ pub(crate) fn set_callback_error(error: JsValue) {
 /// Builds the sentinel reject returned into the core when a callback failed.
 ///
 /// The sentinel lets the core unwind cleanly. A capturing entry point reports
-/// the first captured `JsValue` as the `cause` of a `PolicyCallbackError`.
+/// the captured `JsValue` as the `cause` of a `PolicyCallbackError`: the first
+/// failure wins, except that a non-mutation failure replaces a parked mutation
+/// one, and the execute entry points may return the engine's reserved
+/// review-rollback reject instead of throwing.
 fn callback_failure_reject(policy_name: &str) -> Reject {
     Reject::new(
         policy_name,
@@ -983,8 +1039,13 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
 /// Invokes a hook, mapping a thrown error onto a captured sentinel reject.
 ///
 /// Used by pre-trade hooks that return `Result<_, Rejects>`. A sentinel
-/// `Rejects` lets the core unwind. A capturing entry point reports the first
-/// captured JS value as the `cause` of a `PolicyCallbackError`.
+/// `Rejects` lets the core unwind. After the stage finishes, a capturing entry
+/// point reports the first captured JS value as the `cause` of a
+/// `PolicyCallbackError`, except that a policy callback failure replaces an
+/// earlier mutation commit/rollback failure. `executePreTrade` and
+/// `Request.execute` return the engine's "review rollback failed" reject
+/// without raising a parked mutation-rollback failure; a policy callback
+/// failure in the same call still raises.
 fn call_hook(
     function: &Function,
     this: &JsValue,
@@ -1367,9 +1428,10 @@ fn apply_policy_pre_trade_result(
 /// Parses a `Mutation`-shaped value (a `{ commit, rollback }` pair).
 ///
 /// Both callbacks are invoked with `this` bound to the mutation object. A
-/// failure in either is captured, and a capturing entry point reports the first
-/// captured JS value as the `cause` of a `PolicyCallbackError`. The implicit
-/// rollback of a reservation destroyed without finalization runs under
+/// failure in either is captured with its mutation origin. Execute entry points
+/// can return the engine's reserved review-rollback reject instead; otherwise
+/// callback failures become the `cause` of a `PolicyCallbackError`. The
+/// implicit rollback of a reservation destroyed without finalization runs under
 /// suppression and discards the failure.
 ///
 /// # Errors
@@ -1390,7 +1452,7 @@ pub(crate) fn parse_policy_mutation(value: &JsValue) -> Result<Mutation, JsValue
                     &error,
                     "javascript mutation commit callback failed",
                 );
-                set_callback_error(error);
+                set_callback_failure(error, true);
                 Err(details)
             } else {
                 Ok(())
@@ -1405,7 +1467,7 @@ pub(crate) fn parse_policy_mutation(value: &JsValue) -> Result<Mutation, JsValue
                     &error,
                     "javascript mutation rollback callback failed",
                 );
-                set_callback_error(error);
+                set_callback_failure(error, true);
                 Err(details)
             } else {
                 Ok(())

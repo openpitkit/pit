@@ -32,7 +32,9 @@ inline thread_local CallbackExceptionScope* g_currentCallbackExceptionScope =
     nullptr;
 
 // Operation-local callback exception slot. Scopes form a thread-local stack so
-// a nested SDK operation cannot clear or consume its caller's exception.
+// a nested SDK operation cannot clear or consume its caller's exception. The
+// first captured exception wins, except that a policy-callback exception
+// replaces a parked mutation-callback one.
 class CallbackExceptionScope {
  public:
   CallbackExceptionScope() noexcept
@@ -47,11 +49,21 @@ class CallbackExceptionScope {
     return m_pending != nullptr;
   }
 
+  [[nodiscard]] bool HasPendingMutation() const noexcept {
+    return HasPending() && m_mutationOrigin;
+  }
+
+  void DiscardPending() noexcept {
+    m_pending = nullptr;
+    m_mutationOrigin = false;
+  }
+
   void ThrowIfPending() {
     if (m_pending == nullptr) {
       return;
     }
     std::exception_ptr pending = std::exchange(m_pending, std::exception_ptr{});
+    m_mutationOrigin = false;
     std::rethrow_exception(pending);
   }
 
@@ -62,21 +74,31 @@ class CallbackExceptionScope {
 
   CallbackExceptionScope* m_previous;
   std::exception_ptr m_pending;
+  bool m_mutationOrigin = false;
 };
 
+// For policy and other non-mutation callbacks. Fixes policy origin, which
+// takes precedence over mutation failures and prevents execute from discarding
+// the exception when it returns the engine's review-rollback reject.
 inline void CaptureCurrentCallbackException() noexcept {
   if (g_currentCallbackExceptionScope != nullptr &&
-      !g_currentCallbackExceptionScope->HasPending()) {
+      (!g_currentCallbackExceptionScope->HasPending() ||
+       g_currentCallbackExceptionScope->HasPendingMutation())) {
     g_currentCallbackExceptionScope->m_pending = std::current_exception();
+    g_currentCallbackExceptionScope->m_mutationOrigin = false;
   }
 }
 
+// For mutation commit/rollback trampolines only. Fixes mutation origin, which
+// yields to policy failures and lets execute discard the exception when it
+// returns the engine's review-rollback reject.
 inline void CaptureCurrentCallbackException(
     OpenPitSharedString** outError) noexcept {
   const std::exception_ptr current = std::current_exception();
   if (g_currentCallbackExceptionScope != nullptr &&
       !g_currentCallbackExceptionScope->HasPending()) {
     g_currentCallbackExceptionScope->m_pending = current;
+    g_currentCallbackExceptionScope->m_mutationOrigin = true;
   }
   if (outError == nullptr || current == nullptr) {
     return;

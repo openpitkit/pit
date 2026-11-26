@@ -333,10 +333,24 @@ class Engine {
         "order; pass std::unique_ptr<const openpit::Order> instead"));
   }
 
-  // Runs the complete pre-trade pipeline. On accept the result carries a
-  // `pretrade::Reservation` representing reserved-but-not-finalized state; on
-  // reject it carries the rejects. Throws `openpit::Error` on a boundary
-  // failure.
+  /// Runs the complete pre-trade pipeline. On accept the result carries a
+  /// `pretrade::Reservation` representing reserved-but-not-finalized state; on
+  /// reject it carries the rejects. Throws `openpit::Error` on a boundary
+  /// failure.
+  ///
+  /// If discarding a review instance's tentative state fails, returns the
+  /// rejected result with policy "Engine", scope `RejectScope::Order`, code
+  /// `RejectCode::SystemUnavailable`, and reason "review rollback failed",
+  /// instead of throwing the rollback callback's exception. The engine kill
+  /// switch is armed; later policies still ran. A policy callback exception in
+  /// the same call takes precedence and propagates. Any other mutation rollback
+  /// failure, including ordinary reject compensation, propagates with its
+  /// original exception type, unless a review rollback in the same call also
+  /// failed: then the full reject list is returned and nothing is thrown.
+  ///
+  /// This identity is the engine's reserved report. A custom policy emitting
+  /// it is treated as the engine, so a mutation rollback exception parked in
+  /// the same call is not thrown.
   [[nodiscard]] ::openpit::pretrade::ExecuteResult ExecutePreTrade(
       const ::openpit::Order& order) const {
     const OpenPitOrder raw = ::openpit::detail::Native(order);
@@ -347,6 +361,8 @@ class Engine {
     detail::CallbackExceptionScope callbackExceptions;
     const OpenPitPretradeStatus status = openpit_engine_execute_pre_trade(
         m_handle.Get(), &raw, &reservation, &rejects, &error);
+    pretrade::detail::DiscardReviewRollbackException(status, rejects,
+                                                     callbackExceptions);
     if (callbackExceptions.HasPending()) {
       openpit_destroy_pretrade_pre_trade_reservation(reservation);
       openpit_destroy_pretrade_reject_list(rejects);

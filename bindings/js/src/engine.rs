@@ -643,6 +643,22 @@ impl JsEngine {
     /// wrapper `order` is not consumed, so the caller may reuse the same object
     /// afterwards.
     ///
+    /// If discarding a review instance's tentative state fails, returns a
+    /// rejected `ExecuteResult` with policy "Engine", scope "order", code
+    /// "SystemUnavailable", and reason "review rollback failed", instead of
+    /// throwing for the rollback callback. The engine kill switch is armed and
+    /// later policies still ran. A policy callback exception in the same call
+    /// still wins: `PolicyCallbackError` carries its original value as `cause`.
+    /// Other mutation rollback failures, including ordinary reject
+    /// compensation, still throw `PolicyCallbackError` with the original value
+    /// and type preserved in `cause`, unless a review rollback in the same call
+    /// also failed: then the full reject list is returned and nothing is
+    /// thrown.
+    ///
+    /// This identity is the engine's reserved report. A custom policy emitting
+    /// it is treated as the engine: a mutation rollback exception parked in
+    /// the same call is then not thrown.
+    ///
     /// # Errors
     ///
     /// Throws `TypeError` for a malformed order or field, `RangeError` for an
@@ -650,24 +666,32 @@ impl JsEngine {
     /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
     /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Throws `PolicyCallbackError` on callback failure. A malformed return has
-    /// a `TypeError` cause for a missing field or wrong type, `RangeError` for
-    /// an invalid scope, mode, or numeric bound, `ParamError` for an invalid
-    /// domain value, or `AssetError` for an invalid asset.
+    /// Throws `PolicyCallbackError` on other callback failures. A malformed
+    /// return has a `TypeError` cause for a missing field or wrong type,
+    /// `RangeError` for an invalid scope, mode, or numeric bound, `ParamError`
+    /// for an invalid domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = executePreTrade)]
     pub fn execute_pre_trade(&self, order: OrderLike) -> Result<JsExecuteResult, JsValue> {
         let original: JsValue = order.into();
         let order = JsOrder::coerce(original.clone())?;
         let (request, lifecycle) = build_order_request(&order, &original, self.callback_scope_id)?;
         let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
-        let result = match self.inner.execute_pre_trade(request) {
-            Ok(reservation) => JsExecuteResult::accepted(reservation, lifecycle.clone()),
+        let (result, failure) = match self.inner.execute_pre_trade(request) {
+            Ok(reservation) => (
+                JsExecuteResult::accepted(reservation, lifecycle.clone()),
+                callback_scope.finish(),
+            ),
             Err(rejects) => {
                 lifecycle.invalidate();
-                JsExecuteResult::rejected(&rejects)
+                (
+                    JsExecuteResult::rejected(&rejects),
+                    callback_scope.finish_execute(&rejects),
+                )
             }
         };
-        finish_callback_scope(callback_scope, JsValue::UNDEFINED)?;
+        if let Some(failure) = failure {
+            return Err(failure.into_error(JsValue::UNDEFINED));
+        }
         Ok(result)
     }
 
@@ -1674,7 +1698,7 @@ fn build_builtin_policy(
     ))
 }
 
-/// Finishes one callback scope and surfaces its first failure.
+/// Finishes one callback scope and surfaces its captured failure.
 ///
 /// # Errors
 ///

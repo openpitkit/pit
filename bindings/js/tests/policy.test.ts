@@ -400,9 +400,21 @@ describe("custom policy review modes", () => {
     },
   );
 
-  it.each([false, true])(
-    "runs later hooks and kills the engine after review rollback fails, rollbackAll=%s",
-    (rollbackAll) => {
+  function executeReviewOrder(engine: Engine, viaRequest: boolean) {
+    if (!viaRequest) return engine.executePreTrade(order("BUY"));
+    const start = engine.startPreTrade(order("BUY"));
+    expect(start.ok).toBe(true);
+    expect(start.request).toBeDefined();
+    return start.request!.execute();
+  }
+
+  it.each(
+    [false, true].flatMap((viaRequest) =>
+      [false, true].map((rollbackAll) => ({ viaRequest, rollbackAll })),
+    ),
+  )(
+    "runs later hooks and kills the engine after review rollback fails, request=$viaRequest rollbackAll=$rollbackAll",
+    ({ viaRequest, rollbackAll }) => {
       const review = new ReviewInstancePolicy();
       review.recordMode = rollbackAll
         ? RuleMode.ReviewWithoutHold
@@ -418,15 +430,18 @@ describe("custom policy review modes", () => {
       });
       ready.preTrade(later, { name: "later" });
       const engine = ready.build();
-      let caught: unknown;
-      try {
-        engine.executePreTrade(order("BUY"));
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBeInstanceOf(PolicyCallbackError);
-      expect((caught as PolicyCallbackError).cause).toBe(thrown);
-
+      const result = executeReviewOrder(engine, viaRequest);
+      expect(result.ok).toBe(false);
+      expect(result.reservation).toBeUndefined();
+      expect(result.reviews).toEqual([]);
+      expect(result.rejects).toHaveLength(1);
+      expect(result.rejects[0]).toMatchObject({
+        policy: "Engine",
+        scope: "order",
+        code: "SystemUnavailable",
+        reason: "review rollback failed",
+        mode: RuleMode.Reject,
+      });
       const blocked = engine.startPreTrade(orderFor(OTHER_ACCOUNT));
       expect(blocked.ok).toBe(false);
       expect(blocked.request).toBeUndefined();
@@ -458,6 +473,148 @@ describe("custom policy review modes", () => {
         later.rollbacks,
         later.applied,
       ]).toEqual([1, 0, 1, 0]);
+    },
+  );
+
+  it.each(
+    [false, true].flatMap((viaRequest) =>
+      [false, true].map((earlier) => ({ viaRequest, earlier })),
+    ),
+  )(
+    "policy exception wins over review rollback, request=$viaRequest earlier=$earlier",
+    ({ viaRequest, earlier }) => {
+      const thrown = new TypeError("policy callback failed");
+      const callback: Policy = {
+        name: "throwing",
+        policyGroupId: 0,
+        checkPreTradeStart() {
+          return [];
+        },
+        performPreTradeCheck() {
+          throw thrown;
+        },
+      };
+      const review = new ReviewInstancePolicy();
+      review.rollbackFailure = new RangeError("review rollback failed");
+      const ready = Engine.builder().preTrade(earlier ? callback : review, {
+        name: earlier ? "throwing" : "review",
+        mode: earlier ? RuleMode.Reject : RuleMode.ReviewWithHold,
+      });
+      ready.preTrade(earlier ? review : callback, {
+        name: earlier ? "review" : "throwing",
+        mode: earlier ? RuleMode.ReviewWithHold : RuleMode.Reject,
+      });
+      const engine = ready.build();
+      let caught: unknown;
+      try {
+        executeReviewOrder(engine, viaRequest);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(PolicyCallbackError);
+      expect((caught as PolicyCallbackError).cause).toBe(thrown);
+      expect(review.rollbacks).toBe(1);
+    },
+  );
+
+  it.each([false, true])(
+    "ordinary reject rollback keeps its cause, request=%s",
+    (viaRequest) => {
+      const policy = new ReviewInstancePolicy();
+      const thrown = new RangeError("ordinary rollback failed");
+      policy.rollbackFailure = thrown;
+      const engine = Engine.builder().preTrade(policy).build();
+      let caught: unknown;
+      try {
+        executeReviewOrder(engine, viaRequest);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(PolicyCallbackError);
+      expect((caught as PolicyCallbackError).cause).toBe(thrown);
+      expect(policy.rollbacks).toBe(1);
+      const blocked = engine.startPreTrade(orderFor(OTHER_ACCOUNT));
+      expect(blocked.ok).toBe(false);
+      expect(blocked.rejects).toHaveLength(1);
+      expect(blocked.rejects[0]).toMatchObject({
+        policy: "Engine",
+        code: "SystemUnavailable",
+        reason: "mutation finalizer failed",
+      });
+    },
+  );
+
+  it.each(["reason", "scope", "code"])(
+    "near review-rollback reject keeps its cause, changed=%s",
+    (changedField) => {
+      const policy = new ReviewInstancePolicy();
+      policy.name = "Engine";
+      policy.reject = (): PolicyReject => ({
+        details: "instance contribution",
+        code: changedField === "code" ? REJECT_CODE : "SystemUnavailable",
+        scope: changedField === "scope" ? "account" : "order",
+        reason:
+          changedField === "reason"
+            ? "different rollback failure"
+            : "review rollback failed",
+      });
+      const thrown = new RangeError("near-identity rollback failed");
+      policy.rollbackFailure = thrown;
+      const engine = Engine.builder().preTrade(policy).build();
+      let caught: unknown;
+      try {
+        engine.executePreTrade(order("BUY"));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(PolicyCallbackError);
+      expect((caught as PolicyCallbackError).cause).toBeInstanceOf(RangeError);
+      expect((caught as PolicyCallbackError).cause).toBe(thrown);
+      expect(policy.rollbacks).toBe(1);
+    },
+  );
+
+  it.each([false, true])(
+    "returns all rejects after both rollbacks fail, request=%s",
+    (viaRequest) => {
+      const review = new ReviewInstancePolicy();
+      review.rollbackFailure = new Error("review rollback failed");
+      const later = new ReviewInstancePolicy();
+      later.rollbackFailure = new RangeError("later rollback failed");
+      const ready = Engine.builder().preTrade(review, {
+        name: "review",
+        mode: RuleMode.ReviewWithHold,
+      });
+      ready.preTrade(later, { name: "later" });
+      const engine = ready.build();
+      const result = executeReviewOrder(engine, viaRequest);
+      expect(result.ok).toBe(false);
+      expect(result.reservation).toBeUndefined();
+      expect(
+        result.rejects.map(({ policy, scope, code, reason, mode }) => ({
+          policy,
+          scope,
+          code,
+          reason,
+          mode,
+        })),
+      ).toEqual([
+        {
+          policy: "Engine",
+          scope: "order",
+          code: "SystemUnavailable",
+          reason: "review rollback failed",
+          mode: RuleMode.Reject,
+        },
+        {
+          policy: later.name,
+          scope: "order",
+          code: REJECT_CODE,
+          reason: "review boundary",
+          mode: RuleMode.Reject,
+        },
+      ]);
+      expect([review.rollbacks, later.rollbacks]).toEqual([1, 1]);
     },
   );
 

@@ -333,8 +333,11 @@ class Policy(abc.ABC):
 
     Callback exceptions belong to the operation that invoked them. If multiple
     sibling callbacks fail during one operation, the first exception is
-    re-raised after the stage finishes; later exceptions from that operation do
-    not replace it.
+    re-raised after the stage finishes, except that a policy callback exception
+    replaces an earlier mutation commit/rollback exception.
+    ``execute_pre_trade`` and ``Request.execute`` return the engine's
+    "review rollback failed" reject without raising a parked mutation-rollback
+    exception; a policy callback exception in the same call still raises.
     """
 
     @property
