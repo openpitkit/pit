@@ -1,3 +1,4 @@
+import conftest
 import openpit
 import pytest
 
@@ -176,7 +177,9 @@ def test_account_pnl_operation_reaches_builtin_spot_funds_batch_path() -> None:
     )
 
 
-def _spot_funds_killswitch_engine() -> openpit.Engine:
+def _spot_funds_killswitch_engine(
+    mode: openpit.pretrade.RuleMode = openpit.pretrade.RuleMode.REJECT,
+) -> openpit.Engine:
     policies = openpit.pretrade.policies
     return (
         openpit.Engine.builder()
@@ -186,6 +189,7 @@ def _spot_funds_killswitch_engine() -> openpit.Engine:
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-100"),
+                    mode=mode,
                 )
             )
         )
@@ -209,11 +213,15 @@ def _assert_account_pnl(
 
 
 @pytest.mark.integration
-def test_account_pnl_halt_through_builtin_spot_funds_batch_path_blocks() -> None:
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+def test_account_pnl_halt_through_builtin_spot_funds_batch_path_blocks(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
     # A halted account PnL is uncomputable, so a configured barrier can no
     # longer be evaluated: the batch commits and the account is blocked.
     account_id = openpit.param.AccountId.from_int(99224417)
-    engine = _spot_funds_killswitch_engine()
+    engine = _spot_funds_killswitch_engine(mode)
+    engine.accounts().set_currency(account_id, openpit.param.Asset("USD"))
 
     result = _assert_account_pnl(
         engine, account_id, openpit.pretrade.PnlHaltReason.MISSING_FX
@@ -227,6 +235,39 @@ def test_account_pnl_halt_through_builtin_spot_funds_batch_path_blocks() -> None
         result.account_blocks[0].code
         == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
     )
+    for confirmed in (False, True):
+        engine.accounts().unblock(account_id)
+        order = conftest.make_order(account_id=account_id)
+        order = openpit.Order(
+            operation=order.operation, review=openpit.OrderReview(confirmed=confirmed)
+        )
+        live = engine.execute_pre_trade(order=order)
+        assert live.reservation is None
+        assert [(r.code, r.mode) for r in live.rejects] == [
+            (
+                openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED,
+                openpit.pretrade.RuleMode.REJECT,
+            )
+        ]
+        rearmed = engine.configure().set_spot_funds_account_pnl(
+            openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+            account=account_id,
+            state=openpit.param.Pnl(0),
+        )
+        assert rearmed.account_blocks == []
+        blocked = engine.execute_pre_trade(order=order)
+        assert blocked.reservation is None
+        assert [r.code for r in blocked.rejects] == [
+            openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+        ]
+        if not confirmed:
+            halted_again = _assert_account_pnl(
+                engine, account_id, openpit.pretrade.PnlHaltReason.MISSING_FX
+            )
+            assert halted_again.ok
+            assert [b.code for b in halted_again.account_blocks] == [
+                openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+            ]
 
 
 @pytest.mark.integration

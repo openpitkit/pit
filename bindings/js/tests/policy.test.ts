@@ -45,6 +45,7 @@ import {
 } from "@openpit/engine/model";
 import {
   type Context,
+  type DropCopyOperation,
   AccountAdjustmentBatchResult,
   type Policy,
   type PolicyAccountAdjustmentResult,
@@ -58,6 +59,7 @@ import {
 import {
   AccountAdjustmentOutcome,
   AccountOutcomeEntry,
+  OutcomeAmount,
   PnlOutcomeAmount,
 } from "@openpit/engine/accountadjustment";
 import { AccountBlock, RuleMode } from "@openpit/engine/reject";
@@ -89,8 +91,13 @@ function orderFor(account: number) {
 
 // Applies drop copy and finalizes the operation the way a caller would. The
 // operation's accessors must be read before it is committed.
-function applyDropCopyAndCommit(engine: Engine, request: Order | OrderInit) {
+function applyDropCopyAndCommit(
+  engine: Engine,
+  request: Order | OrderInit,
+  inspect?: (operation: DropCopyOperation) => void,
+) {
   const result = engine.applyDropCopy(request);
+  if (result.operation && inspect) inspect(result.operation);
   result.operation?.commit();
   return result;
 }
@@ -129,6 +136,447 @@ const sellGate: Policy = {
 };
 
 describe("custom policy review modes", () => {
+  class ReviewInstancePolicy implements Policy {
+    name = "review-boundary";
+    policyGroupId = 0;
+    startReject = false;
+    mainReject = true;
+    price = "99";
+    asset = "USD";
+    code: PolicyReject["code"] = REJECT_CODE;
+    scope: NonNullable<PolicyReject["scope"]> = "order";
+    recordMode: RuleMode = RuleMode.Reject;
+    rollbackFailure?: Error;
+    previous?: ReviewInstancePolicy;
+    observed?: number[];
+    startCalls = 0;
+    mainCalls = 0;
+    commits = 0;
+    rollbacks = 0;
+    applied = 0;
+
+    reject(): PolicyReject {
+      return {
+        code: this.code,
+        reason: "review boundary",
+        details: "instance contribution",
+        scope: this.scope,
+        mode: this.recordMode,
+      };
+    }
+
+    checkPreTradeStart() {
+      this.startCalls += 1;
+      return this.startReject ? [this.reject()] : [];
+    }
+
+    performPreTradeCheck(): PolicyPreTradeResult {
+      this.mainCalls += 1;
+      if (this.previous) {
+        this.observed = [this.previous.rollbacks, this.previous.applied];
+      }
+      this.applied += 1;
+      return {
+        rejects: this.mainReject ? [this.reject()] : [],
+        mutations: [
+          new Mutation(
+            () => {
+              this.commits += 1;
+            },
+            () => {
+              this.rollbacks += 1;
+              if (this.rollbackFailure) throw this.rollbackFailure;
+              this.applied -= 1;
+            },
+          ),
+        ],
+        lockPrices: [this.price],
+        accountAdjustments: [
+          new AccountOutcomeEntry(
+            this.asset,
+            undefined,
+            new OutcomeAmount("2", "2"),
+          ),
+        ],
+      };
+    }
+  }
+
+  it.each(
+    [RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold].flatMap((mode) =>
+      [false, true].map((confirmed) => ({ mode, confirmed })),
+    ),
+  )(
+    "rolls back registered $mode segments before the next hook, confirmed=$confirmed",
+    ({ mode, confirmed }) => {
+      const review = new ReviewInstancePolicy();
+      const keep = new ReviewInstancePolicy();
+      keep.mainReject = false;
+      keep.price = "101";
+      keep.asset = "EUR";
+      keep.previous = review;
+      const ready = Engine.builder().preTrade(review, { name: "review", mode });
+      ready.preTrade(keep, { name: "keep" });
+      const engine = ready.build();
+      const result = engine.executePreTrade({
+        ...order("BUY"),
+        review: { confirmed },
+      });
+      expect(result.ok).toBe(true);
+      expect(result.rejects).toEqual([]);
+      expect(
+        result.reviews.map(({ policy, mode, scope, code }) => ({
+          policy,
+          mode,
+          scope,
+          code,
+        })),
+      ).toEqual(
+        confirmed
+          ? []
+          : [{ policy: review.name, mode, scope: "order", code: REJECT_CODE }],
+      );
+      expect(keep.observed).toEqual([1, 0]);
+      const reservation = result.reservation!;
+      expect(reservation.reviews().map(({ mode }) => mode)).toEqual(
+        confirmed ? [] : [mode],
+      );
+      const holds = confirmed || mode === RuleMode.ReviewWithHold;
+      expect(reservation.lock().size()).toBe(holds ? 1 : 0);
+      expect(reservation.lock().pricesOf(0).map(String)).toEqual(
+        holds ? ["101"] : [],
+      );
+      expect(
+        reservation.accountAdjustments().map(({ entry }) => entry.asset),
+      ).toEqual(holds ? ["EUR"] : []);
+      reservation.commit();
+      expect([
+        review.mainCalls,
+        review.commits,
+        review.rollbacks,
+        review.applied,
+      ]).toEqual([1, 0, 1, 0]);
+      expect([
+        keep.mainCalls,
+        keep.commits,
+        keep.rollbacks,
+        keep.applied,
+      ]).toEqual([1, Number(holds), Number(!holds), Number(holds)]);
+    },
+  );
+
+  it.each([false, true])(
+    "lets without-hold win with all marks, acrossStages=%s",
+    (acrossStages) => {
+      const withHold = new ReviewInstancePolicy();
+      withHold.startReject = acrossStages;
+      withHold.mainReject = !acrossStages;
+      const withoutHold = new ReviewInstancePolicy();
+      const keep = new ReviewInstancePolicy();
+      keep.mainReject = false;
+      const ready = Engine.builder().preTrade(withHold, {
+        name: "with",
+        mode: RuleMode.ReviewWithHold,
+      });
+      ready.preTrade(withoutHold, {
+        name: "without",
+        mode: RuleMode.ReviewWithoutHold,
+      });
+      ready.preTrade(keep, { name: "keep" });
+      const engine = ready.build();
+      const start = engine.startPreTrade(order("BUY"));
+      expect(start.ok).toBe(true);
+      expect(start.request!.reviews().map(({ mode }) => mode)).toEqual(
+        acrossStages ? [RuleMode.ReviewWithHold] : [],
+      );
+      const result = start.request!.execute();
+      expect(result.ok).toBe(true);
+      expect(result.rejects).toEqual([]);
+      expect(result.reviews.map(({ mode }) => mode).sort()).toEqual([
+        RuleMode.ReviewWithHold,
+        RuleMode.ReviewWithoutHold,
+      ]);
+      const reservation = result.reservation!;
+      expect(
+        reservation
+          .reviews()
+          .map(({ mode }) => mode)
+          .sort(),
+      ).toEqual([RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold]);
+      expect(reservation.lock().size()).toBe(0);
+      expect(reservation.accountAdjustments()).toEqual([]);
+      reservation.commit();
+      for (const policy of [withHold, withoutHold, keep]) {
+        expect([
+          policy.mainCalls,
+          policy.commits,
+          policy.rollbacks,
+          policy.applied,
+        ]).toEqual([1, 0, 1, 0]);
+      }
+    },
+  );
+
+  it.each(
+    [RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold].flatMap((mode) =>
+      [false, true].flatMap((confirmed) =>
+        ([REJECT_CODE, "SystemUnavailable"] as const).map((code) => ({
+          mode,
+          confirmed,
+          code,
+        })),
+      ),
+    ),
+  )(
+    "discards marks and mutations on an effective $code reject, mode=$mode, confirmed=$confirmed",
+    ({ mode, confirmed, code }) => {
+      const review = new ReviewInstancePolicy();
+      review.startReject = mode === RuleMode.ReviewWithHold;
+      const deny = new ReviewInstancePolicy();
+      deny.code = code;
+      const keep = new ReviewInstancePolicy();
+      keep.mainReject = false;
+      const input = { ...order("BUY"), review: { confirmed } };
+      const build = (
+        review: ReviewInstancePolicy,
+        deny: ReviewInstancePolicy,
+        keep: ReviewInstancePolicy,
+      ) => {
+        const ready = Engine.builder().preTrade(review, {
+          name: "review",
+          mode,
+        });
+        ready.preTrade(deny, {
+          name: "deny",
+          mode: code === "SystemUnavailable" ? mode : RuleMode.Reject,
+        });
+        ready.preTrade(keep, { name: "keep" });
+        return ready.build();
+      };
+      const result = build(review, deny, keep).executePreTrade(input);
+      expect(result.ok).toBe(false);
+      expect(result.reservation).toBeUndefined();
+      expect(
+        result.rejects.map(({ policy, code, scope, mode }) => ({
+          policy,
+          code,
+          scope,
+          mode,
+        })),
+      ).toEqual([
+        { policy: deny.name, code, scope: "order", mode: RuleMode.Reject },
+      ]);
+      for (const policy of [review, deny, keep]) {
+        expect([
+          policy.startCalls,
+          policy.mainCalls,
+          policy.commits,
+          policy.rollbacks,
+          policy.applied,
+        ]).toEqual([1, 1, 0, 1, 0]);
+      }
+      // Fresh instances keep dry-run fallback hooks out of the live counters.
+      const dryReview = new ReviewInstancePolicy();
+      dryReview.startReject = review.startReject;
+      const dryDeny = new ReviewInstancePolicy();
+      dryDeny.code = code;
+      const dryKeep = new ReviewInstancePolicy();
+      dryKeep.mainReject = false;
+      const report = build(dryReview, dryDeny, dryKeep).executePreTradeDryRun(
+        input,
+      );
+      expect(report.isPass).toBe(false);
+      expect(report.reviews).toEqual([]);
+      expect(
+        report.rejects.map(({ policy, code, scope, mode }) => ({
+          policy,
+          code,
+          scope,
+          mode,
+        })),
+      ).toEqual([
+        { policy: deny.name, code, scope: "order", mode: RuleMode.Reject },
+      ]);
+    },
+  );
+
+  it.each([false, true])(
+    "runs later hooks and kills the engine after review rollback fails, rollbackAll=%s",
+    (rollbackAll) => {
+      const review = new ReviewInstancePolicy();
+      review.recordMode = rollbackAll
+        ? RuleMode.ReviewWithoutHold
+        : RuleMode.Reject;
+      const thrown = new Error("review mutation rollback failed");
+      review.rollbackFailure = thrown;
+      const later = new ReviewInstancePolicy();
+      later.mainReject = false;
+      later.previous = review;
+      const ready = Engine.builder().preTrade(review, {
+        name: "review",
+        mode: rollbackAll ? RuleMode.Reject : RuleMode.ReviewWithHold,
+      });
+      ready.preTrade(later, { name: "later" });
+      const engine = ready.build();
+      let caught: unknown;
+      try {
+        engine.executePreTrade(order("BUY"));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(PolicyCallbackError);
+      expect((caught as PolicyCallbackError).cause).toBe(thrown);
+
+      const blocked = engine.startPreTrade(orderFor(OTHER_ACCOUNT));
+      expect(blocked.ok).toBe(false);
+      expect(blocked.request).toBeUndefined();
+      expect(
+        blocked.rejects.map(({ policy, code, reason, mode }) => ({
+          policy,
+          code,
+          reason,
+          mode,
+        })),
+      ).toEqual([
+        {
+          policy: "Engine",
+          code: "SystemUnavailable",
+          reason: "mutation finalizer failed",
+          mode: RuleMode.Reject,
+        },
+      ]);
+      expect([
+        review.mainCalls,
+        review.commits,
+        review.rollbacks,
+        review.applied,
+      ]).toEqual([1, 0, 1, 1]);
+      expect(later.observed).toEqual([Number(!rollbackAll), 1]);
+      expect([
+        later.mainCalls,
+        later.commits,
+        later.rollbacks,
+        later.applied,
+      ]).toEqual([1, 0, 1, 0]);
+    },
+  );
+
+  it.each(
+    [
+      RuleMode.Reject,
+      RuleMode.ReviewWithHold,
+      RuleMode.ReviewWithoutHold,
+    ].flatMap((mode) => [false, true].map((fatal) => ({ mode, fatal }))),
+  )(
+    "keeps drop-copy review bookkeeping unless evaluation fails, mode=$mode, fatal=$fatal",
+    ({ mode, fatal }) => {
+      const policy = new ReviewInstancePolicy();
+      policy.scope = "account";
+      policy.recordMode =
+        mode === RuleMode.Reject ? RuleMode.ReviewWithHold : RuleMode.Reject;
+      policy.code = fatal ? "OrderValueCalculationFailed" : REJECT_CODE;
+      const engine = Engine.builder()
+        .preTrade(policy, { name: "review", mode })
+        .build();
+      const result = applyDropCopyAndCommit(
+        engine,
+        order("BUY"),
+        (operation) => {
+          expect(operation.accountBlock()).toBeUndefined();
+          expect(operation.isAccountBlocked()).toBe(false);
+          expect(operation.lock().size()).toBe(1);
+          expect(operation.lock().pricesOf(0).map(String)).toEqual(["99"]);
+          const adjustments = operation.accountAdjustments();
+          expect(adjustments.map(({ entry }) => entry.asset)).toEqual(["USD"]);
+          expect(adjustments[0]!.entry.held!.delta.toString()).toBe("2");
+        },
+      );
+      expect(result.ok).toBe(!fatal);
+      if (fatal) {
+        expect(result.operation).toBeUndefined();
+        expect(
+          result.rejects.map(({ code, mode }) => ({ code, mode })),
+        ).toEqual([
+          { code: "OrderValueCalculationFailed", mode: RuleMode.Reject },
+        ]);
+      } else {
+        expect(result.rejects).toEqual([]);
+        const next = engine.startPreTrade(order("BUY"));
+        expect(next.ok).toBe(true);
+        const request = next.request!;
+        (next as unknown as { free(): void }).free();
+        (request as unknown as { free(): void }).free();
+      }
+      expect([
+        policy.mainCalls,
+        policy.commits,
+        policy.rollbacks,
+        policy.applied,
+      ]).toEqual([1, Number(!fatal), Number(fatal), Number(!fatal)]);
+    },
+  );
+
+  it("lets an account block between stages beat a start without-hold mark", () => {
+    const policy = new ReviewInstancePolicy();
+    policy.startReject = true;
+    policy.mainReject = false;
+    const engine = Engine.builder()
+      .preTrade(policy, { name: "review", mode: RuleMode.ReviewWithoutHold })
+      .build();
+    const start = engine.startPreTrade(order("BUY"));
+    expect(start.ok).toBe(true);
+    expect(
+      start.request!.reviews().map(({ policy, mode }) => ({ policy, mode })),
+    ).toEqual([{ policy: policy.name, mode: RuleMode.ReviewWithoutHold }]);
+    engine.accounts().block(ACCOUNT, "between stages");
+    const result = start.request!.execute();
+    expect(result.ok).toBe(false);
+    expect(result.reservation).toBeUndefined();
+    expect(result.rejects.map(({ code, mode }) => ({ code, mode }))).toEqual([
+      { code: "AccountBlocked", mode: RuleMode.Reject },
+    ]);
+    expect([
+      policy.startCalls,
+      policy.mainCalls,
+      policy.commits,
+      policy.rollbacks,
+    ]).toEqual([1, 0, 0, 0]);
+  });
+
+  it("runs main after a confirmed start without-hold mark and keeps the reservation live", () => {
+    const policy = new ReviewInstancePolicy();
+    policy.startReject = true;
+    policy.mainReject = false;
+    const engine = Engine.builder()
+      .preTrade(policy, { name: "review", mode: RuleMode.ReviewWithoutHold })
+      .build();
+    const start = engine.startPreTrade({
+      ...order("BUY"),
+      review: { confirmed: true, alreadyHeld: true },
+    });
+    expect(start.ok).toBe(true);
+    expect(start.request!.reviews()).toEqual([]);
+    const result = start.request!.execute();
+    expect(result.ok).toBe(true);
+    expect(result.rejects).toEqual([]);
+    expect(result.reviews).toEqual([]);
+    const reservation = result.reservation!;
+    expect(reservation.reviews()).toEqual([]);
+    expect(reservation.lock().size()).toBe(1);
+    expect(reservation.lock().pricesOf(0).map(String)).toEqual(["99"]);
+    expect(
+      reservation.accountAdjustments().map(({ entry }) => entry.asset),
+    ).toEqual(["USD"]);
+    reservation.commit();
+    expect([
+      policy.startCalls,
+      policy.mainCalls,
+      policy.commits,
+      policy.rollbacks,
+      policy.applied,
+    ]).toEqual([1, 1, 1, 0, 1]);
+  });
+
   it.each([
     { mode: RuleMode.Reject },
     { mode: RuleMode.ReviewWithHold },

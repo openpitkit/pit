@@ -30,7 +30,7 @@ import {
   PnlBoundsBrokerBarrier,
   PnlBoundsKillswitchBuilder,
 } from "@openpit/engine/pretrade/policies";
-import { RuleMode } from "@openpit/engine/reject";
+import { isEvaluationFailure, RuleMode } from "@openpit/engine/reject";
 
 describe("MonetaryAmount", () => {
   it("preserves an exact fee and validated currency", () => {
@@ -227,6 +227,41 @@ describe("P&L-bounds kill switch execution reports", () => {
         expect(blocked.ok).toBe(false);
         expect(blocked.rejects.map((reject) => reject.code)).toEqual([
           "MissingRequiredField",
+        ]);
+      });
+
+      it("blocks the account after realized P&L accumulation overflows", () => {
+        const engine = buildEngine(mode);
+        const maximum = engine.applyExecutionReport({
+          ...report,
+          financialImpact: {
+            ...report.financialImpact,
+            pnl: "79228162514264337593543950335",
+          },
+        });
+        expect(maximum.accountBlocks).toEqual([]);
+        const overflow = engine.applyExecutionReport({
+          ...report,
+          financialImpact: { ...report.financialImpact, pnl: "1" },
+        });
+        expect(overflow.accountBlocks).toHaveLength(1);
+        const block = overflow.accountBlocks[0]!;
+        expect(isEvaluationFailure(block.code)).toBe(true);
+
+        engine.configure().setAccountPnl(PnlBoundsKillswitchBuilder.NAME, {
+          account: operation.accountId,
+          settlementAsset: operation.settlementAsset,
+          pnl: "0",
+        });
+        const blocked = engine.startPreTrade(order);
+        expect(blocked.ok).toBe(false);
+        expect(blocked.rejects).toMatchObject([
+          {
+            code: block.code,
+            reason: block.reason,
+            details: block.details,
+            mode: RuleMode.Reject,
+          },
         ]);
       });
     },

@@ -24,13 +24,102 @@ class _RejectPolicy(openpit.pretrade.Policy):
         )
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("custom", [False, True])
+def test_policy_instance_duplicate_explicit_name_fails_build(custom: bool) -> None:
+    valid = openpit.Engine.builder().no_sync()
+    if custom:
+        valid = valid.pre_trade(
+            _RejectPolicy(), name="desk-review", mode="ReviewWithHold"
+        )
+        valid.pre_trade(_RejectPolicy(), name="desk-other", mode="ReviewWithoutHold")
+    else:
+        valid = valid.builtin(
+            _order_size_limit(), name="desk-review", mode="ReviewWithHold"
+        )
+        valid.builtin(_order_size_limit(), name="desk-other", mode="ReviewWithoutHold")
+    valid.build()
+
+    builder = openpit.Engine.builder().no_sync()
+    if custom:
+        ready = builder.pre_trade(
+            _RejectPolicy(), name="desk-review", mode="ReviewWithHold"
+        )
+        ready.pre_trade(_RejectPolicy(), name="desk-review", mode="ReviewWithoutHold")
+    else:
+        ready = builder.builtin(
+            _order_size_limit(), name="desk-review", mode="ReviewWithHold"
+        )
+        ready.builtin(_order_size_limit(), name="desk-review", mode="ReviewWithoutHold")
+    with pytest.raises(Exception):  # noqa: B017 - no public build-error class
+        ready.build()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["ReviewWithHold", "ReviewWithoutHold"])
+@pytest.mark.parametrize("confirmed", [False, True])
+@pytest.mark.parametrize("notional", [False, True])
+def test_order_size_review_value_calculation_failure_stays_reject(
+    mode, confirmed, notional
+) -> None:
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            (
+                _order_size_limit(None, notional="100")
+                if notional
+                else _order_size_limit("100")
+            ),
+            name="review",
+            mode=mode,
+        )
+        .build()
+    )
+    original = conftest.make_order().operation
+    operation = openpit.OrderOperation(
+        instrument=openpit.Instrument(
+            original.underlying_asset, original.settlement_asset
+        ),
+        account_id=original.account_id,
+        side=original.side,
+        trade_amount=(
+            openpit.param.TradeAmount.quantity("1")
+            if notional
+            else openpit.param.TradeAmount.volume("10")
+        ),
+        price=None,
+    )
+    order = openpit.Order(
+        operation=operation, review=openpit.OrderReview(confirmed=confirmed)
+    )
+    result = engine.start_pre_trade(order=order)
+    assert not result.ok
+    assert result.request is None
+    assert [(r.policy, r.code, r.scope, r.mode) for r in result.rejects] == [
+        (
+            "OrderSizeLimitPolicy",
+            openpit.pretrade.RejectCode.ORDER_VALUE_CALCULATION_FAILED,
+            openpit.pretrade.RejectScope.ORDER,
+            "Reject",
+        )
+    ]
+
+
 def _order_size_limit(
-    quantity: str = "0",
+    quantity: str | None = "0", *, notional: str | None = None
 ) -> openpit.pretrade.policies.OrderSizeLimitReadyBuilder:
     policies = openpit.pretrade.policies
     return policies.build_order_size_limit().broker_barrier(
         policies.OrderSizeBrokerBarrier(
-            limit=policies.OrderSizeLimit(max_quantity=openpit.param.Quantity(quantity))
+            limit=policies.OrderSizeLimit(
+                max_quantity=(
+                    None if quantity is None else openpit.param.Quantity(quantity)
+                ),
+                max_notional=(
+                    None if notional is None else openpit.param.Volume(notional)
+                ),
+            )
         )
     )
 
@@ -131,7 +220,8 @@ def test_policy_instances_configure_independently(
                 )
             ),
         )
-    result = engine.start_pre_trade(order=conftest.make_order())
+    order = conftest.make_order()
+    result = engine.start_pre_trade(order=order)
     assert result.ok
     assert not result.rejects
     assert len(result.reviews) == 1
@@ -139,16 +229,52 @@ def test_policy_instances_configure_independently(
     assert result.reviews[0].policy == "OrderSizeLimitPolicy"
     assert result.reviews[0].code == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
     assert result.reviews[0].scope == openpit.pretrade.RejectScope.ORDER
+    confirmed_order = openpit.Order(
+        operation=order.operation,
+        review=openpit.OrderReview(confirmed=True),
+    )
+    passed = engine.start_pre_trade(order=confirmed_order)
+    assert passed.ok
+    assert passed.reviews == []
+    executed = passed.request.execute()
+    assert executed.ok
+    executed.reservation.commit()
     engine.configure().order_size_limit(
         "size-reject",
         broker=policies.OrderSizeBrokerBarrier(
             limit=policies.OrderSizeLimit(max_quantity=openpit.param.Quantity("0"))
         ),
     )
-    rejected = engine.start_pre_trade(order=conftest.make_order())
+    rejected = engine.start_pre_trade(order=order)
     assert not rejected.ok
     assert len(rejected.rejects) == 1
     assert rejected.rejects[0].mode == "Reject"
+
+    confirmed_rejected = engine.start_pre_trade(order=confirmed_order)
+    assert not confirmed_rejected.ok
+    assert confirmed_rejected.request is None
+    assert [
+        (r.policy, r.code, r.scope, r.mode) for r in confirmed_rejected.rejects
+    ] == [
+        (
+            "OrderSizeLimitPolicy",
+            openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT,
+            openpit.pretrade.RejectScope.ORDER,
+            "Reject",
+        )
+    ]
+
+    report = engine.start_pre_trade_dry_run(order=order)
+    assert not report
+    assert report.reviews == []
+    assert [(r.policy, r.code, r.scope, r.mode) for r in report.rejects] == [
+        (
+            "OrderSizeLimitPolicy",
+            openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT,
+            openpit.pretrade.RejectScope.ORDER,
+            "Reject",
+        )
+    ]
 
 
 @pytest.mark.unit
@@ -248,6 +374,7 @@ def test_rate_limit_reject_and_review_share_target() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("reject_limit", [1, 3], ids=["blocked", "execute"])
 @pytest.mark.parametrize(
     "mode",
     [
@@ -255,8 +382,82 @@ def test_rate_limit_reject_and_review_share_target() -> None:
         openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
     ],
 )
+def test_rate_limit_counts_only_starts_reaching_the_hook(
+    rate_limit_barriers: dict, reject_limit: int, mode: openpit.pretrade.RuleMode
+) -> None:
+    policies = openpit.pretrade.policies
+    barrier = rate_limit_barriers["broker"]
+    reject_mode = openpit.pretrade.RuleMode.REJECT
+    exceeded = openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barriers(
+                dataclasses.replace(
+                    barrier,
+                    limit=policies.RateLimit(reject_limit, datetime.timedelta(hours=1)),
+                ),
+                dataclasses.replace(
+                    barrier,
+                    limit=policies.RateLimit(
+                        1 if reject_limit == 1 else 2, datetime.timedelta(hours=1)
+                    ),
+                    mode=mode,
+                ),
+            )
+        )
+        .build()
+    )
+    order = conftest.make_order()
+    if reject_limit == 1:
+        account = order.operation.account_id
+        engine.accounts().block(account, "operator block")
+        blocked = engine.start_pre_trade(order=order)
+        assert not blocked.ok
+        assert [reject.code for reject in blocked.rejects] == [
+            openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+        ]
+        engine.accounts().unblock(account)
+        first = engine.start_pre_trade(order=order)
+        assert first.ok
+        assert first.reviews == []
+    else:
+        first = engine.start_pre_trade(order=order)
+        assert first.ok
+        assert first.reviews == []
+        executed = first.request.execute()
+        assert executed.ok
+        executed.reservation.commit()
+        second = engine.start_pre_trade(order=order)
+        assert second.ok
+        assert second.reviews == []
+        third = engine.start_pre_trade(order=order)
+        assert third.ok
+        assert [(mark.mode, mark.code) for mark in third.reviews] == [(mode, exceeded)]
+
+    exhausted = engine.start_pre_trade(order=order)
+    assert not exhausted.ok
+    assert [(reject.mode, reject.code) for reject in exhausted.rejects] == [
+        (
+            reject_mode,
+            exceeded,
+        )
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+@pytest.mark.parametrize("already_held", [False, True])
 def test_rate_limit_confirmed_spends_both_thresholds_and_drops_review_marks(
     mode: openpit.pretrade.RuleMode,
+    already_held: bool,
 ) -> None:
     policies = openpit.pretrade.policies
     engine = (
@@ -265,11 +466,11 @@ def test_rate_limit_confirmed_spends_both_thresholds_and_drops_review_marks(
         .builtin(
             policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(
-                    limit=policies.RateLimit(4, datetime.timedelta(hours=1)),
+                    limit=policies.RateLimit(7, datetime.timedelta(hours=1)),
                     mode=openpit.pretrade.RuleMode.REJECT,
                 ),
                 policies.RateLimitBrokerBarrier(
-                    limit=policies.RateLimit(2, datetime.timedelta(hours=1)), mode=mode
+                    limit=policies.RateLimit(4, datetime.timedelta(hours=1)), mode=mode
                 ),
             )
         )
@@ -280,24 +481,46 @@ def test_rate_limit_confirmed_spends_both_thresholds_and_drops_review_marks(
     assert first.ok
     assert not first.reviews
     confirmed = openpit.Order(
-        operation=order.operation, review=openpit.OrderReview(confirmed=True)
+        operation=order.operation,
+        review=openpit.OrderReview(confirmed=True),
     )
     second = engine.start_pre_trade(order=confirmed)
     assert second.ok
     assert not second.reviews
-    third = engine.start_pre_trade(order=order)
+    confirmed_held = openpit.Order(
+        operation=order.operation,
+        review=openpit.OrderReview(confirmed=True, already_held=True),
+    )
+    third = engine.start_pre_trade(order=confirmed_held)
     assert third.ok
-    assert len(third.reviews) == 1
-    assert third.reviews[0].mode == mode
-    assert third.reviews[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
-    fourth = engine.start_pre_trade(order=confirmed)
+    assert third.reviews == []
+    fourth = engine.start_pre_trade(order=order)
     assert fourth.ok
-    assert not fourth.reviews
-    fifth = engine.start_pre_trade(order=order)
-    assert not fifth.ok
-    assert len(fifth.rejects) == 1
-    assert fifth.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
-    assert fifth.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+    assert fourth.reviews == []
+    reviewed = engine.start_pre_trade(order=order)
+    assert reviewed.ok
+    assert [(mark.code, mark.mode) for mark in reviewed.reviews] == [
+        (openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED, mode)
+    ]
+    held_rerun = engine.start_pre_trade(order=confirmed_held)
+    assert held_rerun.ok
+    assert not held_rerun.reviews
+    rerun = engine.start_pre_trade(order=confirmed)
+    assert rerun.ok
+    assert not rerun.reviews
+    exhausted = engine.start_pre_trade(
+        order=openpit.Order(
+            operation=order.operation,
+            review=openpit.OrderReview(confirmed=True, already_held=already_held),
+        )
+    )
+    assert not exhausted.ok
+    assert [(reject.code, reject.mode) for reject in exhausted.rejects] == [
+        (
+            openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED,
+            openpit.pretrade.RuleMode.REJECT,
+        )
+    ]
 
 
 @pytest.mark.unit
@@ -513,28 +736,34 @@ def test_pnl_broker_barrier_ignores_mode_repr_override(native: bool) -> None:
 
 @pytest.mark.unit
 @pytest.mark.parametrize("axis", ["broker", "account"])
-@pytest.mark.parametrize(
-    "mode",
-    [
-        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
-        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
-    ],
-)
-def test_pnl_kill_switch_breach_marks_order_for_review(
-    mode: openpit.pretrade.RuleMode, axis: str
-) -> None:
+@pytest.mark.parametrize("confirmed", [False, True], ids=["unconfirmed", "confirmed"])
+def test_pnl_kill_switch_mixed_barriers(axis: str, confirmed: bool) -> None:
     policies = openpit.pretrade.policies
     account_id = openpit.param.AccountId.from_int(99224416)
-    barrier = policies.PnlBoundsBrokerBarrier(
-        openpit.param.Asset("USD"), openpit.param.Pnl("1"), mode=mode
+    usd = openpit.param.Asset("USD")
+    reject_mode = openpit.pretrade.RuleMode.REJECT
+    triggered = openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    review_modes = (
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    )
+    review_barriers = [
+        policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("1"), mode=mode)
+        for mode in review_modes
+    ]
+    reject_barrier = policies.PnlBoundsBrokerBarrier(
+        usd, openpit.param.Pnl("-200"), mode=reject_mode
     )
     builder = policies.build_pnl_bounds_killswitch()
     if axis == "broker":
-        policy = builder.broker_barriers(barrier)
+        policy = builder.broker_barriers(*review_barriers, reject_barrier)
     else:
         policy = builder.account_barriers(
-            policies.PnlBoundsAccountAssetBarrier(
-                barrier, account_id, openpit.param.Pnl("0")
+            *(
+                policies.PnlBoundsAccountAssetBarrier(
+                    barrier, account_id, openpit.param.Pnl("0")
+                )
+                for barrier in (*review_barriers, reject_barrier)
             )
         )
     engine = openpit.Engine.builder().no_sync().builtin(policy).build()
@@ -542,23 +771,61 @@ def test_pnl_kill_switch_breach_marks_order_for_review(
     order = conftest.make_order(account_id=account_id)
     first = engine.start_pre_trade(order=order)
     assert first.rejects == []
-    assert [review.mode for review in first.reviews] == [mode]
-    assert (
-        first.reviews[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
-    )
+    expected_reviews = [(mode, triggered, "account") for mode in review_modes]
+    assert sorted(
+        (mark.mode, mark.code, mark.scope) for mark in first.reviews
+    ) == sorted(expected_reviews)
     assert first.request is not None
     executed = first.request.execute()
     assert executed.rejects == []
-    assert [review.mode for review in executed.reviews] == [mode]
+    assert sorted(
+        (mark.mode, mark.code, mark.scope) for mark in executed.reviews
+    ) == sorted(expected_reviews)
     assert executed.reservation is not None
     executed.reservation.rollback()
 
-    next_order = openpit.Order(
-        operation=order.operation, review=openpit.OrderReview(confirmed=True)
-    )
-    following = engine.start_pre_trade(order=next_order)
+    following = engine.start_pre_trade(order=order)
     assert following.ok
-    assert following.reviews == []
+    assert sorted(
+        (mark.mode, mark.code, mark.scope) for mark in following.reviews
+    ) == sorted(expected_reviews)
+
+    if confirmed:
+        order = openpit.Order(
+            operation=order.operation, review=openpit.OrderReview(confirmed=True)
+        )
+        following = engine.start_pre_trade(order=order)
+        assert following.ok
+        assert following.reviews == []
+
+    engine.configure().set_account_pnl(
+        policies.PnlBoundsKillswitchBuilder.NAME,
+        account=account_id,
+        settlement_asset=usd,
+        pnl=openpit.param.Pnl("-250"),
+    )
+    if not confirmed:
+        dry = engine.start_pre_trade_dry_run(order=order)
+        assert dry.reviews == []
+        assert [(reject.mode, reject.code, reject.scope) for reject in dry.rejects] == [
+            (reject_mode, triggered, "account")
+        ]
+    rejected = engine.start_pre_trade(order=order)
+    assert not rejected.ok
+    assert [
+        (reject.mode, reject.code, reject.scope) for reject in rejected.rejects
+    ] == [(reject_mode, triggered, "account")]
+    engine.configure().set_account_pnl(
+        policies.PnlBoundsKillswitchBuilder.NAME,
+        account=account_id,
+        settlement_asset=usd,
+        pnl=openpit.param.Pnl("0"),
+    )
+    blocked = engine.start_pre_trade(order=order)
+    assert not blocked.ok
+    assert [reject.code for reject in blocked.rejects] == [
+        openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+    ]
 
 
 @pytest.mark.unit
@@ -645,6 +912,59 @@ def test_pnl_kill_switch_execution_report_breach_blocks_only_in_reject_mode(
         following = engine.start_pre_trade(order=order)
         assert following.ok
         assert [review.mode for review in following.reviews] == [mode]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_pnl_kill_switch_review_report_accumulation_overflow_blocks(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_pnl_bounds_killswitch().broker_barriers(
+                policies.PnlBoundsBrokerBarrier(
+                    usd, openpit.param.Pnl("-100"), mode=mode
+                )
+            )
+        )
+        .build()
+    )
+    order = conftest.make_order()
+    first = engine.apply_execution_report(
+        report=conftest.make_report(
+            pnl=openpit.param.Pnl("79228162514264337593543950335")
+        )
+    )
+    assert first.account_blocks == []
+    result = engine.apply_execution_report(
+        report=conftest.make_report(pnl=openpit.param.Pnl("1"))
+    )
+    assert len(result.account_blocks) == 1
+    block = result.account_blocks[0]
+    assert openpit.pretrade.RejectCode(block.code).is_evaluation_failure()
+
+    engine.configure().set_account_pnl(
+        policies.PnlBoundsKillswitchBuilder.NAME,
+        account=order.operation.account_id,
+        settlement_asset=usd,
+        pnl=openpit.param.Pnl("0"),
+    )
+    blocked = engine.start_pre_trade(order=order)
+    assert not blocked.ok
+    assert [
+        (reject.mode, reject.code, reject.reason, reject.details)
+        for reject in blocked.rejects
+    ] == [(openpit.pretrade.RuleMode.REJECT, block.code, block.reason, block.details)]
 
 
 @pytest.mark.unit

@@ -938,6 +938,14 @@ mod tests {
             ),
             (
                 Some(OpenPitPolicyInstance {
+                    name: OpenPitStringView::from_utf8("size-reject"),
+                    mode: 1,
+                }),
+                1,
+                "size-reject",
+            ),
+            (
+                Some(OpenPitPolicyInstance {
                     name: OpenPitStringView::from_utf8("size-review"),
                     mode: 2,
                 }),
@@ -1048,6 +1056,166 @@ mod tests {
     }
 
     #[test]
+    fn order_size_limit_review_and_reject_instances_through_c_abi() {
+        use crate::engine::*;
+        use crate::reject::*;
+
+        for mode in [2, 3] {
+            for (quantity, notional, code) in [
+                (
+                    true,
+                    false,
+                    OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT,
+                ),
+                (
+                    false,
+                    true,
+                    OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT,
+                ),
+                (true, true, OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT),
+            ] {
+                let review = OpenPitPretradePoliciesOrderSizeBrokerBarrier {
+                    limit: OpenPitPretradePoliciesOrderSizeLimit {
+                        max_quantity: if quantity {
+                            quantity_cap(0, 0)
+                        } else {
+                            Default::default()
+                        },
+                        max_notional: if notional {
+                            volume_cap(0, 0)
+                        } else {
+                            Default::default()
+                        },
+                    },
+                };
+                let mut reject = OpenPitPretradePoliciesOrderSizeBrokerBarrier {
+                    limit: OpenPitPretradePoliciesOrderSizeLimit {
+                        max_quantity: quantity_cap(100, 0),
+                        max_notional: Default::default(),
+                    },
+                };
+                let engine = build_engine_with_builtin_start_policy(|builder| {
+                    for (name, mode, barrier) in
+                        [("size-review", mode, &review), ("size-reject", 1, &reject)]
+                    {
+                        let instance = OpenPitPolicyInstance {
+                            name: OpenPitStringView::from_utf8(name),
+                            mode,
+                        };
+                        assert!(unsafe {
+                            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                                builder,
+                                0,
+                                barrier,
+                                std::ptr::null(),
+                                0,
+                                std::ptr::null(),
+                                0,
+                                &instance,
+                                std::ptr::null_mut(),
+                            )
+                        });
+                    }
+                    true
+                });
+                let mut order = valid_pit_order();
+                for (confirmed, breached, missing_price) in [
+                    (false, false, false),
+                    (true, false, false),
+                    (false, true, false),
+                    (true, true, false),
+                    (false, false, true),
+                    (true, false, true),
+                ] {
+                    reject.limit.max_quantity = quantity_cap(if breached { 0 } else { 100 }, 0);
+                    assert!(unsafe {
+                        openpit_engine_configure_order_size_limit(
+                            engine,
+                            OpenPitStringView::from_utf8("size-reject"),
+                            &reject,
+                            true,
+                            std::ptr::null(),
+                            0,
+                            false,
+                            std::ptr::null(),
+                            0,
+                            false,
+                            std::ptr::null_mut(),
+                        )
+                    });
+                    order.review.is_set = true;
+                    order.review.value.confirmed = if confirmed {
+                        crate::param::OPENPIT_TRI_BOOL_TRUE
+                    } else {
+                        crate::param::OPENPIT_TRI_BOOL_FALSE
+                    };
+                    order.operation.value.price.is_set = !missing_price;
+                    let mut request = std::ptr::null_mut();
+                    let mut rejects = std::ptr::null_mut();
+                    let mut error = std::ptr::null_mut();
+                    let status = openpit_engine_start_pre_trade(
+                        engine,
+                        &order,
+                        &mut request,
+                        &mut rejects,
+                        &mut error,
+                    );
+                    assert!(error.is_null());
+                    let conversion_failed = missing_price && notional;
+                    let rejected = breached || conversion_failed;
+                    assert_eq!(
+                        status,
+                        if rejected {
+                            OpenPitPretradeStatus::Rejected
+                        } else {
+                            OpenPitPretradeStatus::Passed
+                        }
+                    );
+                    let list = if rejected {
+                        assert!(request.is_null());
+                        rejects
+                    } else {
+                        assert!(rejects.is_null());
+                        openpit_pretrade_pre_trade_request_get_reviews(request, &mut error)
+                    };
+                    let count = usize::from(rejected || !confirmed);
+                    assert_eq!(openpit_pretrade_reject_list_len(list), count);
+                    if count != 0 {
+                        let mut record = std::mem::MaybeUninit::uninit();
+                        assert!(openpit_pretrade_reject_list_get(
+                            list,
+                            0,
+                            record.as_mut_ptr()
+                        ));
+                        let record = unsafe { record.assume_init() };
+                        assert_eq!(record.mode, if rejected { 1 } else { mode });
+                        assert_eq!(record.scope, OPENPIT_PRETRADE_REJECT_SCOPE_ORDER);
+                        assert_eq!(
+                            record.code,
+                            if conversion_failed {
+                                OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED
+                            } else if breached {
+                                OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT
+                            } else {
+                                code
+                            }
+                        );
+                        assert_eq!(
+                            unsafe {
+                                std::slice::from_raw_parts(record.policy.ptr, record.policy.len)
+                            },
+                            b"OrderSizeLimitPolicy"
+                        );
+                    }
+                    openpit_destroy_pretrade_reject_list(list);
+                    openpit_destroy_pretrade_pre_trade_request(request);
+                }
+                openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
     fn invalid_instance_registers_nothing_through_c_abi() {
         use crate::engine::*;
         for instance in [
@@ -1106,34 +1274,46 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_default_instances_fail_build_through_c_abi() {
+    fn duplicate_instance_names_fail_build_through_c_abi() {
         use crate::engine::*;
-        let builder =
-            openpit_create_engine_builder(OpenPitSyncPolicy::Full as u8, std::ptr::null_mut());
-        for _ in 0..2 {
-            assert!(unsafe {
-                openpit_engine_builder_add_builtin_order_size_limit_policy(
-                    builder,
-                    0,
-                    std::ptr::null(),
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null(),
-                    std::ptr::null_mut(),
-                )
-            });
+        for explicit in [true, false] {
+            let instance = OpenPitPolicyInstance {
+                name: OpenPitStringView::from_utf8("duplicate"),
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            };
+            let builder =
+                openpit_create_engine_builder(OpenPitSyncPolicy::Full as u8, std::ptr::null_mut());
+            for group in [1, 2] {
+                assert!(unsafe {
+                    openpit_engine_builder_add_builtin_order_size_limit_policy(
+                        builder,
+                        group,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null(),
+                        0,
+                        if explicit {
+                            &instance
+                        } else {
+                            std::ptr::null()
+                        },
+                        std::ptr::null_mut(),
+                    )
+                });
+            }
+            let mut error = std::ptr::null_mut();
+            assert!(
+                openpit_engine_builder_build(builder, &mut error, std::ptr::null_mut()).is_null()
+            );
+            assert!(!error.is_null());
+            assert_eq!(
+                openpit_engine_build_error_get_code(error),
+                OpenPitEngineBuildErrorCode::DuplicatePolicyName
+            );
+            openpit_destroy_engine_build_error(error);
+            openpit_destroy_engine_builder(builder);
         }
-        let mut error = std::ptr::null_mut();
-        assert!(openpit_engine_builder_build(builder, &mut error, std::ptr::null_mut()).is_null());
-        assert!(!error.is_null());
-        assert_eq!(
-            openpit_engine_build_error_get_code(error),
-            OpenPitEngineBuildErrorCode::DuplicatePolicyName
-        );
-        openpit_destroy_engine_build_error(error);
-        openpit_destroy_engine_builder(builder);
     }
 
     #[test]

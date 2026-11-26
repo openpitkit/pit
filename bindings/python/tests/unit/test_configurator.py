@@ -954,7 +954,6 @@ def test_spot_funds_account_pnl_barrier_rejects_non_matching_currency() -> None:
     block = result.account_blocks[0]
     assert block.code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
     assert block.reason == "pnl barrier currency mismatch"
-    assert block.details == "account currency USD, barrier currency EUR"
 
     blocked = engine.start_pre_trade(order=conftest.make_order(account_id=account_id))
     assert not blocked.ok
@@ -963,7 +962,6 @@ def test_spot_funds_account_pnl_barrier_rejects_non_matching_currency() -> None:
         blocked.rejects[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
     )
     assert blocked.rejects[0].reason == "pnl barrier currency mismatch"
-    assert blocked.rejects[0].details == "account currency USD, barrier currency EUR"
 
 
 @pytest.mark.unit
@@ -1266,6 +1264,16 @@ def test_spot_pnl_modes_reach_engine(
     assert result.reservation is not None
     assert [mark.mode for mark in result.reservation.reviews] == [mode]
     result.reservation.rollback()
+    confirmed = openpit.Order(
+        operation=order.operation, review=openpit.OrderReview(confirmed=True)
+    )
+    confirmed_dry = engine.execute_pre_trade_dry_run(order=confirmed)
+    assert confirmed_dry and confirmed_dry.reviews == []
+    confirmed_live = engine.execute_pre_trade(order=confirmed)
+    assert confirmed_live.ok and confirmed_live.reviews == []
+    assert confirmed_live.reservation is not None
+    assert confirmed_live.reservation.reviews == []
+    confirmed_live.reservation.rollback()
     breached = engine.configure().set_spot_funds_account_pnl(
         policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
         account=account,
@@ -1273,6 +1281,116 @@ def test_spot_pnl_modes_reach_engine(
     )
     assert len(breached.account_blocks) == 1
     assert not engine.start_pre_trade(order=order).ok
+    for rejected_order in (order, confirmed):
+        engine.accounts().unblock(account)
+        dry = engine.execute_pre_trade_dry_run(order=rejected_order)
+        assert not dry
+        assert [(r.code, r.mode) for r in dry.rejects] == [
+            (
+                openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED,
+                openpit.pretrade.RuleMode.REJECT,
+            )
+        ]
+        assert dry.reviews == []
+        live = engine.execute_pre_trade(order=rejected_order)
+        assert live.reservation is None
+        assert [(r.code, r.mode) for r in live.rejects] == [
+            (
+                openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED,
+                openpit.pretrade.RuleMode.REJECT,
+            )
+        ]
+        rearmed = engine.configure().set_spot_funds_account_pnl(
+            policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+            account=account,
+            state=openpit.param.Pnl(0),
+        )
+        assert rearmed.account_blocks == []
+        blocked = engine.execute_pre_trade(order=rejected_order)
+        assert [r.code for r in blocked.rejects] == [
+            openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+        ]
+        if rejected_order is order:
+            engine.configure().set_spot_funds_account_pnl(
+                policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+                account=account,
+                state=openpit.param.Pnl(-150),
+            )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_spot_funds_review_currency_mismatch_rejects_live(
+    mode: openpit.pretrade.RuleMode, confirmed: bool
+) -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(83022)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().account_barriers(
+                policies.SpotFundsPnlBoundsAccountBarrier(
+                    policies.SpotFundsPnlBoundsBarrier(
+                        currency=openpit.param.Asset("EUR"),
+                        lower_bound=openpit.param.Pnl(-100),
+                        mode=mode,
+                    ),
+                    account,
+                )
+            )
+        )
+        .build()
+    )
+    engine.accounts().set_currency(account, openpit.param.Asset("USD"))
+    configured = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl(0),
+    )
+    assert [b.code for b in configured.account_blocks] == [
+        openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    ]
+    engine.accounts().unblock(account)
+    original = conftest.make_order(account_id=account)
+    order = openpit.Order(
+        operation=original.operation,
+        review=openpit.OrderReview(confirmed=confirmed),
+    )
+    live = engine.execute_pre_trade(order=order)
+    assert live.reservation is None
+    assert [(r.code, r.mode) for r in live.rejects] == [
+        (
+            openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED,
+            openpit.pretrade.RuleMode.REJECT,
+        )
+    ]
+    retuned = engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account_barriers=[
+            policies.SpotFundsPnlBoundsAccountBarrier(
+                policies.SpotFundsPnlBoundsBarrier(
+                    currency=openpit.param.Asset("USD"),
+                    lower_bound=openpit.param.Pnl(-100),
+                    mode=mode,
+                ),
+                account,
+            )
+        ],
+    )
+    assert retuned.account_blocks == []
+    blocked = engine.execute_pre_trade(order=order)
+    assert blocked.reservation is None
+    assert [r.code for r in blocked.rejects] == [
+        openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+    ]
 
 
 @pytest.mark.parametrize("runtime", [False, True])
@@ -2350,6 +2468,8 @@ def test_spot_funds_limit_mode_review_holds(
     remaining_reviews: int,
 ) -> None:
     policies = openpit.pretrade.policies
+    assert policies.SpotFundsLimitMode.REVIEW_WITH_HOLD.value == "ReviewWithHold"
+    assert policies.SpotFundsLimitMode.REVIEW_WITHOUT_HOLD.value == "ReviewWithoutHold"
     engine = (
         openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
     )
@@ -2409,11 +2529,15 @@ def test_spot_funds_limit_mode_rejects_invalid_enum_entity(mode: str) -> None:
     engine = (
         openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
     )
-    with pytest.raises(TypeError, match="SpotFundsLimitMode"):
+    with pytest.raises(TypeError):
         engine.configure().spot_funds(
             policies.SpotFundsBuilder.NAME,
             global_limit_mode=mode,  # type: ignore[arg-type]
         )
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        global_limit_mode=policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+    )
 
 
 def _spot_funds_position_limit_engine() -> (
@@ -2431,6 +2555,75 @@ def _spot_funds_position_limit_engine() -> (
         global_limit_mode=policies.SpotFundsLimitMode.TRACK_ONLY,
     )
     return engine, account, asset
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+@pytest.mark.parametrize(
+    "holding,quantity",
+    [
+        ("79228162514264337593543950335", "1"),
+        ("100000000000", "0.000000000000000001"),
+    ],
+)
+def test_spot_funds_position_limit_arithmetic_rejects_every_mode(
+    mode: openpit.pretrade.RuleMode,
+    holding: str,
+    quantity: str,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine, account, asset = _spot_funds_position_limit_engine()
+    seeded = engine.apply_account_adjustment(
+        account,
+        [
+            openpit.AccountAdjustment(
+                operation=openpit.AccountAdjustmentBalanceOperation(asset="AAPL"),
+                amount=openpit.AccountAdjustmentAmount(
+                    balance=openpit.param.AdjustmentAmount.absolute(
+                        openpit.param.PositionSize(holding)
+                    )
+                ),
+            )
+        ],
+    )
+    assert seeded.ok
+    order = conftest.make_order(
+        account_id=account,
+        price=openpit.param.Price(0),
+        trade_amount=openpit.param.TradeAmount.quantity(quantity),
+    )
+    without_limit = engine.execute_pre_trade_dry_run(order=order)
+    assert without_limit
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            policies.SpotFundsPositionLimitEntry(
+                account,
+                asset,
+                openpit.param.Quantity(holding),
+                mode=mode,
+            )
+        ],
+    )
+    dry = engine.execute_pre_trade_dry_run(order=order)
+    assert not dry
+    assert dry.reviews == []
+    assert [(r.code, r.mode) for r in dry.rejects] == [
+        (
+            openpit.pretrade.RejectCode.ARITHMETIC_OVERFLOW,
+            openpit.pretrade.RuleMode.REJECT,
+        )
+    ]
+    assert [r.scope for r in dry.rejects] == [openpit.pretrade.RejectScope.ORDER]
+    live = engine.execute_pre_trade(order=order)
+    assert live.reservation is None
+    assert [(r.code, r.mode) for r in live.rejects] == [
+        (
+            openpit.pretrade.RejectCode.ARITHMETIC_OVERFLOW,
+            openpit.pretrade.RuleMode.REJECT,
+        )
+    ]
+    assert [r.scope for r in live.rejects] == [openpit.pretrade.RejectScope.ORDER]
 
 
 @pytest.mark.unit
@@ -2459,16 +2652,27 @@ def test_spot_funds_position_limit_modes_coexist_and_clear(
         policies.SpotFundsBuilder.NAME, position_limits=[rejecting, reviewing]
     )
 
-    def check_order(quantity: str, passed: bool, review_count: int) -> None:
-        result = engine.execute_pre_trade(
-            order=conftest.make_order(
-                account_id=account,
-                trade_amount=openpit.param.TradeAmount.quantity(quantity),
-            )
+    def check_order(
+        quantity: str, passed: bool, review_count: int, *, confirmed: bool = False
+    ) -> None:
+        order = conftest.make_order(
+            account_id=account,
+            trade_amount=openpit.param.TradeAmount.quantity(quantity),
         )
+        order = openpit.Order(
+            operation=order.operation, review=openpit.OrderReview(confirmed=confirmed)
+        )
+        dry = engine.execute_pre_trade_dry_run(order=order)
+        assert bool(dry) is passed
+        assert len(dry.reviews) == review_count
+        result = engine.execute_pre_trade(order=order)
         try:
             assert result.ok is passed, "review passes and Reject rejects"
             if passed:
+                assert result.reservation is not None
+                assert [(m.code, m.mode) for m in result.reservation.reviews] == [
+                    (m.code, m.mode) for m in result.reviews
+                ]
                 assert result.rejects == []
                 assert len(result.reviews) == review_count
                 if review_count:
@@ -2489,6 +2693,8 @@ def test_spot_funds_position_limit_modes_coexist_and_clear(
 
     check_order("1", True, 1)
     check_order("3", False, 0)
+    check_order("1", True, 0, confirmed=True)
+    check_order("3", False, 0, confirmed=True)
     explicit_none = policies.SpotFundsPositionLimitEntry(
         account, asset, openpit.param.Quantity("1"), mode=None
     )

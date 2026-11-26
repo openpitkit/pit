@@ -35,7 +35,9 @@ def _make_validation_engine() -> openpit.Engine:
     )
 
 
-def _make_rate_limit_engine(*, max_orders: int = 1) -> openpit.Engine:
+def _make_rate_limit_engine(
+    *, max_orders: int = 1, mode: openpit.pretrade.RuleMode | None = None
+) -> openpit.Engine:
     policies = openpit.pretrade.policies
     return (
         openpit.Engine.builder()
@@ -46,7 +48,8 @@ def _make_rate_limit_engine(*, max_orders: int = 1) -> openpit.Engine:
                     limit=policies.RateLimit(
                         max_orders=max_orders,
                         window=datetime.timedelta(seconds=60),
-                    )
+                    ),
+                    mode=mode,
                 )
             )
         )
@@ -115,24 +118,108 @@ def test_dry_run_report_has_lock_and_adjustments_attrs() -> None:
     assert adjustments == []
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["Reject", "ReviewWithHold", "ReviewWithoutHold"])
+@pytest.mark.parametrize("start_stage", [False, True])
+def test_dry_run_account_review_mark_does_not_predict_block(mode, start_stage) -> None:
+    class AccountReviewPolicy(openpit.pretrade.Policy):
+        @property
+        def name(self) -> str:
+            return "AccountReviewPolicy"
+
+        def check_pre_trade_start(self, ctx, order):
+            return (entry,) if start_stage else ()
+
+        def perform_pre_trade_check(self, ctx, order):
+            return openpit.pretrade.PolicyPreTradeResult.reject(
+                rejects=() if start_stage else (entry,)
+            )
+
+    entry = openpit.pretrade.PolicyReject(
+        code=openpit.pretrade.RejectCode.CUSTOM,
+        reason="account needs review",
+        details="dry run",
+        scope=openpit.pretrade.RejectScope.ACCOUNT,
+    )
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(AccountReviewPolicy(), name="review", mode=mode)
+        .build()
+    )
+    reports = [engine.execute_pre_trade_dry_run(order=conftest.make_order())]
+    if start_stage:
+        reports.append(engine.start_pre_trade_dry_run(order=conftest.make_order()))
+    for report in reports:
+        assert bool(report) == (mode != "Reject")
+        if mode == "Reject":
+            assert report.reviews == []
+            assert report.account_block is not None
+            assert (
+                report.account_block.code == openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+            )
+            assert len(report.rejects) == 1
+        else:
+            assert not report.rejects
+            assert report.account_block is None
+            assert [(r.policy, r.scope, r.mode) for r in report.reviews] == [
+                ("AccountReviewPolicy", openpit.pretrade.RejectScope.ACCOUNT, mode)
+            ]
+
+
 # ---------------------------------------------------------------------------
 # Idempotency: dry-run must not affect subsequent real calls
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-def test_dry_run_leaves_engine_state_intact_for_real_call() -> None:
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_dry_run_leaves_engine_state_intact_for_real_call(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
     """A dry-run must not consume rate-limit budget or prevent a real call."""
-    engine = _make_rate_limit_engine(max_orders=1)
+    engine = _make_rate_limit_engine(max_orders=1, mode=mode)
 
     # Dry-run first - this must NOT consume the one allowed order.
     dry = engine.execute_pre_trade_dry_run(order=conftest.make_order())
     assert dry.is_pass
+    assert dry.reviews == []
 
     # The real call must still succeed.
     result = engine.execute_pre_trade(order=conftest.make_order())
     assert result.ok
+    assert result.reviews == []
     result.reservation.rollback()
+
+    probe = engine.start_pre_trade_dry_run(order=conftest.make_order())
+    assert probe.is_pass
+    assert not probe.rejects
+    assert [(mark.mode, mark.code) for mark in probe.reviews] == [
+        (mode, openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED)
+    ]
+    policies = openpit.pretrade.policies
+    engine.configure().rate_limit(
+        policies.RateLimitBuilder.NAME,
+        broker_barriers=[
+            policies.RateLimitBrokerBarrier(
+                policies.RateLimit(2, datetime.timedelta(seconds=60)), mode=mode
+            )
+        ],
+    )
+    following = engine.start_pre_trade(order=conftest.make_order())
+    assert following.ok
+    assert following.reviews == []
+    breached = engine.start_pre_trade(order=conftest.make_order())
+    assert breached.ok
+    assert [(mark.mode, mark.code) for mark in breached.reviews] == [
+        (mode, openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED)
+    ]
 
 
 @pytest.mark.unit

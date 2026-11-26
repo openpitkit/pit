@@ -190,6 +190,64 @@ describe("rate-limit review modes", () => {
     expect(third.rejects[0]?.mode).toBe(RuleMode.Reject);
   });
 
+  it.each([1, 3])(
+    "counts only starts reaching the hook with a Reject budget of %i",
+    (rejectLimit) => {
+      for (const mode of [
+        RuleMode.ReviewWithHold,
+        RuleMode.ReviewWithoutHold,
+      ]) {
+        const engine = Engine.builder()
+          .builtin(
+            buildRateLimit().brokerBarriers([
+              axes[0].make(rejectLimit, RuleMode.Reject),
+              axes[0].make(rejectLimit === 1 ? 1 : 2, mode),
+            ]),
+          )
+          .build();
+        if (rejectLimit === 1) {
+          engine.accounts().block(ACCOUNT, "operator block");
+          const blocked = engine.startPreTrade(order());
+          expect(blocked.ok).toBe(false);
+          expect(blocked.rejects.map(({ code }) => code)).toEqual([
+            "AccountBlocked",
+          ]);
+          engine.accounts().unblock(ACCOUNT);
+          const first = engine.startPreTrade(order());
+          expect(first.ok).toBe(true);
+          expect(first.reviews).toEqual([]);
+        } else {
+          const first = engine.startPreTrade(order());
+          expect(first.ok).toBe(true);
+          expect(first.reviews).toEqual([]);
+          const executed = first.request!.execute();
+          expect(executed.ok).toBe(true);
+          executed.reservation!.commit();
+
+          const second = engine.startPreTrade(order());
+          expect(second.ok).toBe(true);
+          expect(second.reviews).toEqual([]);
+          const third = engine.startPreTrade(order());
+          expect(third.ok).toBe(true);
+          expect(third.reviews).toMatchObject([
+            {
+              code: "RateLimitExceeded",
+              mode,
+            },
+          ]);
+        }
+        const exhausted = engine.startPreTrade(order());
+        expect(exhausted.ok).toBe(false);
+        expect(exhausted.rejects).toMatchObject([
+          {
+            code: "RateLimitExceeded",
+            mode: RuleMode.Reject,
+          },
+        ]);
+      }
+    },
+  );
+
   it.each(axes)("forwards both review modes on the $name axis", (axis) => {
     for (const mode of [RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold]) {
       const engine = Engine.builder().builtin(axis.builder(1, mode)).build();
@@ -204,13 +262,18 @@ describe("rate-limit review modes", () => {
     }
   });
 
-  it("spends both thresholds and drops review marks under confirmed", () => {
-    for (const mode of [RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold]) {
+  it.each(
+    [RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold].flatMap((mode) =>
+      [false, true].map((alreadyHeld) => ({ mode, alreadyHeld })),
+    ),
+  )(
+    "spends both thresholds and drops review marks under confirmed, mode=$mode, alreadyHeld=$alreadyHeld",
+    ({ mode, alreadyHeld }) => {
       const engine = Engine.builder()
         .builtin(
           buildRateLimit().brokerBarriers([
-            axes[0].make(4, RuleMode.Reject),
-            axes[0].make(2, mode),
+            axes[0].make(7, RuleMode.Reject),
+            axes[0].make(4, mode),
           ]),
         )
         .build();
@@ -222,24 +285,35 @@ describe("rate-limit review modes", () => {
       const second = engine.startPreTrade(input);
       expect(second.ok).toBe(true);
       expect(second.reviews).toEqual([]);
+      input.review = { confirmed: true, alreadyHeld: true };
+      const third = engine.startPreTrade(input);
+      expect(third.ok).toBe(true);
+      expect(third.reviews).toEqual([]);
       input.review = { confirmed: false };
-      const reviewed = engine.startPreTrade(input);
-      expect(reviewed.ok).toBe(true);
-      expect(reviewed.reviews).toHaveLength(1);
-      expect(reviewed.reviews[0]?.code).toBe("RateLimitExceeded");
-      expect(reviewed.reviews[0]?.mode).toBe(mode);
-      input.review = { confirmed: true };
       const fourth = engine.startPreTrade(input);
       expect(fourth.ok).toBe(true);
       expect(fourth.reviews).toEqual([]);
-      input.review = { confirmed: false };
+      const reviewed = engine.startPreTrade(input);
+      expect(reviewed.ok).toBe(true);
+      expect(
+        reviewed.reviews.map(({ code, mode }) => ({ code, mode })),
+      ).toEqual([{ code: "RateLimitExceeded", mode }]);
+      input.review = { confirmed: true, alreadyHeld: true };
+      const heldRerun = engine.startPreTrade(input);
+      expect(heldRerun.ok).toBe(true);
+      expect(heldRerun.reviews).toEqual([]);
+      input.review = { confirmed: true };
+      const rerun = engine.startPreTrade(input);
+      expect(rerun.ok).toBe(true);
+      expect(rerun.reviews).toEqual([]);
+      input.review = { confirmed: true, alreadyHeld };
       const rejected = engine.startPreTrade(input);
       expect(rejected.ok).toBe(false);
-      expect(rejected.rejects).toHaveLength(1);
-      expect(rejected.rejects[0]?.code).toBe("RateLimitExceeded");
-      expect(rejected.rejects[0]?.mode).toBe(RuleMode.Reject);
-    }
-  });
+      expect(
+        rejected.rejects.map(({ code, mode }) => ({ code, mode })),
+      ).toEqual([{ code: "RateLimitExceeded", mode: RuleMode.Reject }]);
+    },
+  );
 
   it.each(axes)("rejects duplicate $name keys atomically", (axis) => {
     const repeated = axis.patch(10, RuleMode.Reject);

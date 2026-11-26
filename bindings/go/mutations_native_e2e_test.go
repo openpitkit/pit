@@ -19,6 +19,7 @@ package openpit
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -158,6 +159,9 @@ func TestCustomPolicyReceivesConfirmedOrder(t *testing.T) {
 			t.Fatalf("StartPreTrade(confirmed = %v) = %v, %v, %v", confirmed, request, rejects, err)
 		}
 		defer request.Close()
+		if policy.startConfirmed != confirmed {
+			t.Errorf("policy confirmed = %v, want %v", policy.startConfirmed, confirmed)
+		}
 		assertReviewMarks(t, request.Reviews, want)
 		reservation, rejects, err := request.Execute()
 		if err != nil || reservation == nil || len(rejects) != 0 {
@@ -205,28 +209,50 @@ func assertReviewResult(t *testing.T, result interface {
 
 type reviewTestPolicy struct {
 	orderNativeE2ENoopStartPolicy
-	start     []reject.Reject
-	main      []reject.Reject
-	lockPrice param.Price
-	asset     param.Asset
+	start          []reject.Reject
+	main           []reject.Reject
+	lockPrice      param.Price
+	asset          param.Asset
+	trackMutations bool
+	startCalls     int
+	startConfirmed bool
+	mainCalls      int
+	commits        int
+	rollbacks      int
+	beforeMain     func()
+	rollbackPanic  bool
 }
 
 func (*reviewTestPolicy) Name() string { return "review-test" }
 
 func (p *reviewTestPolicy) CheckPreTradeStart(_ pretrade.Context, order model.Order) []reject.Reject {
-	if review, ok := order.Review().Get(); ok && review.Confirmed().Or(false) {
-		return nil
-	}
+	p.startCalls++
+	review, ok := order.Review().Get()
+	p.startConfirmed = ok && review.Confirmed().Or(false)
 	return p.start
 }
 
 func (p *reviewTestPolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
-	_ tx.Mutations,
+	mutations tx.Mutations,
 	result pretrade.Result,
 ) []reject.Reject {
-	if len(p.main) != 0 {
+	p.mainCalls++
+	if p.beforeMain != nil {
+		p.beforeMain()
+	}
+	if p.trackMutations {
+		if err := mutations.Push(func() { p.commits++ }, func() {
+			p.rollbacks++
+			if p.rollbackPanic {
+				panic("review rollback exploded")
+			}
+		}); err != nil {
+			panic(err)
+		}
+	}
+	if len(p.main) != 0 || p.trackMutations {
 		if err := result.PushLockPrice(p.lockPrice); err != nil {
 			panic(err)
 		}
@@ -1186,6 +1212,314 @@ func newEngineWithPreTradePolicyForNativeE2E(
 		t.Fatalf("Build() error = %v", err)
 	}
 	return engine
+}
+
+func newReviewMutationPolicy(t *testing.T) *reviewTestPolicy {
+	t.Helper()
+	return &reviewTestPolicy{trackMutations: true, lockPrice: mustOrderNativePrice(t, "99"), asset: mustOrderNativeAsset(t, "USD")}
+}
+
+func TestReviewInstanceMainSegments(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			review := newReviewMutationPolicy(t)
+			review.main = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, review.Name(), "review", "main", reject.ScopeOrder)
+			keep := newReviewMutationPolicy(t)
+			keep.lockPrice = mustOrderNativePrice(t, "101")
+			keep.asset = mustOrderNativeAsset(t, "EUR")
+			keep.beforeMain = func() {
+				if review.rollbacks != 1 {
+					t.Errorf("review rollback before next hook = %d, want 1", review.rollbacks)
+				}
+			}
+			engine, err := NewEngineBuilder().FullSync().PreTrade(review, InstanceName("review"), InstanceMode(mode)).PreTrade(keep, InstanceName("keep")).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Stop()
+			reservation, rejects, err := engine.ExecutePreTrade(newValidOrderForNativeE2E(t))
+			if err != nil || reservation == nil || len(rejects) != 0 {
+				t.Fatalf("ExecutePreTrade = %v, %v, %v", reservation, rejects, err)
+			}
+			defer reservation.Close()
+			want := slices.Clone(review.main)
+			want[0].Mode = mode
+			assertReviewMarks(t, reservation.Reviews, want)
+			assertReviewResult(t, reservation, mode)
+			lock, err := reservation.Lock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == reject.RuleModeReviewWithHold {
+				prices, err := lock.Prices()
+				if err != nil || len(prices) != 1 || prices[0] != keep.lockPrice {
+					t.Fatalf("kept prices = %v, %v, want %v", prices, err, keep.lockPrice)
+				}
+				outcomes, err := reservation.AccountAdjustments()
+				if err != nil || len(outcomes) != 1 || !outcomes[0].Entry.Asset.Equal(keep.asset) {
+					t.Fatalf("kept outcomes = %v, %v, want asset %v", outcomes, err, keep.asset)
+				}
+			}
+			if review.rollbacks != 1 || review.commits != 0 {
+				t.Fatalf("review callbacks = %d/%d", review.commits, review.rollbacks)
+			}
+			reservation.CommitAndClose()
+			if review.rollbacks != 1 || review.commits != 0 {
+				t.Errorf("final review callbacks = %d/%d", review.commits, review.rollbacks)
+			}
+			wantCommits, wantRollbacks := 1, 0
+			if mode == reject.RuleModeReviewWithoutHold {
+				wantCommits, wantRollbacks = 0, 1
+			}
+			if keep.commits != wantCommits || keep.rollbacks != wantRollbacks {
+				t.Fatalf("kept callbacks = %d/%d, want %d/%d", keep.commits, keep.rollbacks, wantCommits, wantRollbacks)
+			}
+		})
+	}
+}
+
+func TestReviewInstanceWithoutHoldWins(t *testing.T) {
+	for _, across := range []bool{false, true} {
+		t.Run(fmt.Sprint(across), func(t *testing.T) {
+			with, without, keep := newReviewMutationPolicy(t), newReviewMutationPolicy(t), newReviewMutationPolicy(t)
+			with.main = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, with.Name(), "with", "", reject.ScopeOrder)
+			without.main = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, without.Name(), "without", "", reject.ScopeOrder)
+			if across {
+				with.start, with.main = with.main, nil
+			}
+			engine, err := NewEngineBuilder().FullSync().PreTrade(with, InstanceName("with"), InstanceMode(reject.RuleModeReviewWithHold)).PreTrade(without, InstanceName("without"), InstanceMode(reject.RuleModeReviewWithoutHold)).PreTrade(keep, InstanceName("keep")).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Stop()
+			reservation, rejects, err := engine.ExecutePreTrade(newValidOrderForNativeE2E(t))
+			if err != nil || reservation == nil || len(rejects) != 0 {
+				t.Fatalf("execute = %v, %v, %v", reservation, rejects, err)
+			}
+			defer reservation.Close()
+			reviews, err := reservation.Reviews()
+			if err != nil || len(reviews) != 2 {
+				t.Fatalf("reviews = %v, %v", reviews, err)
+			}
+			modes := []reject.RuleMode{reviews[0].Mode, reviews[1].Mode}
+			slices.Sort(modes)
+			if !slices.Equal(modes, []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold}) {
+				t.Fatalf("review modes = %v, want both review modes", modes)
+			}
+			assertReviewResult(t, reservation, reject.RuleModeReviewWithoutHold)
+			reservation.CommitAndClose()
+			if with.commits != 0 {
+				t.Errorf("with-hold commits = %d, want 0", with.commits)
+			}
+			if without.commits != 0 {
+				t.Errorf("without-hold commits = %d, want 0", without.commits)
+			}
+			if keep.commits != 0 || keep.rollbacks != 1 || with.rollbacks != 1 || without.rollbacks != 1 {
+				t.Fatalf("without-hold callbacks = %d/%d; review rollbacks %d/%d", keep.commits, keep.rollbacks, with.rollbacks, without.rollbacks)
+			}
+		})
+	}
+}
+
+func TestReviewInstanceEffectiveRejectRollsBack(t *testing.T) {
+	review, deny := newReviewMutationPolicy(t), newReviewMutationPolicy(t)
+	review.main = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, review.Name(), "review", "", reject.ScopeOrder)
+	deny.main = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, deny.Name(), "deny", "", reject.ScopeOrder)
+	engine, err := NewEngineBuilder().FullSync().PreTrade(review, InstanceName("review"), InstanceMode(reject.RuleModeReviewWithHold)).PreTrade(deny, InstanceName("deny")).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Stop()
+	reservation, rejects, err := engine.ExecutePreTrade(newValidOrderForNativeE2E(t))
+	if err != nil || reservation != nil || !slices.Equal(rejects, deny.main) {
+		t.Fatalf("effective rejects = %v, %v, %v", reservation, rejects, err)
+	}
+	report, err := engine.ExecutePreTradeDryRun(newValidOrderForNativeE2E(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer report.Close()
+	assertReviewMarks(t, report.Reviews, nil)
+	assertReviewMarks(t, report.Rejects, deny.main)
+	if review.rollbacks != 1 || deny.rollbacks != 1 || review.commits != 0 || deny.commits != 0 {
+		t.Errorf("rollback counters = %d/%d; commits = %d/%d", review.rollbacks, deny.rollbacks, review.commits, deny.commits)
+	}
+}
+
+func TestReviewInstanceDryRunAccountMark(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReject, reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			policy := newReviewMutationPolicy(t)
+			policy.main = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, policy.Name(), "account limit", "", reject.ScopeAccount)
+			engine, err := NewEngineBuilder().FullSync().PreTrade(policy, InstanceMode(mode)).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Stop()
+			report, err := engine.ExecutePreTradeDryRun(newValidOrderForNativeE2E(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer report.Close()
+			passed, err := report.IsPass()
+			if err != nil || passed != (mode != reject.RuleModeReject) {
+				t.Fatalf("dry pass = %v, %v", passed, err)
+			}
+			block, err := report.AccountBlock()
+			if err != nil || (block != nil) != (mode == reject.RuleModeReject) {
+				t.Fatalf("dry AccountBlock = %v, %v", block, err)
+			}
+			want := slices.Clone(policy.main)
+			want[0].Mode = mode
+			if mode == reject.RuleModeReject {
+				assertReviewMarks(t, report.Rejects, want)
+				assertReviewMarks(t, report.Reviews, nil)
+			} else {
+				assertReviewMarks(t, report.Reviews, want)
+				assertReviewMarks(t, report.Rejects, nil)
+			}
+		})
+	}
+}
+
+func TestReviewInstanceRollbackFailure(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			policy := newReviewMutationPolicy(t)
+			policy.rollbackPanic = true
+			policy.main = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, policy.Name(), "review", "", reject.ScopeOrder)
+			// A record-mode mark retains the segment until rollback_all.
+			instanceMode := mode
+			if mode == reject.RuleModeReviewWithoutHold {
+				policy.main[0].Mode = mode
+				instanceMode = reject.RuleModeReject
+			}
+			later := newReviewMutationPolicy(t)
+			engine, err := NewEngineBuilder().FullSync().PreTrade(policy, InstanceName("review"), InstanceMode(instanceMode)).PreTrade(later, InstanceName("later")).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Stop()
+			reservation, rejects, err := engine.ExecutePreTrade(newValidOrderForNativeE2E(t))
+			if err != nil || reservation != nil || len(rejects) != 1 || rejects[0].Policy != "Engine" || rejects[0].Scope != reject.ScopeOrder || rejects[0].Mode != reject.RuleModeReject || rejects[0].Code != reject.CodeSystemUnavailable || rejects[0].Reason != "review rollback failed" {
+				t.Fatalf("rollback failure = %v, %v, %v", reservation, rejects, err)
+			}
+			if later.mainCalls != 1 || policy.rollbacks != 1 {
+				t.Fatalf("later hooks = %d, rollbacks = %d", later.mainCalls, policy.rollbacks)
+			}
+			assertMutationFinalizerBlock(t, engine, mutationOrderAccountID+1)
+			if later.rollbacks != 1 || later.commits != 0 {
+				t.Errorf("later callbacks = %d/%d", later.commits, later.rollbacks)
+			}
+			if policy.rollbacks != 1 || policy.commits != 0 {
+				t.Errorf("final failed review callbacks = %d/%d", policy.commits, policy.rollbacks)
+			}
+		})
+	}
+}
+
+func TestReviewInstanceDropCopy(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReject, reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		for _, fatal := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%v/%v", mode, fatal), func(t *testing.T) {
+				policy := newReviewMutationPolicy(t)
+				code := reject.CodeRiskLimitExceeded
+				if fatal {
+					code = reject.CodeOrderValueCalculationFailed
+				}
+				policy.main = reject.NewSingleItemList(code, policy.Name(), "review", "", reject.ScopeAccount)
+				if mode == reject.RuleModeReject {
+					policy.main[0].Mode = reject.RuleModeReviewWithHold
+				}
+				engine, err := NewEngineBuilder().FullSync().PreTrade(policy, InstanceMode(mode)).Build()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer engine.Stop()
+				if fatal {
+					rejects := requireRejectedDropCopy(t, engine, newValidOrderForNativeE2E(t))
+					if len(rejects) != 1 || rejects[0].Code != code || rejects[0].Mode != reject.RuleModeReject || policy.rollbacks != 1 || policy.commits != 0 {
+						t.Fatalf("fatal drop-copy = %v, callbacks %d/%d", rejects, policy.commits, policy.rollbacks)
+					}
+				} else {
+					operation := requireAppliedDropCopy(t, engine, newValidOrderForNativeE2E(t))
+					defer operation.Close()
+					block, err := operation.AccountBlock()
+					if err != nil || block != nil {
+						t.Fatalf("drop-copy block = %v, %v", block, err)
+					}
+					blocked, err := operation.IsAccountBlocked()
+					if err != nil || blocked {
+						t.Fatalf("drop-copy blocked = %v, %v", blocked, err)
+					}
+					lock, err := operation.Lock()
+					if err != nil {
+						t.Fatal(err)
+					}
+					prices, err := lock.Prices()
+					if err != nil || len(prices) != 1 || prices[0] != policy.lockPrice {
+						t.Errorf("drop-copy prices = %v, %v, want %v", prices, err, policy.lockPrice)
+					}
+					outcomes, err := operation.AccountAdjustments()
+					if err != nil || len(outcomes) != 1 || !outcomes[0].Entry.Asset.Equal(policy.asset) {
+						t.Errorf("drop-copy outcomes = %v, %v, want asset %v", outcomes, err, policy.asset)
+					}
+					operation.Commit()
+					if policy.commits != 1 || policy.rollbacks != 0 {
+						t.Fatalf("drop-copy callbacks = %d/%d", policy.commits, policy.rollbacks)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestReviewInstanceBlockBetweenStages(t *testing.T) {
+	policy := newReviewMutationPolicy(t)
+	policy.start = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, policy.Name(), "review", "", reject.ScopeOrder)
+	engine, err := NewEngineBuilder().FullSync().PreTrade(policy, InstanceMode(reject.RuleModeReviewWithoutHold)).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Stop()
+	request, rejects, err := engine.StartPreTrade(newValidOrderForNativeE2E(t))
+	if err != nil || request == nil || len(rejects) != 0 {
+		t.Fatalf("start = %v, %v, %v", request, rejects, err)
+	}
+	defer request.Close()
+	want := slices.Clone(policy.start)
+	want[0].Mode = reject.RuleModeReviewWithoutHold
+	assertReviewMarks(t, request.Reviews, want)
+	engine.Accounts().Block(param.NewAccountIDFromUint64(mutationOrderAccountID), "between stages")
+	reservation, rejects, err := request.Execute()
+	if err != nil || reservation != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeAccountBlocked || rejects[0].Mode != reject.RuleModeReject || policy.mainCalls != 0 {
+		t.Fatalf("blocked execute = %v, %v, %v; hooks %d", reservation, rejects, err, policy.mainCalls)
+	}
+}
+
+func TestReviewInstanceConfirmedStartRunsMain(t *testing.T) {
+	policy := newReviewMutationPolicy(t)
+	policy.start = reject.NewSingleItemList(reject.CodeRiskLimitExceeded, policy.Name(), "start review", "", reject.ScopeOrder)
+	engine, err := NewEngineBuilder().FullSync().PreTrade(policy, InstanceMode(reject.RuleModeReviewWithoutHold)).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Stop()
+	order := newValidOrderForNativeE2E(t)
+	flags := order.EnsureReviewView()
+	flags.SetConfirmed(true)
+	flags.SetAlreadyHeld(true)
+	reservation, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil || reservation == nil || len(rejects) != 0 {
+		t.Fatalf("confirmed execute = %v, %v, %v", reservation, rejects, err)
+	}
+	defer reservation.Close()
+	assertReviewMarks(t, reservation.Reviews, nil)
+	assertReviewResult(t, reservation, reject.RuleModeReviewWithHold)
+	reservation.CommitAndClose()
+	if policy.startCalls != 1 || policy.mainCalls != 1 || policy.commits != 1 || policy.rollbacks != 0 {
+		t.Fatalf("confirmed hooks/callbacks = %d/%d/%d/%d", policy.startCalls, policy.mainCalls, policy.commits, policy.rollbacks)
+	}
 }
 
 func newValidOrderForNativeE2E(t *testing.T) model.Order {

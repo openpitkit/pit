@@ -31,7 +31,13 @@ import {
   buildSpotFunds,
   RateLimit,
   RateLimitBrokerBarrier,
+  RateLimitBuilder,
+  SpotFundsBuilder,
+  SpotFundsLimitMode,
+  SpotFundsPnlBoundsBarrier,
 } from "@openpit/engine/pretrade/policies";
+
+import { holdings } from "./spot_funds_holdings";
 
 const ACCOUNT = 99_224_416n;
 
@@ -52,12 +58,12 @@ function makeValidationEngine(): Engine {
   return Engine.builder().builtin(buildOrderValidation()).build();
 }
 
-function makeRateLimitEngine(maxOrders: number = 1): Engine {
+function makeRateLimitEngine(maxOrders: number = 1, mode?: RuleMode): Engine {
   return Engine.builder()
 
     .builtin(
       buildRateLimit().brokerBarriers([
-        new RateLimitBrokerBarrier(new RateLimit(maxOrders, 60_000)),
+        new RateLimitBrokerBarrier(new RateLimit(maxOrders, 60_000), mode),
       ]),
     )
     .build();
@@ -144,6 +150,58 @@ describe("dry-run surface", () => {
     }
   });
 
+  it.each(
+    [
+      RuleMode.Reject,
+      RuleMode.ReviewWithHold,
+      RuleMode.ReviewWithoutHold,
+    ].flatMap((mode) =>
+      [false, true].map((startStage) => ({ mode, startStage })),
+    ),
+  )(
+    "predicts no account block from review marks, mode=$mode, startStage=$startStage",
+    ({ mode, startStage }) => {
+      const entry = {
+        code: "Custom" as const,
+        reason: "account needs review",
+        details: "dry run",
+        scope: "account" as const,
+      };
+      const engine = Engine.builder()
+        .preTrade(
+          {
+            name: "account-dry-review",
+            checkPreTradeStart: () => (startStage ? [entry] : []),
+            performPreTradeCheck: () => ({
+              rejects: startStage ? [] : [entry],
+            }),
+          },
+          { name: "review", mode },
+        )
+        .build();
+      const reports = [engine.executePreTradeDryRun(makeOrder())];
+      if (startStage) reports.push(engine.startPreTradeDryRun(makeOrder()));
+      for (const report of reports) {
+        expect(report.isPass).toBe(mode !== RuleMode.Reject);
+        if (mode === RuleMode.Reject) {
+          expect(report.reviews).toEqual([]);
+          expect(report.accountBlock).toMatchObject({ code: "AccountBlocked" });
+          expect(report.rejects).toHaveLength(1);
+        } else {
+          expect(report.rejects).toEqual([]);
+          expect(report.accountBlock).toBeUndefined();
+          expect(
+            report.reviews.map(({ policy, scope, mode }) => ({
+              policy,
+              scope,
+              mode,
+            })),
+          ).toEqual([{ policy: "account-dry-review", scope: "account", mode }]);
+        }
+      }
+    },
+  );
+
   it("passes and rejects without mutating the engine", () => {
     const engine = makeValidationEngine();
 
@@ -195,22 +253,52 @@ describe("dry-run surface", () => {
     expect(probe.isPass).toBe(true);
   });
 
-  it("leaves rate-limit budget untouched until a real call happens", () => {
-    const engine = makeRateLimitEngine(1);
+  it.each([
+    RuleMode.Reject,
+    RuleMode.ReviewWithHold,
+    RuleMode.ReviewWithoutHold,
+  ])(
+    "leaves the %s rate-limit budget untouched until a real call happens",
+    (mode) => {
+      const engine = makeRateLimitEngine(1, mode);
 
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const dry = engine.executePreTradeDryRun(makeOrder());
-      expect(dry.isPass).toBe(true);
-    }
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const dry = engine.executePreTradeDryRun(makeOrder());
+        expect(dry.isPass).toBe(true);
+        expect(dry.reviews).toEqual([]);
+      }
 
-    const real = engine.executePreTrade(makeOrder());
-    expect(real.ok).toBe(true);
-    real.reservation!.rollback();
+      const real = engine.executePreTrade(makeOrder());
+      expect(real.ok).toBe(true);
+      expect(real.reviews).toEqual([]);
+      real.reservation!.rollback();
 
-    const blocked = engine.executePreTradeDryRun(makeOrder());
-    expect(blocked.isPass).toBe(false);
-    expect(blocked.rejects[0]!.code).toBe("RateLimitExceeded");
-  });
+      const probe = engine.executePreTradeDryRun(makeOrder());
+      const exceeded = {
+        mode,
+        code: "RateLimitExceeded",
+      };
+      if (mode === RuleMode.Reject) {
+        expect(probe.isPass).toBe(false);
+        expect(probe.rejects).toMatchObject([exceeded]);
+      } else {
+        expect(probe.isPass).toBe(true);
+        expect(probe.rejects).toEqual([]);
+        expect(probe.reviews).toMatchObject([exceeded]);
+        engine.configure().rateLimit(RateLimitBuilder.NAME, {
+          brokerBarriers: [
+            new RateLimitBrokerBarrier(new RateLimit(2, 60_000), mode),
+          ],
+        });
+        const following = engine.startPreTrade(makeOrder());
+        expect(following.ok).toBe(true);
+        expect(following.reviews).toEqual([]);
+        const breached = engine.startPreTrade(makeOrder());
+        expect(breached.ok).toBe(true);
+        expect(breached.reviews).toMatchObject([exceeded]);
+      }
+    },
+  );
 
   it("uses a custom read-only start hook without running normal side effects", () => {
     // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
@@ -300,21 +388,32 @@ describe("dry-run surface", () => {
 describe("Spot Funds review with an existing hold", () => {
   it("passes without reserving funds again", () => {
     const engine = makeSpotFundsEngine();
-    const order = makeOrder("6", "10000");
+    engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+      globalLimitMode: SpotFundsLimitMode.ReviewWithHold,
+    });
+    const order = makeOrder("12", "10000");
     const initial = engine.executePreTrade(order);
-    expect(initial.ok, "expected the initial 60000 USD order").toBe(true);
+    expect(initial.ok).toBe(true);
+    expect(initial.reviews).toHaveLength(1);
+    expect(initial.reviews[0]).toMatchObject({
+      code: RejectCode.InsufficientFunds,
+      mode: RuleMode.ReviewWithHold,
+    });
     const initialReservation = initial.reservation;
     if (initialReservation === undefined) {
-      throw new Error("expected the initial 60000 USD reservation");
+      throw new Error("expected the initial reservation");
     }
+    const lock = initialReservation.lock();
+    expect(lock.pricesOf(0).map(String)).toEqual(["10000"]);
     initialReservation.commit();
-
-    order.review = { confirmed: true };
-    const rejected = engine.executePreTrade(order);
-    expect(rejected.reservation).toBeUndefined();
-    expect(rejected.rejects.map((reject) => reject.code)).toEqual([
-      RejectCode.InsufficientFunds,
-    ]);
+    const before = holdings(engine, ACCOUNT, "USD");
+    expect(before).toEqual({
+      balance: "-20000",
+      held: "120000",
+      incoming: "0",
+    });
+    const incoming = holdings(engine, ACCOUNT, "AAPL");
+    expect(incoming).toEqual({ balance: "0", held: "0", incoming: "12" });
 
     order.review = { confirmed: true, alreadyHeld: true };
     const held = engine.executePreTrade(order);
@@ -323,14 +422,225 @@ describe("Spot Funds review with an existing hold", () => {
     if (heldReservation === undefined) {
       throw new Error("expected the already-held order's reservation");
     }
+    expect(held.reviews).toEqual([]);
+    expect(heldReservation.lock().size()).toBe(0);
+    expect(heldReservation.accountAdjustments()).toEqual([]);
     heldReservation.commit();
+    expect(holdings(engine, ACCOUNT, "USD")).toEqual(before);
+    expect(holdings(engine, ACCOUNT, "AAPL")).toEqual(incoming);
 
-    const remaining = engine.executePreTrade(makeOrder("4", "10000"));
-    expect(remaining.ok, "expected the remaining 40000 USD").toBe(true);
-    const remainingReservation = remaining.reservation;
-    if (remainingReservation === undefined) {
-      throw new Error("expected a reservation for the remaining 40000 USD");
-    }
-    remainingReservation.rollback();
+    const cancel = engine.applyExecutionReport({
+      operation: order.operation!,
+      fill: { remainingReservedQuantity: "12", isFinal: true, lock },
+    });
+    expect(cancel.accountBlocks).toEqual([]);
+    expect(holdings(engine, ACCOUNT, "USD")).toEqual({
+      balance: "100000",
+      held: "0",
+      incoming: "0",
+    });
+    expect(holdings(engine, ACCOUNT, "AAPL")).toEqual({
+      balance: "0",
+      held: "0",
+      incoming: "0",
+    });
+  });
+
+  it.each(["funds", "P&L"] as const)(
+    "keeps the first hold when a confirmed rerun breaches Reject %s",
+    (cause) => {
+      const engine = makeSpotFundsEngine();
+      engine.accounts().setCurrency(ACCOUNT, "USD");
+      const order = makeOrder("6", "10000");
+      const first = engine.executePreTrade(order);
+      expect(first.ok).toBe(true);
+      const lock = first.reservation!.lock();
+      first.reservation!.commit();
+      expect(holdings(engine, ACCOUNT, "USD")).toEqual({
+        balance: "40000",
+        held: "60000",
+        incoming: "0",
+      });
+      if (cause === "funds") {
+        order.review = { confirmed: true };
+        const unheld = engine.executePreTrade(order);
+        expect(unheld.reservation).toBeUndefined();
+        expect(unheld.rejects).toHaveLength(1);
+        expect(unheld.rejects[0]).toMatchObject({
+          code: RejectCode.InsufficientFunds,
+          mode: RuleMode.Reject,
+        });
+        order.review = { confirmed: true, alreadyHeld: true };
+        const held = engine.executePreTrade(order);
+        expect(held.ok).toBe(true);
+        expect(held.reviews).toEqual([]);
+        expect(held.reservation!.lock().size()).toBe(0);
+        expect(held.reservation!.accountAdjustments()).toEqual([]);
+        held.reservation!.commit();
+        expect(holdings(engine, ACCOUNT, "USD")).toEqual({
+          balance: "40000",
+          held: "60000",
+          incoming: "0",
+        });
+        const remaining = engine.executePreTrade(makeOrder("4", "10000"));
+        expect(remaining.ok).toBe(true);
+        remaining.reservation!.rollback();
+        expect(
+          engine.applyAccountAdjustment(ACCOUNT, [
+            {
+              operation: { asset: "USD" },
+              amount: { balance: AdjustmentAmount.delta("-50000") },
+            },
+          ]).ok,
+        ).toBe(true);
+      } else {
+        engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
+          globalBarriers: [
+            new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+          ],
+        });
+        const pnl = engine
+          .configure()
+          .setSpotFundsAccountPnl(SpotFundsBuilder.NAME, {
+            account: ACCOUNT,
+            state: "-20",
+          });
+        expect(pnl.accountBlocks).toHaveLength(1);
+        expect(pnl.accountBlocks[0]!.code).toBe(
+          RejectCode.PnlKillSwitchTriggered,
+        );
+        engine.accounts().unblock(ACCOUNT);
+      }
+      const before = holdings(engine, ACCOUNT, "USD");
+      expect(before).toEqual({
+        balance: cause === "funds" ? "-10000" : "40000",
+        held: "60000",
+        incoming: "0",
+      });
+      order.review = { confirmed: true, alreadyHeld: true };
+      const result = engine.executePreTrade(order);
+      expect(result.ok).toBe(false);
+      expect(result.reservation).toBeUndefined();
+      expect(result.rejects).toHaveLength(1);
+      expect(result.rejects[0]).toMatchObject({
+        code:
+          cause === "funds"
+            ? RejectCode.InsufficientFunds
+            : RejectCode.PnlKillSwitchTriggered,
+        mode: RuleMode.Reject,
+      });
+      expect(holdings(engine, ACCOUNT, "USD")).toEqual(before);
+      engine.applyExecutionReport({
+        operation: order.operation!,
+        fill: { remainingReservedQuantity: "6", isFinal: true, lock },
+      });
+      expect(holdings(engine, ACCOUNT, "USD")).toEqual({
+        balance: cause === "funds" ? "50000" : "100000",
+        held: "0",
+        incoming: "0",
+      });
+    },
+  );
+
+  it("blocks a cancel with the empty rerun lock without releasing USD", () => {
+    const engine = makeSpotFundsEngine();
+    engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+      globalLimitMode: SpotFundsLimitMode.ReviewWithHold,
+    });
+    const order = makeOrder("12", "10000");
+    const first = engine.executePreTrade(order);
+    expect(first.ok).toBe(true);
+    first.reservation!.commit();
+    order.review = { confirmed: true, alreadyHeld: true };
+    const rerun = engine.executePreTrade(order);
+    expect(rerun.ok).toBe(true);
+    expect(rerun.reviews).toEqual([]);
+    const lock = rerun.reservation!.lock();
+    expect(lock.size()).toBe(0);
+    expect(rerun.reservation!.accountAdjustments()).toEqual([]);
+    rerun.reservation!.commit();
+    const before = holdings(engine, ACCOUNT, "USD");
+    expect(before).toEqual({
+      balance: "-20000",
+      held: "120000",
+      incoming: "0",
+    });
+    const cancel = engine.applyExecutionReport({
+      operation: order.operation!,
+      fill: { remainingReservedQuantity: "12", isFinal: true, lock },
+    });
+    expect(cancel.accountBlocks).toHaveLength(1);
+    expect(cancel.accountBlocks[0]!.code).toBe(RejectCode.MissingRequiredField);
+    expect(holdings(engine, ACCOUNT, "USD")).toEqual(before);
+  });
+
+  it("omits Spot Funds results on an already-held rerun with breached review rules", () => {
+    const engine = makeSpotFundsEngine();
+    engine.accounts().setCurrency(ACCOUNT, "USD");
+    const order = makeOrder("6", "10000");
+    const first = engine.executePreTrade(order);
+    expect(first.ok).toBe(true);
+    first.reservation!.commit();
+    engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+      globalLimitMode: SpotFundsLimitMode.TrackOnly,
+      positionLimits: [
+        {
+          accountId: ACCOUNT,
+          asset: "AAPL",
+          limit: "0",
+          mode: RuleMode.ReviewWithoutHold,
+        },
+      ],
+    });
+    engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
+      globalBarriers: [
+        new SpotFundsPnlBoundsBarrier(
+          "USD",
+          "-10",
+          undefined,
+          RuleMode.ReviewWithHold,
+        ),
+      ],
+    });
+    expect(
+      engine.configure().setSpotFundsAccountPnl(SpotFundsBuilder.NAME, {
+        account: ACCOUNT,
+        state: "-20",
+      }).accountBlocks,
+    ).toEqual([]);
+    const unflagged = engine.executePreTradeDryRun(order);
+    expect(unflagged.isPass).toBe(true);
+    expect(unflagged.reviews).toHaveLength(2);
+    expect(unflagged.reviews).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: RejectCode.PnlKillSwitchTriggered,
+          mode: RuleMode.ReviewWithHold,
+        }),
+        expect.objectContaining({
+          code: RejectCode.PositionLimitExceeded,
+          mode: RuleMode.ReviewWithoutHold,
+        }),
+      ]),
+    );
+    const before = [
+      holdings(engine, ACCOUNT, "USD"),
+      holdings(engine, ACCOUNT, "AAPL"),
+    ];
+    expect(before).toEqual([
+      { balance: "40000", held: "60000", incoming: "0" },
+      { balance: "0", held: "0", incoming: "6" },
+    ]);
+    order.review = { confirmed: true, alreadyHeld: true };
+    const rerun = engine.executePreTrade(order);
+    expect(rerun.ok).toBe(true);
+    expect(rerun.reviews).toEqual([]);
+    expect(rerun.reservation!.lock().size()).toBe(0);
+    expect(rerun.reservation!.accountAdjustments()).toEqual([]);
+    rerun.reservation!.commit();
+    expect([
+      holdings(engine, ACCOUNT, "USD"),
+      holdings(engine, ACCOUNT, "AAPL"),
+    ]).toEqual(before);
   });
 });

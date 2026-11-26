@@ -34,6 +34,43 @@ def _build_spot_funds_engine() -> openpit.Engine:
     )
 
 
+def _spot_funds_amounts(
+    engine: openpit.Engine, account: openpit.param.AccountId, asset: str
+) -> tuple[openpit.param.PositionSize, ...]:
+    zero = openpit.param.AdjustmentAmount.delta(openpit.param.PositionSize(0))
+    result = engine.apply_account_adjustment(
+        account,
+        [
+            openpit.AccountAdjustment(
+                operation=openpit.AccountAdjustmentBalanceOperation(asset=asset),
+                amount=openpit.AccountAdjustmentAmount(
+                    balance=zero, held=zero, incoming=zero
+                ),
+            )
+        ],
+    )
+    assert result.ok
+    assert len(result.outcomes) == 1
+    entry = result.outcomes[0].entry
+    assert entry.asset == asset
+    assert entry.balance is not None
+    assert entry.held is not None
+    assert entry.incoming is not None
+    return entry.balance.absolute, entry.held.absolute, entry.incoming.absolute
+
+
+def _cancel_report(account, lock, remaining: int) -> openpit.ExecutionReport:
+    report = conftest.make_report(pnl=openpit.param.Pnl(0), account_id=account)
+    return openpit.ExecutionReport(
+        operation=report.operation,
+        fill=openpit.ExecutionReportFillDetails(
+            lock=lock,
+            remaining_reserved_quantity=openpit.param.Quantity(remaining),
+            is_final=True,
+        ),
+    )
+
+
 def _seed_balance(
     engine: openpit.Engine,
     account_id: openpit.param.AccountId,
@@ -237,12 +274,15 @@ def test_spot_funds_priceless_sell_without_market_data_bundle_rejects() -> None:
 
 @pytest.mark.integration
 def test_spot_funds_already_held_does_not_reserve_again() -> None:
-    """A confirmed, already-held buy passes without reserving another 600 USD.
-    The final order asks for exactly the remaining 400 USD: a second hold
-    would leave less available and cause that order to reject."""
+    """Keep the first review hold through rerun, then release its exact legs."""
     account_id = openpit.param.AccountId.from_int(99224416)
     engine = _build_spot_funds_engine()
-    _seed_balance(engine, account_id, "USD", 1000)
+    policies = openpit.pretrade.policies
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        global_limit_mode=policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+    )
+    _seed_balance(engine, account_id, "USD", 500)
 
     price = openpit.param.Price("100")
     order = conftest.make_order(
@@ -256,17 +296,20 @@ def test_spot_funds_already_held_does_not_reserve_again() -> None:
     assert initial.ok, f"expected initial 600 USD order to pass: {initial.rejects}"
     reservation = initial.reservation
     assert reservation is not None, "expected the initial 600 USD reservation"
-    reservation.commit()
-
-    rejected = engine.execute_pre_trade(
-        order=openpit.Order(
-            operation=operation, review=openpit.OrderReview(confirmed=True)
+    assert [(mark.code, mark.mode) for mark in initial.reviews] == [
+        (
+            openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS,
+            openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
         )
-    )
-    assert rejected.reservation is None, "expected insufficient funds without hold flag"
-    assert [reject.code for reject in rejected.rejects] == [
-        openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS
     ]
+    first_lock = reservation.lock
+    assert len(first_lock) == 1
+    assert [px for _, px in first_lock.entries()] == [price]
+    reservation.commit()
+    usd = _spot_funds_amounts(engine, account_id, "USD")
+    aapl = _spot_funds_amounts(engine, account_id, "AAPL")
+    assert usd == tuple(openpit.param.PositionSize(v) for v in (-100, 600, 0))
+    assert aapl == tuple(openpit.param.PositionSize(v) for v in (0, 0, 6))
 
     held = engine.execute_pre_trade(
         order=openpit.Order(
@@ -277,16 +320,398 @@ def test_spot_funds_already_held_does_not_reserve_again() -> None:
     assert held.ok, f"expected already-held order to pass: {held.rejects}"
     reservation = held.reservation
     assert reservation is not None, "expected the already-held order's reservation"
+    assert len(reservation.lock) == 0
+    assert held.reviews == reservation.reviews == []
+    assert reservation.account_adjustments == []
     reservation.commit()
+    assert _spot_funds_amounts(engine, account_id, "USD") == usd
+    assert _spot_funds_amounts(engine, account_id, "AAPL") == aapl
 
-    remaining = engine.execute_pre_trade(
-        order=conftest.make_order(
-            account_id=account_id,
-            trade_amount=openpit.param.TradeAmount.quantity("4"),
-            price=price,
+    report = _cancel_report(account_id, first_lock, 6)
+    post = engine.apply_execution_report(report=report)
+    assert post.account_blocks == []
+    assert _spot_funds_amounts(engine, account_id, "USD") == tuple(
+        openpit.param.PositionSize(v) for v in (500, 0, 0)
+    )
+    assert _spot_funds_amounts(engine, account_id, "AAPL") == tuple(
+        openpit.param.PositionSize(0) for _ in range(3)
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("cause", ["funds", "pnl"])
+def test_spot_funds_already_held_reject_keeps_first_hold(cause: str) -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(99224416)
+    engine = _build_spot_funds_engine()
+    engine.accounts().set_currency(account, openpit.param.Asset("USD"))
+    _seed_balance(engine, account, "USD", 1000)
+    order = conftest.make_order(
+        account_id=account,
+        price=openpit.param.Price(100),
+        trade_amount=openpit.param.TradeAmount.quantity(6),
+    )
+    first = engine.execute_pre_trade(order=order)
+    assert first.ok and first.reservation is not None
+    first.reservation.commit()
+
+    rejected = engine.execute_pre_trade(
+        order=openpit.Order(
+            operation=order.operation, review=openpit.OrderReview(confirmed=True)
         )
     )
-    assert remaining.ok, f"expected remaining 400 USD: {remaining.rejects}"
-    reservation = remaining.reservation
-    assert reservation is not None, "expected a reservation for the remaining 400 USD"
-    reservation.rollback()
+    assert rejected.reservation is None
+    assert [(r.code, r.mode) for r in rejected.rejects] == [
+        (
+            openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS,
+            openpit.pretrade.RuleMode.REJECT,
+        )
+    ]
+    rerun = openpit.Order(
+        operation=order.operation,
+        review=openpit.OrderReview(confirmed=True, already_held=True),
+    )
+    held = engine.execute_pre_trade(order=rerun)
+    assert held.ok and held.reservation is not None
+    assert len(held.reservation.lock) == 0
+    assert held.reviews == held.reservation.reviews == []
+    assert held.reservation.account_adjustments == []
+    held.reservation.commit()
+    assert _spot_funds_amounts(engine, account, "USD") == tuple(
+        openpit.param.PositionSize(v) for v in (400, 600, 0)
+    )
+    remaining = engine.execute_pre_trade(
+        order=conftest.make_order(
+            account_id=account,
+            price=openpit.param.Price(100),
+            trade_amount=openpit.param.TradeAmount.quantity(4),
+        )
+    )
+    assert remaining.ok and remaining.reservation is not None
+    remaining.reservation.rollback()
+
+    if cause == "funds":
+        _seed_balance(engine, account, "USD", -1)
+        expected = openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS
+    else:
+        engine.configure().spot_funds_pnl_bounds_killswitch(
+            policies.SpotFundsBuilder.NAME,
+            account_barriers=[
+                policies.SpotFundsPnlBoundsAccountBarrier(
+                    policies.SpotFundsPnlBoundsBarrier(
+                        currency=openpit.param.Asset("USD"),
+                        lower_bound=openpit.param.Pnl(-10),
+                    ),
+                    account,
+                )
+            ],
+        )
+        configured = engine.configure().set_spot_funds_account_pnl(
+            policies.SpotFundsBuilder.NAME,
+            account=account,
+            state=openpit.param.Pnl(-20),
+        )
+        assert len(configured.account_blocks) == 1
+        engine.accounts().unblock(account)
+        expected = openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    before = _spot_funds_amounts(engine, account, "USD")
+    expected_balance = -1 if cause == "funds" else 400
+    assert before == tuple(
+        openpit.param.PositionSize(v) for v in (expected_balance, 600, 0)
+    )
+    rejected = engine.execute_pre_trade(order=rerun)
+    assert rejected.reservation is None
+    assert [(r.code, r.mode) for r in rejected.rejects] == [
+        (expected, openpit.pretrade.RuleMode.REJECT)
+    ]
+    assert _spot_funds_amounts(engine, account, "USD") == before
+
+
+@pytest.mark.integration
+def test_spot_funds_cancel_with_rerun_lock_blocks_without_releasing_usd() -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(99224416)
+    engine = _build_spot_funds_engine()
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        global_limit_mode=policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+    )
+    _seed_balance(engine, account, "USD", 500)
+    order = conftest.make_order(
+        account_id=account,
+        price=openpit.param.Price(100),
+        trade_amount=openpit.param.TradeAmount.quantity(6),
+    )
+    first = engine.execute_pre_trade(order=order)
+    assert first.ok and first.reservation is not None
+    first.reservation.commit()
+    rerun = engine.execute_pre_trade(
+        order=openpit.Order(
+            operation=order.operation,
+            review=openpit.OrderReview(confirmed=True, already_held=True),
+        )
+    )
+    assert rerun.ok and rerun.reservation is not None
+    lock = rerun.reservation.lock
+    assert len(lock) == 0
+    assert rerun.reviews == rerun.reservation.reviews == []
+    assert rerun.reservation.account_adjustments == []
+    rerun.reservation.commit()
+    before = _spot_funds_amounts(engine, account, "USD")
+    assert before == tuple(openpit.param.PositionSize(v) for v in (-100, 600, 0))
+    report = _cancel_report(account, lock, 6)
+    post = engine.apply_execution_report(report=report)
+    assert [block.code for block in post.account_blocks] == [
+        openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD
+    ]
+    assert _spot_funds_amounts(engine, account, "USD") == before
+
+
+@pytest.mark.integration
+def test_spot_funds_already_held_omits_breached_review_rules() -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(99224416)
+    engine = _build_spot_funds_engine()
+    engine.accounts().set_currency(account, openpit.param.Asset("USD"))
+    _seed_balance(engine, account, "USD", 1000)
+    order = conftest.make_order(account_id=account)
+    first = engine.execute_pre_trade(order=order)
+    assert first.ok and first.reservation is not None
+    first.reservation.commit()
+    engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsBuilder.NAME,
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl(-10),
+                mode=openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+            )
+        ],
+    )
+    assert (
+        not engine.configure()
+        .set_spot_funds_account_pnl(
+            policies.SpotFundsBuilder.NAME,
+            account=account,
+            state=openpit.param.Pnl(-20),
+        )
+        .account_blocks
+    )
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            policies.SpotFundsPositionLimitEntry(
+                account,
+                openpit.param.Asset("AAPL"),
+                openpit.param.Quantity(0),
+                mode=openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+            )
+        ],
+    )
+    dry = engine.execute_pre_trade_dry_run(order=order)
+    assert dry
+    assert {(m.code, m.mode) for m in dry.reviews} == {
+        (
+            openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED,
+            openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        ),
+        (
+            openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED,
+            openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+        ),
+    }
+    assert len(dry.reviews) == 2
+    before = {
+        asset: _spot_funds_amounts(engine, account, asset) for asset in ("USD", "AAPL")
+    }
+    rerun = engine.execute_pre_trade(
+        order=openpit.Order(
+            operation=order.operation,
+            review=openpit.OrderReview(confirmed=True, already_held=True),
+        )
+    )
+    assert rerun.ok and rerun.reservation is not None
+    assert len(rerun.reservation.lock) == 0
+    assert rerun.reviews == rerun.reservation.reviews == []
+    assert rerun.reservation.account_adjustments == []
+    rerun.reservation.commit()
+    for asset, amounts in before.items():
+        assert _spot_funds_amounts(engine, account, asset) == amounts
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+@pytest.mark.parametrize("drop_copy", [False, True])
+def test_spot_funds_confirmed_and_drop_copy_track_shortfall(
+    mode: openpit.pretrade.policies.SpotFundsLimitMode, drop_copy: bool
+) -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(99224416)
+    engine = _build_spot_funds_engine()
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        global_limit_mode=mode,
+        position_limits=(
+            [
+                policies.SpotFundsPositionLimitEntry(
+                    account, openpit.param.Asset("AAPL"), openpit.param.Quantity(0)
+                )
+            ]
+            if drop_copy
+            else []
+        ),
+    )
+    _seed_balance(engine, account, "USD", 500)
+    order = conftest.make_order(
+        account_id=account,
+        price=openpit.param.Price(100),
+        trade_amount=openpit.param.TradeAmount.quantity(6),
+    )
+    if drop_copy:
+        dry = engine.execute_pre_trade_dry_run(order=order)
+        assert [(r.code, r.mode) for r in dry.rejects] == [
+            (
+                openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED,
+                openpit.pretrade.RuleMode.REJECT,
+            )
+        ]
+        result = engine.apply_drop_copy(order=order)
+        assert result.ok and result.rejects == []
+        handle = result.operation
+    else:
+        order = openpit.Order(
+            operation=order.operation, review=openpit.OrderReview(confirmed=True)
+        )
+        dry = engine.execute_pre_trade_dry_run(order=order)
+        assert dry and dry.reviews == []
+        result = engine.execute_pre_trade(order=order)
+        assert result.ok and result.rejects == result.reviews == []
+        handle = result.reservation
+    assert handle is not None
+    assert len(handle.lock) == 1
+    assert [px for _, px in handle.lock.entries()] == [openpit.param.Price(100)]
+    assert len(handle.account_adjustments) == 2
+    entries = {
+        outcome.entry.asset: outcome.entry for outcome in handle.account_adjustments
+    }
+    assert set(entries) == {"USD", "AAPL"}
+    assert entries["USD"].balance.delta == openpit.param.PositionSize(-600)
+    assert entries["USD"].balance.absolute == openpit.param.PositionSize(-100)
+    assert entries["USD"].held.delta == openpit.param.PositionSize(600)
+    assert entries["USD"].held.absolute == openpit.param.PositionSize(600)
+    assert entries["AAPL"].incoming.delta == openpit.param.PositionSize(6)
+    assert entries["AAPL"].incoming.absolute == openpit.param.PositionSize(6)
+    handle.commit()
+    assert _spot_funds_amounts(engine, account, "USD") == tuple(
+        openpit.param.PositionSize(v) for v in (-100, 600, 0)
+    )
+    assert _spot_funds_amounts(engine, account, "AAPL") == tuple(
+        openpit.param.PositionSize(v) for v in (0, 0, 6)
+    )
+    if drop_copy:
+        engine.configure().spot_funds(
+            policies.SpotFundsBuilder.NAME,
+            position_limits=[
+                policies.SpotFundsPositionLimitEntry(
+                    account, openpit.param.Asset("AAPL"), None
+                )
+            ],
+        )
+    next_order = engine.execute_pre_trade(order=conftest.make_order(account_id=account))
+    assert next_order.ok and next_order.reservation is not None
+    assert [(m.code, m.mode) for m in next_order.reviews] == [
+        (openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS, mode.value)
+    ]
+    next_order.reservation.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "global_mode,group_mode,account_mode",
+    [
+        (
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITHOUT_HOLD,
+            openpit.pretrade.policies.SpotFundsLimitMode.ENFORCE,
+        ),
+        (
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITHOUT_HOLD,
+            openpit.pretrade.policies.SpotFundsLimitMode.ENFORCE,
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+        ),
+        (
+            openpit.pretrade.policies.SpotFundsLimitMode.ENFORCE,
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITH_HOLD,
+            openpit.pretrade.policies.SpotFundsLimitMode.REVIEW_WITHOUT_HOLD,
+        ),
+    ],
+)
+def test_spot_funds_review_limit_mode_cascade(
+    global_mode: openpit.pretrade.policies.SpotFundsLimitMode,
+    group_mode: openpit.pretrade.policies.SpotFundsLimitMode,
+    account_mode: openpit.pretrade.policies.SpotFundsLimitMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(99224416)
+    group = openpit.param.AccountGroupId.from_int(7)
+    engine = _build_spot_funds_engine()
+    engine.accounts().register_group([account], group)
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        global_limit_mode=global_mode,
+        account_group_limit_modes=[
+            policies.SpotFundsLimitModeAccountGroupEntry(group, group_mode)
+        ],
+        account_limit_modes=[
+            policies.SpotFundsLimitModeAccountEntry(account, account_mode)
+        ],
+    )
+    order = conftest.make_order(account_id=account)
+    for tier, mode in (
+        ("account", account_mode),
+        ("group", group_mode),
+        ("global", global_mode),
+    ):
+        result = engine.execute_pre_trade(order=order)
+        if mode is policies.SpotFundsLimitMode.ENFORCE:
+            assert result.reservation is None
+            assert [(r.code, r.mode) for r in result.rejects] == [
+                (
+                    openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS,
+                    openpit.pretrade.RuleMode.REJECT,
+                )
+            ]
+        else:
+            assert result.ok and result.reservation is not None
+            assert [(m.code, m.mode) for m in result.reviews] == [
+                (openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS, mode.value)
+            ]
+            expected = (
+                (-10, 10, 0)
+                if mode is policies.SpotFundsLimitMode.REVIEW_WITH_HOLD
+                else (0, 0, 0)
+            )
+            assert _spot_funds_amounts(engine, account, "USD") == tuple(
+                openpit.param.PositionSize(v) for v in expected
+            )
+            result.reservation.rollback()
+        if tier == "account":
+            engine.configure().spot_funds(
+                policies.SpotFundsBuilder.NAME,
+                account_limit_modes=[
+                    policies.SpotFundsLimitModeAccountEntry(account, None)
+                ],
+            )
+        elif tier == "group":
+            engine.configure().spot_funds(
+                policies.SpotFundsBuilder.NAME,
+                account_group_limit_modes=[
+                    policies.SpotFundsLimitModeAccountGroupEntry(group, None)
+                ],
+            )

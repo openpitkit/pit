@@ -19,6 +19,7 @@ package openpit
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -129,6 +130,18 @@ func TestPolicyInstanceRegistration(t *testing.T) {
 			t.Fatalf("named review marks = %v, %v", marks, err)
 		}
 		request.Close()
+		confirmedOrder := newValidOrderForNativeE2E(t)
+		flags := confirmedOrder.EnsureReviewView()
+		flags.SetConfirmed(true)
+		request, rejects, err = engine.StartPreTrade(confirmedOrder)
+		if err != nil || request == nil || len(rejects) != 0 {
+			t.Fatalf("confirmed review = %v, %v, %v", request, rejects, err)
+		}
+		marks, err = request.Reviews()
+		if err != nil || len(marks) != 0 {
+			t.Fatalf("confirmed review marks = %v, %v, want none", marks, err)
+		}
+		request.Close()
 		if err := engine.Configure().OrderSizeLimit("size-reject", barrier("0"), nil, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -136,7 +149,43 @@ func TestPolicyInstanceRegistration(t *testing.T) {
 		if err != nil || request != nil || len(rejects) != 1 || rejects[0].Mode != reject.RuleModeReject {
 			t.Fatalf("reject-instance breach must reject: %v, %v, %v", request, rejects, err)
 		}
+		request, rejects, err = engine.StartPreTrade(confirmedOrder)
+		if err != nil || request != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeOrderQtyExceedsLimit || rejects[0].Mode != reject.RuleModeReject {
+			t.Fatalf("confirmed reject = %v, %v, %v", request, rejects, err)
+		}
 		engine.Stop()
+	}
+}
+
+func TestReviewInstanceDuplicateExplicitName(t *testing.T) {
+	_, err := NewEngineBuilder().FullSync().
+		PreTrade(&reviewTestPolicy{}, InstanceName("duplicate")).
+		PreTrade(&reviewTestPolicy{}, InstanceName("duplicate"), InstanceMode(reject.RuleModeReviewWithHold)).Build()
+	var buildError *EngineBuildError
+	if !errors.As(err, &buildError) || buildError.Code != EngineBuildErrorDuplicatePolicyName {
+		t.Fatalf("duplicate explicit instance error = %v, want DuplicatePolicyName", err)
+	}
+}
+
+func TestReviewInstanceOrderSizeEvaluationFailure(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			config := policies.BuildOrderSizeLimit().BrokerBarrier(policies.OrderSizeBrokerBarrier{
+				Limit: policies.OrderSizeLimit{MaxNotional: optional.Some(orderSizeTestVol(t, "100"))},
+			})
+			engine, err := NewEngineBuilder().FullSync().Builtin(config, InstanceMode(mode)).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Stop()
+			order := orderSizeTestOrder(t, 42, "USD", "1")
+			op := order.EnsureOperationView()
+			op.UnsetPrice()
+			request, rejects, err := engine.StartPreTrade(order)
+			if err != nil || request != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeOrderValueCalculationFailed || rejects[0].Mode != reject.RuleModeReject || rejects[0].Scope != reject.ScopeOrder || rejects[0].Policy != "OrderSizeLimitPolicy" {
+				t.Fatalf("review calculation failure = %v, %v, %v", request, rejects, err)
+			}
+		})
 	}
 }
 

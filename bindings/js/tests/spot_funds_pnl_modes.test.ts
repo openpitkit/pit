@@ -118,11 +118,33 @@ describe("spot-funds P&L modes", () => {
           mode,
         ]);
         result.reservation!.rollback();
+        const confirmed = { ...order(), review: { confirmed: true } };
+        const confirmedDry = engine.executePreTradeDryRun(confirmed);
+        expect(confirmedDry.isPass).toBe(true);
+        expect(confirmedDry.reviews).toEqual([]);
+        const approved = engine.executePreTrade(confirmed);
+        expect(approved.ok).toBe(true);
+        expect(approved.reviews).toEqual([]);
+        approved.reservation!.rollback();
         expect(setPnl(engine, "-150").accountBlocks).toHaveLength(1);
         const blocked = engine.executePreTrade(order());
         expect(blocked.ok).toBe(false);
         expect(blocked.rejects[0]!.code).toBe("PnlKillSwitchTriggered");
         expect(blocked.rejects[0]!.mode).toBe(RuleMode.Reject);
+        engine.accounts().unblock(ACCOUNT);
+        const rejectedDry = engine.executePreTradeDryRun(confirmed);
+        expect(rejectedDry.isPass).toBe(false);
+        expect(rejectedDry.reviews).toEqual([]);
+        expect(rejectedDry.rejects).toHaveLength(1);
+        expect(rejectedDry.rejects[0]).toMatchObject({
+          code: "PnlKillSwitchTriggered",
+          mode: RuleMode.Reject,
+        });
+        const rejected = engine.executePreTrade(confirmed);
+        expect(rejected.ok).toBe(false);
+        expect(rejected.rejects).toHaveLength(1);
+        expect(rejected.rejects[0]!.code).toBe("PnlKillSwitchTriggered");
+        expect(rejected.rejects[0]!.mode).toBe(RuleMode.Reject);
       },
     );
 

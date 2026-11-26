@@ -1908,7 +1908,7 @@ mod tests {
         has_global: bool,
         groups: Option<&[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier]>,
         accounts: Option<&[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier]>,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(AccountId, openpit::pretrade::RejectCode, String)>, String> {
         let mut error = std::ptr::null_mut();
         let group_entries = groups.unwrap_or(&[]);
         let account_entries = accounts.unwrap_or(&[]);
@@ -1964,8 +1964,19 @@ mod tests {
             Err(message)
         } else {
             assert!(error.is_null());
+            let blocks = unsafe { &*result }
+                .items
+                .iter()
+                .map(|outcome| {
+                    (
+                        outcome.account_id,
+                        outcome.block.code,
+                        outcome.block.details.clone(),
+                    )
+                })
+                .collect();
             crate::reject::openpit_destroy_pretrade_account_block_outcome_list(result);
-            Ok(())
+            Ok(blocks)
         }
     }
 
@@ -2298,6 +2309,363 @@ mod tests {
         }
     }
 
+    fn set_test_account_pnl(
+        engine: *mut crate::engine::OpenPitEngine,
+        state: OpenPitPnlState,
+    ) -> usize {
+        let mut error = std::ptr::null_mut();
+        let blocks = unsafe {
+            openpit_engine_configure_spot_funds_set_account_pnl(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                42,
+                state,
+                &mut error,
+            )
+        };
+        assert!(error.is_null());
+        assert!(!blocks.is_null());
+        let items = &unsafe { &*blocks }.items;
+        for block in items {
+            assert_eq!(
+                block.code,
+                openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+            );
+        }
+        let count = items.len();
+        crate::reject::openpit_destroy_pretrade_account_block_list(blocks);
+        count
+    }
+
+    #[track_caller]
+    fn assert_pnl_order(
+        engine: *mut crate::engine::OpenPitEngine,
+        order: &crate::order::OpenPitOrder,
+        modes: &[RuleMode],
+        rejected: bool,
+    ) {
+        use crate::engine::*;
+        let mut report = std::ptr::null_mut();
+        assert!(openpit_engine_execute_pre_trade_dry_run(
+            engine,
+            order,
+            &mut report,
+            null_out_error(),
+        ));
+        assert_eq!(
+            openpit_pretrade_pre_trade_dry_run_report_is_pass(report),
+            !rejected,
+            "P&L review passes while an effective failure rejects"
+        );
+        let reviews = openpit_pretrade_pre_trade_dry_run_report_get_reviews(report);
+        let items = &unsafe { &*reviews }.items;
+        assert_eq!(
+            items.len(),
+            modes.len(),
+            "only documented P&L marks survive"
+        );
+        for mode in modes {
+            assert!(items.iter().any(|item| item.mode == *mode));
+        }
+        for item in items {
+            assert_eq!(
+                item.code,
+                openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+            );
+            assert_eq!(item.scope, openpit::pretrade::RejectScope::Account);
+        }
+        crate::reject::openpit_destroy_pretrade_reject_list(reviews);
+        let blocks = openpit_pretrade_pre_trade_dry_run_report_get_account_block(report);
+        assert_eq!(unsafe { &*blocks }.items.len(), usize::from(rejected));
+        crate::reject::openpit_destroy_pretrade_account_block_list(blocks);
+        openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+
+        let mut reservation = std::ptr::null_mut();
+        let mut rejects = std::ptr::null_mut();
+        assert_eq!(
+            openpit_engine_execute_pre_trade(
+                engine,
+                order,
+                &mut reservation,
+                &mut rejects,
+                null_out_error(),
+            ),
+            if rejected {
+                OpenPitPretradeStatus::Rejected
+            } else {
+                OpenPitPretradeStatus::Passed
+            }
+        );
+        if rejected {
+            assert!(reservation.is_null());
+            assert!(!rejects.is_null());
+            let items = &unsafe { &*rejects }.items;
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                items[0].code,
+                openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+            );
+            assert_eq!(items[0].scope, openpit::pretrade::RejectScope::Account);
+            assert_eq!(items[0].mode, RuleMode::Reject);
+            crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+        } else {
+            assert!(rejects.is_null());
+            assert!(!reservation.is_null());
+            let reviews = openpit_pretrade_pre_trade_reservation_get_reviews(reservation);
+            let items = &unsafe { &*reviews }.items;
+            assert_eq!(items.len(), modes.len());
+            for mode in modes {
+                assert!(items.iter().any(|item| item.mode == *mode));
+            }
+            for item in items {
+                assert_eq!(
+                    item.code,
+                    openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+                );
+                assert_eq!(item.scope, openpit::pretrade::RejectScope::Account);
+            }
+            crate::reject::openpit_destroy_pretrade_reject_list(reviews);
+            openpit_pretrade_pre_trade_reservation_rollback(reservation);
+            openpit_destroy_pretrade_pre_trade_reservation(reservation);
+        }
+    }
+
+    #[test]
+    fn spot_funds_pnl_reviews_confirmed_and_reject_precedence() {
+        use crate::account_outcome::*;
+        use crate::engine::*;
+        use crate::reject::*;
+        let engine = funded_spot_funds_engine();
+        let mut with_hold = pnl_bounds_barrier("-10");
+        with_hold.mode = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD;
+        let mut without_hold = pnl_bounds_barrier("-15");
+        without_hold.mode = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD;
+        patch_pnl_bounds(
+            engine,
+            None,
+            &[pnl_bounds_barrier("-50"), with_hold, without_hold],
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        let state = |value: &str| OpenPitPnlState {
+            kind: OPENPIT_PNL_STATE_VALUE,
+            value: crate::param::OpenPitParamPnl(Pnl::from_str(value).unwrap().to_decimal().into()),
+            halt_reason: OPENPIT_PNL_HALT_REASON_NONE,
+        };
+        assert_eq!(set_test_account_pnl(engine, state("-20")), 0);
+        let mut order = spot_funds_buy_order("1");
+        assert_pnl_order(
+            engine,
+            &order,
+            &[RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold],
+            false,
+        );
+        order.review.is_set = true;
+        order.review.value.confirmed = crate::param::OPENPIT_TRI_BOOL_TRUE;
+        assert_pnl_order(engine, &order, &[], false);
+        order.review.value.confirmed = crate::param::OPENPIT_TRI_BOOL_FALSE;
+        assert_pnl_order(
+            engine,
+            &order,
+            &[RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold],
+            false,
+        );
+
+        with_hold.lower_bound = pnl_bounds_barrier("-12").lower_bound;
+        for (lower, expected_blocks) in [("-50", 0), ("-10", 1)] {
+            let barriers = [pnl_bounds_barrier(lower), with_hold, without_hold];
+            let outcomes = patch_pnl_bounds(engine, None, &barriers, true, None, None).unwrap();
+            assert_eq!(
+                outcomes.len(),
+                expected_blocks,
+                "realized retune blocks only on a Reject breach"
+            );
+            if expected_blocks == 0 {
+                assert_pnl_order(
+                    engine,
+                    &order,
+                    &[RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold],
+                    false,
+                );
+            } else {
+                assert_eq!(
+                    (outcomes[0].0, outcomes[0].1),
+                    (
+                        AccountId::from_u64(42),
+                        openpit::pretrade::RejectCode::PnlKillSwitchTriggered,
+                    ),
+                    "realized retune returns the breached account's P&L block"
+                );
+            }
+        }
+        let assert_latched = |source: &str| {
+            patch_pnl_bounds(engine, None, &[], true, None, None).unwrap();
+            let mut rejects = std::ptr::null_mut();
+            assert_eq!(
+                openpit_engine_execute_pre_trade(
+                    engine,
+                    &order,
+                    std::ptr::null_mut(),
+                    &mut rejects,
+                    null_out_error(),
+                ),
+                OpenPitPretradeStatus::Rejected,
+                "{source} block persists with no barrier installed"
+            );
+            assert_eq!(
+                unsafe { &*rejects }.items.len(),
+                1,
+                "{source} latch returns one reject"
+            );
+            openpit_destroy_pretrade_reject_list(rejects);
+        };
+        assert_latched("realized retune");
+        openpit_engine_unblock_account(engine, 42);
+        patch_pnl_bounds(
+            engine,
+            None,
+            &[pnl_bounds_barrier("-50"), with_hold, without_hold],
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(set_test_account_pnl(engine, state("-60")), 1);
+        assert_latched("force-set");
+        patch_pnl_bounds(
+            engine,
+            None,
+            &[pnl_bounds_barrier("-50"), with_hold, without_hold],
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        for confirmed in [false, true] {
+            openpit_engine_unblock_account(engine, 42);
+            order.review.value.confirmed = if confirmed {
+                crate::param::OPENPIT_TRI_BOOL_TRUE
+            } else {
+                crate::param::OPENPIT_TRI_BOOL_FALSE
+            };
+            assert_pnl_order(engine, &order, &[], true);
+            let mut rejects = std::ptr::null_mut();
+            assert_eq!(
+                openpit_engine_execute_pre_trade(
+                    engine,
+                    &order,
+                    std::ptr::null_mut(),
+                    &mut rejects,
+                    null_out_error()
+                ),
+                OpenPitPretradeStatus::Rejected,
+                "pre-trade block persists for confirmed={confirmed}"
+            );
+            let items = &unsafe { &*rejects }.items;
+            assert_eq!(
+                (items.len(), items[0].code),
+                (1, openpit::pretrade::RejectCode::AccountBlocked),
+                "pre-trade block is observed before the next unblock"
+            );
+            openpit_destroy_pretrade_reject_list(rejects);
+        }
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn spot_funds_pnl_review_only_halt_and_currency_mismatch_reject_and_block() {
+        use crate::account_outcome::*;
+        use crate::engine::*;
+        use crate::reject::*;
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            for halted in [false, true] {
+                for confirmed in [false, true] {
+                    let engine = funded_spot_funds_engine();
+                    if halted {
+                        assert_eq!(
+                            set_test_account_pnl(
+                                engine,
+                                OpenPitPnlState {
+                                    kind: OPENPIT_PNL_STATE_HALTED,
+                                    value: crate::param::OpenPitParamPnl::default(),
+                                    halt_reason: OPENPIT_PNL_HALT_REASON_MISSING_FX,
+                                }
+                            ),
+                            0
+                        );
+                    }
+                    let mut barrier = pnl_bounds_barrier("-10");
+                    barrier.mode = mode;
+                    let blocks = if halted {
+                        patch_pnl_bounds(engine, None, &[barrier], true, None, None).unwrap()
+                    } else {
+                        barrier.currency = OpenPitStringView::from_utf8("EUR");
+                        patch_pnl_bounds(
+                            engine,
+                            None,
+                            &[],
+                            false,
+                            None,
+                            Some(&[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+                                barrier,
+                                account_id: 42,
+                            }]),
+                        )
+                        .unwrap()
+                    };
+                    assert_eq!(
+                        blocks
+                            .iter()
+                            .map(|block| (block.0, block.1))
+                            .collect::<Vec<_>>(),
+                        [(
+                            AccountId::from_u64(42),
+                            openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+                        )],
+                        "halted={halted}, mode={mode}, confirmed={confirmed}: retune block"
+                    );
+                    openpit_engine_unblock_account(engine, 42);
+                    let mut order = spot_funds_buy_order("1");
+                    order.review.is_set = true;
+                    order.review.value.confirmed = if confirmed {
+                        crate::param::OPENPIT_TRI_BOOL_TRUE
+                    } else {
+                        crate::param::OPENPIT_TRI_BOOL_FALSE
+                    };
+                    assert_pnl_order(engine, &order, &[], true);
+                    assert!(
+                        patch_pnl_bounds(engine, None, &[], true, None, Some(&[]))
+                            .unwrap()
+                            .is_empty(),
+                        "halted={halted}, mode={mode}, confirmed={confirmed}: clear adds no block"
+                    );
+                    let mut rejects = std::ptr::null_mut();
+                    assert_eq!(
+                        openpit_engine_execute_pre_trade(
+                            engine,
+                            &order,
+                            std::ptr::null_mut(),
+                            &mut rejects,
+                            null_out_error()
+                        ),
+                        OpenPitPretradeStatus::Rejected
+                    );
+                    assert_eq!(
+                        unsafe { &*rejects }.items[0].code,
+                        openpit::pretrade::RejectCode::AccountBlocked
+                    );
+                    openpit_destroy_pretrade_reject_list(rejects);
+                    openpit_destroy_engine(engine);
+                }
+            }
+        }
+    }
+
     #[test]
     fn configure_spot_funds_pnl_bounds_axis_selects_each_axis() {
         for (wire, (selector, axis)) in PNL_BOUNDS_AXES.into_iter().enumerate() {
@@ -2568,135 +2936,335 @@ mod tests {
     }
 
     #[test]
-    fn configure_spot_funds_pnl_bounds_axis_retune_returns_position_block() {
-        for (axis, label) in [(2, "position unrealized pnl"), (3, "position total pnl")] {
-            let builder = make_local_engine_builder();
-            let service = make_service();
-            let slippage = 0;
-            assert!(unsafe {
-                openpit_engine_builder_add_builtin_spot_funds_policy(
-                    builder,
-                    service,
-                    &slippage,
-                    0,
-                    std::ptr::null(),
-                    0,
-                    0,
-                    std::ptr::null(),
-                    null_out_error(),
-                )
-            });
-            let engine = crate::engine::openpit_engine_builder_build(
-                builder,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
-            assert!(!engine.is_null());
-            openpit_destroy_engine_builder(builder);
-            assert!(crate::engine::openpit_engine_set_account_currency(
-                engine,
-                42,
-                OpenPitStringView::from_utf8("USD"),
-                null_out_error(),
-            ));
-            let instrument = crate::instrument::OpenPitInstrument {
-                underlying_asset: OpenPitStringView::from_utf8("AAPL"),
-                settlement_asset: OpenPitStringView::from_utf8("USD"),
-            };
-            let mut quote = crate::marketdata::OpenPitMarketDataQuote::default();
-            quote.mark.value = crate::param::OpenPitParamPrice(
-                openpit::param::Price::from_str("90")
-                    .unwrap()
-                    .to_decimal()
-                    .into(),
-            );
-            quote.mark.is_set = true;
-            let mut instrument_id = 0;
-            assert!(
-                crate::marketdata::openpit_marketdata_service_push_by_instrument(
-                    service,
-                    &instrument,
-                    quote,
-                    0,
-                    0,
-                    &mut instrument_id,
-                    null_out_error(),
-                )
-            );
-            let mut report = crate::execution_report::OpenPitExecutionReport::default();
-            report.operation.is_set = true;
-            report.operation.value.instrument = instrument;
-            report.operation.value.account_id.value = 42;
-            report.operation.value.account_id.is_set = true;
-            report.operation.value.side = crate::param::OPENPIT_PARAM_SIDE_BUY;
-            report.fill.is_set = true;
-            report.fill.value.last_trade.is_set = true;
-            report.fill.value.last_trade.value.price = crate::param::OpenPitParamPrice(
-                openpit::param::Price::from_str("100")
-                    .unwrap()
-                    .to_decimal()
-                    .into(),
-            );
-            report.fill.value.last_trade.value.quantity = OpenPitParamQuantity(
-                openpit::param::Quantity::from_str("2")
-                    .unwrap()
-                    .to_decimal()
-                    .into(),
-            );
-            report.fill.value.remaining_reserved_quantity.is_set = true;
-            report.fill.value.is_final.is_set = true;
-            let lock = crate::pre_trade_lock::OpenPitPretradePreTradeLock::from_inner(
-                openpit::pretrade::PreTradeLock::from_entries([(
-                    openpit::DEFAULT_POLICY_GROUP_ID,
-                    openpit::param::Price::from_str("100").unwrap(),
-                )]),
-            );
-            report.fill.value.lock = lock;
-            assert!(crate::engine::openpit_engine_apply_execution_report(
-                engine,
-                &report,
-                std::ptr::null_mut(),
-                null_out_error(),
-            ));
-            crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(lock);
-            let barrier = pnl_bounds_barrier("-10");
-            let mut error = std::ptr::null_mut();
-            let result = unsafe {
-                openpit_engine_configure_spot_funds_pnl_bounds_axis(
-                    engine,
-                    OpenPitStringView::from_utf8("SpotFundsPolicy"),
-                    axis,
-                    &barrier,
-                    1,
-                    true,
-                    std::ptr::null(),
-                    0,
-                    false,
-                    std::ptr::null(),
-                    0,
-                    false,
-                    &mut error,
-                )
-            };
-            assert!(!result.is_null(), "{label}: retune succeeds");
-            assert!(error.is_null());
-            let outcomes = &unsafe { &*result }.items;
-            assert_eq!(outcomes.len(), 1, "{label}: retune returns one block");
-            assert_eq!(outcomes[0].account_id, AccountId::from_u64(42));
-            assert_eq!(
-                outcomes[0].block.code,
-                openpit::pretrade::RejectCode::PnlKillSwitchTriggered
-            );
-            assert_eq!(
-                outcomes[0].block.details,
-                format!(
-                    "lower bound breached: {label} -20, lower bound -10, currency USD, asset AAPL"
+    fn configure_spot_funds_pnl_bounds_axis_retune_returns_account_block() {
+        for (axis, label) in [
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_ACCOUNT_UNREALIZED,
+                "account unrealized pnl",
+            ),
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_ACCOUNT_TOTAL,
+                "account total pnl",
+            ),
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_UNREALIZED,
+                "position unrealized pnl",
+            ),
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_TOTAL,
+                "position total pnl",
+            ),
+        ] {
+            for (case, mode) in [
+                ("breach", crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT),
+                (
+                    "uncomputed",
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
                 ),
-                "{label}: returned block names the breached axis and position"
-            );
-            crate::reject::openpit_destroy_pretrade_account_block_outcome_list(result);
-            crate::engine::openpit_destroy_engine(engine);
-            openpit_destroy_marketdata_service(service);
+                (
+                    "uncomputed",
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+                ),
+                (
+                    "currency mismatch",
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+                ),
+                (
+                    "currency mismatch",
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+                ),
+            ] {
+                let builder = make_local_engine_builder();
+                let service = make_service();
+                let slippage = 0;
+                assert!(unsafe {
+                    openpit_engine_builder_add_builtin_spot_funds_policy(
+                        builder,
+                        service,
+                        &slippage,
+                        0,
+                        std::ptr::null(),
+                        0,
+                        0,
+                        std::ptr::null(),
+                        null_out_error(),
+                    )
+                });
+                let engine = crate::engine::openpit_engine_builder_build(
+                    builder,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                assert!(!engine.is_null());
+                openpit_destroy_engine_builder(builder);
+                assert!(unsafe {
+                    openpit_engine_configure_spot_funds_global_limit_mode(
+                        engine,
+                        OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                        OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
+                        std::ptr::null_mut(),
+                    )
+                });
+                assert!(crate::engine::openpit_engine_set_account_currency(
+                    engine,
+                    42,
+                    OpenPitStringView::from_utf8("USD"),
+                    null_out_error(),
+                ));
+                let instrument = crate::instrument::OpenPitInstrument {
+                    underlying_asset: OpenPitStringView::from_utf8("AAPL"),
+                    settlement_asset: OpenPitStringView::from_utf8("USD"),
+                };
+                let mut quote = crate::marketdata::OpenPitMarketDataQuote::default();
+                quote.mark.value = crate::param::OpenPitParamPrice(
+                    openpit::param::Price::from_str("90")
+                        .unwrap()
+                        .to_decimal()
+                        .into(),
+                );
+                quote.mark.is_set = true;
+                let mut instrument_id = 0;
+                assert!(
+                    crate::marketdata::openpit_marketdata_service_push_by_instrument(
+                        service,
+                        &instrument,
+                        quote,
+                        0,
+                        0,
+                        &mut instrument_id,
+                        null_out_error(),
+                    )
+                );
+                let mut report = crate::execution_report::OpenPitExecutionReport::default();
+                report.operation.is_set = true;
+                report.operation.value.instrument = instrument;
+                report.operation.value.account_id.value = 42;
+                report.operation.value.account_id.is_set = true;
+                report.operation.value.side = crate::param::OPENPIT_PARAM_SIDE_BUY;
+                report.fill.is_set = true;
+                report.fill.value.last_trade.is_set = true;
+                report.fill.value.last_trade.value.price = crate::param::OpenPitParamPrice(
+                    openpit::param::Price::from_str("100")
+                        .unwrap()
+                        .to_decimal()
+                        .into(),
+                );
+                report.fill.value.last_trade.value.quantity = OpenPitParamQuantity(
+                    openpit::param::Quantity::from_str("2")
+                        .unwrap()
+                        .to_decimal()
+                        .into(),
+                );
+                report.fill.value.remaining_reserved_quantity.is_set = true;
+                report.fill.value.is_final.is_set = true;
+                let lock = crate::pre_trade_lock::OpenPitPretradePreTradeLock::from_inner(
+                    openpit::pretrade::PreTradeLock::from_entries([(
+                        openpit::DEFAULT_POLICY_GROUP_ID,
+                        openpit::param::Price::from_str("100").unwrap(),
+                    )]),
+                );
+                report.fill.value.lock = lock;
+                assert!(crate::engine::openpit_engine_apply_execution_report(
+                    engine,
+                    &report,
+                    std::ptr::null_mut(),
+                    null_out_error(),
+                ));
+                crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(lock);
+                let mut review_barriers = [pnl_bounds_barrier("-10"); 3];
+                review_barriers[0].mode =
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD;
+                review_barriers[1].mode =
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD;
+                review_barriers[2] = pnl_bounds_barrier("-30");
+                let initial = if case == "breach" {
+                    review_barriers.to_vec()
+                } else {
+                    let mut barrier = pnl_bounds_barrier("-30");
+                    barrier.mode = mode;
+                    vec![barrier]
+                };
+                assert!(
+                    patch_pnl_bounds(engine, Some(axis), &initial, true, None, None)
+                        .unwrap()
+                        .is_empty(),
+                    "{label}, {case}, mode={mode}: initial retune must not block"
+                );
+                assert_pnl_order(
+                    engine,
+                    &spot_funds_buy_order("1"),
+                    if case == "breach" {
+                        &[RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold]
+                    } else {
+                        &[]
+                    },
+                    false,
+                );
+                if case == "breach" {
+                    assert_pnl_order(
+                        engine,
+                        &spot_funds_buy_order("1"),
+                        &[RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold],
+                        false,
+                    );
+                }
+                if case == "uncomputed" {
+                    assert!(
+                        crate::marketdata::openpit_marketdata_service_push_by_instrument(
+                            service,
+                            &instrument,
+                            crate::marketdata::OpenPitMarketDataQuote::default(),
+                            0,
+                            0,
+                            &mut instrument_id,
+                            null_out_error(),
+                        )
+                    );
+                }
+                let mut barrier = pnl_bounds_barrier("-10");
+                barrier.mode = mode;
+                let blocks = if case == "currency mismatch" {
+                    barrier.currency = OpenPitStringView::from_utf8("EUR");
+                    patch_pnl_bounds(
+                        engine,
+                        Some(axis),
+                        &[],
+                        true,
+                        None,
+                        Some(&[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+                            barrier,
+                            account_id: 42,
+                        }]),
+                    )
+                    .unwrap()
+                } else {
+                    review_barriers[2] = barrier;
+                    patch_pnl_bounds(
+                        engine,
+                        Some(axis),
+                        if case == "breach" {
+                            &review_barriers
+                        } else {
+                            std::slice::from_ref(&barrier)
+                        },
+                        true,
+                        None,
+                        None,
+                    )
+                    .unwrap()
+                };
+                assert_eq!(
+                    blocks
+                        .iter()
+                        .map(|block| (block.0, block.1))
+                        .collect::<Vec<_>>(),
+                    [(
+                        AccountId::from_u64(42),
+                        openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+                    )],
+                    "{label}, {case}, mode={mode}: retune returns one P&L block"
+                );
+                assert!(
+                    blocks[0].2.contains(label),
+                    "{label}, {case}, mode={mode}: block details name the axis"
+                );
+                if matches!(
+                    axis,
+                    OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_UNREALIZED
+                        | OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_PNL_BOUNDS_AXIS_POSITION_TOTAL
+                ) && matches!(case, "breach" | "uncomputed")
+                {
+                    assert!(
+                        blocks[0].2.contains("AAPL"),
+                        "{label}, {case}, mode={mode}: position details name the asset"
+                    );
+                }
+                assert!(
+                    patch_pnl_bounds(engine, Some(axis), &[], true, None, Some(&[]))
+                        .unwrap()
+                        .is_empty(),
+                    "{label}, {case}, mode={mode}: clearing barriers latches no block"
+                );
+                let mut rejects = std::ptr::null_mut();
+                assert_eq!(
+                    crate::engine::openpit_engine_execute_pre_trade(
+                        engine,
+                        &spot_funds_buy_order("1"),
+                        std::ptr::null_mut(),
+                        &mut rejects,
+                        null_out_error(),
+                    ),
+                    crate::engine::OpenPitPretradeStatus::Rejected,
+                    "{label}, {case}, mode={mode}: retune stored the block"
+                );
+                crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+                crate::engine::openpit_engine_unblock_account(engine, 42);
+                let accounts = [OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+                    barrier,
+                    account_id: 42,
+                }];
+                let blocks = patch_pnl_bounds(
+                    engine,
+                    Some(axis),
+                    if case == "currency mismatch" {
+                        &[]
+                    } else if case == "breach" {
+                        &review_barriers
+                    } else {
+                        std::slice::from_ref(&barrier)
+                    },
+                    true,
+                    None,
+                    if case == "currency mismatch" {
+                        Some(&accounts)
+                    } else {
+                        None
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    blocks
+                        .iter()
+                        .map(|block| (block.0, block.1))
+                        .collect::<Vec<_>>(),
+                    [(
+                        AccountId::from_u64(42),
+                        openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+                    )],
+                    "{label}, {case}, mode={mode}: reinstalled barriers return one P&L block"
+                );
+                crate::engine::openpit_engine_unblock_account(engine, 42);
+                assert_pnl_order(engine, &spot_funds_buy_order("1"), &[], true);
+                assert!(
+                    patch_pnl_bounds(engine, Some(axis), &[], true, None, Some(&[]))
+                        .unwrap()
+                        .is_empty(),
+                    "{label}, {case}, mode={mode}: clearing barriers latches no block"
+                );
+                let mut rejects = std::ptr::null_mut();
+                assert_eq!(
+                    crate::engine::openpit_engine_execute_pre_trade(
+                        engine,
+                        &spot_funds_buy_order("1"),
+                        std::ptr::null_mut(),
+                        &mut rejects,
+                        null_out_error()
+                    ),
+                    crate::engine::OpenPitPretradeStatus::Rejected
+                );
+                assert_eq!(
+                    unsafe { &*rejects }
+                        .items
+                        .iter()
+                        .map(|item| item.code)
+                        .collect::<Vec<_>>(),
+                    [openpit::pretrade::RejectCode::AccountBlocked],
+                    "{label}, {case}, mode={mode}: live evaluation latched the account block"
+                );
+                crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+                crate::engine::openpit_destroy_engine(engine);
+                openpit_destroy_marketdata_service(service);
+            }
         }
     }
 
@@ -3283,7 +3851,6 @@ mod tests {
     }
 
     fn funded_spot_funds_engine() -> *mut crate::engine::OpenPitEngine {
-        use crate::account_adjustment::*;
         let engine = engine_with_spot_funds();
         assert!(crate::engine::openpit_engine_set_account_currency(
             engine,
@@ -3291,14 +3858,20 @@ mod tests {
             OpenPitStringView::from_utf8("USD"),
             null_out_error(),
         ));
+        set_test_balance(engine, "USD", "1000");
+        engine
+    }
+
+    fn set_test_balance(engine: *mut crate::engine::OpenPitEngine, asset: &str, value: &str) {
+        use crate::account_adjustment::*;
         let mut adjustment = OpenPitAccountAdjustment::default();
         adjustment.operation.kind = OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE;
-        adjustment.operation.balance.asset = OpenPitStringView::from_utf8("USD");
+        adjustment.operation.balance.asset = OpenPitStringView::from_utf8(asset);
         adjustment.amount.is_set = true;
         adjustment.amount.value.balance = OpenPitParamAdjustmentAmount {
             kind: crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE,
             value: crate::param::OpenPitParamPositionSize(
-                openpit::param::PositionSize::from_str("1000")
+                openpit::param::PositionSize::from_str(value)
                     .unwrap()
                     .to_decimal()
                     .into(),
@@ -3317,7 +3890,6 @@ mod tests {
             ),
             OpenPitAccountAdjustmentApplyStatus::Applied
         );
-        engine
     }
 
     fn spot_funds_buy_order(quantity: &str) -> crate::order::OpenPitOrder {
@@ -3355,12 +3927,26 @@ mod tests {
         commit: bool,
     ) {
         let order = spot_funds_buy_order(quantity);
+        let reservation = reserve_funds_order(engine, &order, review_mode);
+        if commit {
+            crate::engine::openpit_pretrade_pre_trade_reservation_commit(reservation);
+        } else {
+            crate::engine::openpit_pretrade_pre_trade_reservation_rollback(reservation);
+        }
+        crate::engine::openpit_destroy_pretrade_pre_trade_reservation(reservation);
+    }
+
+    fn reserve_funds_order(
+        engine: *mut crate::engine::OpenPitEngine,
+        order: &crate::order::OpenPitOrder,
+        review_mode: Option<RuleMode>,
+    ) -> *mut crate::engine::OpenPitPretradePreTradeReservation {
         let mut reservation = std::ptr::null_mut();
         let mut rejects = std::ptr::null_mut();
         assert_eq!(
             crate::engine::openpit_engine_execute_pre_trade(
                 engine,
-                &order,
+                order,
                 &mut reservation,
                 &mut rejects,
                 null_out_error(),
@@ -3379,6 +3965,8 @@ mod tests {
             "funds review count reflects the hold"
         );
         if let Some(mode) = review_mode {
+            assert_eq!(items[0].scope, openpit::pretrade::RejectScope::Order);
+            assert_eq!(items[0].policy, "SpotFundsPolicy");
             assert_eq!(
                 items[0].code,
                 openpit::pretrade::RejectCode::InsufficientFunds
@@ -3389,12 +3977,729 @@ mod tests {
             );
         }
         crate::reject::openpit_destroy_pretrade_reject_list(reviews);
-        if commit {
-            crate::engine::openpit_pretrade_pre_trade_reservation_commit(reservation);
-        } else {
-            crate::engine::openpit_pretrade_pre_trade_reservation_rollback(reservation);
+        reservation
+    }
+
+    #[track_caller]
+    fn assert_funds_balances(
+        engine: *mut crate::engine::OpenPitEngine,
+        usd: [&str; 3],
+        aapl: Option<[&str; 3]>,
+    ) {
+        for (asset, expected) in
+            std::iter::once(("USD", usd)).chain(aapl.map(|expected| ("AAPL", expected)))
+        {
+            assert_eq!(
+                funds_balances(engine, asset),
+                expected.map(|value| openpit::param::PositionSize::from_str(value).unwrap()),
+                "{asset}: stored balance must match"
+            );
         }
-        crate::engine::openpit_destroy_pretrade_pre_trade_reservation(reservation);
+    }
+
+    fn funds_balances(
+        engine: *mut crate::engine::OpenPitEngine,
+        asset: &str,
+    ) -> [openpit::param::PositionSize; 3] {
+        use crate::account_adjustment::*;
+        use crate::account_outcome::*;
+        // Zero deltas expose stored balances through the public outcome.
+        let mut adjustment = OpenPitAccountAdjustment::default();
+        adjustment.operation.kind = OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE;
+        adjustment.operation.balance.asset = OpenPitStringView::from_utf8(asset);
+        adjustment.amount.is_set = true;
+        let zero = OpenPitParamAdjustmentAmount {
+            kind: crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA,
+            value: crate::param::OpenPitParamPositionSize(
+                openpit::param::PositionSize::ZERO.to_decimal().into(),
+            ),
+        };
+        adjustment.amount.value.balance = zero;
+        adjustment.amount.value.held = zero;
+        adjustment.amount.value.incoming = zero;
+        let mut outcomes = std::ptr::null_mut();
+        assert_eq!(
+            crate::engine::openpit_engine_apply_account_adjustment(
+                engine,
+                42,
+                &adjustment,
+                1,
+                std::ptr::null_mut(),
+                &mut outcomes,
+                std::ptr::null_mut(),
+                null_out_error(),
+            ),
+            OpenPitAccountAdjustmentApplyStatus::Applied
+        );
+        assert!(!outcomes.is_null());
+        assert_eq!(
+            unsafe { openpit_account_adjustment_outcome_list_len(outcomes) },
+            1
+        );
+        let mut outcome = OpenPitAccountAdjustmentOutcome::default();
+        assert!(unsafe { openpit_account_adjustment_outcome_list_get(outcomes, 0, &mut outcome) });
+        assert_eq!(
+            outcome.entry.to_entry().unwrap().asset,
+            openpit::param::Asset::new(asset).unwrap()
+        );
+        let balances = [
+            outcome.entry.balance,
+            outcome.entry.held,
+            outcome.entry.incoming,
+        ]
+        .map(|field| {
+            assert!(field.is_set, "{asset}: balance field must be present");
+            assert_eq!(
+                field.value.delta.to_param().unwrap(),
+                openpit::param::PositionSize::ZERO
+            );
+            field.value.absolute.to_param().unwrap()
+        });
+        unsafe { openpit_destroy_account_adjustment_outcome_list(outcomes) };
+        balances
+    }
+
+    fn assert_funds_lock(lock: *const crate::pre_trade_lock::OpenPitPretradePreTradeLock) {
+        use crate::pre_trade_lock::*;
+        assert!(!lock.is_null());
+        let entries = openpit_pretrade_pre_trade_lock_entries(lock);
+        let view = openpit_pretrade_pre_trade_lock_entries_view(entries);
+        assert_eq!(view.len, 1, "held funds must retain one lock price");
+        let entry = unsafe { &*view.ptr };
+        assert_eq!(
+            entry.policy_group_id,
+            openpit::DEFAULT_POLICY_GROUP_ID.value()
+        );
+        assert_eq!(
+            entry.price.to_param().unwrap(),
+            openpit::param::Price::from_str("100").unwrap()
+        );
+        openpit_destroy_pretrade_pre_trade_lock_entries(entries);
+    }
+
+    #[test]
+    fn spot_funds_review_hold_rerun_cancel_lifecycle() {
+        use crate::engine::*;
+        use crate::pre_trade_lock::*;
+        for (mode, rule, cancel_with_first_lock) in [
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+                RuleMode::ReviewWithHold,
+                true,
+            ),
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+                RuleMode::ReviewWithHold,
+                false,
+            ),
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD,
+                RuleMode::ReviewWithoutHold,
+                true,
+            ),
+        ] {
+            for side in [
+                crate::param::OPENPIT_PARAM_SIDE_BUY,
+                crate::param::OPENPIT_PARAM_SIDE_SELL,
+            ] {
+                let engine = funded_spot_funds_engine();
+                assert!(unsafe {
+                    openpit_engine_configure_spot_funds_global_limit_mode(
+                        engine,
+                        OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                        mode,
+                        std::ptr::null_mut(),
+                    )
+                });
+                let mut order = spot_funds_buy_order("11");
+                order.operation.value.side = side;
+                let with_hold = rule == RuleMode::ReviewWithHold;
+                let (usd, aapl) = if !with_hold {
+                    (["1000", "0", "0"], ["0", "0", "0"])
+                } else if side == crate::param::OPENPIT_PARAM_SIDE_BUY {
+                    (["-100", "1100", "0"], ["0", "0", "11"])
+                } else {
+                    (["1000", "0", "1100"], ["-11", "11", "0"])
+                };
+                let expected = [usd, aapl].map(|leg| {
+                    leg.map(|value| openpit::param::PositionSize::from_str(value).unwrap())
+                });
+                let balances = || {
+                    [
+                        funds_balances(engine, "USD"),
+                        funds_balances(engine, "AAPL"),
+                    ]
+                };
+                let first = reserve_funds_order(engine, &order, Some(rule));
+                let first_lock = openpit_pretrade_pre_trade_reservation_get_lock(first);
+                if with_hold {
+                    assert_funds_lock(first_lock);
+                } else {
+                    assert!(
+                        openpit_pretrade_pre_trade_lock_is_empty(first_lock),
+                        "side={side}: without-hold first run has no funds lock"
+                    );
+                }
+                let adjustments =
+                    openpit_pretrade_pre_trade_reservation_get_account_adjustments(first);
+                assert_eq!(
+                    unsafe {
+                        crate::account_outcome::openpit_account_adjustment_outcome_list_len(
+                            adjustments,
+                        )
+                    },
+                    if with_hold { 2 } else { 0 },
+                    "side={side}, mode={mode}: first-run adjustments reflect the hold"
+                );
+                unsafe {
+                    crate::account_outcome::openpit_destroy_account_adjustment_outcome_list(
+                        adjustments,
+                    )
+                };
+                openpit_pretrade_pre_trade_reservation_commit(first);
+                openpit_destroy_pretrade_pre_trade_reservation(first);
+                assert_eq!(
+                    balances(),
+                    expected,
+                    "side={side}, mode={mode}: first run records exact balances"
+                );
+
+                order.review.is_set = true;
+                order.review.value.confirmed = crate::param::OPENPIT_TRI_BOOL_TRUE;
+                order.review.value.already_held = crate::param::OPENPIT_TRI_BOOL_TRUE;
+                let rerun = reserve_funds_order(engine, &order, None);
+                let rerun_lock = openpit_pretrade_pre_trade_reservation_get_lock(rerun);
+                assert!(!rerun_lock.is_null());
+                assert!(
+                    openpit_pretrade_pre_trade_lock_is_empty(rerun_lock),
+                    "side={side}, mode={mode}: rerun must return no funds lock"
+                );
+                let adjustments =
+                    openpit_pretrade_pre_trade_reservation_get_account_adjustments(rerun);
+                assert_eq!(
+                    unsafe {
+                        crate::account_outcome::openpit_account_adjustment_outcome_list_len(
+                            adjustments,
+                        )
+                    },
+                    0,
+                    "side={side}, mode={mode}: rerun emits no adjustments"
+                );
+                unsafe {
+                    crate::account_outcome::openpit_destroy_account_adjustment_outcome_list(
+                        adjustments,
+                    )
+                };
+                openpit_pretrade_pre_trade_reservation_commit(rerun);
+                openpit_destroy_pretrade_pre_trade_reservation(rerun);
+                assert_eq!(
+                    balances(),
+                    expected,
+                    "side={side}, mode={mode}: rerun preserves exact balances"
+                );
+
+                let mut report = crate::execution_report::OpenPitExecutionReport::default();
+                report.operation.is_set = true;
+                report.operation.value.account_id = order.operation.value.account_id;
+                report.operation.value.instrument = order.operation.value.instrument;
+                report.operation.value.side = order.operation.value.side;
+                report.fill.is_set = true;
+                report.fill.value.remaining_reserved_quantity.is_set = true;
+                report.fill.value.remaining_reserved_quantity.value = OpenPitParamQuantity(
+                    openpit::param::Quantity::from_str("11")
+                        .unwrap()
+                        .to_decimal()
+                        .into(),
+                );
+                report.fill.value.is_final.is_set = true;
+                report.fill.value.is_final.value = true;
+                report.fill.value.lock = if cancel_with_first_lock {
+                    first_lock
+                } else {
+                    rerun_lock
+                };
+                let mut post = std::ptr::null_mut();
+                assert!(openpit_engine_apply_execution_report(
+                    engine,
+                    &report,
+                    &mut post,
+                    null_out_error()
+                ));
+                assert!(!post.is_null());
+                let blocks = openpit_post_trade_result_get_account_blocks(post);
+                let blocks = &unsafe { &*blocks }.items;
+                if with_hold && cancel_with_first_lock {
+                    assert!(
+                        blocks.is_empty(),
+                        "first-run lock must release without blocking"
+                    );
+                    assert_eq!(
+                        balances(),
+                        [["1000", "0", "0"], ["0", "0", "0"]].map(|leg| {
+                            leg.map(|value| openpit::param::PositionSize::from_str(value).unwrap())
+                        }),
+                        "side={side}: first-lock cancel releases the exact hold"
+                    );
+                } else {
+                    assert_eq!(
+                        blocks.len(),
+                        1,
+                        "side={side}, mode={mode}: empty lock must block loudly"
+                    );
+                    assert_eq!(
+                        blocks[0].code,
+                        openpit::pretrade::RejectCode::MissingRequiredField,
+                        "side={side}, mode={mode}: cancel with no Spot Funds price blocks"
+                    );
+                    assert_funds_balances(engine, usd, None);
+                }
+                openpit_destroy_post_trade_result(post);
+                openpit_destroy_pretrade_pre_trade_lock(first_lock);
+                openpit_destroy_pretrade_pre_trade_lock(rerun_lock);
+                openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn spot_funds_already_held_rerun_over_breached_rules_keeps_first_hold() {
+        use crate::account_outcome::*;
+        use crate::engine::*;
+        use crate::pre_trade_lock::*;
+        use crate::reject::*;
+        for rule in ["review_pnl", "review_position", "reject_pnl", "shrunk"] {
+            let engine = funded_spot_funds_engine();
+            let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_global_limit_mode(
+                    engine,
+                    name,
+                    OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+                    std::ptr::null_mut(),
+                )
+            });
+            let mut order = spot_funds_buy_order("1");
+            let first = reserve_funds_order(engine, &order, None);
+            let first_lock = openpit_pretrade_pre_trade_reservation_get_lock(first);
+            assert_funds_lock(first_lock);
+            openpit_pretrade_pre_trade_reservation_commit(first);
+            openpit_destroy_pretrade_pre_trade_reservation(first);
+            assert_funds_balances(engine, ["900", "100", "0"], Some(["0", "0", "1"]));
+            match rule {
+                "review_pnl" | "reject_pnl" => {
+                    let mut barriers = vec![pnl_bounds_barrier("-10")];
+                    if rule == "review_pnl" {
+                        barriers[0].mode = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD;
+                        let mut second = pnl_bounds_barrier("-15");
+                        second.mode = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD;
+                        barriers.push(second);
+                    }
+                    patch_pnl_bounds(engine, None, &barriers, true, None, None).unwrap();
+                    assert_eq!(
+                        set_test_account_pnl(
+                            engine,
+                            OpenPitPnlState {
+                                kind: OPENPIT_PNL_STATE_VALUE,
+                                value: crate::param::OpenPitParamPnl(
+                                    Pnl::from_str("-20").unwrap().to_decimal().into()
+                                ),
+                                halt_reason: OPENPIT_PNL_HALT_REASON_NONE,
+                            }
+                        ),
+                        usize::from(rule == "reject_pnl")
+                    );
+                    openpit_engine_unblock_account(engine, 42);
+                }
+                "review_position" => {
+                    for mode in [
+                        OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+                        OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+                    ] {
+                        assert!(unsafe {
+                            openpit_engine_configure_spot_funds_position_limit(
+                                engine,
+                                name,
+                                42,
+                                OpenPitStringView::from_utf8("AAPL"),
+                                mode,
+                                OpenPitParamQuantity::default(),
+                                true,
+                                std::ptr::null_mut(),
+                            )
+                        });
+                    }
+                }
+                "shrunk" => {
+                    assert!(unsafe {
+                        openpit_engine_configure_spot_funds_global_limit_mode(
+                            engine,
+                            name,
+                            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
+                            std::ptr::null_mut(),
+                        )
+                    });
+                    set_test_balance(engine, "USD", "-1");
+                }
+                _ => unreachable!("all rule cases are explicit"),
+            }
+            let review = rule == "review_pnl" || rule == "review_position";
+            if review {
+                let mut report = std::ptr::null_mut();
+                assert!(openpit_engine_execute_pre_trade_dry_run(
+                    engine,
+                    &order,
+                    &mut report,
+                    null_out_error()
+                ));
+                assert!(openpit_pretrade_pre_trade_dry_run_report_is_pass(report));
+                let reviews = openpit_pretrade_pre_trade_dry_run_report_get_reviews(report);
+                let items = &unsafe { &*reviews }.items;
+                assert_eq!(
+                    items.len(),
+                    2,
+                    "both review rules must actually breach before the flagged rerun"
+                );
+                for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+                    assert!(items.iter().any(|item| item.mode == mode
+                        && item.code
+                            == if rule == "review_pnl" {
+                                openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+                            } else {
+                                openpit::pretrade::RejectCode::PositionLimitExceeded
+                            }));
+                }
+                openpit_destroy_pretrade_reject_list(reviews);
+                openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+            }
+            order.review.is_set = true;
+            order.review.value.confirmed = crate::param::OPENPIT_TRI_BOOL_TRUE;
+            order.review.value.already_held = crate::param::OPENPIT_TRI_BOOL_TRUE;
+            let mut rerun = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            assert_eq!(
+                openpit_engine_execute_pre_trade(
+                    engine,
+                    &order,
+                    &mut rerun,
+                    &mut rejects,
+                    null_out_error()
+                ),
+                if review {
+                    OpenPitPretradeStatus::Passed
+                } else {
+                    OpenPitPretradeStatus::Rejected
+                },
+                "already-held rerun retains Reject enforcement"
+            );
+            if review {
+                assert!(rejects.is_null());
+                assert!(!rerun.is_null());
+                let reviews = openpit_pretrade_pre_trade_reservation_get_reviews(rerun);
+                assert!(
+                    unsafe { &*reviews }.items.is_empty(),
+                    "confirmed already-held rerun has no review marks"
+                );
+                openpit_destroy_pretrade_reject_list(reviews);
+                let lock = openpit_pretrade_pre_trade_reservation_get_lock(rerun);
+                assert!(
+                    openpit_pretrade_pre_trade_lock_is_empty(lock),
+                    "already-held rerun has no second funds lock"
+                );
+                openpit_destroy_pretrade_pre_trade_lock(lock);
+                let adjustments =
+                    openpit_pretrade_pre_trade_reservation_get_account_adjustments(rerun);
+                assert_eq!(
+                    unsafe { openpit_account_adjustment_outcome_list_len(adjustments) },
+                    0
+                );
+                unsafe { openpit_destroy_account_adjustment_outcome_list(adjustments) };
+                openpit_pretrade_pre_trade_reservation_commit(rerun);
+                openpit_destroy_pretrade_pre_trade_reservation(rerun);
+            } else {
+                assert!(rerun.is_null());
+                let items = &unsafe { &*rejects }.items;
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].mode, RuleMode::Reject);
+                assert_eq!(
+                    items[0].code,
+                    if rule == "reject_pnl" {
+                        openpit::pretrade::RejectCode::PnlKillSwitchTriggered
+                    } else {
+                        openpit::pretrade::RejectCode::InsufficientFunds
+                    }
+                );
+                openpit_destroy_pretrade_reject_list(rejects);
+            }
+            assert_funds_balances(
+                engine,
+                [if rule == "shrunk" { "-1" } else { "900" }, "100", "0"],
+                Some(["0", "0", "1"]),
+            );
+            openpit_destroy_pretrade_pre_trade_lock(first_lock);
+            openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn spot_funds_review_confirmed_holds_as_track_only() {
+        use crate::account_outcome::*;
+        use crate::engine::*;
+        for side in [
+            crate::param::OPENPIT_PARAM_SIDE_BUY,
+            crate::param::OPENPIT_PARAM_SIDE_SELL,
+        ] {
+            for mode in [
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD,
+            ] {
+                let engine = funded_spot_funds_engine();
+                assert!(unsafe {
+                    openpit_engine_configure_spot_funds_global_limit_mode(
+                        engine,
+                        OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                        mode,
+                        std::ptr::null_mut(),
+                    )
+                });
+                let mut order = spot_funds_buy_order("11");
+                order.operation.value.side = side;
+                order.review.is_set = true;
+                order.review.value.confirmed = crate::param::OPENPIT_TRI_BOOL_TRUE;
+                let reservation = reserve_funds_order(engine, &order, None);
+                let lock = openpit_pretrade_pre_trade_reservation_get_lock(reservation);
+                assert_funds_lock(lock);
+                let adjustments =
+                    openpit_pretrade_pre_trade_reservation_get_account_adjustments(reservation);
+                assert_eq!(
+                    unsafe { openpit_account_adjustment_outcome_list_len(adjustments) },
+                    2
+                );
+                let mut entries = Vec::new();
+                for index in 0..2 {
+                    let mut outcome = OpenPitAccountAdjustmentOutcome::default();
+                    assert!(unsafe {
+                        openpit_account_adjustment_outcome_list_get(
+                            adjustments,
+                            index,
+                            &mut outcome,
+                        )
+                    });
+                    let entry = outcome.entry.to_entry().unwrap();
+                    entries.push((
+                        entry.asset,
+                        entry.balance.map(|amount| amount.delta),
+                        entry.held.map(|amount| amount.delta),
+                        entry.incoming.map(|amount| amount.delta),
+                    ));
+                }
+                let quantity = openpit::param::PositionSize::from_str("11").unwrap();
+                let value = openpit::param::PositionSize::from_str("1100").unwrap();
+                for (asset, outflow, amount) in [
+                    ("USD", side == crate::param::OPENPIT_PARAM_SIDE_BUY, value),
+                    (
+                        "AAPL",
+                        side == crate::param::OPENPIT_PARAM_SIDE_SELL,
+                        quantity,
+                    ),
+                ] {
+                    assert!(
+                        entries.iter().any(|entry| {
+                            entry.0 == openpit::param::Asset::new(asset).unwrap()
+                                && if outflow {
+                                    entry.1 == Some(-amount) && entry.2 == Some(amount)
+                                } else {
+                                    entry.3 == Some(amount)
+                                }
+                        }),
+                        "side={side}, mode={mode}, asset={asset}: exact hold deltas"
+                    );
+                }
+                unsafe { openpit_destroy_account_adjustment_outcome_list(adjustments) };
+                crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(lock);
+                openpit_pretrade_pre_trade_reservation_commit(reservation);
+                openpit_destroy_pretrade_pre_trade_reservation(reservation);
+                if side == crate::param::OPENPIT_PARAM_SIDE_BUY {
+                    assert_funds_balances(engine, ["-100", "1100", "0"], Some(["0", "0", "11"]));
+                } else {
+                    assert_funds_balances(engine, ["1000", "0", "1100"], Some(["-11", "11", "0"]));
+                }
+                openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn spot_funds_review_drop_copy_forces_track_only() {
+        use crate::account_outcome::*;
+        use crate::engine::*;
+        for mode in [
+            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
+            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = funded_spot_funds_engine();
+            let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_global_limit_mode(
+                    engine,
+                    name,
+                    mode,
+                    std::ptr::null_mut(),
+                )
+            });
+            let limit = OpenPitParamQuantity(
+                openpit::param::Quantity::from_str("1")
+                    .unwrap()
+                    .to_decimal()
+                    .into(),
+            );
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_position_limit(
+                    engine,
+                    name,
+                    42,
+                    OpenPitStringView::from_utf8("AAPL"),
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                    limit,
+                    true,
+                    std::ptr::null_mut(),
+                )
+            });
+            let order = spot_funds_buy_order("11");
+            let mut operation = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            assert_eq!(
+                openpit_engine_apply_drop_copy(
+                    engine,
+                    &order,
+                    &mut operation,
+                    &mut rejects,
+                    null_out_error()
+                ),
+                OpenPitPretradeStatus::Passed
+            );
+            assert!(rejects.is_null(), "pass output contract: no reject list");
+            assert!(!operation.is_null());
+            assert!(!openpit_pretrade_drop_copy_operation_is_account_blocked(
+                operation
+            ));
+            let lock = openpit_pretrade_drop_copy_operation_get_lock(operation);
+            assert_funds_lock(lock);
+            crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(lock);
+            let adjustments =
+                openpit_pretrade_drop_copy_operation_get_account_adjustments(operation);
+            assert_eq!(
+                unsafe { openpit_account_adjustment_outcome_list_len(adjustments) },
+                2
+            );
+            for index in 0..2 {
+                let mut outcome = OpenPitAccountAdjustmentOutcome::default();
+                assert!(unsafe {
+                    openpit_account_adjustment_outcome_list_get(adjustments, index, &mut outcome)
+                });
+                assert_eq!(
+                    outcome.policy_group_id,
+                    openpit::DEFAULT_POLICY_GROUP_ID.value()
+                );
+                let entry = outcome.entry.to_entry().unwrap();
+                if entry.asset == openpit::param::Asset::new("USD").unwrap() {
+                    assert_eq!(
+                        entry.balance.unwrap().delta,
+                        openpit::param::PositionSize::from_str("-1100").unwrap()
+                    );
+                    assert_eq!(
+                        entry.held.unwrap().delta,
+                        openpit::param::PositionSize::from_str("1100").unwrap()
+                    );
+                } else {
+                    assert_eq!(entry.asset, openpit::param::Asset::new("AAPL").unwrap());
+                    assert_eq!(
+                        entry.incoming.unwrap().delta,
+                        openpit::param::PositionSize::from_str("11").unwrap()
+                    );
+                }
+            }
+            unsafe { openpit_destroy_account_adjustment_outcome_list(adjustments) };
+            openpit_pretrade_drop_copy_operation_commit(operation);
+            openpit_destroy_pretrade_drop_copy_operation(operation);
+            assert_funds_balances(engine, ["-100", "1100", "0"], Some(["0", "0", "11"]));
+            openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn spot_funds_review_limit_cascade_selects_most_specific_tier() {
+        for (mode, rule) in [
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD,
+                RuleMode::ReviewWithHold,
+            ),
+            (
+                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITHOUT_HOLD,
+                RuleMode::ReviewWithoutHold,
+            ),
+        ] {
+            for tier in ["account", "group", "global"] {
+                let engine = funded_spot_funds_engine();
+                let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+                assert!(crate::engine::openpit_engine_register_account_group(
+                    engine,
+                    &42,
+                    1,
+                    7,
+                    std::ptr::null_mut(),
+                    null_out_error(),
+                ));
+                assert!(unsafe {
+                    openpit_engine_configure_spot_funds_global_limit_mode(
+                        engine,
+                        name,
+                        if tier == "global" {
+                            mode
+                        } else {
+                            OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE
+                        },
+                        std::ptr::null_mut(),
+                    )
+                });
+                if tier != "global" {
+                    assert!(unsafe {
+                        openpit_engine_configure_spot_funds_account_group_limit_mode(
+                            engine,
+                            name,
+                            7,
+                            if tier == "group" {
+                                mode
+                            } else {
+                                OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE
+                            },
+                            true,
+                            std::ptr::null_mut(),
+                        )
+                    });
+                }
+                if tier == "account" {
+                    assert!(unsafe {
+                        openpit_engine_configure_spot_funds_account_limit_mode(
+                            engine,
+                            name,
+                            42,
+                            mode,
+                            true,
+                            std::ptr::null_mut(),
+                        )
+                    });
+                }
+                assert_funds_order(engine, "11", Some(rule), true);
+                if mode == OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_REVIEW_WITH_HOLD {
+                    assert_funds_balances(engine, ["-100", "1100", "0"], Some(["0", "0", "11"]));
+                } else {
+                    assert_funds_balances(engine, ["1000", "0", "0"], Some(["0", "0", "0"]));
+                }
+                crate::engine::openpit_destroy_engine(engine);
+            }
+        }
     }
 
     #[test]
@@ -3689,7 +4994,10 @@ mod tests {
 
     #[test]
     fn configure_spot_funds_position_limit_review_and_reject_breaches() {
-        for mode in [2, 3] {
+        for mode in [
+            crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
             let engine = engine_with_spot_funds();
             let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
             assert!(crate::engine::openpit_engine_set_account_currency(
@@ -3706,7 +5014,10 @@ mod tests {
                     std::ptr::null_mut(),
                 )
             });
-            for (wire, limit) in [(1, "2"), (mode, "0")] {
+            for (wire, limit) in [
+                (crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT, "2"),
+                (mode, "0"),
+            ] {
                 assert!(unsafe {
                     openpit_engine_configure_spot_funds_position_limit(
                         engine,
@@ -3725,8 +5036,19 @@ mod tests {
                     )
                 });
             }
-            for (quantity, passed) in [("1", true), ("3", false)] {
-                let order = spot_funds_buy_order(quantity);
+            for (quantity, confirmed, passed) in [
+                ("1", false, true),
+                ("1", true, true),
+                ("3", true, false),
+                ("3", false, false),
+            ] {
+                let mut order = spot_funds_buy_order(quantity);
+                order.review.is_set = true;
+                order.review.value.confirmed = if confirmed {
+                    crate::param::OPENPIT_TRI_BOOL_TRUE
+                } else {
+                    crate::param::OPENPIT_TRI_BOOL_FALSE
+                };
                 let mut report = std::ptr::null_mut();
                 assert!(crate::engine::openpit_engine_execute_pre_trade_dry_run(
                     engine,
@@ -3745,25 +5067,143 @@ mod tests {
                     crate::engine::openpit_pretrade_pre_trade_dry_run_report_get_rejects(report)
                 };
                 let items = &unsafe { &*list }.items;
-                assert_eq!(items.len(), 1, "one position-limit outcome");
                 assert_eq!(
-                    items[0].code,
-                    openpit::pretrade::RejectCode::PositionLimitExceeded
+                    items.len(),
+                    usize::from(!passed || !confirmed),
+                    "confirmed drops only review position-limit outcomes"
                 );
-                assert_eq!(items[0].scope, openpit::pretrade::RejectScope::Order);
-                assert_eq!(
-                    items[0].mode,
-                    if passed {
-                        import_rule_mode(mode).unwrap()
-                    } else {
-                        RuleMode::Reject
-                    },
-                    "position-limit outcome preserves its mode"
-                );
+                for item in items {
+                    assert_eq!(
+                        item.code,
+                        openpit::pretrade::RejectCode::PositionLimitExceeded
+                    );
+                    assert_eq!(item.scope, openpit::pretrade::RejectScope::Order);
+                    assert_eq!(
+                        item.mode,
+                        if passed {
+                            import_rule_mode(mode).unwrap()
+                        } else {
+                            RuleMode::Reject
+                        },
+                        "position-limit outcome preserves its mode"
+                    );
+                }
+                if !passed {
+                    let reviews =
+                        crate::engine::openpit_pretrade_pre_trade_dry_run_report_get_reviews(
+                            report,
+                        );
+                    assert!(unsafe { &*reviews }.items.is_empty());
+                    crate::reject::openpit_destroy_pretrade_reject_list(reviews);
+                }
                 crate::reject::openpit_destroy_pretrade_reject_list(list);
                 crate::engine::openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+                if passed && confirmed {
+                    let reservation = reserve_funds_order(engine, &order, None);
+                    crate::engine::openpit_pretrade_pre_trade_reservation_rollback(reservation);
+                    crate::engine::openpit_destroy_pretrade_pre_trade_reservation(reservation);
+                } else if !passed {
+                    let mut reservation = std::ptr::null_mut();
+                    let mut rejects = std::ptr::null_mut();
+                    assert_eq!(
+                        crate::engine::openpit_engine_execute_pre_trade(
+                            engine,
+                            &order,
+                            &mut reservation,
+                            &mut rejects,
+                            null_out_error(),
+                        ),
+                        crate::engine::OpenPitPretradeStatus::Rejected,
+                        "live Reject position limit enforces for confirmed={confirmed}"
+                    );
+                    assert!(reservation.is_null(), "rejected order has no reservation");
+                    let items = &unsafe { &*rejects }.items;
+                    assert_eq!(
+                        (items.len(), items[0].code, items[0].mode, &items[0].scope),
+                        (
+                            1,
+                            openpit::pretrade::RejectCode::PositionLimitExceeded,
+                            RuleMode::Reject,
+                            &openpit::pretrade::RejectScope::Order,
+                        ),
+                        "live Reject position limit returns its documented record"
+                    );
+                    crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+                }
             }
             crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn spot_funds_position_limit_overflow_rejects_in_every_mode() {
+        use crate::engine::*;
+        use crate::reject::*;
+        let maximum = "79228162514264337593543950335";
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = funded_spot_funds_engine();
+            set_test_balance(engine, "AAPL", maximum);
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_position_limit(
+                    engine,
+                    OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                    42,
+                    OpenPitStringView::from_utf8("AAPL"),
+                    mode,
+                    OpenPitParamQuantity(
+                        openpit::param::Quantity::from_str(maximum)
+                            .unwrap()
+                            .to_decimal()
+                            .into(),
+                    ),
+                    true,
+                    std::ptr::null_mut(),
+                )
+            });
+            let order = spot_funds_buy_order("1");
+            let mut report = std::ptr::null_mut();
+            assert!(openpit_engine_execute_pre_trade_dry_run(
+                engine,
+                &order,
+                &mut report,
+                null_out_error()
+            ));
+            assert!(
+                !openpit_pretrade_pre_trade_dry_run_report_is_pass(report),
+                "position projection overflow must reject"
+            );
+            let reviews = openpit_pretrade_pre_trade_dry_run_report_get_reviews(report);
+            assert!(unsafe { &*reviews }.items.is_empty());
+            openpit_destroy_pretrade_reject_list(reviews);
+            openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+            let mut reservation = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            assert_eq!(
+                openpit_engine_execute_pre_trade(
+                    engine,
+                    &order,
+                    &mut reservation,
+                    &mut rejects,
+                    null_out_error()
+                ),
+                OpenPitPretradeStatus::Rejected
+            );
+            assert!(reservation.is_null());
+            let items = &unsafe { &*rejects }.items;
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                items[0].code,
+                openpit::pretrade::RejectCode::ArithmeticOverflow
+            );
+            assert_eq!(items[0].mode, RuleMode::Reject);
+            assert_eq!(items[0].scope, openpit::pretrade::RejectScope::Order);
+            openpit_destroy_pretrade_reject_list(rejects);
+            assert_funds_balances(engine, ["1000", "0", "0"], Some([maximum, "0", "0"]));
+            openpit_destroy_engine(engine);
         }
     }
 

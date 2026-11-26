@@ -1958,18 +1958,28 @@ mod tests {
     fn build_engine_with_custom_policies(
         policies: &[*mut OpenPitPretradePreTradePolicy],
     ) -> *mut crate::engine::OpenPitEngine {
+        let policies: Vec<_> = policies.iter().map(|&policy| (policy, None)).collect();
+        build_engine_with_custom_instances(&policies)
+    }
+
+    fn build_engine_with_custom_instances(
+        policies: &[(
+            *mut OpenPitPretradePreTradePolicy,
+            Option<crate::engine::OpenPitPolicyInstance>,
+        )],
+    ) -> *mut crate::engine::OpenPitEngine {
         let builder = crate::engine::openpit_create_engine_builder(
             crate::engine::OpenPitSyncPolicy::Full as u8,
             std::ptr::null_mut(),
         );
-        for &policy in policies {
+        for (policy, instance) in policies {
             assert!(openpit_engine_builder_add_pre_trade_policy(
                 builder,
-                policy,
-                std::ptr::null(),
+                *policy,
+                instance.as_ref().map_or(std::ptr::null(), |value| value),
                 std::ptr::null_mut()
             ));
-            openpit_destroy_pretrade_pre_trade_policy(policy);
+            openpit_destroy_pretrade_pre_trade_policy(*policy);
         }
         let engine = crate::engine::openpit_engine_builder_build(
             builder,
@@ -1996,19 +2006,35 @@ mod tests {
         if mode == crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT {
             return accepted_rejects();
         }
-        let list = crate::reject::openpit_create_pretrade_reject_list(1);
-        assert!(crate::reject::openpit_pretrade_reject_list_push(
-            list,
-            crate::reject::OpenPitPretradeReject {
-                policy: OpenPitStringView::from_utf8("custom.review"),
-                reason: OpenPitStringView::from_utf8("limit breached"),
-                details: OpenPitStringView::from_utf8("requires confirmation"),
-                user_data: 42,
-                code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
-                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
-                mode,
-            },
-        ));
+        review_records(&[(
+            mode,
+            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+            crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+        )])
+    }
+
+    fn review_records(
+        records: &[(
+            crate::reject::OpenPitPretradeRuleMode,
+            crate::reject::OpenPitPretradeRejectCode,
+            crate::reject::OpenPitPretradeRejectScope,
+        )],
+    ) -> *mut OpenPitPretradeRejectList {
+        let list = crate::reject::openpit_create_pretrade_reject_list(records.len());
+        for &(mode, code, scope) in records {
+            assert!(crate::reject::openpit_pretrade_reject_list_push(
+                list,
+                crate::reject::OpenPitPretradeReject {
+                    policy: OpenPitStringView::from_utf8("custom.review"),
+                    reason: OpenPitStringView::from_utf8("limit breached"),
+                    details: OpenPitStringView::from_utf8("requires confirmation"),
+                    user_data: 42,
+                    code,
+                    scope,
+                    mode,
+                },
+            ));
+        }
         list
     }
 
@@ -2086,37 +2112,6 @@ mod tests {
         build_engine_with_custom_policy(policy)
     }
 
-    fn assert_review_list(
-        list: *mut OpenPitPretradeRejectList,
-        expected_len: usize,
-        mode: crate::reject::OpenPitPretradeRuleMode,
-    ) {
-        assert!(!list.is_null());
-        assert_eq!(
-            crate::reject::openpit_pretrade_reject_list_len(list),
-            expected_len
-        );
-        for index in 0..expected_len {
-            let mut mark = crate::reject::OpenPitPretradeReject {
-                policy: OpenPitStringView::not_set(),
-                reason: OpenPitStringView::not_set(),
-                details: OpenPitStringView::not_set(),
-                user_data: 0,
-                code: 0,
-                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
-                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
-            };
-            assert!(crate::reject::openpit_pretrade_reject_list_get(
-                list, index, &mut mark
-            ));
-            assert_eq!(mark.mode, mode);
-            assert_eq!(mark.user_data, 42);
-            assert_eq!(string_view_to_string(mark.policy), "custom.review");
-            assert_eq!(string_view_to_string(mark.reason), "limit breached");
-        }
-        crate::reject::openpit_destroy_pretrade_reject_list(list);
-    }
-
     #[test]
     fn review_getters_return_detached_lists_for_empty_and_review_results() {
         use crate::engine::*;
@@ -2178,9 +2173,14 @@ mod tests {
             } else {
                 count
             };
-            assert_review_list(start_marks, count, mode);
-            assert_review_list(marks, total, mode);
-            assert_review_list(dry_marks, total, mode);
+            let record = (
+                mode,
+                OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+            );
+            assert_wire_records(start_marks, &vec![record; count]);
+            assert_wire_records(marks, &vec![record; total]);
+            assert_wire_records(dry_marks, &vec![record; total]);
         }
     }
 
@@ -2318,6 +2318,870 @@ mod tests {
         openpit_destroy_pretrade_pre_trade_reservation(reservation);
         openpit_destroy_pretrade_pre_trade_dry_run_report(report);
         openpit_destroy_engine(engine);
+    }
+
+    struct WireReviewState {
+        observed_rollbacks: Vec<usize>,
+        mutation: MutationUserData,
+        failure: super::super::tests::FailingMutationUserData,
+        observe: Option<Rc<RefCell<MutationState>>>,
+        start_calls: usize,
+        main_calls: usize,
+        code: Option<crate::reject::OpenPitPretradeRejectCode>,
+        record_mode: crate::reject::OpenPitPretradeRuleMode,
+        scope: crate::reject::OpenPitPretradeRejectScope,
+        start_reject: bool,
+        mixed_records: bool,
+        failing_rollback: bool,
+    }
+
+    impl WireReviewState {
+        fn new(code: Option<crate::reject::OpenPitPretradeRejectCode>) -> Self {
+            Self {
+                observed_rollbacks: Vec::new(),
+                mutation: MutationUserData {
+                    state: Rc::new(RefCell::new(MutationState::default())),
+                    marker: 0,
+                },
+                failure: super::super::tests::FailingMutationUserData {
+                    details: Some("wire rollback failed"),
+                },
+                observe: None,
+                start_calls: 0,
+                main_calls: 0,
+                code,
+                record_mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                start_reject: false,
+                mixed_records: false,
+                failing_rollback: false,
+            }
+        }
+
+        fn records(&self) -> *mut OpenPitPretradeRejectList {
+            let Some(code) = self.code else {
+                return accepted_rejects();
+            };
+            let mut records = vec![(self.record_mode, code, self.scope)];
+            if self.mixed_records {
+                records.push((
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+                    code,
+                    self.scope,
+                ));
+            }
+            review_records(&records)
+        }
+    }
+
+    unsafe extern "C" fn wire_review_start(
+        _ctx: *const OpenPitPretradeContext,
+        _order: *const OpenPitOrder,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let state = unsafe { &mut *user_data.cast::<WireReviewState>() };
+        state.start_calls += 1;
+        if state.start_reject {
+            state.records()
+        } else {
+            accepted_rejects()
+        }
+    }
+
+    unsafe extern "C" fn wire_review_main(
+        ctx: *const OpenPitPretradeContext,
+        order: *const OpenPitOrder,
+        mutations: *mut OpenPitMutations,
+        out_result: *mut OpenPitPretradePreTradeResult,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let state = unsafe { &mut *user_data.cast::<WireReviewState>() };
+        state.main_calls += 1;
+        if let Some(observed) = &state.observe {
+            state
+                .observed_rollbacks
+                .push(observed.borrow().rollback_calls);
+        }
+        // Reuse the existing record-mode fixture's lock and outcomes.
+        let mut mode = crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT;
+        unsafe {
+            let records = review_main_check_fn(
+                ctx,
+                order,
+                mutations,
+                out_result,
+                std::ptr::addr_of_mut!(mode).cast(),
+            );
+            crate::reject::openpit_destroy_pretrade_reject_list(records);
+            let (commit, rollback, data): (
+                super::super::OpenPitMutationFn,
+                super::super::OpenPitMutationFn,
+                *mut c_void,
+            ) = if state.failing_rollback {
+                (
+                    super::super::tests::successful_mutation_commit,
+                    super::super::tests::failing_mutation_rollback,
+                    std::ptr::addr_of_mut!(state.failure).cast(),
+                )
+            } else {
+                (
+                    tracked_mutation_commit,
+                    tracked_mutation_rollback,
+                    std::ptr::addr_of_mut!(state.mutation).cast(),
+                )
+            };
+            assert!(openpit_mutations_push(
+                mutations,
+                commit,
+                rollback,
+                data,
+                None,
+                std::ptr::null_mut()
+            ));
+        }
+        if state.start_reject {
+            accepted_rejects()
+        } else {
+            state.records()
+        }
+    }
+
+    fn build_wire_review_engine(
+        states: &mut [(&mut WireReviewState, crate::reject::OpenPitPretradeRuleMode)],
+    ) -> *mut crate::engine::OpenPitEngine {
+        let policies: Vec<_> = states
+            .iter_mut()
+            .enumerate()
+            .map(|(index, (state, mode))| {
+                let policy = unsafe {
+                    openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
+                        OpenPitStringView::from_utf8("custom.review"),
+                        index as u16 + 20,
+                        Some(wire_review_start),
+                        Some(wire_review_start),
+                        Some(wire_review_main),
+                        Some(wire_review_main),
+                        None,
+                        None,
+                        None,
+                        custom_free_user_data_fn,
+                        std::ptr::from_mut(*state).cast(),
+                        std::ptr::null_mut(),
+                    )
+                };
+                assert!(!policy.is_null());
+                (
+                    policy,
+                    Some(crate::engine::OpenPitPolicyInstance {
+                        name: OpenPitStringView::from_utf8(match index {
+                            0 => "first",
+                            1 => "second",
+                            2 => "third",
+                            _ => panic!("unexpected fixture index"),
+                        }),
+                        mode: *mode,
+                    }),
+                )
+            })
+            .collect();
+        build_engine_with_custom_instances(&policies)
+    }
+
+    fn assert_wire_records(
+        list: *mut OpenPitPretradeRejectList,
+        expected: &[(
+            crate::reject::OpenPitPretradeRuleMode,
+            crate::reject::OpenPitPretradeRejectCode,
+            crate::reject::OpenPitPretradeRejectScope,
+        )],
+    ) {
+        use crate::reject::*;
+        assert!(!list.is_null());
+        assert_eq!(openpit_pretrade_reject_list_len(list), expected.len());
+        let mut actual = Vec::with_capacity(expected.len());
+        for index in 0..expected.len() {
+            let mut record = std::mem::MaybeUninit::uninit();
+            assert!(openpit_pretrade_reject_list_get(
+                list,
+                index,
+                record.as_mut_ptr()
+            ));
+            let record = unsafe { record.assume_init() };
+            actual.push((record.mode, record.code, record.scope));
+            assert_eq!(record.user_data, 42);
+            assert_eq!(string_view_to_string(record.policy), "custom.review");
+            assert_eq!(string_view_to_string(record.reason), "limit breached");
+        }
+        let mut expected = expected.to_vec();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+        openpit_destroy_pretrade_reject_list(list);
+    }
+
+    fn assert_wire_reservation_groups(
+        reservation: *mut crate::engine::OpenPitPretradePreTradeReservation,
+        groups: &[u16],
+    ) {
+        use crate::account_outcome::*;
+        use crate::engine::*;
+        use crate::pre_trade_lock::*;
+        let lock = openpit_pretrade_pre_trade_reservation_get_lock(reservation);
+        assert_eq!(openpit_pretrade_pre_trade_lock_len(lock), groups.len());
+        for &group in groups {
+            let mut price = Default::default();
+            let mut prices = std::ptr::null_mut();
+            assert_eq!(
+                openpit_pretrade_pre_trade_lock_prices_of(
+                    lock,
+                    group,
+                    &mut price,
+                    &mut prices,
+                    std::ptr::null_mut()
+                ),
+                OpenPitPretradePreTradeLockPricesStatus::One
+            );
+            assert_eq!(
+                price.to_param().unwrap(),
+                openpit::param::Price::from_str("125").unwrap()
+            );
+        }
+        openpit_destroy_pretrade_pre_trade_lock(lock);
+        let outcomes = openpit_pretrade_pre_trade_reservation_get_account_adjustments(reservation);
+        assert_eq!(
+            unsafe { openpit_account_adjustment_outcome_list_len(outcomes) },
+            groups.len()
+        );
+        let mut actual = Vec::with_capacity(groups.len());
+        for index in 0..groups.len() {
+            let mut outcome = Default::default();
+            assert!(unsafe {
+                openpit_account_adjustment_outcome_list_get(outcomes, index, &mut outcome)
+            });
+            actual.push(outcome.policy_group_id);
+        }
+        let mut expected = groups.to_vec();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+        unsafe { openpit_destroy_account_adjustment_outcome_list(outcomes) };
+    }
+
+    #[test]
+    fn review_instance_registered_segments_and_without_hold_precedence() {
+        use crate::engine::*;
+        use crate::reject::*;
+        for mode in [2, 3] {
+            for second_mark in [false, true] {
+                let mut review =
+                    WireReviewState::new(Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED));
+                let mut keep = WireReviewState::new(None);
+                keep.observe = Some(Rc::clone(&review.mutation.state));
+                let mut last = WireReviewState::new(
+                    second_mark.then_some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED),
+                );
+                let engine = build_wire_review_engine(&mut [
+                    (&mut review, mode),
+                    (&mut keep, 1),
+                    (&mut last, 3),
+                ]);
+                let order = sample_order();
+                let order = export_order(&order);
+                let mut reservation = std::ptr::null_mut();
+                assert_eq!(
+                    openpit_engine_execute_pre_trade(
+                        engine,
+                        &order,
+                        &mut reservation,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut()
+                    ),
+                    OpenPitPretradeStatus::Passed
+                );
+                assert_eq!(keep.observed_rollbacks, [1]);
+                let mut marks = vec![(
+                    mode,
+                    OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                    OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                )];
+                if second_mark {
+                    marks.push((
+                        3,
+                        OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                        OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+                    ));
+                }
+                assert_wire_records(
+                    openpit_pretrade_pre_trade_reservation_get_reviews(reservation),
+                    &marks,
+                );
+                let without_hold = mode == 3 || second_mark;
+                assert_wire_reservation_groups(
+                    reservation,
+                    if without_hold { &[] } else { &[21, 22] },
+                );
+                assert_eq!(review.mutation.state.borrow().rollback_calls, 1);
+                assert_eq!(
+                    keep.mutation.state.borrow().rollback_calls,
+                    usize::from(without_hold)
+                );
+                openpit_pretrade_pre_trade_reservation_commit(reservation);
+                assert_eq!(review.mutation.state.borrow().commit_calls, 0);
+                assert_eq!(review.mutation.state.borrow().rollback_calls, 1);
+                assert_eq!(
+                    keep.mutation.state.borrow().commit_calls,
+                    usize::from(!without_hold)
+                );
+                assert_eq!(
+                    last.mutation.state.borrow().commit_calls,
+                    usize::from(!without_hold)
+                );
+                assert_eq!(
+                    keep.mutation.state.borrow().rollback_calls,
+                    usize::from(without_hold)
+                );
+                assert_eq!(
+                    last.mutation.state.borrow().rollback_calls,
+                    usize::from(without_hold)
+                );
+                openpit_destroy_pretrade_pre_trade_reservation(reservation);
+                openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn review_instance_start_and_main_marks_without_hold_precedence_and_confirmed() {
+        use crate::engine::*;
+        use crate::reject::*;
+        for confirmed in [false, true] {
+            for start_mode in [2, 3] {
+                let mut start =
+                    WireReviewState::new(Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED));
+                start.start_reject = true;
+                let mut main =
+                    WireReviewState::new(Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED));
+                let mut keep = WireReviewState::new(None);
+                let engine = build_wire_review_engine(&mut [
+                    (&mut start, start_mode),
+                    (&mut main, 3),
+                    (&mut keep, 1),
+                ]);
+                let order = sample_order();
+                let mut order = export_order(&order);
+                order.review.is_set = true;
+                order.review.value.confirmed = if confirmed {
+                    crate::param::OPENPIT_TRI_BOOL_TRUE
+                } else {
+                    crate::param::OPENPIT_TRI_BOOL_FALSE
+                };
+                let mut request = std::ptr::null_mut();
+                assert_eq!(
+                    openpit_engine_start_pre_trade(
+                        engine,
+                        &order,
+                        &mut request,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut()
+                    ),
+                    OpenPitPretradeStatus::Passed
+                );
+                let start_marks = if confirmed {
+                    vec![]
+                } else {
+                    vec![(
+                        start_mode,
+                        OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                        1,
+                    )]
+                };
+                assert_wire_records(
+                    openpit_pretrade_pre_trade_request_get_reviews(request, std::ptr::null_mut()),
+                    &start_marks,
+                );
+                let mut reservation = std::ptr::null_mut();
+                assert_eq!(
+                    openpit_pretrade_pre_trade_request_execute(
+                        request,
+                        &mut reservation,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut()
+                    ),
+                    OpenPitPretradeStatus::Passed
+                );
+                let ran_main = confirmed || start_mode != 3;
+                assert_eq!(main.main_calls, usize::from(ran_main));
+                assert_eq!(start.start_calls, 1);
+                let mut all_marks = start_marks;
+                if !confirmed && ran_main {
+                    all_marks.push((3, OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED, 1));
+                }
+                assert_wire_records(
+                    openpit_pretrade_pre_trade_reservation_get_reviews(reservation),
+                    &all_marks,
+                );
+                assert_wire_reservation_groups(
+                    reservation,
+                    if confirmed { &[20, 22] } else { &[] },
+                );
+                openpit_pretrade_pre_trade_reservation_commit(reservation);
+                assert_eq!(
+                    start.mutation.state.borrow().commit_calls,
+                    usize::from(confirmed)
+                );
+                assert_eq!(
+                    start.mutation.state.borrow().rollback_calls,
+                    usize::from(ran_main && !confirmed)
+                );
+                assert_eq!(
+                    keep.mutation.state.borrow().commit_calls,
+                    usize::from(confirmed)
+                );
+                assert_eq!(
+                    keep.mutation.state.borrow().rollback_calls,
+                    usize::from(ran_main && !confirmed)
+                );
+                assert_eq!(main.mutation.state.borrow().commit_calls, 0);
+                assert_eq!(
+                    main.mutation.state.borrow().rollback_calls,
+                    usize::from(ran_main)
+                );
+                openpit_destroy_pretrade_pre_trade_reservation(reservation);
+                openpit_destroy_pretrade_pre_trade_request(request);
+                openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn review_instance_effective_rejects_drop_marks_and_rollback_mutations() {
+        use crate::engine::*;
+        use crate::reject::*;
+        for mode in [2, 3] {
+            for confirmed in [false, true] {
+                for (code, reject_at_start, mixed_records) in [
+                    (
+                        OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                        false,
+                        false,
+                    ),
+                    (
+                        OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE,
+                        false,
+                        false,
+                    ),
+                    (
+                        OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                        false,
+                        true,
+                    ),
+                    (
+                        OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                        true,
+                        false,
+                    ),
+                ] {
+                    let mut review = WireReviewState::new(Some(
+                        OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                    ));
+                    let mut rejecting = WireReviewState::new(Some(code));
+                    review.start_reject = reject_at_start
+                        || (mode == 2 && code == OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED);
+                    rejecting.start_reject = reject_at_start;
+                    rejecting.mixed_records = mixed_records;
+                    let mut keep = WireReviewState::new(None);
+                    let engine = build_wire_review_engine(&mut [
+                        (&mut review, mode),
+                        (
+                            &mut rejecting,
+                            if code == OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE {
+                                mode
+                            } else {
+                                1
+                            },
+                        ),
+                        (&mut keep, 1),
+                    ]);
+                    let order = sample_order();
+                    let mut order = export_order(&order);
+                    order.review.is_set = true;
+                    order.review.value.confirmed = if confirmed {
+                        crate::param::OPENPIT_TRI_BOOL_TRUE
+                    } else {
+                        crate::param::OPENPIT_TRI_BOOL_FALSE
+                    };
+                    let mut reservation = std::ptr::null_mut();
+                    let mut rejects = std::ptr::null_mut();
+                    assert_eq!(
+                        openpit_engine_execute_pre_trade(
+                            engine,
+                            &order,
+                            &mut reservation,
+                            &mut rejects,
+                            std::ptr::null_mut()
+                        ),
+                        OpenPitPretradeStatus::Rejected
+                    );
+                    assert!(reservation.is_null());
+                    assert_wire_records(rejects, &[(1, code, OPENPIT_PRETRADE_REJECT_SCOPE_ORDER)]);
+                    assert_eq!(review.start_calls, 1);
+                    assert_eq!(rejecting.start_calls, 1);
+                    assert_eq!(review.main_calls, usize::from(!reject_at_start));
+                    assert_eq!(rejecting.main_calls, usize::from(!reject_at_start));
+                    assert_eq!(keep.main_calls, usize::from(!reject_at_start));
+                    for state in [&review, &rejecting, &keep] {
+                        assert_eq!(
+                            state.mutation.state.borrow().rollback_calls,
+                            usize::from(!reject_at_start)
+                        );
+                        assert_eq!(state.mutation.state.borrow().commit_calls, 0);
+                    }
+                    let mut report = std::ptr::null_mut();
+                    assert!(openpit_engine_execute_pre_trade_dry_run(
+                        engine,
+                        &order,
+                        &mut report,
+                        std::ptr::null_mut()
+                    ));
+                    assert!(!openpit_pretrade_pre_trade_dry_run_report_is_pass(report));
+                    assert_wire_records(
+                        openpit_pretrade_pre_trade_dry_run_report_get_rejects(report),
+                        &[(1, code, OPENPIT_PRETRADE_REJECT_SCOPE_ORDER)],
+                    );
+                    assert_wire_records(
+                        openpit_pretrade_pre_trade_dry_run_report_get_reviews(report),
+                        &[],
+                    );
+                    openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+                    openpit_destroy_engine(engine);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn review_instance_record_mode_keeps_segment_and_policy_result() {
+        use crate::engine::*;
+        use crate::reject::*;
+        for mode in [2, 3] {
+            for confirmed in [false, true] {
+                let mut record =
+                    WireReviewState::new(Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED));
+                record.record_mode = mode;
+                let engine = build_wire_review_engine(&mut [(&mut record, 1)]);
+                let order = sample_order();
+                let mut order = export_order(&order);
+                order.review.is_set = true;
+                order.review.value.confirmed = if confirmed {
+                    crate::param::OPENPIT_TRI_BOOL_TRUE
+                } else {
+                    crate::param::OPENPIT_TRI_BOOL_FALSE
+                };
+                let mut reservation = std::ptr::null_mut();
+                assert_eq!(
+                    openpit_engine_execute_pre_trade(
+                        engine,
+                        &order,
+                        &mut reservation,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut()
+                    ),
+                    OpenPitPretradeStatus::Passed
+                );
+                let expected = if confirmed {
+                    vec![]
+                } else {
+                    vec![(mode, OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED, 1)]
+                };
+                assert_wire_records(
+                    openpit_pretrade_pre_trade_reservation_get_reviews(reservation),
+                    &expected,
+                );
+                let kept = confirmed || mode == 2;
+                assert_wire_reservation_groups(reservation, if kept { &[20] } else { &[] });
+                openpit_pretrade_pre_trade_reservation_commit(reservation);
+                assert_eq!(
+                    record.mutation.state.borrow().commit_calls,
+                    usize::from(kept)
+                );
+                assert_eq!(
+                    record.mutation.state.borrow().rollback_calls,
+                    usize::from(!kept)
+                );
+                openpit_destroy_pretrade_pre_trade_reservation(reservation);
+                openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn review_instance_account_scope_dry_run_marks_do_not_predict_a_block() {
+        use crate::engine::*;
+        use crate::reject::*;
+        for mode in [2, 3, 1] {
+            let mut review =
+                WireReviewState::new(Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED));
+            review.scope = OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT;
+            let engine = build_wire_review_engine(&mut [(&mut review, mode)]);
+            let order = sample_order();
+            let order = export_order(&order);
+            let mut report = std::ptr::null_mut();
+            assert!(openpit_engine_execute_pre_trade_dry_run(
+                engine,
+                &order,
+                &mut report,
+                std::ptr::null_mut()
+            ));
+            assert_eq!(
+                openpit_pretrade_pre_trade_dry_run_report_is_pass(report),
+                mode != 1
+            );
+            let record = (
+                mode,
+                OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
+            );
+            assert_wire_records(
+                openpit_pretrade_pre_trade_dry_run_report_get_reviews(report),
+                if mode == 1 {
+                    &[]
+                } else {
+                    std::slice::from_ref(&record)
+                },
+            );
+            assert_wire_records(
+                openpit_pretrade_pre_trade_dry_run_report_get_rejects(report),
+                if mode == 1 {
+                    std::slice::from_ref(&record)
+                } else {
+                    &[]
+                },
+            );
+            let blocks = openpit_pretrade_pre_trade_dry_run_report_get_account_block(report);
+            assert_eq!(
+                openpit_pretrade_account_block_list_len(blocks),
+                usize::from(mode == 1)
+            );
+            openpit_destroy_pretrade_account_block_list(blocks);
+            openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+            assert_eq!(review.main_calls, 1);
+            assert_eq!(review.mutation.state.borrow().commit_calls, 0);
+            assert_eq!(review.mutation.state.borrow().rollback_calls, 0);
+            openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn review_instance_drop_copy_ignores_marks_commits_bookkeeping_and_aborts_evaluation_failure() {
+        use crate::engine::*;
+        use crate::reject::*;
+        for mode in [2, 3] {
+            for code in [
+                OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE,
+            ] {
+                let mut review = WireReviewState::new(Some(code));
+                review.scope = OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT;
+                let engine = build_wire_review_engine(&mut [(&mut review, mode)]);
+                let order = sample_order();
+                let order = export_order(&order);
+                let mut operation = std::ptr::null_mut();
+                let mut rejects = std::ptr::null_mut();
+                let mut error = std::ptr::null_mut();
+                let status = openpit_engine_apply_drop_copy(
+                    engine,
+                    &order,
+                    &mut operation,
+                    &mut rejects,
+                    &mut error,
+                );
+                assert!(error.is_null());
+                if code == OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE {
+                    assert_eq!(status, OpenPitPretradeStatus::Rejected);
+                    assert!(operation.is_null());
+                    assert_wire_records(
+                        rejects,
+                        &[(1, code, OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT)],
+                    );
+                    assert_eq!(review.mutation.state.borrow().commit_calls, 0);
+                    assert_eq!(review.mutation.state.borrow().rollback_calls, 1);
+                } else {
+                    assert_eq!(status, OpenPitPretradeStatus::Passed);
+                    assert!(rejects.is_null());
+                    let blocks = openpit_pretrade_drop_copy_operation_get_account_block(operation);
+                    assert_eq!(openpit_pretrade_account_block_list_len(blocks), 0);
+                    openpit_destroy_pretrade_account_block_list(blocks);
+                    assert!(!openpit_pretrade_drop_copy_operation_is_account_blocked(
+                        operation
+                    ));
+                    let lock = openpit_pretrade_drop_copy_operation_get_lock(operation);
+                    assert_eq!(
+                        crate::pre_trade_lock::openpit_pretrade_pre_trade_lock_len(lock),
+                        1
+                    );
+                    crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(lock);
+                    openpit_pretrade_drop_copy_operation_commit(operation);
+                    assert_eq!(review.mutation.state.borrow().commit_calls, 1);
+                    assert_eq!(review.mutation.state.borrow().rollback_calls, 0);
+                    openpit_destroy_pretrade_drop_copy_operation(operation);
+                    // A later order on the same account still reaches
+                    // the policy.
+                    let mut request = std::ptr::null_mut();
+                    assert_eq!(
+                        openpit_engine_start_pre_trade(
+                            engine,
+                            &order,
+                            &mut request,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut()
+                        ),
+                        OpenPitPretradeStatus::Passed
+                    );
+                    assert_eq!(review.start_calls, 2);
+                    openpit_destroy_pretrade_pre_trade_request(request);
+                }
+                openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn review_instance_block_between_stages_beats_start_without_hold() {
+        use crate::engine::*;
+        use crate::reject::*;
+        let mut review =
+            WireReviewState::new(Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED));
+        review.start_reject = true;
+        let engine = build_wire_review_engine(&mut [(&mut review, 3)]);
+        let order = sample_order();
+        let order = export_order(&order);
+        let mut request = std::ptr::null_mut();
+        assert_eq!(
+            openpit_engine_start_pre_trade(
+                engine,
+                &order,
+                &mut request,
+                std::ptr::null_mut(),
+                std::ptr::null_mut()
+            ),
+            OpenPitPretradeStatus::Passed
+        );
+        assert_wire_records(
+            openpit_pretrade_pre_trade_request_get_reviews(request, std::ptr::null_mut()),
+            &[(3, OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED, 1)],
+        );
+        openpit_engine_block_account(
+            engine,
+            99224416,
+            OpenPitStringView::from_utf8("operator block"),
+        );
+        let mut rejects = std::ptr::null_mut();
+        let mut reservation = std::ptr::null_mut();
+        assert_eq!(
+            openpit_pretrade_pre_trade_request_execute(
+                request,
+                &mut reservation,
+                &mut rejects,
+                std::ptr::null_mut()
+            ),
+            OpenPitPretradeStatus::Rejected
+        );
+        assert!(reservation.is_null());
+        assert_eq!(openpit_pretrade_reject_list_len(rejects), 1);
+        let mut record = std::mem::MaybeUninit::uninit();
+        assert!(openpit_pretrade_reject_list_get(
+            rejects,
+            0,
+            record.as_mut_ptr()
+        ));
+        let record = unsafe { record.assume_init() };
+        assert_eq!(record.code, OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED);
+        assert_eq!(record.mode, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+        assert_eq!(review.main_calls, 0);
+        openpit_destroy_pretrade_reject_list(rejects);
+        openpit_destroy_pretrade_pre_trade_request(request);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn review_instance_rollback_failure_rejects_kills_engine_and_runs_later_hooks() {
+        use crate::engine::*;
+        use crate::reject::*;
+        for (rollback_all, failing_rollback) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let mut first = WireReviewState::new(if rollback_all {
+                None
+            } else {
+                Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED)
+            });
+            first.failing_rollback = failing_rollback;
+            let mut second =
+                WireReviewState::new(Some(OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED));
+            let mut later = WireReviewState::new(None);
+            let engine = build_wire_review_engine(&mut [
+                (&mut first, if rollback_all { 1 } else { 2 }),
+                (&mut second, 3),
+                (&mut later, 1),
+            ]);
+            let order = sample_order();
+            let mut order = export_order(&order);
+            let mut reservation = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            let status = openpit_engine_execute_pre_trade(
+                engine,
+                &order,
+                &mut reservation,
+                &mut rejects,
+                std::ptr::null_mut(),
+            );
+            if !failing_rollback {
+                assert_eq!(status, OpenPitPretradeStatus::Passed);
+                assert!(!reservation.is_null());
+                assert!(rejects.is_null());
+                openpit_pretrade_pre_trade_reservation_commit(reservation);
+                openpit_destroy_pretrade_pre_trade_reservation(reservation);
+                openpit_destroy_engine(engine);
+                continue;
+            }
+            assert_eq!(status, OpenPitPretradeStatus::Rejected);
+            assert!(reservation.is_null());
+            assert_eq!(openpit_pretrade_reject_list_len(rejects), 1);
+            let mut record = std::mem::MaybeUninit::uninit();
+            assert!(openpit_pretrade_reject_list_get(
+                rejects,
+                0,
+                record.as_mut_ptr()
+            ));
+            let record = unsafe { record.assume_init() };
+            assert_eq!(string_view_to_string(record.policy), "Engine");
+            assert_eq!(record.code, OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE);
+            assert_eq!(record.scope, OPENPIT_PRETRADE_REJECT_SCOPE_ORDER);
+            assert_eq!(record.mode, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+            assert_eq!(
+                string_view_to_string(record.reason),
+                "review rollback failed"
+            );
+            openpit_destroy_pretrade_reject_list(rejects);
+            assert_eq!(later.main_calls, 1);
+            assert_eq!(later.mutation.state.borrow().rollback_calls, 1);
+            order.operation.value.account_id.value = 123;
+            rejects = std::ptr::null_mut();
+            assert_eq!(
+                openpit_engine_execute_pre_trade(
+                    engine,
+                    &order,
+                    &mut reservation,
+                    &mut rejects,
+                    std::ptr::null_mut()
+                ),
+                OpenPitPretradeStatus::Rejected
+            );
+            assert_eq!(first.start_calls, 1);
+            assert_eq!(later.main_calls, 1);
+            openpit_destroy_pretrade_reject_list(rejects);
+            openpit_destroy_engine(engine);
+        }
     }
 
     fn build_engine_with_account_rate_limit(

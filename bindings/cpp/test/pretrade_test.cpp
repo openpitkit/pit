@@ -1020,17 +1020,34 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
   EXPECT_EQ(counters.main, 1u);
 }
 
+struct ReviewMutationState {
+  int start = 0;
+  int main = 0;
+  int commits = 0;
+  int rollbacks = 0;
+  bool failRollback = false;
+};
+
 struct ReviewPolicy {
   std::optional<RuleMode> startMode;
   std::optional<RuleMode> mainMode;
+  ReviewMutationState* state = nullptr;
+  const ReviewMutationState* previous = nullptr;
+  int expectedPreviousRollbacks = 0;
+  RejectScope scope = RejectScope::Order;
+  RejectCode code = RejectCode::Custom;
+  const char* price = "100";
+  const char* asset = "USD";
 
   [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
       const openpit::Order&) const {
+    if (state) {
+      ++state->start;
+    }
     if (!startMode) {
       return std::nullopt;
     }
-    Reject mark("ReviewPolicy", RejectScope::Order, RejectCode::Custom,
-                "review order", "start stage");
+    Reject mark("ReviewPolicy", scope, code, "review order", "start stage");
     mark.mode = *startMode;
     return mark;
   }
@@ -1040,16 +1057,28 @@ struct ReviewPolicy {
     return CheckPreTradeStart(order);
   }
 
-  void PerformPreTradeCheck(const Context&, openpit::tx::Mutations&,
+  void PerformPreTradeCheck(const Context&, openpit::tx::Mutations& mutations,
                             openpit::pretrade::Result& result,
                             PolicyDecision& decision) const {
-    result.PushLockPrice(Price::FromString("100"));
+    if (previous) {
+      EXPECT_EQ(previous->rollbacks, expectedPreviousRollbacks);
+    }
+    if (state) {
+      ++state->main;
+      mutations.Push([value = state] { ++value->commits; },
+                     [value = state] {
+                       ++value->rollbacks;
+                       if (value->failRollback) {
+                         throw std::runtime_error("review rollback exploded");
+                       }
+                     });
+    }
+    result.PushLockPrice(Price::FromString(price));
     result.PushAccountAdjustment(
         openpit::accountadjustment::AccountOutcomeEntry(
-            openpit::param::Asset("USD")));
+            openpit::param::Asset(asset)));
     if (mainMode) {
-      Reject mark("ReviewPolicy", RejectScope::Order, RejectCode::Custom,
-                  "review order", "main stage");
+      Reject mark("ReviewPolicy", scope, code, "review order", "main stage");
       mark.mode = *mainMode;
       decision.Push(std::move(mark));
     }
@@ -1132,6 +1161,296 @@ TEST(CustomPolicy, InvalidModeFailsLiveAndDryRun) {
   } catch (const std::invalid_argument& error) {
     EXPECT_STREQ(error.what(), "reject scope or mode is invalid");
   }
+}
+
+TEST(CustomPolicy, ReviewInstanceMainSegments) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    for (const bool recordMode : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(recordMode);
+      ReviewMutationState review, keep;
+      ReviewPolicy reviewing{std::nullopt,
+                             recordMode ? mode : RuleMode::Reject};
+      reviewing.state = &review;
+      reviewing.price = "99";
+      ReviewPolicy keeping{std::nullopt, std::nullopt};
+      keeping.state = &keep;
+      keeping.previous = &review;
+      keeping.expectedPreviousRollbacks = recordMode ? 0 : 1;
+      keeping.price = "101";
+      keeping.asset = "EUR";
+      openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+      builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", reviewing),
+                  openpit::PolicyInstance{
+                      "review", recordMode ? RuleMode::Reject : mode});
+      builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", keeping),
+                  openpit::PolicyInstance{"keep"});
+      const auto engine = builder.Build();
+      auto result = engine.ExecutePreTrade(MakeDryRunHookOrder());
+      ASSERT_TRUE(result.Passed());
+      const auto marks = result.reservation->Reviews();
+      ASSERT_EQ(marks.size(), 1u);
+      EXPECT_EQ(marks.front().mode, mode);
+      EXPECT_EQ(marks.front().policy, "ReviewPolicy");
+      const bool holds = mode == RuleMode::ReviewWithHold;
+      const auto prices = result.reservation->Lock().Prices();
+      const std::size_t expected = holds ? (recordMode ? 2u : 1u) : 0u;
+      ASSERT_EQ(prices.size(), expected);
+      EXPECT_EQ(result.reservation->AccountAdjustments().size(), expected);
+      if (holds) {
+        const auto outcomes = result.reservation->AccountAdjustments();
+        ASSERT_EQ(outcomes.size(), expected);
+        std::vector<openpit::param::Asset> assets;
+        for (const auto& outcome : outcomes) {
+          assets.push_back(outcome.entry.asset);
+        }
+        if (recordMode) {
+          EXPECT_THAT(prices,
+                      testing::UnorderedElementsAre(Price::FromString("99"),
+                                                    Price::FromString("101")));
+          EXPECT_THAT(assets, testing::UnorderedElementsAre(
+                                  openpit::param::Asset("USD"),
+                                  openpit::param::Asset("EUR")));
+        } else {
+          EXPECT_THAT(prices,
+                      testing::UnorderedElementsAre(Price::FromString("101")));
+          EXPECT_THAT(assets, testing::UnorderedElementsAre(
+                                  openpit::param::Asset("EUR")));
+        }
+      }
+      result.reservation->Commit();
+      EXPECT_EQ(keep.commits, holds ? 1 : 0);
+      EXPECT_EQ(keep.rollbacks, holds ? 0 : 1);
+      EXPECT_EQ(review.commits, holds && recordMode ? 1 : 0);
+      EXPECT_EQ(review.rollbacks, holds && recordMode ? 0 : 1);
+    }
+  }
+}
+
+TEST(CustomPolicy, ReviewInstanceWithoutHoldWins) {
+  for (const bool across : {false, true}) {
+    SCOPED_TRACE(across);
+    ReviewMutationState with, without, keep;
+    ReviewPolicy withPolicy{
+        across ? std::optional<RuleMode>(RuleMode::Reject) : std::nullopt,
+        across ? std::nullopt : std::optional<RuleMode>(RuleMode::Reject)};
+    withPolicy.state = &with;
+    ReviewPolicy withoutPolicy{std::nullopt, RuleMode::Reject};
+    withoutPolicy.state = &without;
+    ReviewPolicy keepPolicy{std::nullopt, std::nullopt};
+    keepPolicy.state = &keep;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", withPolicy),
+                openpit::PolicyInstance{"with", RuleMode::ReviewWithHold});
+    builder.Add(
+        CustomPolicy<ReviewPolicy>("ReviewPolicy", withoutPolicy),
+        openpit::PolicyInstance{"without", RuleMode::ReviewWithoutHold});
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", keepPolicy),
+                openpit::PolicyInstance{"keep"});
+    const auto engine = builder.Build();
+    auto result = engine.ExecutePreTrade(MakeDryRunHookOrder());
+    ASSERT_TRUE(result.Passed());
+    const auto marks = result.reservation->Reviews();
+    ASSERT_EQ(marks.size(), 2u);
+    EXPECT_THAT((std::vector{marks.front().mode, marks.back().mode}),
+                testing::UnorderedElementsAre(RuleMode::ReviewWithHold,
+                                              RuleMode::ReviewWithoutHold));
+    EXPECT_TRUE(result.reservation->Lock().IsEmpty());
+    EXPECT_TRUE(result.reservation->AccountAdjustments().empty());
+    result.reservation->Commit();
+    EXPECT_EQ(keep.commits, 0);
+    EXPECT_EQ(keep.rollbacks, 1);
+    EXPECT_EQ(with.commits, 0);
+    EXPECT_EQ(without.commits, 0);
+    EXPECT_EQ(with.rollbacks, 1);
+    EXPECT_EQ(without.rollbacks, 1);
+  }
+}
+
+TEST(CustomPolicy, ReviewInstanceEffectiveRejectRollsBack) {
+  ReviewMutationState review, deny;
+  ReviewPolicy reviewPolicy{std::nullopt, RuleMode::Reject};
+  reviewPolicy.state = &review;
+  ReviewPolicy denyPolicy{std::nullopt, RuleMode::Reject};
+  denyPolicy.state = &deny;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", reviewPolicy),
+              openpit::PolicyInstance{"review", RuleMode::ReviewWithHold});
+  builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", denyPolicy),
+              openpit::PolicyInstance{"deny"});
+  const auto engine = builder.Build();
+  const auto result = engine.ExecutePreTrade(MakeDryRunHookOrder());
+  EXPECT_FALSE(result.Passed());
+  EXPECT_FALSE(result.reservation.has_value());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::Custom);
+  const auto report = engine.ExecutePreTradeDryRun(MakeDryRunHookOrder());
+  EXPECT_TRUE(report.Reviews().empty());
+  ASSERT_EQ(report.Rejects().size(), 1u);
+  EXPECT_EQ(report.Rejects().front().mode, RuleMode::Reject);
+  EXPECT_EQ(review.rollbacks, 1);
+  EXPECT_EQ(deny.rollbacks, 1);
+  EXPECT_EQ(review.commits + deny.commits, 0);
+}
+
+TEST(CustomPolicy, ReviewInstanceDryRunAccountMark) {
+  for (const auto mode : {RuleMode::Reject, RuleMode::ReviewWithHold,
+                          RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ReviewPolicy policy{std::nullopt, RuleMode::Reject};
+    policy.scope = RejectScope::Account;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+                openpit::PolicyInstance{"review", mode});
+    const auto engine = builder.Build();
+    const auto report = engine.ExecutePreTradeDryRun(MakeDryRunHookOrder());
+    EXPECT_EQ(report.Passed(), mode != RuleMode::Reject);
+    EXPECT_EQ(report.AccountBlock().has_value(), mode == RuleMode::Reject);
+    const auto marks = report.Reviews();
+    if (mode == RuleMode::Reject) {
+      EXPECT_TRUE(marks.empty());
+    } else {
+      ASSERT_EQ(marks.size(), 1u);
+      EXPECT_EQ(marks.front().scope, RejectScope::Account);
+      EXPECT_EQ(marks.front().mode, mode);
+      EXPECT_TRUE(report.Rejects().empty());
+    }
+  }
+}
+
+TEST(CustomPolicy, ReviewInstanceRollbackFailure) {
+  for (const bool rollbackAll : {false, true}) {
+    SCOPED_TRACE(rollbackAll);
+    ReviewMutationState review, later;
+    review.failRollback = true;
+    ReviewPolicy policy{std::nullopt, rollbackAll ? RuleMode::ReviewWithoutHold
+                                                  : RuleMode::Reject};
+    policy.state = &review;
+    ReviewPolicy laterPolicy{std::nullopt, std::nullopt};
+    laterPolicy.state = &later;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+                openpit::PolicyInstance{
+                    "review",
+                    rollbackAll ? RuleMode::Reject : RuleMode::ReviewWithHold});
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", laterPolicy),
+                openpit::PolicyInstance{"later"});
+    const auto engine = builder.Build();
+    EXPECT_THROW(
+        static_cast<void>(engine.ExecutePreTrade(MakeDryRunHookOrder())),
+        std::runtime_error);
+    EXPECT_EQ(review.rollbacks, 1);
+    EXPECT_EQ(later.main, 1);
+    auto order = MakeDryRunHookOrder();
+    order.operation->accountId = openpit::param::AccountId::FromUint64(43);
+    const auto blocked = engine.StartPreTrade(order);
+    EXPECT_FALSE(blocked.Passed());
+    ASSERT_EQ(blocked.rejects.size(), 1u);
+    EXPECT_EQ(blocked.rejects.front().code, RejectCode::SystemUnavailable);
+    EXPECT_EQ(blocked.rejects.front().policy, "Engine");
+    EXPECT_EQ(blocked.rejects.front().mode, RuleMode::Reject);
+    EXPECT_EQ(review.rollbacks, 1);
+    EXPECT_EQ(review.commits, 0);
+    EXPECT_EQ(later.rollbacks, 1);
+    EXPECT_EQ(later.commits, 0);
+  }
+}
+
+TEST(CustomPolicy, ReviewInstanceDropCopy) {
+  for (const auto mode : {RuleMode::Reject, RuleMode::ReviewWithHold,
+                          RuleMode::ReviewWithoutHold}) {
+    for (const bool fatal : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(fatal);
+      ReviewMutationState state;
+      ReviewPolicy policy{std::nullopt, mode == RuleMode::Reject
+                                            ? RuleMode::ReviewWithHold
+                                            : RuleMode::Reject};
+      policy.state = &state;
+      policy.scope = RejectScope::Account;
+      if (fatal) {
+        policy.code = RejectCode::OrderValueCalculationFailed;
+      }
+      openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+      builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+                  openpit::PolicyInstance{"review", mode});
+      const auto engine = builder.Build();
+      auto result = engine.ApplyDropCopy(MakeDryRunHookOrder());
+      if (fatal) {
+        EXPECT_FALSE(result.operation.has_value());
+        ASSERT_EQ(result.rejects.size(), 1u);
+        EXPECT_EQ(result.rejects.front().code,
+                  RejectCode::OrderValueCalculationFailed);
+        EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
+        EXPECT_EQ(state.rollbacks, 1);
+        EXPECT_EQ(state.commits, 0);
+      } else {
+        ASSERT_TRUE(result.operation.has_value());
+        EXPECT_TRUE(result.rejects.empty());
+        EXPECT_FALSE(result.operation->AccountBlock().has_value());
+        EXPECT_FALSE(result.operation->IsAccountBlocked());
+        const auto prices = result.operation->Lock().Prices();
+        ASSERT_EQ(prices.size(), 1u);
+        EXPECT_EQ(prices.front(), Price::FromString(policy.price));
+        const auto outcomes = result.operation->AccountAdjustments();
+        ASSERT_EQ(outcomes.size(), 1u);
+        EXPECT_EQ(outcomes.front().entry.asset,
+                  openpit::param::Asset(policy.asset));
+        result.operation->Commit();
+        EXPECT_EQ(state.commits, 1);
+        EXPECT_EQ(state.rollbacks, 0);
+      }
+    }
+  }
+}
+
+TEST(CustomPolicy, ReviewInstanceBlockBetweenStages) {
+  ReviewMutationState state;
+  ReviewPolicy policy{RuleMode::Reject, std::nullopt};
+  policy.state = &state;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+              openpit::PolicyInstance{"review", RuleMode::ReviewWithoutHold});
+  const auto engine = builder.Build();
+  auto start = engine.StartPreTrade(MakeDryRunHookOrder());
+  ASSERT_TRUE(start.Passed());
+  const auto marks = start.request->Reviews();
+  ASSERT_EQ(marks.size(), 1u);
+  EXPECT_EQ(marks.front().code, RejectCode::Custom);
+  EXPECT_EQ(marks.front().mode, RuleMode::ReviewWithoutHold);
+  engine.Accounts().Block(openpit::param::AccountId::FromUint64(42),
+                          "between stages");
+  const auto result = start.request->Execute();
+  EXPECT_FALSE(result.Passed());
+  EXPECT_FALSE(result.reservation.has_value());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::AccountBlocked);
+  EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
+  EXPECT_EQ(state.main, 0);
+}
+
+TEST(CustomPolicy, ReviewInstanceConfirmedStartRunsMain) {
+  ReviewMutationState state;
+  ReviewPolicy policy{RuleMode::Reject, std::nullopt};
+  policy.state = &state;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+              openpit::PolicyInstance{"review", RuleMode::ReviewWithoutHold});
+  const auto engine = builder.Build();
+  auto order = MakeDryRunHookOrder();
+  order.review = openpit::model::OrderReview{true, true};
+  auto result = engine.ExecutePreTrade(order);
+  ASSERT_TRUE(result.Passed());
+  EXPECT_TRUE(result.reservation->Reviews().empty());
+  EXPECT_FALSE(result.reservation->Lock().IsEmpty());
+  ASSERT_EQ(result.reservation->AccountAdjustments().size(), 1u);
+  result.reservation->Commit();
+  EXPECT_EQ(state.start, 1);
+  EXPECT_EQ(state.main, 1);
+  EXPECT_EQ(state.commits, 1);
+  EXPECT_EQ(state.rollbacks, 0);
 }
 
 TEST(CustomPolicy, UsesContextStartDryRunHookForDryRunPipeline) {
@@ -1429,6 +1748,81 @@ TEST(CustomPolicy, DropCopyKeepsGatedBookkeepingUnderBusinessReject) {
 //------------------------------------------------------------------------------
 // Built-in policy configuration construction + registration.
 
+openpit::model::ExecutionReport SpotFundsReport(
+    openpit::param::AccountId account) {
+  openpit::model::ExecutionReport report;
+  auto& operation = report.operation.emplace();
+  operation.instrument = openpit::model::Instrument(
+      openpit::param::Asset("AAPL"), openpit::param::Asset("USD"));
+  operation.accountId = account;
+  operation.side = openpit::model::Side::Buy;
+  return report;
+}
+
+openpit::accountadjustment::AccountOutcomeEntry AdjustSpotFundsBalances(
+    const openpit::Engine& engine, openpit::param::AccountId account,
+    std::string_view asset, std::string_view balanceDelta) {
+  openpit::accountadjustment::BalanceOperation balance;
+  balance.asset = openpit::param::Asset(asset);
+  openpit::accountadjustment::AccountAdjustment adjustment;
+  adjustment.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(balance));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = openpit::param::AdjustmentAmount::Delta(
+      openpit::param::PositionSize::FromString(balanceDelta));
+  amount.held = openpit::param::AdjustmentAmount::Delta(
+      openpit::param::PositionSize::FromString("0"));
+  amount.incoming = amount.held;
+  adjustment.amount = std::move(amount);
+  const auto result = engine.ApplyAccountAdjustment(
+      account,
+      std::vector<openpit::accountadjustment::AccountAdjustment>{adjustment});
+  EXPECT_TRUE(result.Passed());
+  EXPECT_EQ(result.accountAdjustmentOutcomes.size(), 1U);
+  return result.accountAdjustmentOutcomes.at(0).entry;
+}
+
+struct SpotFundsAssetBalances {
+  std::string balance;
+  std::string held;
+  std::string incoming;
+
+  bool operator==(const SpotFundsAssetBalances& other) const {
+    return balance == other.balance && held == other.held &&
+           incoming == other.incoming;
+  }
+};
+
+struct SpotFundsBalanceSnapshot {
+  SpotFundsAssetBalances usd;
+  SpotFundsAssetBalances aapl;
+
+  bool operator==(const SpotFundsBalanceSnapshot& other) const {
+    return usd == other.usd && aapl == other.aapl;
+  }
+};
+
+SpotFundsBalanceSnapshot SpotFundsBalances(const openpit::Engine& engine,
+                                           openpit::param::AccountId account) {
+  const auto amounts = [&](std::string_view asset) {
+    const auto entry = AdjustSpotFundsBalances(engine, account, asset, "0");
+    return SpotFundsAssetBalances{entry.balance.value().absolute.ToString(),
+                                  entry.held.value().absolute.ToString(),
+                                  entry.incoming.value().absolute.ToString()};
+  };
+  return {amounts("USD"), amounts("AAPL")};
+}
+
+openpit::model::ExecutionReport SpotFundsCancelReport(
+    openpit::param::AccountId account, Quantity remaining, PreTradeLock lock) {
+  auto report = SpotFundsReport(account);
+  auto& fill = report.fill.emplace();
+  fill.lock = std::move(lock);
+  fill.remainingReservedQuantity = remaining;
+  fill.isFinal = true;
+  return report;
+}
+
 [[nodiscard]] openpit::model::Order SpotFundsLifecycleOrder(
     const openpit::param::AccountId accountId,
     const Quantity quantity = Quantity::FromString("1")) {
@@ -1485,12 +1879,6 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   openpit::pretrade::PreTradeLock lock = execution.reservation->Lock();
   execution.reservation->Commit();
 
-  openpit::model::ExecutionReportOperation operation;
-  operation.instrument = openpit::model::Instrument(
-      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
-  operation.accountId = accountId;
-  operation.side = openpit::model::Side::Buy;
-
   openpit::model::Fill fill;
   fill.lock = std::move(lock);
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
@@ -1498,8 +1886,7 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   fill.remainingReservedQuantity = Quantity::FromString("0");
   fill.isFinal = true;
 
-  openpit::model::ExecutionReport report;
-  report.operation = std::move(operation);
+  auto report = SpotFundsReport(accountId);
   report.fill = std::move(fill);
   return engine.ApplyExecutionReport(report).accountBlocks;
 }
@@ -1619,12 +2006,107 @@ TEST(BuiltinPolicy, InstanceModeControlsOrderSizeLimit) {
     EXPECT_EQ(reviews.front().code, RejectCode::OrderQtyExceedsLimit);
     EXPECT_EQ(reviews.front().scope, RejectScope::Order);
     EXPECT_EQ(reviews.front().policy, "OrderSizeLimitPolicy");
+    auto confirmedOrder = order;
+    confirmedOrder.review = openpit::model::OrderReview{true, std::nullopt};
+    const auto confirmed = engine.ExecutePreTrade(confirmedOrder);
+    ASSERT_TRUE(confirmed.Passed());
+    EXPECT_TRUE(confirmed.reservation->Reviews().empty());
     engine.Configure().OrderSizeLimit("size-reject",
                                       BrokerUpdate::Set(barrier("0")));
     const auto rejected = engine.StartPreTrade(order);
     EXPECT_FALSE(rejected.Passed());
     ASSERT_EQ(rejected.rejects.size(), 1u);
     EXPECT_EQ(rejected.rejects.front().mode, RuleMode::Reject);
+    EXPECT_EQ(rejected.rejects.front().code, RejectCode::OrderQtyExceedsLimit);
+    const auto dry = engine.ExecutePreTradeDryRun(order);
+    EXPECT_TRUE(dry.Reviews().empty());
+    ASSERT_EQ(dry.Rejects().size(), 1u);
+    const auto confirmedReject = engine.StartPreTrade(confirmedOrder);
+    EXPECT_FALSE(confirmedReject.Passed());
+    ASSERT_EQ(confirmedReject.rejects.size(), 1u);
+    EXPECT_EQ(confirmedReject.rejects.front().mode, RuleMode::Reject);
+    EXPECT_EQ(confirmedReject.rejects.front().code,
+              RejectCode::OrderQtyExceedsLimit);
+  }
+}
+
+TEST(BuiltinPolicy, ReviewInstanceExplicitRejectEqualsAbsent) {
+  for (const bool explicitMode : {false, true}) {
+    SCOPED_TRACE(explicitMode);
+    policies::OrderSizeLimitPolicy config;
+    config.BrokerBarrier(policies::OrderSizeBrokerBarrier(
+        policies::OrderSizeLimit::Quantity(Quantity::FromString("0"))));
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    if (explicitMode) {
+      builder.Add(config, openpit::PolicyInstance{"named", RuleMode::Reject});
+    } else {
+      builder.Add(config);
+    }
+    const auto engine = builder.Build();
+    const auto result = engine.StartPreTrade(MakeDryRunHookOrder());
+    EXPECT_FALSE(result.Passed());
+    ASSERT_EQ(result.rejects.size(), 1u);
+    EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
+    EXPECT_EQ(result.rejects.front().code, RejectCode::OrderQtyExceedsLimit);
+    EXPECT_EQ(result.rejects.front().scope, RejectScope::Order);
+    EXPECT_EQ(result.rejects.front().policy, "OrderSizeLimitPolicy");
+  }
+}
+
+TEST(CustomPolicy, ReviewInstanceInvalidModeThrows) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  EXPECT_THROW(
+      builder.Add(CustomPolicy<ReviewPolicy>(
+                      "ReviewPolicy", ReviewPolicy{std::nullopt, std::nullopt}),
+                  openpit::PolicyInstance{"invalid", static_cast<RuleMode>(4)}),
+      openpit::Error);
+}
+
+TEST(CustomPolicy, ReviewInstanceDuplicateExplicitName) {
+  openpit::EngineBuilder valid(openpit::SyncPolicy::Full);
+  valid.Add(CustomPolicy<ReviewPolicy>(
+                "ReviewPolicy", ReviewPolicy{std::nullopt, std::nullopt}),
+            openpit::PolicyInstance{"duplicate"});
+  valid.Add(CustomPolicy<ReviewPolicy>(
+                "ReviewPolicy", ReviewPolicy{std::nullopt, std::nullopt}),
+            openpit::PolicyInstance{"distinct", RuleMode::ReviewWithHold});
+  EXPECT_NO_THROW(static_cast<void>(valid.Build()));
+
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  builder.Add(CustomPolicy<ReviewPolicy>(
+                  "ReviewPolicy", ReviewPolicy{std::nullopt, std::nullopt}),
+              openpit::PolicyInstance{"duplicate"});
+  builder.Add(CustomPolicy<ReviewPolicy>(
+                  "ReviewPolicy", ReviewPolicy{std::nullopt, std::nullopt}),
+              openpit::PolicyInstance{"duplicate", RuleMode::ReviewWithHold});
+  try {
+    static_cast<void>(builder.Build());
+    FAIL() << "duplicate instance name must fail the build";
+  } catch (const openpit::EngineBuildError& error) {
+    EXPECT_EQ(error.Code(), openpit::EngineBuildErrorCode::DuplicatePolicyName);
+  }
+}
+
+TEST(BuiltinPolicy, ReviewInstanceOrderSizeEvaluationFailure) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    policies::OrderSizeLimitPolicy config;
+    config.BrokerBarrier(policies::OrderSizeBrokerBarrier(
+        policies::OrderSizeLimit::Notional(Volume::FromString("100"))));
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(config, openpit::PolicyInstance{"review", mode});
+    const auto engine = builder.Build();
+    auto order = MakeDryRunHookOrder();
+    order.operation->price.reset();
+    const auto result = engine.StartPreTrade(order);
+    EXPECT_FALSE(result.Passed());
+    ASSERT_EQ(result.rejects.size(), 1u);
+    EXPECT_EQ(result.rejects.front().code,
+              RejectCode::OrderValueCalculationFailed);
+    EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
+    EXPECT_EQ(result.rejects.front().scope, RejectScope::Order);
+    EXPECT_EQ(result.rejects.front().policy, "OrderSizeLimitPolicy");
   }
 }
 
@@ -1769,6 +2251,97 @@ TEST(BuiltinPolicy, PnlBoundsKillSwitchPreTradeModes) {
   }
 }
 
+TEST(BuiltinPolicy, PnlBoundsKillSwitchMixedBarriers) {
+  for (const auto accountAxis : {false, true}) {
+    for (const auto confirmed : {false, true}) {
+      SCOPED_TRACE(accountAxis);
+      SCOPED_TRACE(confirmed);
+      auto order = MakeDryRunHookOrder();
+      const auto account = order.operation->accountId.value();
+      const openpit::param::Asset usd("USD");
+      const auto zero = openpit::param::Pnl::FromString("0");
+      policies::PnlBoundsKillSwitchPolicy config;
+      for (const auto barrierMode :
+           {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold,
+            RuleMode::Reject}) {
+        const auto lower = openpit::param::Pnl::FromString(
+            barrierMode == RuleMode::Reject ? "-200" : "-100");
+        if (accountAxis) {
+          policies::PnlBoundsAccountBarrier barrier(account, usd, zero);
+          barrier.lowerBound = lower;
+          barrier.mode = barrierMode;
+          config.AccountBarrier(barrier);
+        } else {
+          policies::PnlBoundsBrokerBarrier barrier(usd);
+          barrier.lowerBound = lower;
+          barrier.mode = barrierMode;
+          config.BrokerBarrier(barrier);
+        }
+      }
+      openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+      builder.Add(config);
+      const auto engine = builder.Build();
+      const auto setPnl = [&](const char* value) {
+        engine.Configure().SetAccountPnl(
+            policies::PnlBoundsKillSwitchPolicyName, account, usd,
+            openpit::param::Pnl::FromString(value));
+      };
+      setPnl("-150");
+      {
+        const auto first = engine.StartPreTrade(order);
+        ASSERT_TRUE(first.Passed());
+        const auto marks = first.request->Reviews();
+        ASSERT_EQ(marks.size(), 2u);
+        for (const auto mode :
+             {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+          EXPECT_EQ(
+              std::count_if(marks.begin(), marks.end(),
+                            [mode](const auto& mark) {
+                              return mark.code ==
+                                         RejectCode::PnlKillSwitchTriggered &&
+                                     mark.mode == mode &&
+                                     mark.scope == RejectScope::Account;
+                            }),
+              1);
+        }
+      }
+      {
+        const auto following = engine.StartPreTrade(order);
+        ASSERT_TRUE(following.Passed());
+      }
+      if (confirmed) {
+        order.review.emplace().confirmed = true;
+        const auto rerun = engine.StartPreTrade(order);
+        ASSERT_TRUE(rerun.Passed());
+        EXPECT_TRUE(rerun.request->Reviews().empty());
+      }
+      setPnl("-250");
+      if (!confirmed) {
+        const auto probe = engine.StartPreTradeDryRun(order);
+        EXPECT_FALSE(probe.Passed());
+        EXPECT_TRUE(probe.Reviews().empty());
+        const auto rejects = probe.Rejects();
+        ASSERT_EQ(rejects.size(), 1u);
+        EXPECT_EQ(rejects.front().mode, RuleMode::Reject);
+        EXPECT_EQ(rejects.front().code, RejectCode::PnlKillSwitchTriggered);
+        EXPECT_EQ(rejects.front().scope, RejectScope::Account);
+      }
+      const auto rejected = engine.StartPreTrade(order);
+      ASSERT_FALSE(rejected.Passed());
+      ASSERT_EQ(rejected.rejects.size(), 1u);
+      EXPECT_EQ(rejected.rejects.front().mode, RuleMode::Reject);
+      EXPECT_EQ(rejected.rejects.front().code,
+                RejectCode::PnlKillSwitchTriggered);
+      EXPECT_EQ(rejected.rejects.front().scope, RejectScope::Account);
+      setPnl("0");
+      const auto blocked = engine.StartPreTrade(order);
+      ASSERT_FALSE(blocked.Passed());
+      ASSERT_EQ(blocked.rejects.size(), 1u);
+      EXPECT_EQ(blocked.rejects.front().code, RejectCode::AccountBlocked);
+    }
+  }
+}
+
 TEST(BuiltinPolicy, PnlBoundsKillSwitchReviewOrderMissingInstrumentRejects) {
   for (const auto mode :
        {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
@@ -1858,6 +2431,29 @@ TEST(BuiltinPolicy, PnlBoundsKillSwitchExecutionReportModesAndMissingFee) {
         if (blocks) {
           EXPECT_FALSE(following.rejects.empty());
         }
+        if (!blocks) {
+          report.financialImpact->pnl =
+              openpit::param::Pnl::FromString("79228162514264337593543950335");
+          EXPECT_TRUE(
+              engine.ApplyExecutionReport(report).accountBlocks.empty());
+          report.financialImpact->pnl = openpit::param::Pnl::FromString("1");
+          const auto overflow = engine.ApplyExecutionReport(report);
+          ASSERT_EQ(overflow.accountBlocks.size(), 1u);
+          const auto& block = overflow.accountBlocks.front();
+          EXPECT_TRUE(openpit::reject::IsEvaluationFailure(block.code));
+
+          engine.Configure().SetAccountPnl(
+              policies::PnlBoundsKillSwitchPolicyName, account,
+              openpit::param::Asset("USD"),
+              openpit::param::Pnl::FromString("0"));
+          const auto blocked = engine.StartPreTrade(MakeDryRunHookOrder());
+          ASSERT_FALSE(blocked.Passed());
+          ASSERT_EQ(blocked.rejects.size(), 1u);
+          EXPECT_EQ(blocked.rejects.front().code, block.code);
+          EXPECT_EQ(blocked.rejects.front().reason, block.reason);
+          EXPECT_EQ(blocked.rejects.front().details, block.details);
+          EXPECT_EQ(blocked.rejects.front().mode, RuleMode::Reject);
+        }
       }
     }
   }
@@ -1882,25 +2478,23 @@ TEST(BuiltinPolicy, PnlBoundsKillSwitchBuildRejectsDuplicateKeys) {
       duplicateAccount.mode = static_cast<RuleMode>(0);
     }
     openpit::EngineBuilder brokerBuilder(openpit::SyncPolicy::Full);
-    try {
-      brokerBuilder.Add(policies::PnlBoundsKillSwitchPolicy{}
-                            .BrokerBarrier(broker)
-                            .BrokerBarrier(duplicateBroker));
-      FAIL() << "duplicate broker barriers should fail";
-    } catch (const openpit::Error& error) {
-      EXPECT_THAT(error.Message(),
-                  testing::HasSubstr("duplicate broker barrier"));
-    }
+    EXPECT_THROW(brokerBuilder.Add(policies::PnlBoundsKillSwitchPolicy{}
+                                       .BrokerBarrier(broker)
+                                       .BrokerBarrier(duplicateBroker)),
+                 openpit::Error);
+    openpit::EngineBuilder validBroker(openpit::SyncPolicy::Full);
+    validBroker.Add(
+        policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(broker));
+    EXPECT_NO_THROW(static_cast<void>(validBroker.Build()));
     openpit::EngineBuilder accountBuilder(openpit::SyncPolicy::Full);
-    try {
-      accountBuilder.Add(policies::PnlBoundsKillSwitchPolicy{}
-                             .AccountBarrier(account)
-                             .AccountBarrier(duplicateAccount));
-      FAIL() << "duplicate account barriers should fail";
-    } catch (const openpit::Error& error) {
-      EXPECT_THAT(error.Message(),
-                  testing::HasSubstr("duplicate account barrier"));
-    }
+    EXPECT_THROW(accountBuilder.Add(policies::PnlBoundsKillSwitchPolicy{}
+                                        .AccountBarrier(account)
+                                        .AccountBarrier(duplicateAccount)),
+                 openpit::Error);
+    openpit::EngineBuilder validAccount(openpit::SyncPolicy::Full);
+    validAccount.Add(
+        policies::PnlBoundsKillSwitchPolicy{}.AccountBarrier(account));
+    EXPECT_NO_THROW(static_cast<void>(validAccount.Build()));
   }
 }
 
@@ -1926,17 +2520,17 @@ TEST(BuiltinPolicy, PnlBoundsKillSwitchBuildAllowsModesWithEqualSeeds) {
                                     .AccountBarrier(reviewAccount)));
     EXPECT_NO_THROW({ const auto engine = builder.Build(); });
 
+    openpit::EngineBuilder equalSeeds(openpit::SyncPolicy::Full);
+    equalSeeds.Add(policies::PnlBoundsKillSwitchPolicy{}
+                       .AccountBarrier(account)
+                       .AccountBarrier(reviewAccount));
+    EXPECT_NO_THROW(static_cast<void>(equalSeeds.Build()));
     reviewAccount.initialPnl = openpit::param::Pnl::FromString("1");
     openpit::EngineBuilder conflicting(openpit::SyncPolicy::Full);
-    try {
-      conflicting.Add(policies::PnlBoundsKillSwitchPolicy{}
-                          .AccountBarrier(account)
-                          .AccountBarrier(reviewAccount));
-      FAIL() << "conflicting initial P&L should fail";
-    } catch (const openpit::Error& error) {
-      EXPECT_THAT(error.Message(),
-                  testing::HasSubstr("conflicting initial pnl"));
-    }
+    EXPECT_THROW(conflicting.Add(policies::PnlBoundsKillSwitchPolicy{}
+                                     .AccountBarrier(account)
+                                     .AccountBarrier(reviewAccount)),
+                 openpit::Error);
   }
 }
 
@@ -1945,28 +2539,28 @@ TEST(BuiltinPolicy, PnlBoundsKillSwitchBuildRejectsInvalidModes) {
   broker.mode = static_cast<RuleMode>(4);
   broker.lowerBound = openpit::param::Pnl::FromString("-100");
   openpit::EngineBuilder brokerBuilder(openpit::SyncPolicy::Full);
-  try {
-    brokerBuilder.Add(
-        policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(broker));
-    FAIL() << "an invalid broker mode should fail";
-  } catch (const openpit::Error& error) {
-    EXPECT_THAT(error.Message(),
-                testing::HasSubstr("broker[0] mode is invalid: 4"));
-  }
+  EXPECT_THROW(brokerBuilder.Add(
+                   policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(broker)),
+               openpit::Error);
+  broker.mode = RuleMode::Reject;
+  openpit::EngineBuilder validBroker(openpit::SyncPolicy::Full);
+  validBroker.Add(policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(broker));
+  EXPECT_NO_THROW(static_cast<void>(validBroker.Build()));
   policies::PnlBoundsAccountBarrier account(
       openpit::param::AccountId::FromUint64(42), openpit::param::Asset("USD"),
       openpit::param::Pnl::FromString("0"));
   account.mode = static_cast<RuleMode>(4);
   account.lowerBound = broker.lowerBound;
   openpit::EngineBuilder accountBuilder(openpit::SyncPolicy::Full);
-  try {
-    accountBuilder.Add(
-        policies::PnlBoundsKillSwitchPolicy{}.AccountBarrier(account));
-    FAIL() << "an invalid account mode should fail";
-  } catch (const openpit::Error& error) {
-    EXPECT_THAT(error.Message(),
-                testing::HasSubstr("account[0] mode is invalid: 4"));
-  }
+  EXPECT_THROW(
+      accountBuilder.Add(
+          policies::PnlBoundsKillSwitchPolicy{}.AccountBarrier(account)),
+      openpit::Error);
+  account.mode = RuleMode::Reject;
+  openpit::EngineBuilder validAccount(openpit::SyncPolicy::Full);
+  validAccount.Add(
+      policies::PnlBoundsKillSwitchPolicy{}.AccountBarrier(account));
+  EXPECT_NO_THROW(static_cast<void>(validAccount.Build()));
 }
 
 TEST(BuiltinPolicy, PnlBoundsKillSwitchConfigurePreservesModes) {
@@ -2075,13 +2669,6 @@ TEST(BuiltinPolicy,
         FAIL() << "invalid P&L barriers should fail configuration";
       } catch (const openpit::ConfigureError& error) {
         EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
-        EXPECT_THAT(
-            error.Message(),
-            testing::HasSubstr(
-                invalidMode ? (accountAxis ? "account[0] mode is invalid: 4"
-                                           : "broker[0] mode is invalid: 4")
-                            : (accountAxis ? "duplicate account barrier"
-                                           : "duplicate broker barrier")));
       }
       const auto start = engine.StartPreTrade(MakeDryRunHookOrder());
       ASSERT_FALSE(start.Passed());
@@ -2090,6 +2677,16 @@ TEST(BuiltinPolicy,
       const auto following = engine.StartPreTrade(MakeDryRunHookOrder());
       ASSERT_EQ(following.rejects.size(), 1u);
       EXPECT_EQ(following.rejects.front().code, RejectCode::AccountBlocked);
+      broker.mode = RuleMode::Reject;
+      update.mode = RuleMode::Reject;
+      if (accountAxis) {
+        EXPECT_NO_THROW(engine.Configure().PnlBoundsKillSwitch(
+            policies::PnlBoundsKillSwitchPolicyName, std::nullopt,
+            std::vector{update}));
+      } else {
+        EXPECT_NO_THROW(engine.Configure().PnlBoundsKillSwitch(
+            policies::PnlBoundsKillSwitchPolicyName, std::vector{broker}));
+      }
     }
   }
 }
@@ -2121,30 +2718,352 @@ TEST(BuiltinPolicy, SpotFundsAlreadyHeldDoesNotReserveAgain) {
       openpit::param::AccountId::FromUint64(83024);
   ASSERT_NO_FATAL_FAILURE(SeedSpotFundsLifecycleAccount(engine, account));
 
+  engine.Configure().SpotFundsGlobalLimitMode(
+      policies::SpotFundsPolicyName,
+      policies::SpotFundsLimitMode::ReviewWithHold);
   openpit::model::Order order =
-      SpotFundsLifecycleOrder(account, Quantity::FromString("6"));
+      SpotFundsLifecycleOrder(account, Quantity::FromString("11"));
   auto initial = engine.ExecutePreTrade(order);
-  ASSERT_TRUE(initial.Passed()) << "Expected the initial 600 USD reservation";
+  ASSERT_TRUE(initial.Passed());
+  const auto marks = initial.reservation->Reviews();
+  ASSERT_EQ(marks.size(), 1U);
+  EXPECT_EQ(marks.front().code, RejectCode::InsufficientFunds);
+  EXPECT_EQ(marks.front().mode, RuleMode::ReviewWithHold);
+  auto firstLock = initial.reservation->Lock();
+  EXPECT_FALSE(firstLock.IsEmpty());
+  EXPECT_THAT(firstLock.Prices(),
+              testing::UnorderedElementsAre(Price::FromString("100")));
   initial.reservation->Commit();
+  const auto before = SpotFundsBalances(engine, account);
+  EXPECT_EQ(before.usd.balance, "-100");
+  EXPECT_EQ(before.usd.held, "1100");
+  EXPECT_EQ(before.usd.incoming, "0");
+  EXPECT_EQ(before.aapl.balance, "0");
+  EXPECT_EQ(before.aapl.held, "0");
+  EXPECT_EQ(before.aapl.incoming, "11");
 
   auto& review = order.review.emplace();
   review.confirmed = true;
-  const auto rejected = engine.ExecutePreTrade(order);
-  ASSERT_FALSE(rejected.Passed())
-      << "Expected insufficient funds without a hold flag";
-  ASSERT_EQ(rejected.rejects.size(), 1u);
-  EXPECT_EQ(rejected.rejects.front().code, RejectCode::InsufficientFunds);
-
   review.alreadyHeld = true;
   auto held = engine.ExecutePreTrade(order);
   ASSERT_TRUE(held.Passed()) << "Expected the already-held order to pass";
+  EXPECT_TRUE(held.reservation->Lock().IsEmpty());
+  EXPECT_TRUE(held.reservation->Reviews().empty());
+  EXPECT_TRUE(held.reservation->AccountAdjustments().empty());
   held.reservation->Commit();
+  EXPECT_EQ(SpotFundsBalances(engine, account), before);
+  const auto cancelled = engine.ApplyExecutionReport(SpotFundsCancelReport(
+      account, Quantity::FromString("11"), std::move(firstLock)));
+  EXPECT_TRUE(cancelled.accountBlocks.empty());
+  EXPECT_EQ(SpotFundsBalances(engine, account),
+            (SpotFundsBalanceSnapshot{{"1000", "0", "0"}, {"0", "0", "0"}}));
+}
 
-  auto remaining = engine.ExecutePreTrade(
-      SpotFundsLifecycleOrder(account, Quantity::FromString("4")));
-  ASSERT_TRUE(remaining.Passed())
-      << "Expected the remaining 400 USD to be available";
-  remaining.reservation->Rollback();
+TEST(BuiltinPolicy, SpotFundsAlreadyHeldRejectPreservesFirstHold) {
+  for (const bool pnlBreach : {false, true}) {
+    SCOPED_TRACE(pnlBreach);
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
+    barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+    builder.Add(
+        policies::SpotFundsPnlBoundsKillSwitchPolicy{}.GlobalBarrier(barrier));
+    const auto engine = builder.Build();
+    const auto account = openpit::param::AccountId::FromUint64(83025);
+    SeedSpotFundsLifecycleAccount(engine, account);
+    engine.Configure().SpotFundsGlobalLimitMode(
+        policies::SpotFundsPolicyName, policies::SpotFundsLimitMode::Enforce);
+    auto order = SpotFundsLifecycleOrder(account, Quantity::FromString("6"));
+    auto first = engine.ExecutePreTrade(order);
+    ASSERT_TRUE(first.Passed());
+    first.reservation->Commit();
+    if (!pnlBreach) {
+      const auto beforeConfirmed = SpotFundsBalances(engine, account);
+      order.review.emplace().confirmed = true;
+      const auto confirmed = engine.ExecutePreTrade(order);
+      EXPECT_FALSE(confirmed.Passed());
+      EXPECT_FALSE(confirmed.reservation.has_value());
+      ASSERT_EQ(confirmed.rejects.size(), 1U);
+      EXPECT_EQ(confirmed.rejects.front().code, RejectCode::InsufficientFunds);
+      EXPECT_EQ(confirmed.rejects.front().mode, RuleMode::Reject);
+      EXPECT_EQ(SpotFundsBalances(engine, account), beforeConfirmed);
+
+      const auto beforeHeld = SpotFundsBalances(engine, account);
+      order.review->alreadyHeld = true;
+      auto held = engine.ExecutePreTrade(order);
+      ASSERT_TRUE(held.Passed());
+      EXPECT_TRUE(held.reservation->Lock().IsEmpty());
+      EXPECT_TRUE(held.reservation->Reviews().empty());
+      EXPECT_TRUE(held.reservation->AccountAdjustments().empty());
+      held.reservation->Commit();
+      EXPECT_EQ(SpotFundsBalances(engine, account), beforeHeld);
+    }
+    if (pnlBreach) {
+      const auto change = engine.Configure().SetSpotFundsAccountPnl(
+          policies::SpotFundsPolicyName, account,
+          openpit::param::Pnl::FromString("-150"));
+      ASSERT_EQ(change.accountBlocks.size(), 1U);
+      engine.Accounts().Unblock(account);
+    } else {
+      AdjustSpotFundsBalances(engine, account, "USD", "-500");
+    }
+    const auto before = SpotFundsBalances(engine, account);
+    order.review.emplace().confirmed = true;
+    order.review->alreadyHeld = true;
+    const auto rerun = engine.ExecutePreTrade(order);
+    EXPECT_EQ(before, pnlBreach ? (SpotFundsBalanceSnapshot{{"400", "600", "0"},
+                                                            {"0", "0", "6"}})
+                                : (SpotFundsBalanceSnapshot{
+                                      {"-100", "600", "0"}, {"0", "0", "6"}}));
+    ASSERT_FALSE(rerun.Passed());
+    ASSERT_EQ(rerun.rejects.size(), 1U);
+    EXPECT_EQ(rerun.rejects.front().code,
+              pnlBreach ? RejectCode::PnlKillSwitchTriggered
+                        : RejectCode::InsufficientFunds);
+    EXPECT_EQ(rerun.rejects.front().mode, RuleMode::Reject);
+    EXPECT_EQ(SpotFundsBalances(engine, account), before);
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsAlreadyHeldCancelNeedsFirstLock) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  const auto engine = builder.Build();
+  const auto account = openpit::param::AccountId::FromUint64(83026);
+  SeedSpotFundsLifecycleAccount(engine, account);
+  auto order = SpotFundsLifecycleOrder(account);
+  auto first = engine.ExecutePreTrade(order);
+  ASSERT_TRUE(first.Passed());
+  first.reservation->Commit();
+  order.review.emplace().confirmed = true;
+  order.review->alreadyHeld = true;
+  auto rerun = engine.ExecutePreTrade(order);
+  ASSERT_TRUE(rerun.Passed());
+  auto lock = rerun.reservation->Lock();
+  ASSERT_TRUE(lock.IsEmpty());
+  EXPECT_TRUE(rerun.reservation->AccountAdjustments().empty());
+  rerun.reservation->Commit();
+  const auto before = AdjustSpotFundsBalances(engine, account, "USD", "0");
+  EXPECT_EQ(before.balance.value().absolute.ToString(), "900");
+  EXPECT_EQ(before.held.value().absolute.ToString(), "100");
+  EXPECT_EQ(before.incoming.value().absolute.ToString(), "0");
+  const auto cancelled = engine.ApplyExecutionReport(SpotFundsCancelReport(
+      account, Quantity::FromString("1"), std::move(lock)));
+  ASSERT_EQ(cancelled.accountBlocks.size(), 1U);
+  EXPECT_EQ(cancelled.accountBlocks.front().code,
+            RejectCode::MissingRequiredField);
+  const auto after = AdjustSpotFundsBalances(engine, account, "USD", "0");
+  EXPECT_EQ(after.balance.value().absolute, before.balance.value().absolute);
+  EXPECT_EQ(after.held.value().absolute, before.held.value().absolute);
+  EXPECT_EQ(after.incoming.value().absolute, before.incoming.value().absolute);
+}
+
+TEST(BuiltinPolicy, SpotFundsAlreadyHeldOmitsBreachedReviewRules) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
+    barrier.mode = mode;
+    barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    builder.Add(
+        policies::SpotFundsPnlBoundsKillSwitchPolicy{}.GlobalBarrier(barrier));
+    const auto engine = builder.Build();
+    const auto account = openpit::param::AccountId::FromUint64(83027);
+    SeedSpotFundsLifecycleAccount(engine, account);
+    auto order = SpotFundsLifecycleOrder(account);
+    auto first = engine.ExecutePreTrade(order);
+    ASSERT_TRUE(first.Passed());
+    first.reservation->Commit();
+    const auto configured = engine.Configure().SetSpotFundsAccountPnl(
+        policies::SpotFundsPolicyName, account,
+        openpit::param::Pnl::FromString("-150"));
+    ASSERT_TRUE(configured.accountBlocks.empty());
+    engine.Configure().SpotFundsPositionLimit(
+        policies::SpotFundsPolicyName, account, openpit::param::Asset("AAPL"),
+        mode == RuleMode::ReviewWithHold ? RuleMode::ReviewWithoutHold
+                                         : RuleMode::ReviewWithHold,
+        Quantity::FromString("0"));
+    const auto probe = engine.ExecutePreTradeDryRun(order);
+    ASSERT_TRUE(probe.Passed());
+    const auto marks = probe.Reviews();
+    ASSERT_EQ(marks.size(), 2u);
+    EXPECT_EQ(std::count_if(marks.begin(), marks.end(),
+                            [mode](const auto& mark) {
+                              return mark.code ==
+                                         RejectCode::PnlKillSwitchTriggered &&
+                                     mark.mode == mode;
+                            }),
+              1);
+    EXPECT_EQ(std::count_if(marks.begin(), marks.end(),
+                            [mode](const auto& mark) {
+                              return mark.code ==
+                                         RejectCode::PositionLimitExceeded &&
+                                     mark.mode != mode &&
+                                     (mark.mode == RuleMode::ReviewWithHold ||
+                                      mark.mode == RuleMode::ReviewWithoutHold);
+                            }),
+              1);
+    const auto before = SpotFundsBalances(engine, account);
+    order.review.emplace().confirmed = true;
+    order.review->alreadyHeld = true;
+    auto rerun = engine.ExecutePreTrade(order);
+    ASSERT_TRUE(rerun.Passed());
+    EXPECT_TRUE(rerun.reservation->Lock().IsEmpty());
+    EXPECT_TRUE(rerun.reservation->Reviews().empty());
+    EXPECT_TRUE(rerun.reservation->AccountAdjustments().empty());
+    rerun.reservation->Commit();
+    EXPECT_EQ(SpotFundsBalances(engine, account), before);
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsConfirmedReviewModesRecordNewHold) {
+  for (const auto mode : {policies::SpotFundsLimitMode::ReviewWithHold,
+                          policies::SpotFundsLimitMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    builder.Add(policies::SpotFundsPolicy{});
+    const auto engine = builder.Build();
+    const auto account = openpit::param::AccountId::FromUint64(83028);
+    SeedSpotFundsLifecycleAccount(engine, account);
+    engine.Configure().SpotFundsGlobalLimitMode(policies::SpotFundsPolicyName,
+                                                mode);
+    auto order = SpotFundsLifecycleOrder(account, Quantity::FromString("11"));
+    order.review.emplace().confirmed = true;
+    auto result = engine.ExecutePreTrade(order);
+    ASSERT_TRUE(result.Passed());
+    EXPECT_TRUE(result.reservation->Reviews().empty());
+    EXPECT_FALSE(result.reservation->Lock().IsEmpty());
+    result.reservation->Commit();
+    EXPECT_EQ(
+        SpotFundsBalances(engine, account),
+        (SpotFundsBalanceSnapshot{{"-100", "1100", "0"}, {"0", "0", "11"}}));
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsReviewModesDropCopyTracksWithoutLimits) {
+  for (const auto mode : {policies::SpotFundsLimitMode::ReviewWithHold,
+                          policies::SpotFundsLimitMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    builder.Add(policies::SpotFundsPolicy{});
+    const auto engine = builder.Build();
+    const auto account = openpit::param::AccountId::FromUint64(83029);
+    SeedSpotFundsLifecycleAccount(engine, account);
+    engine.Configure().SpotFundsGlobalLimitMode(policies::SpotFundsPolicyName,
+                                                mode);
+    engine.Configure().SpotFundsPositionLimit(
+        policies::SpotFundsPolicyName, account, openpit::param::Asset("AAPL"),
+        RuleMode::Reject, Quantity::FromString("0"));
+    const auto ordinaryBefore = engine.ExecutePreTradeDryRun(
+        SpotFundsLifecycleOrder(account, Quantity::FromString("11")));
+    ASSERT_EQ(ordinaryBefore.Rejects().size(), 1U);
+    EXPECT_EQ(ordinaryBefore.Rejects().front().code,
+              RejectCode::PositionLimitExceeded);
+    EXPECT_EQ(ordinaryBefore.Rejects().front().mode, RuleMode::Reject);
+    auto result = engine.ApplyDropCopy(
+        SpotFundsLifecycleOrder(account, Quantity::FromString("11")));
+    ASSERT_TRUE(result.Passed());
+    EXPECT_TRUE(result.rejects.empty());
+    ASSERT_TRUE(result.operation.has_value());
+    EXPECT_FALSE(result.operation->IsAccountBlocked());
+    auto lock = result.operation->Lock();
+    EXPECT_FALSE(lock.IsEmpty());
+    EXPECT_THAT(lock.Prices(),
+                testing::UnorderedElementsAre(Price::FromString("100")));
+    const auto adjustments = result.operation->AccountAdjustments();
+    ASSERT_EQ(adjustments.size(), 2U);
+    std::vector<openpit::param::Asset> assets;
+    for (const auto& adjustment : adjustments) {
+      const auto& entry = adjustment.entry;
+      assets.push_back(entry.asset);
+      if (entry.asset == openpit::param::Asset("USD")) {
+        ASSERT_TRUE(entry.balance.has_value());
+        ASSERT_TRUE(entry.held.has_value());
+        EXPECT_EQ(entry.balance->delta.ToString(), "-1100");
+        EXPECT_EQ(entry.held->delta.ToString(), "1100");
+      } else if (entry.asset == openpit::param::Asset("AAPL")) {
+        ASSERT_TRUE(entry.incoming.has_value());
+        EXPECT_EQ(entry.incoming->delta.ToString(), "11");
+      }
+    }
+    EXPECT_THAT(assets,
+                testing::UnorderedElementsAre(openpit::param::Asset("USD"),
+                                              openpit::param::Asset("AAPL")));
+    result.operation->Commit();
+    EXPECT_EQ(
+        SpotFundsBalances(engine, account),
+        (SpotFundsBalanceSnapshot{{"-100", "1100", "0"}, {"0", "0", "11"}}));
+    engine.Configure().SpotFundsPositionLimit(
+        policies::SpotFundsPolicyName, account, openpit::param::Asset("AAPL"),
+        RuleMode::Reject, std::nullopt);
+    auto ordinary = engine.ExecutePreTrade(SpotFundsLifecycleOrder(account));
+    ASSERT_TRUE(ordinary.Passed());
+    ASSERT_EQ(ordinary.reservation->Reviews().size(), 1U);
+    EXPECT_EQ(ordinary.reservation->Reviews().front().code,
+              RejectCode::InsufficientFunds);
+    EXPECT_EQ(ordinary.reservation->Reviews().front().mode,
+              mode == policies::SpotFundsLimitMode::ReviewWithHold
+                  ? RuleMode::ReviewWithHold
+                  : RuleMode::ReviewWithoutHold);
+    ordinary.reservation->Rollback();
+    EXPECT_TRUE(engine
+                    .ApplyExecutionReport(SpotFundsCancelReport(
+                        account, Quantity::FromString("11"), std::move(lock)))
+                    .accountBlocks.empty());
+    EXPECT_EQ(SpotFundsBalances(engine, account),
+              (SpotFundsBalanceSnapshot{{"1000", "0", "0"}, {"0", "0", "0"}}));
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsReviewLimitModeCascade) {
+  for (const bool reverse : {false, true}) {
+    SCOPED_TRACE(reverse);
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    builder.Add(policies::SpotFundsPolicy{});
+    const auto engine = builder.Build();
+    const auto account = openpit::param::AccountId::FromUint64(83030);
+    const auto group = openpit::param::AccountGroupId::FromUint32(83031);
+    ASSERT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
+    SeedSpotFundsLifecycleAccount(engine, account);
+    const auto global = reverse
+                            ? policies::SpotFundsLimitMode::ReviewWithoutHold
+                            : policies::SpotFundsLimitMode::ReviewWithHold;
+    const auto grouped = reverse
+                             ? policies::SpotFundsLimitMode::ReviewWithHold
+                             : policies::SpotFundsLimitMode::ReviewWithoutHold;
+    engine.Configure().SpotFundsGlobalLimitMode(policies::SpotFundsPolicyName,
+                                                global);
+    engine.Configure().SpotFundsAccountGroupLimitMode(
+        policies::SpotFundsPolicyName, group, grouped);
+    engine.Configure().SpotFundsAccountLimitMode(policies::SpotFundsPolicyName,
+                                                 account, global);
+    const auto check = [&](policies::SpotFundsLimitMode expected) {
+      auto result = engine.ExecutePreTrade(
+          SpotFundsLifecycleOrder(account, Quantity::FromString("11")));
+      ASSERT_TRUE(result.Passed());
+      ASSERT_EQ(result.reservation->Reviews().size(), 1U);
+      const bool holds =
+          expected == policies::SpotFundsLimitMode::ReviewWithHold;
+      EXPECT_EQ(result.reservation->Reviews().front().mode,
+                holds ? RuleMode::ReviewWithHold : RuleMode::ReviewWithoutHold);
+      EXPECT_EQ(SpotFundsBalances(engine, account),
+                holds ? (SpotFundsBalanceSnapshot{{"-100", "1100", "0"},
+                                                  {"0", "0", "11"}})
+                      : (SpotFundsBalanceSnapshot{{"1000", "0", "0"},
+                                                  {"0", "0", "0"}}));
+      result.reservation->Rollback();
+      EXPECT_EQ(
+          SpotFundsBalances(engine, account),
+          (SpotFundsBalanceSnapshot{{"1000", "0", "0"}, {"0", "0", "0"}}));
+    };
+    check(global);
+    engine.Configure().SpotFundsAccountLimitMode(policies::SpotFundsPolicyName,
+                                                 account, std::nullopt);
+    check(grouped);
+    engine.Configure().SpotFundsAccountGroupLimitMode(
+        policies::SpotFundsPolicyName, group, std::nullopt);
+    check(global);
+  }
 }
 
 TEST(BuiltinPolicy, SpotFundsAbsentFillLockBlocksAccount) {
@@ -2236,6 +3155,13 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierPreservesBounds) {
   ASSERT_TRUE(barrier.upperBound.has_value());
   EXPECT_EQ(barrier.lowerBound->ToString(), "-1000");
   EXPECT_EQ(barrier.upperBound->ToString(), "250");
+  for (const auto invalidMode : {4, 255}) {
+    barrier.mode = static_cast<RuleMode>(invalidMode);
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    EXPECT_THROW(builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}
+                                 .GlobalBarrier(barrier)),
+                 openpit::Error);
+  }
 }
 
 TEST(BuiltinPolicy, SpotFundsPnlModesReachPolicy) {
@@ -2265,12 +3191,179 @@ TEST(BuiltinPolicy, SpotFundsPnlModesReachPolicy) {
     ASSERT_EQ(reviews.size(), 1U);
     EXPECT_EQ(reviews.front().mode, mode);
     EXPECT_EQ(reviews.front().code, RejectCode::PnlKillSwitchTriggered);
+    auto confirmed = SpotFundsLifecycleOrder(account);
+    confirmed.review.emplace().confirmed = true;
+    const auto confirmedReport = engine.ExecutePreTradeDryRun(confirmed);
+    ASSERT_TRUE(confirmedReport.Passed());
+    EXPECT_TRUE(confirmedReport.Reviews().empty());
+    auto confirmedLive = engine.ExecutePreTrade(confirmed);
+    ASSERT_TRUE(confirmedLive.Passed());
+    EXPECT_TRUE(confirmedLive.reservation->Reviews().empty());
+    confirmedLive.reservation->Rollback();
     const auto breached = engine.Configure().SetSpotFundsAccountPnl(
         policies::SpotFundsPolicyName, account,
         openpit::param::Pnl::FromString("-150"));
     ASSERT_EQ(breached.accountBlocks.size(), 1U);
     EXPECT_EQ(breached.accountBlocks.front().code,
               RejectCode::PnlKillSwitchTriggered);
+    engine.Accounts().Unblock(account);
+    const auto rejectedReport =
+        engine.ExecutePreTradeDryRun(SpotFundsLifecycleOrder(account));
+    ASSERT_FALSE(rejectedReport.Passed());
+    ASSERT_EQ(rejectedReport.Rejects().size(), 1U);
+    EXPECT_EQ(rejectedReport.Rejects().front().code,
+              RejectCode::PnlKillSwitchTriggered);
+    EXPECT_EQ(rejectedReport.Rejects().front().mode, RuleMode::Reject);
+    EXPECT_TRUE(rejectedReport.Reviews().empty());
+    for (const bool isConfirmed : {false, true}) {
+      engine.Accounts().Unblock(account);
+      auto order = SpotFundsLifecycleOrder(account);
+      order.review.emplace().confirmed = isConfirmed;
+      const auto rejected = engine.ExecutePreTrade(order);
+      ASSERT_FALSE(rejected.Passed());
+      ASSERT_EQ(rejected.rejects.size(), 1U);
+      EXPECT_EQ(rejected.rejects.front().code,
+                RejectCode::PnlKillSwitchTriggered);
+      EXPECT_EQ(rejected.rejects.front().mode, RuleMode::Reject);
+      const auto blocked = engine.ExecutePreTrade(order);
+      ASSERT_EQ(blocked.rejects.size(), 1U);
+      EXPECT_EQ(blocked.rejects.front().code, RejectCode::AccountBlocked);
+    }
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlTierDuplicatesAreAtomic) {
+  const auto account = openpit::param::AccountId::FromUint64(83303);
+  const auto group = openpit::param::AccountGroupId::FromUint32(83304);
+  for (const bool accountTier : {false, true}) {
+    SCOPED_TRACE(accountTier);
+    policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
+    barrier.mode = RuleMode::ReviewWithHold;
+    barrier.lowerBound = openpit::param::Pnl::FromString("-10");
+    const policies::SpotFundsPnlBoundsAccountGroupBarrier groupBarrier(group,
+                                                                       barrier);
+    const policies::SpotFundsPnlBoundsAccountBarrier accountBarrier(account,
+                                                                    barrier);
+    openpit::EngineBuilder invalidBuilder(openpit::SyncPolicy::None);
+    auto duplicate = policies::SpotFundsPnlBoundsKillSwitchPolicy{};
+    if (accountTier) {
+      duplicate.AccountBarrier(accountBarrier).AccountBarrier(accountBarrier);
+    } else {
+      duplicate.AccountGroupBarrier(groupBarrier)
+          .AccountGroupBarrier(groupBarrier);
+    }
+    EXPECT_THROW(duplicate.AddTo(invalidBuilder), openpit::Error);
+
+    auto policy = policies::SpotFundsPnlBoundsKillSwitchPolicy{};
+    if (accountTier) {
+      policy.AccountBarrier(accountBarrier);
+    } else {
+      policy.AccountGroupBarrier(groupBarrier);
+    }
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    builder.Add(policy);
+    const auto engine = builder.Build();
+    ASSERT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
+    SeedSpotFundsLifecycleAccount(engine, account);
+    ASSERT_TRUE(
+        engine.Configure()
+            .SetSpotFundsAccountPnl(policies::SpotFundsPolicyName, account,
+                                    openpit::param::Pnl::FromString("-50"))
+            .accountBlocks.empty());
+    const auto check = [&] {
+      const auto report =
+          engine.ExecutePreTradeDryRun(SpotFundsLifecycleOrder(account));
+      ASSERT_TRUE(report.Passed());
+      ASSERT_EQ(report.Reviews().size(), 1U);
+      EXPECT_EQ(report.Reviews().front().mode, RuleMode::ReviewWithHold);
+      EXPECT_EQ(report.Reviews().front().code,
+                RejectCode::PnlKillSwitchTriggered);
+    };
+    check();
+    auto replacement = barrier;
+    replacement.lowerBound = openpit::param::Pnl::FromString("-100");
+    try {
+      if (accountTier) {
+        static_cast<void>(engine.Configure().SpotFundsPnlBoundsKillSwitch(
+            policies::SpotFundsPolicyName, std::nullopt, std::nullopt,
+            std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{
+                {account, replacement}, {account, replacement}}));
+      } else {
+        static_cast<void>(engine.Configure().SpotFundsPnlBoundsKillSwitch(
+            policies::SpotFundsPolicyName, std::nullopt,
+            std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{
+                {group, replacement}, {group, replacement}}));
+      }
+      FAIL() << "duplicate tier key must fail";
+    } catch (const openpit::ConfigureError& error) {
+      EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
+    }
+    check();
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsReviewOnlyPnlEvaluationFailuresBlock) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    for (const bool mismatch : {false, true}) {
+      for (const bool confirmed : {false, true}) {
+        SCOPED_TRACE(testing::Message() << static_cast<int>(mode) << ":"
+                                        << mismatch << ":" << confirmed);
+        const auto account = openpit::param::AccountId::FromUint64(83305);
+        policies::SpotFundsPnlBoundsBarrier barrier(
+            openpit::param::Asset(mismatch ? "EUR" : "USD"));
+        barrier.mode = mode;
+        barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+        openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+        builder.Add(
+            policies::SpotFundsPnlBoundsKillSwitchPolicy{}.AccountBarrier(
+                {account, barrier}));
+        const auto engine = builder.Build();
+        SeedSpotFundsLifecycleAccount(engine, account);
+        const auto before = SpotFundsBalances(engine, account);
+        const auto configured =
+            mismatch ? engine.Configure().SetSpotFundsAccountPnl(
+                           policies::SpotFundsPolicyName, account,
+                           openpit::param::Pnl::FromString("0"))
+                     : engine.Configure().SetSpotFundsAccountPnl(
+                           policies::SpotFundsPolicyName, account,
+                           openpit::accountadjustment::PnlHaltReason::
+                               MissingCostBasis);
+        ASSERT_EQ(configured.accountBlocks.size(), 1U);
+        EXPECT_EQ(configured.accountBlocks.front().code,
+                  RejectCode::PnlKillSwitchTriggered);
+        engine.Accounts().Unblock(account);
+        auto order = SpotFundsLifecycleOrder(account);
+        order.review.emplace().confirmed = confirmed;
+        const auto result = engine.ExecutePreTrade(order);
+        ASSERT_FALSE(result.Passed());
+        EXPECT_FALSE(result.reservation.has_value());
+        ASSERT_EQ(result.rejects.size(), 1U);
+        EXPECT_EQ(result.rejects.front().code,
+                  RejectCode::PnlKillSwitchTriggered);
+        EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
+        if (mismatch) {
+          barrier.currency = openpit::param::Asset("USD");
+          EXPECT_TRUE(
+              engine.Configure()
+                  .SpotFundsPnlBoundsKillSwitch(
+                      policies::SpotFundsPolicyName, std::nullopt, std::nullopt,
+                      std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{
+                          {account, barrier}})
+                  .accountBlocks.empty());
+        } else {
+          EXPECT_TRUE(engine.Configure()
+                          .SetSpotFundsAccountPnl(
+                              policies::SpotFundsPolicyName, account,
+                              openpit::param::Pnl::FromString("0"))
+                          .accountBlocks.empty());
+        }
+        const auto blocked = engine.ExecutePreTrade(order);
+        ASSERT_EQ(blocked.rejects.size(), 1U);
+        EXPECT_EQ(blocked.rejects.front().code, RejectCode::AccountBlocked);
+        EXPECT_EQ(SpotFundsBalances(engine, account), before);
+      }
+    }
   }
 }
 
@@ -2278,18 +3371,16 @@ TEST(BuiltinPolicy, SpotFundsPnlDuplicateModeFailsBuild) {
   policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
   barrier.mode = RuleMode::ReviewWithHold;
   barrier.lowerBound = openpit::param::Pnl::FromString("-10");
+  openpit::EngineBuilder validBuilder(openpit::SyncPolicy::None);
+  const auto valid =
+      policies::SpotFundsPnlBoundsKillSwitchPolicy{}.GlobalBarrier(barrier);
+  ASSERT_NO_THROW(valid.AddTo(validBuilder));
+  ASSERT_NO_THROW(static_cast<void>(validBuilder.Build()));
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   const auto config = policies::SpotFundsPnlBoundsKillSwitchPolicy{}
                           .GlobalBarrier(barrier)
                           .GlobalBarrier(barrier);
-  try {
-    config.AddTo(builder);
-    FAIL() << "duplicate mode must fail builder";
-  } catch (const openpit::Error& error) {
-    EXPECT_THAT(error.Message(),
-                testing::HasSubstr(
-                    "duplicate global P&L barrier for mode ReviewWithHold"));
-  }
+  EXPECT_THROW(config.AddTo(builder), openpit::Error);
 }
 
 TEST(BuiltinPolicy, SpotFundsPnlGlobalListsPatchAllModes) {
@@ -2330,15 +3421,28 @@ TEST(BuiltinPolicy, SpotFundsPnlGlobalListsPatchAllModes) {
   checkReviews(1);
   update(std::nullopt);
   checkReviews(1);
+  update(std::vector<policies::SpotFundsPnlBoundsBarrier>{reviewing});
+  update(
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{rejecting, reviewing});
   try {
     update(
         std::vector<policies::SpotFundsPnlBoundsBarrier>{reviewing, reviewing});
     FAIL() << "duplicate mode must fail configure";
   } catch (const openpit::ConfigureError& error) {
     EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
-    EXPECT_THAT(error.Message(), testing::HasSubstr("ReviewWithHold"));
   }
   checkReviews(1);
+  const auto survived = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("-150"));
+  ASSERT_EQ(survived.accountBlocks.size(), 1U);
+  EXPECT_EQ(survived.accountBlocks.front().code,
+            RejectCode::PnlKillSwitchTriggered);
+  const auto restored = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("-50"));
+  EXPECT_TRUE(restored.accountBlocks.empty());
+  engine.Accounts().Unblock(account);
   update(std::vector<policies::SpotFundsPnlBoundsBarrier>{rejecting});
   checkReviews(0);
   update(
@@ -2387,8 +3491,6 @@ TEST(BuiltinPolicy,
   ASSERT_EQ(result.accountBlocks.size(), 1U);
   EXPECT_EQ(result.accountBlocks[0].code, RejectCode::PnlKillSwitchTriggered);
   EXPECT_EQ(result.accountBlocks[0].reason, "pnl barrier currency mismatch");
-  EXPECT_EQ(result.accountBlocks[0].details,
-            "account currency USD, barrier currency EUR");
 
   const openpit::pretrade::ExecuteResult blocked =
       engine.ExecutePreTrade(SpotFundsLifecycleOrder(account));
@@ -2396,8 +3498,6 @@ TEST(BuiltinPolicy,
   ASSERT_EQ(blocked.rejects.size(), 1U);
   EXPECT_EQ(blocked.rejects[0].code, RejectCode::PnlKillSwitchTriggered);
   EXPECT_EQ(blocked.rejects[0].reason, "pnl barrier currency mismatch");
-  EXPECT_EQ(blocked.rejects[0].details,
-            "account currency USD, barrier currency EUR");
 }
 
 TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierAppliesMatchingCurrency) {

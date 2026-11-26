@@ -779,8 +779,8 @@ mod tests {
         free_fn: Option<OpenPitMutationFreeFn>,
     }
 
-    struct FailingMutationUserData {
-        details: Option<&'static str>,
+    pub(super) struct FailingMutationUserData {
+        pub(super) details: Option<&'static str>,
     }
 
     fn sample_order() -> Order {
@@ -863,7 +863,7 @@ mod tests {
         data.state.borrow_mut().free_calls += 1;
     }
 
-    unsafe extern "C" fn failing_mutation_rollback(
+    pub(super) unsafe extern "C" fn failing_mutation_rollback(
         user_data: *mut c_void,
         out_error: OpenPitOutError,
     ) -> bool {
@@ -878,7 +878,7 @@ mod tests {
         false
     }
 
-    unsafe extern "C" fn successful_mutation_commit(
+    pub(super) unsafe extern "C" fn successful_mutation_commit(
         _user_data: *mut c_void,
         _out_error: OpenPitOutError,
     ) -> bool {

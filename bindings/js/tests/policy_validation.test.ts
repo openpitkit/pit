@@ -163,9 +163,11 @@ describe("policy instances", () => {
       return [];
     },
   };
-  const builtin = (quantity = "0") =>
+  const builtin = (quantity: string | null = "0", notional?: string) =>
     buildOrderSizeLimit().brokerBarrier(
-      new OrderSizeBrokerBarrier(new OrderSizeLimit(quantity, undefined)),
+      new OrderSizeBrokerBarrier(
+        new OrderSizeLimit(quantity === null ? undefined : quantity, notional),
+      ),
     );
   it.each(
     (
@@ -273,6 +275,70 @@ describe("policy instances", () => {
     expect(() => duplicates.build()).toThrow(/duplicate policy name/);
   });
 
+  it.each([false, true])(
+    "rejects duplicate explicit instance names, custom=%s",
+    (custom) => {
+      const instance = { name: "same-instance" };
+      const ready = custom
+        ? Engine.builder().preTrade(rejecting, instance)
+        : Engine.builder().builtin(builtin(), instance);
+      if (custom) {
+        ready.preTrade(accepting, {
+          ...instance,
+          mode: RuleMode.ReviewWithHold,
+        });
+      } else {
+        ready.builtin(builtin(), {
+          ...instance,
+          mode: RuleMode.ReviewWithHold,
+        });
+      }
+      expect(() => ready.build()).toThrow(EngineBuildError);
+    },
+  );
+
+  it.each(
+    [RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold].flatMap((mode) =>
+      [false, true].flatMap((confirmed) =>
+        [false, true].map((notional) => ({ mode, confirmed, notional })),
+      ),
+    ),
+  )(
+    "keeps OrderSizeLimit calculation failures effective, mode=$mode, confirmed=$confirmed, notional=$notional",
+    ({ mode, confirmed, notional }) => {
+      const engine = Engine.builder()
+        .builtin(notional ? builtin(null, "100") : builtin("100"), {
+          name: "size-review",
+          mode,
+        })
+        .build();
+      const input = sizedOrder("1", "10");
+      input.operation!.price = undefined;
+      input.operation!.tradeAmount = notional
+        ? TradeAmount.quantity("1")
+        : TradeAmount.volume("10");
+      input.review = { confirmed };
+      const result = engine.startPreTrade(input);
+      expect(result.ok).toBe(false);
+      expect(result.request).toBeUndefined();
+      expect(
+        result.rejects.map(({ policy, code, scope, mode }) => ({
+          policy,
+          code,
+          scope,
+          mode,
+        })),
+      ).toEqual([
+        {
+          policy: "OrderSizeLimitPolicy",
+          code: "OrderValueCalculationFailed",
+          scope: "order",
+          mode: RuleMode.Reject,
+        },
+      ]);
+    },
+  );
+
   it("uses the policy name for an empty instance name", () => {
     const emptyName = Engine.builder().builtin(builtin(), { name: "" });
     emptyName.builtin(builtin());
@@ -317,6 +383,15 @@ describe("policy instances", () => {
         scope: "order",
         policy: "OrderSizeLimitPolicy",
       });
+      const input = { ...sizedOrder("1", "10"), review: { confirmed: true } };
+      const pass = engine.startPreTrade(input);
+      expect(pass.ok).toBe(true);
+      expect(pass.rejects).toEqual([]);
+      expect(pass.reviews).toEqual([]);
+      expect(pass.request!.reviews()).toEqual([]);
+      const request = pass.request!;
+      (pass as unknown as { free(): void }).free();
+      (request as unknown as { free(): void }).free();
       engine.configure().orderSizeLimit("size-reject", {
         broker: new OrderSizeBrokerBarrier(new OrderSizeLimit("0", undefined)),
       });
@@ -324,6 +399,42 @@ describe("policy instances", () => {
       expect(rejected.ok).toBe(false);
       expect(rejected.rejects).toHaveLength(1);
       expect(rejected.rejects[0]!.mode).toBe("Reject");
+      const confirmedRejected = engine.startPreTrade(input);
+      expect(confirmedRejected.ok).toBe(false);
+      expect(confirmedRejected.request).toBeUndefined();
+      expect(
+        confirmedRejected.rejects.map(({ policy, code, scope, mode }) => ({
+          policy,
+          code,
+          scope,
+          mode,
+        })),
+      ).toEqual([
+        {
+          policy: "OrderSizeLimitPolicy",
+          code: "OrderQtyExceedsLimit",
+          scope: "order",
+          mode: RuleMode.Reject,
+        },
+      ]);
+      const report = engine.startPreTradeDryRun(sizedOrder("1", "10"));
+      expect(report.isPass).toBe(false);
+      expect(report.reviews).toEqual([]);
+      expect(
+        report.rejects.map(({ policy, code, scope, mode }) => ({
+          policy,
+          code,
+          scope,
+          mode,
+        })),
+      ).toEqual([
+        {
+          policy: "OrderSizeLimitPolicy",
+          code: "OrderQtyExceedsLimit",
+          scope: "order",
+          mode: RuleMode.Reject,
+        },
+      ]);
     },
   );
 

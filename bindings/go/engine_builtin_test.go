@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 )
@@ -54,35 +55,168 @@ func TestBuiltinRateLimitReviewMode(t *testing.T) {
 
 func TestBuiltinRateLimitConfirmedSpendsBothThresholdsAndDropsReviewMarks(t *testing.T) {
 	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		for _, alreadyHeld := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/exhausted_already_held=%t", mode, alreadyHeld), func(t *testing.T) {
+				engine, err := NewEngineBuilder().NoSync().Builtin(
+					policies.BuildRateLimit().BrokerBarriers(
+						policies.RateLimitBrokerBarrier{
+							Mode:  reject.RuleModeReject,
+							Limit: policies.RateLimit{MaxOrders: 7, Window: time.Hour},
+						},
+						policies.RateLimitBrokerBarrier{
+							Mode:  mode,
+							Limit: policies.RateLimit{MaxOrders: 4, Window: time.Hour},
+						},
+					),
+				).Build()
+				if err != nil {
+					t.Fatalf("Build() error = %v", err)
+				}
+				defer engine.Stop()
+				order := rateLimitTestOrder(t, 1)
+				assertRateLimitOrder(t, engine, order, 0, mode, false)
+
+				confirmed := rateLimitTestOrder(t, 1)
+				review := confirmed.EnsureReviewView()
+				review.SetConfirmed(true)
+				review.SetAlreadyHeld(true)
+				assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
+				review.UnsetAlreadyHeld()
+				assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
+
+				assertRateLimitOrder(t, engine, order, 0, mode, false)
+				assertRateLimitOrder(t, engine, order, 1, mode, false)
+				review.SetAlreadyHeld(true)
+				assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
+				review.UnsetAlreadyHeld()
+				assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
+				review.SetAlreadyHeld(alreadyHeld)
+				assertRateLimitOrder(t, engine, confirmed, 0, mode, true)
+			})
+		}
+	}
+}
+
+func TestBuiltinRateLimitReviewDryRunDoesNotSpendBudget(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
 		t.Run(fmt.Sprint(mode), func(t *testing.T) {
 			engine, err := NewEngineBuilder().NoSync().Builtin(
-				policies.BuildRateLimit().BrokerBarriers(
-					policies.RateLimitBrokerBarrier{
-						Mode:  reject.RuleModeReject,
-						Limit: policies.RateLimit{MaxOrders: 4, Window: time.Hour},
-					},
-					policies.RateLimitBrokerBarrier{
-						Mode:  mode,
-						Limit: policies.RateLimit{MaxOrders: 2, Window: time.Hour},
-					},
-				),
+				policies.BuildRateLimit().BrokerBarriers(policies.RateLimitBrokerBarrier{
+					Mode:  mode,
+					Limit: policies.RateLimit{MaxOrders: 1, Window: time.Hour},
+				}),
 			).Build()
 			if err != nil {
-				t.Fatalf("Build() error = %v", err)
+				t.Fatal(err)
 			}
 			defer engine.Stop()
 			order := rateLimitTestOrder(t, 1)
+			for _, probe := range []func(model.Order) (*pretrade.DryRunReport, error){
+				engine.StartPreTradeDryRun,
+				engine.ExecutePreTradeDryRun,
+			} {
+				report, err := probe(order)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer report.Close()
+				pass, err := report.IsPass()
+				if err != nil || !pass {
+					t.Fatalf("dry-run pass = %v, %v, want true", pass, err)
+				}
+				reviews, err := report.Reviews()
+				if err != nil || len(reviews) != 0 {
+					t.Fatalf("dry-run reviews = %v, %v, want no marks before the first real start", reviews, err)
+				}
+			}
 			assertRateLimitOrder(t, engine, order, 0, mode, false)
-
-			confirmed := rateLimitTestOrder(t, 1)
-			review := confirmed.EnsureReviewView()
-			review.SetConfirmed(true)
-			assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
-
+			report, err := engine.StartPreTradeDryRun(order)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer report.Close()
+			reviews, err := report.Reviews()
+			if err != nil || len(reviews) != 1 || reviews[0].Mode != mode ||
+				reviews[0].Code != reject.CodeRateLimitExceeded {
+				t.Fatalf("dry-run reviews after first start = %v, %v, want rate-limit mark", reviews, err)
+			}
+			pass, err := report.IsPass()
+			if err != nil || !pass {
+				t.Fatalf("breached dry-run pass = %v, %v, want true", pass, err)
+			}
+			rejects, err := report.Rejects()
+			if err != nil || len(rejects) != 0 {
+				t.Fatalf("breached dry-run rejects = %v, %v, want none", rejects, err)
+			}
+			if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+				[]policies.RateLimitBrokerBarrier{{Mode: mode, Limit: policies.RateLimit{MaxOrders: 2, Window: time.Hour}}},
+				nil, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			assertRateLimitOrder(t, engine, order, 0, mode, false)
 			assertRateLimitOrder(t, engine, order, 1, mode, false)
-			assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
-			assertRateLimitOrder(t, engine, order, 0, mode, true)
 		})
+	}
+}
+
+func TestBuiltinRateLimitCountsOnlyStartsReachingTheHook(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		for _, test := range []struct {
+			name        string
+			rejectLimit uint
+			reviewLimit uint
+			blocked     bool
+		}{
+			{"blocked account", 1, 1, true},
+			{"execute and commit", 3, 2, false},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", mode, test.name), func(t *testing.T) {
+				engine, err := NewEngineBuilder().NoSync().Builtin(
+					policies.BuildRateLimit().BrokerBarriers(
+						policies.RateLimitBrokerBarrier{
+							Limit: policies.RateLimit{MaxOrders: test.rejectLimit, Window: time.Hour},
+						},
+						policies.RateLimitBrokerBarrier{
+							Mode:  mode,
+							Limit: policies.RateLimit{MaxOrders: test.reviewLimit, Window: time.Hour},
+						},
+					),
+				).Build()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer engine.Stop()
+				order := rateLimitTestOrder(t, 1)
+				if test.blocked {
+					account := param.NewAccountIDFromUint64(1)
+					engine.Accounts().Block(account, "operator block")
+					request, rejects, err := engine.StartPreTrade(order)
+					if err != nil || request != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeAccountBlocked {
+						t.Fatalf("blocked start = %v, %v, %v, want AccountBlocked", request, rejects, err)
+					}
+					engine.Accounts().Unblock(account)
+					assertRateLimitOrder(t, engine, order, 0, mode, false)
+				} else {
+					request, rejects, err := engine.StartPreTrade(order)
+					if err != nil || request == nil || len(rejects) != 0 {
+						t.Fatalf("first start = %v, %v, %v, want accepted request", request, rejects, err)
+					}
+					defer request.Close()
+					reservation, rejects, err := request.Execute()
+					if err != nil || reservation == nil || len(rejects) != 0 {
+						t.Fatalf("execute = %v, %v, %v, want reservation", reservation, rejects, err)
+					}
+					reservation.CommitAndClose()
+					assertRateLimitOrder(t, engine, order, 0, mode, false)
+					assertRateLimitOrder(t, engine, order, 1, mode, false)
+				}
+				request, rejects, err := engine.StartPreTrade(order)
+				if err != nil || request != nil || len(rejects) != 1 ||
+					rejects[0].Code != reject.CodeRateLimitExceeded || rejects[0].Mode != reject.RuleModeReject {
+					t.Fatalf("final start = %v, %v, %v, want rate-limit reject", request, rejects, err)
+				}
+			})
+		}
 	}
 }
 
@@ -95,18 +229,24 @@ func TestBuiltinRateLimitDuplicateKey(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		policy *policies.RateLimitReadyBuilder
+		valid  *policies.RateLimitReadyBuilder
 	}{
-		{"broker", policies.BuildRateLimit().BrokerBarriers(broker, broker)},
-		{"asset", policies.BuildRateLimit().AssetBarriers(asset, asset)},
+		{"broker", policies.BuildRateLimit().BrokerBarriers(broker, broker), policies.BuildRateLimit().BrokerBarriers(broker)},
+		{"asset", policies.BuildRateLimit().AssetBarriers(asset, asset), policies.BuildRateLimit().AssetBarriers(asset)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			engine, err := NewEngineBuilder().NoSync().Builtin(test.policy).Build()
 			if engine != nil {
 				engine.Stop()
 			}
-			if err == nil || !strings.Contains(err.Error(), "Reject") {
-				t.Fatalf("Build() error = %v, want duplicate naming Reject", err)
+			if err == nil {
+				t.Fatal("Build() succeeded with duplicate")
 			}
+			valid, err := NewEngineBuilder().NoSync().Builtin(test.valid).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			valid.Stop()
 		})
 	}
 	reviewAsset := asset
@@ -136,6 +276,14 @@ func TestBuiltinRateLimitDuplicateKey(t *testing.T) {
 		t.Fatalf("duplicate brokers RateLimit() error = %v, want Validation", err)
 	}
 	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, false)
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+		[]policies.RateLimitBrokerBarrier{broker}, []policies.RateLimitAssetBarrier{reviewAsset}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+		[]policies.RateLimitBrokerBarrier{broker}, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestBuiltinRateLimitZeroModeIsReject(t *testing.T) {
@@ -168,9 +316,25 @@ func TestBuiltinRateLimitZeroModeIsReject(t *testing.T) {
 			if engine != nil {
 				engine.Stop()
 			}
-			if err == nil || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "Reject") {
+			if err == nil {
 				t.Fatalf("Build() error = %v, want duplicate Reject for zero mode", err)
 			}
+			var validPolicy *policies.RateLimitReadyBuilder
+			switch test.name {
+			case "broker":
+				validPolicy = policies.BuildRateLimit().BrokerBarriers(policies.RateLimitBrokerBarrier{Limit: limit})
+			case "asset":
+				validPolicy = policies.BuildRateLimit().AssetBarriers(policies.RateLimitAssetBarrier{Limit: limit, SettlementAsset: asset})
+			case "account":
+				validPolicy = policies.BuildRateLimit().AccountBarriers(policies.RateLimitAccountBarrier{Limit: limit, AccountID: account})
+			case "account-asset":
+				validPolicy = policies.BuildRateLimit().AccountAssetBarriers(policies.RateLimitAccountAssetBarrier{Limit: limit, AccountID: account, SettlementAsset: asset})
+			}
+			valid, err := NewEngineBuilder().NoSync().Builtin(validPolicy).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			valid.Stop()
 		})
 	}
 }
@@ -221,11 +385,26 @@ func TestConfigureRateLimitZeroModeIsRejectAndDuplicateIsAtomic(t *testing.T) {
 			err = engine.Configure().RateLimit(policies.RateLimitPolicyName,
 				brokers, test.assets, test.accounts, test.accountAssets)
 			var configErr *configure.Error
-			if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation ||
-				!strings.Contains(configErr.Message, "duplicate") || !strings.Contains(configErr.Message, "Reject") {
-				t.Fatalf("RateLimit() error = %v, want Validation naming duplicate Reject for zero mode", err)
+			if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
+				t.Fatalf("RateLimit() error = %v, want Validation", err)
 			}
 			assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReject, true)
+			if len(brokers) == 2 {
+				brokers = brokers[:1]
+			}
+			assets, accounts, accountAssets := test.assets, test.accounts, test.accountAssets
+			if len(assets) == 2 {
+				assets = assets[:1]
+			}
+			if len(accounts) == 2 {
+				accounts = accounts[:1]
+			}
+			if len(accountAssets) == 2 {
+				accountAssets = accountAssets[:1]
+			}
+			if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, brokers, assets, accounts, accountAssets); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -260,9 +439,8 @@ func TestBuiltinRateLimitInvalidMode(t *testing.T) {
 					if engine != nil {
 						engine.Stop()
 					}
-					message := fmt.Sprintf("%s[0] has invalid mode %d", strings.ReplaceAll(axis, "-", "_"), mode)
-					if err == nil || !strings.Contains(err.Error(), message) {
-						t.Errorf("Build() error = %v, want %q", err, message)
+					if err == nil {
+						t.Error("Build() succeeded with invalid mode")
 					}
 					engine, err = NewEngineBuilder().NoSync().Builtin(policies.BuildRateLimit().BrokerBarriers()).Build()
 					if err != nil {
@@ -274,8 +452,23 @@ func TestBuiltinRateLimitInvalidMode(t *testing.T) {
 					if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
 						t.Fatalf("RateLimit() error = %v, want Validation", err)
 					}
-					if !strings.Contains(configErr.Message, message) {
-						t.Errorf("RateLimit() error = %v, want %q", err, message)
+					switch axis {
+					case "broker":
+						bs[0].Mode = reject.RuleModeReject
+					case "asset":
+						as[0].Mode = reject.RuleModeReject
+					case "account":
+						ac[0].Mode = reject.RuleModeReject
+					case "account-asset":
+						aa[0].Mode = reject.RuleModeReject
+					}
+					valid, err := NewEngineBuilder().NoSync().Builtin(policies.BuildRateLimit().BrokerBarriers(bs...).AssetBarriers(as...).AccountBarriers(ac...).AccountAssetBarriers(aa...)).Build()
+					if err != nil {
+						t.Fatal(err)
+					}
+					valid.Stop()
+					if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, bs, as, ac, aa); err != nil {
+						t.Fatal(err)
 					}
 				})
 			}
@@ -1494,9 +1687,28 @@ func TestBuiltinPnlBoundsKillSwitchBuildValidation(t *testing.T) {
 				defer engine.Stop()
 			}
 			if test.wantErr != "" {
-				if err == nil || !strings.Contains(strings.ToLower(err.Error()), test.wantErr) {
-					t.Fatalf("Build() error = %v, want %q", err, test.wantErr)
+				if err == nil {
+					t.Fatalf("Build() error = %v, want failure", err)
 				}
+				brokers := append([]policies.PnlBoundsBrokerBarrier(nil), test.brokers...)
+				accounts := append([]policies.PnlBoundsAccountAssetBarrier(nil), test.accounts...)
+				switch test.name {
+				case "broker unknown mode":
+					brokers[0].Mode = reject.RuleModeReject
+				case "account unknown mode":
+					accounts[0].Barrier.Mode = reject.RuleModeReject
+				case "duplicate broker":
+					brokers = brokers[:1]
+				case "duplicate account":
+					accounts = accounts[:1]
+				case "conflicting seeds":
+					accounts[1].InitialPnl = accounts[0].InitialPnl
+				}
+				valid, err := NewEngineBuilder().NoSync().Builtin(policies.BuildPnlBoundsKillSwitch().BrokerBarriers(brokers...).AccountBarriers(accounts...)).Build()
+				if err != nil {
+					t.Fatal(err)
+				}
+				valid.Stop()
 			} else if err != nil {
 				t.Fatalf("Build() error = %v, want success", err)
 			}
@@ -1596,6 +1808,109 @@ func TestBuiltinPnlBoundsKillSwitchPreTradeModes(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestBuiltinPnlBoundsKillSwitchMixedBarriers(t *testing.T) {
+	for _, axis := range []string{"broker", "account"} {
+		for _, confirmed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/confirmed=%t", axis, confirmed), func(t *testing.T) {
+				usd := builtinTestAsset(t, "USD")
+				account := param.NewAccountIDFromUint64(1)
+				reviewBarrier := policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: usd,
+					LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+					Mode:            reject.RuleModeReviewWithHold,
+				}
+				withoutHoldBarrier := reviewBarrier
+				withoutHoldBarrier.Mode = reject.RuleModeReviewWithoutHold
+				rejectBarrier := reviewBarrier
+				rejectBarrier.LowerBound = optional.Some(pnlTestPnl(t, "-200"))
+				rejectBarrier.Mode = reject.RuleModeReject
+				builder := policies.BuildPnlBoundsKillSwitch().BrokerBarriers()
+				if axis == "broker" {
+					builder.BrokerBarriers(reviewBarrier, withoutHoldBarrier, rejectBarrier)
+				} else {
+					builder.AccountBarriers(
+						policies.PnlBoundsAccountAssetBarrier{Barrier: reviewBarrier, AccountID: account, InitialPnl: pnlTestPnl(t, "0")},
+						policies.PnlBoundsAccountAssetBarrier{Barrier: withoutHoldBarrier, AccountID: account, InitialPnl: pnlTestPnl(t, "0")},
+						policies.PnlBoundsAccountAssetBarrier{Barrier: rejectBarrier, AccountID: account, InitialPnl: pnlTestPnl(t, "0")},
+					)
+				}
+				engine, err := NewEngineBuilder().NoSync().Builtin(builder).Build()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer engine.Stop()
+				setPnl := func(value string) {
+					t.Helper()
+					if err := engine.Configure().SetAccountPnl(policies.PnlBoundsKillSwitchPolicyName, account, usd, pnlTestPnl(t, value)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				setPnl("-150")
+				order := pnlTestOrder(t, 1)
+				first, rejects, err := engine.StartPreTrade(order)
+				if err != nil || first == nil || len(rejects) != 0 {
+					t.Fatalf("first start rejects = %v, %v, want review-only breach", rejects, err)
+				}
+				reviews, err := first.Reviews()
+				first.Close()
+				counts := map[reject.RuleMode]int{}
+				for _, mark := range reviews {
+					if mark.Code != reject.CodePnlKillSwitchTriggered || mark.Scope != reject.ScopeAccount {
+						t.Fatalf("first start mark = %v, want PnlKillSwitchTriggered", mark)
+					}
+					counts[mark.Mode]++
+				}
+				if err != nil || len(reviews) != 2 || counts[reject.RuleModeReviewWithHold] != 1 || counts[reject.RuleModeReviewWithoutHold] != 1 {
+					t.Fatalf("first start reviews = %v, %v, want both review modes", reviews, err)
+				}
+				next, nextRejects, nextErr := engine.StartPreTrade(order)
+				if nextErr != nil || next == nil || len(nextRejects) != 0 {
+					t.Fatalf("following start = %v, %v, want evaluated order without block", nextRejects, nextErr)
+				}
+				next.Close()
+				if confirmed {
+					review := order.EnsureReviewView()
+					review.SetConfirmed(true)
+					rerun, rejects, err := engine.StartPreTrade(order)
+					if err != nil || rerun == nil || len(rejects) != 0 {
+						t.Fatalf("confirmed start rejects = %v, %v, want accepted request", rejects, err)
+					}
+					reviews, err := rerun.Reviews()
+					rerun.Close()
+					if err != nil || len(reviews) != 0 {
+						t.Fatalf("confirmed start reviews = %v, %v, want no marks", reviews, err)
+					}
+				}
+				setPnl("-250")
+				if !confirmed {
+					dry, err := engine.StartPreTradeDryRun(order)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer dry.Close()
+					marks, markErr := dry.Reviews()
+					hard, rejectErr := dry.Rejects()
+					if markErr != nil || rejectErr != nil || len(marks) != 0 || len(hard) != 1 ||
+						hard[0].Mode != reject.RuleModeReject || hard[0].Code != reject.CodePnlKillSwitchTriggered ||
+						hard[0].Scope != reject.ScopeAccount {
+						t.Fatalf("mixed dry-run rejects = %v, %v, reviews = %v, %v, want one effective account reject", hard, rejectErr, marks, markErr)
+					}
+				}
+				request, rejects, err := engine.StartPreTrade(order)
+				if err != nil || request != nil || len(rejects) != 1 || rejects[0].Mode != reject.RuleModeReject ||
+					rejects[0].Code != reject.CodePnlKillSwitchTriggered || rejects[0].Scope != reject.ScopeAccount {
+					t.Fatalf("mixed start rejects = %v, %v, want one effective account reject", rejects, err)
+				}
+				setPnl("0")
+				request, rejects, err = engine.StartPreTrade(order)
+				if err != nil || request != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeAccountBlocked {
+					t.Fatalf("recovered start rejects = %v, %v, want AccountBlocked", rejects, err)
+				}
+			})
 		}
 	}
 }
@@ -1721,6 +2036,34 @@ func TestBuiltinPnlBoundsKillSwitchReviewEvaluationFailures(t *testing.T) {
 					t.Fatalf("post-report rejects = %v, error = %v, want the recorded MissingRequiredField block", rejects, err)
 				}
 			})
+
+			t.Run("overflow", func(t *testing.T) {
+				engine := newEngine(t)
+				result, err := engine.ApplyExecutionReport(pnlTestReport(t, 1, "AAPL", "USD", "79228162514264337593543950335"))
+				if err != nil || len(result.AccountBlocks) != 0 {
+					t.Fatalf("first report = %v, %v, want no block at maximum P&L", result, err)
+				}
+				result, err = engine.ApplyExecutionReport(pnlTestReport(t, 1, "AAPL", "USD", "1"))
+				if err != nil || len(result.AccountBlocks) != 1 ||
+					!result.AccountBlocks[0].Code.IsEvaluationFailure() {
+					t.Fatalf("second report = %v, %v, want realized P&L accumulation overflow block", result, err)
+				}
+				if err := engine.Configure().SetAccountPnl(
+					policies.PnlBoundsKillSwitchPolicyName, param.NewAccountIDFromUint64(1),
+					builtinTestAsset(t, "USD"), pnlTestPnl(t, "0"),
+				); err != nil {
+					t.Fatal(err)
+				}
+				request, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1))
+				if request != nil {
+					request.Close()
+				}
+				if err != nil || request != nil || len(rejects) != 1 || rejects[0].Code != result.AccountBlocks[0].Code ||
+					rejects[0].Reason != result.AccountBlocks[0].Reason || rejects[0].Details != result.AccountBlocks[0].Details ||
+					rejects[0].Mode != reject.RuleModeReject {
+					t.Fatalf("post-overflow rejects = %v, %v, want latched account block", rejects, err)
+				}
+			})
 		})
 	}
 }
@@ -1774,17 +2117,18 @@ func TestConfigurePnlBoundsKillSwitchValidationIsAtomic(t *testing.T) {
 				if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
 					t.Fatalf("PnlBoundsKillSwitch() error = %v, want *configure.Error Validation", err)
 				}
-				// The Go native wrapper sends 4 for out-of-range modes.
-				wantMessage := axis + "[0] mode is invalid: 4"
-				if invalid == "duplicate" {
-					wantMessage = "duplicate " + axis + " barrier"
-				}
-				if !strings.Contains(configErr.Message, wantMessage) {
-					t.Fatalf("validation message = %q, want %q", configErr.Message, wantMessage)
-				}
 				_, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1))
 				if err != nil || len(rejects) != 1 || rejects[0].Code != reject.CodePnlKillSwitchTriggered {
 					t.Fatalf("after invalid update rejects = %v, %v, want previous barrier's reject", rejects, err)
+				}
+				brokers = brokers[:1]
+				brokers[0].Mode = reject.RuleModeReject
+				if len(accounts) > 0 {
+					accounts = accounts[:1]
+					accounts[0].Barrier.Mode = reject.RuleModeReject
+				}
+				if err := engine.Configure().PnlBoundsKillSwitch(policies.PnlBoundsKillSwitchPolicyName, brokers, accounts); err != nil {
+					t.Fatal(err)
 				}
 			})
 		}

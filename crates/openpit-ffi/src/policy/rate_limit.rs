@@ -805,6 +805,12 @@ mod tests {
         crate::reject::openpit_destroy_pretrade_reject_list(list);
     }
 
+    fn assert_no_rate_limit_mark(list: *mut crate::reject::OpenPitPretradeRejectList) {
+        assert!(!list.is_null(), "mark list must be populated");
+        assert_eq!(crate::reject::openpit_pretrade_reject_list_len(list), 0);
+        crate::reject::openpit_destroy_pretrade_reject_list(list);
+    }
+
     #[test]
     fn rate_limit_broker_reject_wins_over_review() {
         let broker = [
@@ -834,7 +840,10 @@ mod tests {
             OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
             OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
         ] {
-            let engine = build_rate_limit_engine(&[broker_barrier(mode, 1)]);
+            let engine = build_rate_limit_engine(&[
+                broker_barrier(mode, 1),
+                broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 3),
+            ]);
             run_start_pre_trade_passes(engine);
             let mut request = std::ptr::null_mut();
             let mut rejects = std::ptr::null_mut();
@@ -853,6 +862,393 @@ mod tests {
             assert!(error.is_null());
             assert_rate_limit_mark(reviews, mode);
             crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn rate_limit_confirmed_rerun_counts_both_thresholds_with_already_held() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            for already_held in [false, true] {
+                let engine = build_rate_limit_engine(&[
+                    broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 5),
+                    broker_barrier(mode, 3),
+                ]);
+                run_start_pre_trade_passes(engine);
+                for attempt in 2..=6 {
+                    let mut order = valid_pit_order();
+                    if attempt != 3 && attempt != 4 {
+                        order.review.is_set = true;
+                        order.review.value.confirmed = crate::param::OPENPIT_TRI_BOOL_TRUE;
+                        if already_held {
+                            order.review.value.already_held = crate::param::OPENPIT_TRI_BOOL_TRUE;
+                        }
+                    }
+                    let mut request = std::ptr::null_mut();
+                    let mut rejects = std::ptr::null_mut();
+                    let mut error = std::ptr::null_mut();
+                    let status = crate::engine::openpit_engine_start_pre_trade(
+                        engine,
+                        &order,
+                        &mut request,
+                        &mut rejects,
+                        &mut error,
+                    );
+                    assert!(error.is_null());
+                    if attempt == 6 {
+                        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Rejected);
+                        assert!(request.is_null());
+                        assert_rate_limit_mark(rejects, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+                    } else {
+                        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Passed);
+                        assert!(!request.is_null());
+                        assert!(rejects.is_null());
+                        let reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+                            request, &mut error,
+                        );
+                        assert!(error.is_null());
+                        if attempt != 4 {
+                            assert_no_rate_limit_mark(reviews);
+                        } else {
+                            assert_rate_limit_mark(reviews, mode);
+                        }
+                        crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+                    }
+                }
+                crate::engine::openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn rate_limit_broker_replacement_preserves_surviving_mode_counter() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = build_rate_limit_engine(&[broker_barrier(mode, 2)]);
+            run_start_pre_trade_passes(engine);
+            let added_mode = if mode == OPENPIT_PRETRADE_RULE_MODE_REJECT {
+                OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD
+            } else {
+                OPENPIT_PRETRADE_RULE_MODE_REJECT
+            };
+            let replacement = [broker_barrier(added_mode, 100), broker_barrier(mode, 4)];
+            let mut error = std::ptr::null_mut();
+            assert!(configure_rate_limit_arrays(
+                engine,
+                &replacement,
+                &[],
+                &[],
+                &[],
+                [true, false, false, false],
+                &mut error
+            ));
+            assert!(error.is_null());
+            for count in 2..=5 {
+                let mut error = std::ptr::null_mut();
+                let mut request = std::ptr::null_mut();
+                let mut rejects = std::ptr::null_mut();
+                let status = crate::engine::openpit_engine_start_pre_trade(
+                    engine,
+                    &valid_pit_order(),
+                    &mut request,
+                    &mut rejects,
+                    &mut error,
+                );
+                assert!(error.is_null());
+                if count == 5 && mode == OPENPIT_PRETRADE_RULE_MODE_REJECT {
+                    assert_eq!(status, crate::engine::OpenPitPretradeStatus::Rejected);
+                    assert!(request.is_null());
+                    assert_rate_limit_mark(rejects, mode);
+                } else {
+                    assert_eq!(status, crate::engine::OpenPitPretradeStatus::Passed);
+                    assert!(!request.is_null());
+                    assert!(rejects.is_null());
+                    let reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+                        request, &mut error,
+                    );
+                    assert!(error.is_null());
+                    if count <= 4 {
+                        assert_no_rate_limit_mark(reviews);
+                    } else {
+                        assert_rate_limit_mark(reviews, mode);
+                    }
+                    crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+                }
+            }
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn rate_limit_review_dry_run_spends_no_budget() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = build_rate_limit_engine(&[broker_barrier(mode, 1)]);
+            for attempt in 0..3 {
+                let mut error = std::ptr::null_mut();
+                let reviews;
+                if attempt % 2 == 0 {
+                    let mut report = std::ptr::null_mut();
+                    assert!(crate::engine::openpit_engine_start_pre_trade_dry_run(
+                        engine,
+                        &valid_pit_order(),
+                        &mut report,
+                        &mut error
+                    ));
+                    assert!(error.is_null());
+                    assert!(!report.is_null());
+                    assert!(
+                        crate::engine::openpit_pretrade_pre_trade_dry_run_report_is_pass(report)
+                    );
+                    reviews = crate::engine::openpit_pretrade_pre_trade_dry_run_report_get_reviews(
+                        report,
+                    );
+                    crate::engine::openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+                } else {
+                    let mut request = std::ptr::null_mut();
+                    let mut rejects = std::ptr::null_mut();
+                    assert_eq!(
+                        crate::engine::openpit_engine_start_pre_trade(
+                            engine,
+                            &valid_pit_order(),
+                            &mut request,
+                            &mut rejects,
+                            &mut error
+                        ),
+                        crate::engine::OpenPitPretradeStatus::Passed
+                    );
+                    assert!(error.is_null());
+                    assert!(!request.is_null());
+                    assert!(rejects.is_null());
+                    reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+                        request, &mut error,
+                    );
+                    assert!(error.is_null());
+                    crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+                }
+                if attempt < 2 {
+                    assert_no_rate_limit_mark(reviews);
+                } else {
+                    assert_rate_limit_mark(reviews, mode);
+                }
+            }
+            let mut error = std::ptr::null_mut();
+            assert!(configure_rate_limit_arrays(
+                engine,
+                &[broker_barrier(mode, 2)],
+                &[],
+                &[],
+                &[],
+                [true, false, false, false],
+                &mut error
+            ));
+            assert!(error.is_null());
+            for count in 2..=3 {
+                let mut error = std::ptr::null_mut();
+                let mut request = std::ptr::null_mut();
+                let mut rejects = std::ptr::null_mut();
+                assert_eq!(
+                    crate::engine::openpit_engine_start_pre_trade(
+                        engine,
+                        &valid_pit_order(),
+                        &mut request,
+                        &mut rejects,
+                        &mut error
+                    ),
+                    crate::engine::OpenPitPretradeStatus::Passed
+                );
+                assert!(error.is_null());
+                assert!(!request.is_null());
+                assert!(rejects.is_null());
+                let reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+                    request, &mut error,
+                );
+                assert!(error.is_null());
+                if count == 2 {
+                    assert_no_rate_limit_mark(reviews);
+                } else {
+                    assert_rate_limit_mark(reviews, mode);
+                }
+                crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+            }
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn rate_limit_blocked_account_spends_no_budget() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = build_rate_limit_engine(&[
+                broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 1),
+                broker_barrier(mode, 1),
+            ]);
+            crate::engine::openpit_engine_block_account(
+                engine,
+                7,
+                OpenPitStringView::from_utf8("administrative block"),
+            );
+            let mut request = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            assert_eq!(
+                crate::engine::openpit_engine_start_pre_trade(
+                    engine,
+                    &valid_pit_order(),
+                    &mut request,
+                    &mut rejects,
+                    &mut error
+                ),
+                crate::engine::OpenPitPretradeStatus::Rejected
+            );
+            assert!(error.is_null());
+            assert!(request.is_null());
+            let mut reject = std::mem::MaybeUninit::uninit();
+            assert_eq!(crate::reject::openpit_pretrade_reject_list_len(rejects), 1);
+            assert!(crate::reject::openpit_pretrade_reject_list_get(
+                rejects,
+                0,
+                reject.as_mut_ptr()
+            ));
+            assert_eq!(
+                unsafe { reject.assume_init() }.code,
+                crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
+            );
+            crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+            crate::engine::openpit_engine_unblock_account(engine, 7);
+            request = std::ptr::null_mut();
+            rejects = std::ptr::null_mut();
+            assert_eq!(
+                crate::engine::openpit_engine_start_pre_trade(
+                    engine,
+                    &valid_pit_order(),
+                    &mut request,
+                    &mut rejects,
+                    &mut error
+                ),
+                crate::engine::OpenPitPretradeStatus::Passed,
+                "blocked-account rejection spends neither threshold's budget"
+            );
+            assert!(error.is_null());
+            assert!(!request.is_null());
+            assert!(rejects.is_null());
+            let reviews =
+                crate::engine::openpit_pretrade_pre_trade_request_get_reviews(request, &mut error);
+            assert!(error.is_null());
+            assert_no_rate_limit_mark(reviews);
+            crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+            request = std::ptr::null_mut();
+            assert_eq!(
+                crate::engine::openpit_engine_start_pre_trade(
+                    engine,
+                    &valid_pit_order(),
+                    &mut request,
+                    &mut rejects,
+                    &mut error
+                ),
+                crate::engine::OpenPitPretradeStatus::Rejected
+            );
+            assert!(error.is_null());
+            assert!(request.is_null());
+            assert_rate_limit_mark(rejects, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn rate_limit_execute_spends_no_second_unit() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = build_rate_limit_engine(&[
+                broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 3),
+                broker_barrier(mode, 2),
+            ]);
+            let mut request = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            assert_eq!(
+                crate::engine::openpit_engine_start_pre_trade(
+                    engine,
+                    &valid_pit_order(),
+                    &mut request,
+                    &mut rejects,
+                    &mut error
+                ),
+                crate::engine::OpenPitPretradeStatus::Passed
+            );
+            assert!(error.is_null());
+            assert!(!request.is_null());
+            assert!(rejects.is_null());
+            let mut reservation = std::ptr::null_mut();
+            assert_eq!(
+                crate::engine::openpit_pretrade_pre_trade_request_execute(
+                    request,
+                    &mut reservation,
+                    &mut rejects,
+                    &mut error
+                ),
+                crate::engine::OpenPitPretradeStatus::Passed
+            );
+            assert!(error.is_null());
+            assert!(!reservation.is_null());
+            assert!(rejects.is_null());
+            crate::engine::openpit_pretrade_pre_trade_reservation_commit(reservation);
+            crate::engine::openpit_destroy_pretrade_pre_trade_reservation(reservation);
+            crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+            for attempt in 2..=3 {
+                request = std::ptr::null_mut();
+                assert_eq!(
+                    crate::engine::openpit_engine_start_pre_trade(
+                        engine,
+                        &valid_pit_order(),
+                        &mut request,
+                        &mut rejects,
+                        &mut error
+                    ),
+                    crate::engine::OpenPitPretradeStatus::Passed,
+                    "execute must not spend a second Reject unit"
+                );
+                assert!(error.is_null());
+                assert!(!request.is_null());
+                assert!(rejects.is_null());
+                let reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+                    request, &mut error,
+                );
+                assert!(error.is_null());
+                if attempt == 2 {
+                    assert_no_rate_limit_mark(reviews);
+                } else {
+                    assert_rate_limit_mark(reviews, mode);
+                }
+                crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+            }
+            request = std::ptr::null_mut();
+            assert_eq!(
+                crate::engine::openpit_engine_start_pre_trade(
+                    engine,
+                    &valid_pit_order(),
+                    &mut request,
+                    &mut rejects,
+                    &mut error
+                ),
+                crate::engine::OpenPitPretradeStatus::Rejected,
+                "the fourth start must exhaust the Reject budget"
+            );
+            assert!(error.is_null());
+            assert!(request.is_null());
+            assert_rate_limit_mark(rejects, OPENPIT_PRETRADE_RULE_MODE_REJECT);
             crate::engine::openpit_destroy_engine(engine);
         }
     }
@@ -1223,6 +1619,7 @@ mod tests {
             std::ptr::null_mut(),
         );
         assert!(!engine.is_null(), "engine build failed");
+        crate::engine::openpit_destroy_engine_builder(builder);
         engine
     }
 

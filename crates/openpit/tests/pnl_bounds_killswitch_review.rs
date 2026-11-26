@@ -144,6 +144,84 @@ fn pnl_both_review_modes_coexist_with_a_reject_barrier() {
 }
 
 #[test]
+fn pnl_confirmed_keeps_reject_barrier_beside_review() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        for account_axis in [false, true] {
+            let builder = Engine::builder::<Order, Report, ()>()
+                .with_order_review()
+                .no_sync();
+            let settlement_asset = Asset::new("USD").unwrap();
+            let barriers = [
+                barrier(settlement_asset.clone(), "-100", mode),
+                barrier(settlement_asset.clone(), "-200", RuleMode::Reject),
+            ];
+            let settings = if account_axis {
+                PnlBoundsKillSwitchSettings::new(
+                    [],
+                    barriers.map(|barrier| PnlBoundsAccountAssetBarrier {
+                        barrier,
+                        account_id: account_id(),
+                        initial_pnl: Pnl::ZERO,
+                    }),
+                )
+            } else {
+                PnlBoundsKillSwitchSettings::new(barriers, [])
+            }
+            .unwrap();
+            let policy = PnlBoundsKillSwitchPolicy::new(settings, builder.storage_builder());
+            let engine = builder.pre_trade(policy).build().unwrap();
+            assert!(engine
+                .apply_execution_report(&execution_report_spx_usd("-150"))
+                .account_blocks
+                .is_empty());
+
+            let request = engine.start_pre_trade(order(false)).unwrap();
+            assert_eq!(request.reviews().len(), 1);
+            assert_eq!(request.reviews()[0].mode, mode);
+            assert_eq!(
+                request.reviews()[0].code,
+                RejectCode::PnlKillSwitchTriggered
+            );
+            assert_eq!(request.reviews()[0].scope, RejectScope::Account);
+            drop(request);
+            let request = engine.start_pre_trade(order(true)).unwrap();
+            assert!(
+                request.reviews().is_empty(),
+                "confirmed drops the breached review barrier mark"
+            );
+            drop(request);
+
+            engine
+                .configure()
+                .set_account_pnl(
+                    TestPnlPolicy::NAME,
+                    account_id(),
+                    settlement_asset.clone(),
+                    pnl("-250"),
+                )
+                .unwrap();
+            let rejects = engine.start_pre_trade(order(true)).unwrap_err();
+            assert_eq!(rejects.len(), 1);
+            assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+            assert_eq!(rejects[0].mode, RuleMode::Reject);
+            assert_eq!(rejects[0].scope, RejectScope::Account);
+            engine
+                .configure()
+                .set_account_pnl(
+                    TestPnlPolicy::NAME,
+                    account_id(),
+                    settlement_asset,
+                    Pnl::ZERO,
+                )
+                .unwrap();
+            let rejects = engine.start_pre_trade(order(true)).unwrap_err();
+            assert_eq!(rejects.len(), 1);
+            assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
+        }
+    }
+}
+
+#[test]
 fn pnl_review_pretrade_confirmed_rerun() {
     for mode in [
         RuleMode::Reject,

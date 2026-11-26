@@ -748,6 +748,7 @@ mod tests {
             std::ptr::null_mut(),
         );
         assert!(!engine.is_null(), "engine build failed");
+        crate::engine::openpit_destroy_engine_builder(builder);
         engine
     }
 
@@ -871,6 +872,164 @@ mod tests {
         } else {
             assert!(!error.is_null());
             Err(cstr_to_string(error))
+        }
+    }
+
+    fn set_test_pnl(engine: *mut crate::engine::OpenPitEngine, pnl: OpenPitParamPnl) {
+        let mut error = std::ptr::null_mut();
+        assert!(unsafe {
+            openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
+                engine,
+                OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
+                7,
+                OpenPitStringView::from_utf8("USD"),
+                pnl,
+                &mut error,
+            )
+        });
+        assert!(error.is_null());
+    }
+
+    fn assert_pnl_record(
+        list: *mut crate::reject::OpenPitPretradeRejectList,
+        mode: OpenPitPretradeRuleMode,
+        code: crate::reject::OpenPitPretradeRejectCode,
+    ) {
+        assert!(!list.is_null());
+        assert_eq!(crate::reject::openpit_pretrade_reject_list_len(list), 1);
+        let mut record = std::mem::MaybeUninit::uninit();
+        assert!(crate::reject::openpit_pretrade_reject_list_get(
+            list,
+            0,
+            record.as_mut_ptr()
+        ));
+        let record = unsafe { record.assume_init() };
+        assert_eq!(record.code, code);
+        assert_eq!(record.mode, mode);
+        assert_eq!(
+            record.scope,
+            crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT
+        );
+        crate::reject::openpit_destroy_pretrade_reject_list(list);
+    }
+
+    fn pnl_report(pnl: Option<OpenPitParamPnl>) -> crate::execution_report::OpenPitExecutionReport {
+        use crate::execution_report::{
+            OpenPitExecutionReport, OpenPitExecutionReportOperation,
+            OpenPitExecutionReportOperationOptional, OpenPitFinancialImpact,
+            OpenPitFinancialImpactOptional,
+        };
+        let operation = valid_pit_order().operation.value;
+        OpenPitExecutionReport {
+            operation: OpenPitExecutionReportOperationOptional {
+                is_set: true,
+                value: OpenPitExecutionReportOperation {
+                    instrument: operation.instrument,
+                    account_id: operation.account_id,
+                    side: operation.side,
+                },
+            },
+            financial_impact: OpenPitFinancialImpactOptional {
+                is_set: true,
+                value: OpenPitFinancialImpact {
+                    pnl: pnl_optional(pnl),
+                    fee: crate::param::OpenPitParamFeeOptional {
+                        is_set: true,
+                        value: crate::param::OpenPitParamFee(pnl_param(0, 0).0),
+                    },
+                },
+            },
+            ..Default::default()
+        }
+    }
+
+    fn apply_pnl_report(
+        engine: *mut crate::engine::OpenPitEngine,
+        report: &crate::execution_report::OpenPitExecutionReport,
+        expect_block: bool,
+    ) -> Option<(crate::reject::OpenPitPretradeRejectCode, String, String)> {
+        let mut result = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        assert!(crate::engine::openpit_engine_apply_execution_report(
+            engine,
+            report,
+            &mut result,
+            &mut error
+        ));
+        assert!(error.is_null());
+        assert!(!result.is_null());
+        let blocks = crate::engine::openpit_post_trade_result_get_account_blocks(result);
+        assert!(!blocks.is_null());
+        assert_eq!(
+            crate::reject::openpit_pretrade_account_block_list_len(blocks),
+            usize::from(expect_block),
+            "execution report must block exactly for an effective failure"
+        );
+        let block = if expect_block {
+            let mut block = std::mem::MaybeUninit::uninit();
+            assert!(crate::reject::openpit_pretrade_account_block_list_get(
+                blocks,
+                0,
+                block.as_mut_ptr()
+            ));
+            let block = unsafe { block.assume_init() };
+            Some((
+                block.code,
+                unsafe { crate::param::parse_string_view(block.reason) }.unwrap(),
+                unsafe { crate::param::parse_string_view(block.details) }.unwrap(),
+            ))
+        } else {
+            None
+        };
+        crate::engine::openpit_destroy_post_trade_result(result);
+        block
+    }
+
+    fn assert_pnl_latched_block(
+        engine: *mut crate::engine::OpenPitEngine,
+        code: crate::reject::OpenPitPretradeRejectCode,
+        report_block: Option<&(crate::reject::OpenPitPretradeRejectCode, String, String)>,
+    ) {
+        let mut request = std::ptr::null_mut();
+        let mut rejects = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let mut order = valid_pit_order();
+        order.review.is_set = true;
+        order.review.value.confirmed = crate::param::OPENPIT_TRI_BOOL_TRUE;
+        assert_eq!(
+            crate::engine::openpit_engine_start_pre_trade(
+                engine,
+                &order,
+                &mut request,
+                &mut rejects,
+                &mut error
+            ),
+            crate::engine::OpenPitPretradeStatus::Rejected
+        );
+        assert!(error.is_null());
+        assert!(request.is_null());
+        if let Some(block) = report_block {
+            assert!(!rejects.is_null());
+            assert_eq!(crate::reject::openpit_pretrade_reject_list_len(rejects), 1);
+            let mut record = std::mem::MaybeUninit::uninit();
+            assert!(crate::reject::openpit_pretrade_reject_list_get(
+                rejects,
+                0,
+                record.as_mut_ptr()
+            ));
+            let record = unsafe { record.assume_init() };
+            assert_eq!(record.mode, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+            assert_eq!(
+                (
+                    record.code,
+                    unsafe { crate::param::parse_string_view(record.reason) }.unwrap(),
+                    unsafe { crate::param::parse_string_view(record.details) }.unwrap(),
+                ),
+                *block
+            );
+            crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+        } else {
+            assert_pnl_record(rejects, OPENPIT_PRETRADE_RULE_MODE_REJECT, code);
         }
     }
 
@@ -1424,6 +1583,212 @@ mod tests {
         }
 
         crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn pnl_confirmed_keeps_reject_barrier_beside_account_review() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            for (account_axis, confirmed) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                let mut reject = broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT);
+                reject.lower_bound = pnl_optional(Some(pnl_param(-200, 0)));
+                let broker = [broker_barrier(mode), reject];
+                let mut reject = account_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 0);
+                reject.lower_bound = pnl_optional(Some(pnl_param(-200, 0)));
+                let account = [account_barrier(mode, 0), reject];
+                let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+                    openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                        builder,
+                        0,
+                        broker.as_ptr(),
+                        if account_axis { 0 } else { broker.len() },
+                        account.as_ptr(),
+                        if account_axis { account.len() } else { 0 },
+                        std::ptr::null(),
+                        std::ptr::null_mut(),
+                    )
+                });
+                for phase in 0..4 {
+                    set_test_pnl(
+                        engine,
+                        pnl_param(
+                            if phase == 2 {
+                                -250
+                            } else if phase == 3 {
+                                0
+                            } else {
+                                -150
+                            },
+                            0,
+                        ),
+                    );
+                    let mut order = valid_pit_order();
+                    if phase > 0 {
+                        order.review.is_set = true;
+                        order.review.value.confirmed = if phase == 1 || confirmed {
+                            crate::param::OPENPIT_TRI_BOOL_TRUE
+                        } else {
+                            crate::param::OPENPIT_TRI_BOOL_FALSE
+                        };
+                    }
+                    let mut request = std::ptr::null_mut();
+                    let mut rejects = std::ptr::null_mut();
+                    let mut error = std::ptr::null_mut();
+                    let status = crate::engine::openpit_engine_start_pre_trade(
+                        engine,
+                        &order,
+                        &mut request,
+                        &mut rejects,
+                        &mut error,
+                    );
+                    assert!(error.is_null());
+                    if phase < 2 {
+                        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Passed);
+                        assert!(!request.is_null());
+                        assert!(rejects.is_null());
+                        let reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+                            request, &mut error,
+                        );
+                        assert!(error.is_null());
+                        assert!(!reviews.is_null());
+                        if phase == 0 {
+                            assert_pnl_record(
+                                reviews,
+                                mode,
+                                crate::reject::OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED,
+                            );
+                        } else {
+                            assert_eq!(
+                                crate::reject::openpit_pretrade_reject_list_len(reviews),
+                                0,
+                                "confirmed drops a breached review mark beside a Reject barrier"
+                            );
+                            crate::reject::openpit_destroy_pretrade_reject_list(reviews);
+                        }
+                        crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+                    } else {
+                        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Rejected);
+                        assert!(request.is_null());
+                        assert_pnl_record(
+                            rejects,
+                            OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                            if phase == 2 {
+                                crate::reject::OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+                            } else {
+                                crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
+                            },
+                        );
+                    }
+                }
+                crate::engine::openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn pnl_report_review_breach_does_not_block_but_reject_breach_does() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let mut reject = broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT);
+            reject.lower_bound = pnl_optional(Some(pnl_param(-200, 0)));
+            let broker = [broker_barrier(mode), reject];
+            let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+                openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                    builder,
+                    0,
+                    broker.as_ptr(),
+                    broker.len(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                )
+            });
+            apply_pnl_report(engine, &pnl_report(Some(pnl_param(-150, 0))), false);
+            set_test_pnl(engine, pnl_param(0, 0));
+            run_start_pre_trade_passes(engine);
+            let block =
+                apply_pnl_report(engine, &pnl_report(Some(pnl_param(-250, 0))), true).unwrap();
+            assert_eq!(
+                block.0,
+                crate::reject::OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+            );
+            set_test_pnl(engine, pnl_param(0, 0));
+            assert_pnl_latched_block(
+                engine,
+                crate::reject::OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED,
+                None,
+            );
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn pnl_review_report_overflow_blocks() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let broker = broker_barrier(mode);
+            let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+                openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                    builder,
+                    0,
+                    &broker,
+                    1,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                )
+            });
+            apply_pnl_report(
+                engine,
+                &pnl_report(Some(pnl_param(79_228_162_514_264_337_593_543_950_335, 0))),
+                false,
+            );
+            let block = apply_pnl_report(engine, &pnl_report(Some(pnl_param(1, 0))), true).unwrap();
+            assert!(crate::reject::openpit_pretrade_reject_code_is_evaluation_failure(block.0));
+            set_test_pnl(engine, pnl_param(0, 0));
+            assert_pnl_latched_block(engine, block.0, Some(&block));
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn pnl_review_report_missing_field_blocks() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let broker = broker_barrier(mode);
+            let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+                openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                    builder,
+                    0,
+                    &broker,
+                    1,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                )
+            });
+            let block = apply_pnl_report(engine, &pnl_report(None), true).unwrap();
+            assert_eq!(
+                block.0,
+                crate::reject::OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD
+            );
+            set_test_pnl(engine, pnl_param(0, 0));
+            assert_pnl_latched_block(engine, block.0, Some(&block));
+            crate::engine::openpit_destroy_engine(engine);
+        }
     }
 
     // Force-setting the accumulated P&L past a configured bound makes the next

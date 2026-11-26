@@ -205,6 +205,84 @@ class FullParityPolicy(openpit.pretrade.Policy):
         )
 
 
+class ReviewInstancePolicy(FullParityPolicy):
+    def __init__(
+        self,
+        *,
+        main_reject: bool = True,
+        start_reject: bool = False,
+        price: str = "99",
+        asset: str = "USD",
+        record_mode: openpit.pretrade.RuleMode = openpit.pretrade.RuleMode.REJECT,
+        scope: openpit.pretrade.RejectScope = openpit.pretrade.RejectScope.ORDER,
+        code: openpit.pretrade.RejectCode = openpit.pretrade.RejectCode.CUSTOM,
+        fail_rollback: bool = False,
+    ) -> None:
+        self.main_reject = main_reject
+        self.start_reject = start_reject
+        self.price = price
+        self.asset = asset
+        self.record_mode = record_mode
+        self.scope = scope
+        self.code = code
+        self.fail_rollback = fail_rollback
+        self.start_calls = self.main_calls = self.commits = self.rollbacks = 0
+        self.applied = 0
+        self.previous: ReviewInstancePolicy | None = None
+        self.observed: tuple[int, int] | None = None
+
+    @property
+    def policy_group_id(self) -> int:
+        return 0
+
+    def _reject(self) -> openpit.pretrade.PolicyReject:
+        return openpit.pretrade.PolicyReject(
+            code=self.code,
+            reason="review boundary",
+            details="instance contribution",
+            scope=self.scope,
+            mode=self.record_mode,
+        )
+
+    def check_pre_trade_start(
+        self, ctx: openpit.pretrade.Context, order: openpit.Order
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+        self.start_calls += 1
+        return (self._reject(),) if self.start_reject else ()
+
+    def perform_pre_trade_check(
+        self, ctx: openpit.pretrade.Context, order: openpit.Order
+    ) -> openpit.pretrade.PolicyPreTradeResult:
+        self.main_calls += 1
+        if self.previous is not None:
+            self.observed = (self.previous.rollbacks, self.previous.applied)
+        self.applied += 1
+
+        def commit() -> None:
+            self.commits += 1
+
+        def rollback() -> None:
+            self.rollbacks += 1
+            if self.fail_rollback:
+                raise RuntimeError("review mutation rollback failed")
+            self.applied -= 1
+
+        result = super().perform_pre_trade_check(ctx, order)
+        return dataclasses.replace(
+            result,
+            rejects=(self._reject(),) if self.main_reject else (),
+            mutations=(openpit.Mutation(commit=commit, rollback=rollback),),
+            lock_prices=(openpit.param.Price(self.price),),
+            account_adjustments=(
+                openpit.pretrade.AccountOutcomeEntry(
+                    asset=self.asset,
+                    held=result.account_adjustments[0].held,
+                    realized_pnl=result.account_adjustments[0].realized_pnl,
+                ),
+            ),
+        )
+
+
 class RejectingLockPolicy(openpit.pretrade.Policy):
     @property
     def name(self) -> str:
@@ -487,6 +565,355 @@ class AppliedFailingRollbackMutationPolicy(openpit.pretrade.Policy):
         return openpit.pretrade.PolicyPreTradeResult.accept(
             mutations=(openpit.Mutation(commit=lambda: None, rollback=fail_rollback),)
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_review_instance_main_segment_is_rolled_back_before_next_hook(
+    mode, confirmed
+) -> None:
+    review = ReviewInstancePolicy()
+    keep = ReviewInstancePolicy(main_reject=False, price="101", asset="EUR")
+    keep.previous = review
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(review, name="review", mode=mode)
+        .pre_trade(keep, name="keep")
+        .build()
+    )
+    order = openpit.Order(
+        operation=conftest.make_order().operation,
+        review=openpit.OrderReview(confirmed=confirmed),
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert result.ok
+    assert result.rejects == []
+    assert [(r.policy, r.mode, r.scope, r.code) for r in result.reviews] == (
+        []
+        if confirmed
+        else [
+            (
+                "FullParityPolicy",
+                mode,
+                openpit.pretrade.RejectScope.ORDER,
+                openpit.pretrade.RejectCode.CUSTOM,
+            )
+        ]
+    )
+    assert keep.observed == (1, 0)
+    reservation = result.reservation
+    assert reservation is not None
+    assert [r.mode for r in reservation.reviews] == ([] if confirmed else [mode])
+    holds = confirmed or mode == openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
+    assert reservation.lock.entries() == (
+        [(0, openpit.param.Price("101"))] if holds else []
+    )
+    assert [a.entry.asset for a in reservation.account_adjustments] == (
+        ["EUR"] if holds else []
+    )
+    reservation.commit()
+    assert (review.main_calls, review.commits, review.rollbacks, review.applied) == (
+        1,
+        0,
+        1,
+        0,
+    )
+    assert (keep.main_calls, keep.commits, keep.rollbacks, keep.applied) == (
+        1,
+        int(holds),
+        int(not holds),
+        int(holds),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("across_stages", [False, True])
+def test_review_instance_without_hold_wins_and_returns_all_marks(across_stages) -> None:
+    with_hold = ReviewInstancePolicy(
+        start_reject=across_stages, main_reject=not across_stages
+    )
+    without_hold = ReviewInstancePolicy()
+    keep = ReviewInstancePolicy(main_reject=False)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(with_hold, name="with", mode="ReviewWithHold")
+        .pre_trade(without_hold, name="without", mode="ReviewWithoutHold")
+        .pre_trade(keep, name="keep")
+        .build()
+    )
+    start = engine.start_pre_trade(order=conftest.make_order())
+    assert start.ok
+    assert [r.mode for r in start.reviews] == (
+        ["ReviewWithHold"] if across_stages else []
+    )
+    result = start.request.execute()
+    assert result.ok
+    assert result.rejects == []
+    assert sorted(r.mode for r in result.reviews) == [
+        "ReviewWithHold",
+        "ReviewWithoutHold",
+    ]
+    reservation = result.reservation
+    assert reservation is not None
+    assert reservation.lock.entries() == []
+    assert reservation.account_adjustments == []
+    reservation.commit()
+    for policy in (with_hold, without_hold, keep):
+        assert (
+            policy.main_calls,
+            policy.commits,
+            policy.rollbacks,
+            policy.applied,
+        ) == (1, 0, 1, 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("confirmed", [False, True])
+@pytest.mark.parametrize(
+    "code",
+    [
+        openpit.pretrade.RejectCode.CUSTOM,
+        openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE,
+    ],
+)
+def test_review_instance_effective_reject_discards_marks_and_mutations(
+    confirmed, code
+) -> None:
+    review = ReviewInstancePolicy(start_reject=True)
+    deny = ReviewInstancePolicy(code=code)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(review, name="review", mode="ReviewWithHold")
+        .pre_trade(deny, name="deny")
+        .build()
+    )
+    order = openpit.Order(
+        operation=conftest.make_order().operation,
+        review=openpit.OrderReview(confirmed=confirmed),
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert not result.ok
+    assert result.reservation is None
+    assert [(r.policy, r.code, r.scope, r.mode) for r in result.rejects] == [
+        ("FullParityPolicy", code, openpit.pretrade.RejectScope.ORDER, "Reject")
+    ]
+    for policy in (review, deny):
+        assert (
+            policy.start_calls,
+            policy.main_calls,
+            policy.commits,
+            policy.rollbacks,
+            policy.applied,
+        ) == (1, 1, 0, 1, 0)
+
+    dry_engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(
+            ReviewInstancePolicy(start_reject=True),
+            name="review",
+            mode="ReviewWithHold",
+        )
+        .pre_trade(ReviewInstancePolicy(code=code), name="deny")
+        .build()
+    )
+    report = dry_engine.execute_pre_trade_dry_run(order=order)
+    assert not report
+    assert report.reviews == []
+    assert [(r.policy, r.code, r.scope, r.mode) for r in report.rejects] == [
+        ("FullParityPolicy", code, openpit.pretrade.RejectScope.ORDER, "Reject")
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rollback_all", [False, True])
+def test_review_instance_rollback_failure_calls_later_hook_and_kills_engine(
+    rollback_all,
+) -> None:
+    review = ReviewInstancePolicy(
+        record_mode=(
+            openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD
+            if rollback_all
+            else openpit.pretrade.RuleMode.REJECT
+        ),
+        fail_rollback=True,
+    )
+    later = ReviewInstancePolicy(main_reject=False)
+    later.previous = review
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(
+            review, name="review", mode="Reject" if rollback_all else "ReviewWithHold"
+        )
+        .pre_trade(later, name="later")
+        .build()
+    )
+    with pytest.raises(RuntimeError, match="^review mutation rollback failed$"):
+        engine.execute_pre_trade(order=conftest.make_order())
+
+    blocked = engine.start_pre_trade(
+        order=conftest.make_order(account_id=openpit.param.AccountId.from_int(99224417))
+    )
+    assert not blocked.ok
+    assert blocked.request is None
+    assert [(r.policy, r.code, r.reason, r.mode) for r in blocked.rejects] == [
+        (
+            "Engine",
+            openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE,
+            "mutation finalizer failed",
+            "Reject",
+        )
+    ]
+    assert (review.main_calls, review.commits, review.rollbacks) == (1, 0, 1)
+    assert later.observed == (int(not rollback_all), 1)
+    assert (later.main_calls, later.commits, later.rollbacks, later.applied) == (
+        1,
+        0,
+        1,
+        0,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["Reject", "ReviewWithHold", "ReviewWithoutHold"])
+@pytest.mark.parametrize("fatal", [False, True])
+def test_review_instance_drop_copy_keeps_bookkeeping_unless_evaluation_fails(
+    mode, fatal
+) -> None:
+    policy = ReviewInstancePolicy(
+        scope=openpit.pretrade.RejectScope.ACCOUNT,
+        record_mode=(
+            openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
+            if mode == "Reject"
+            else openpit.pretrade.RuleMode.REJECT
+        ),
+        code=(
+            openpit.pretrade.RejectCode.ORDER_VALUE_CALCULATION_FAILED
+            if fatal
+            else openpit.pretrade.RejectCode.CUSTOM
+        ),
+    )
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(policy, name="review", mode=mode)
+        .build()
+    )
+    result = engine.apply_drop_copy(order=conftest.make_order())
+    if fatal:
+        assert not result.ok
+        assert result.operation is None
+        assert [(r.code, r.mode) for r in result.rejects] == [
+            (openpit.pretrade.RejectCode.ORDER_VALUE_CALCULATION_FAILED, "Reject")
+        ]
+    else:
+        assert result.ok
+        assert result.rejects == []
+        operation = result.operation
+        assert operation is not None
+        assert operation.account_block is None
+        assert not operation.is_account_blocked
+        assert operation.lock.entries() == [(0, openpit.param.Price("99"))]
+        assert [a.entry.asset for a in operation.account_adjustments] == ["USD"]
+        assert operation.account_adjustments[
+            0
+        ].entry.held.delta == openpit.param.PositionSize("2")
+        operation.commit()
+        next_order = engine.start_pre_trade(order=conftest.make_order())
+        assert next_order.ok
+        del next_order
+    assert (policy.main_calls, policy.commits, policy.rollbacks, policy.applied) == (
+        1,
+        int(not fatal),
+        int(fatal),
+        int(not fatal),
+    )
+
+
+@pytest.mark.unit
+def test_review_instance_account_block_between_stages_beats_without_hold() -> None:
+    policy = ReviewInstancePolicy(start_reject=True, main_reject=False)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(policy, name="review", mode="ReviewWithoutHold")
+        .build()
+    )
+    order = conftest.make_order()
+    start = engine.start_pre_trade(order=order)
+    assert start.ok
+    assert [(r.policy, r.mode) for r in start.request.reviews] == [
+        ("FullParityPolicy", "ReviewWithoutHold")
+    ]
+    engine.accounts().block(order.operation.account_id, "between stages")
+    result = start.request.execute()
+    assert not result.ok
+    assert result.reservation is None
+    assert [(r.code, r.mode) for r in result.rejects] == [
+        (openpit.pretrade.RejectCode.ACCOUNT_BLOCKED, "Reject")
+    ]
+    assert (
+        policy.start_calls,
+        policy.main_calls,
+        policy.commits,
+        policy.rollbacks,
+    ) == (1, 0, 0, 0)
+
+    dry = engine.execute_pre_trade_dry_run(order=order)
+    assert [(r.code, r.mode) for r in dry.rejects] == [
+        (openpit.pretrade.RejectCode.ACCOUNT_BLOCKED, "Reject")
+    ]
+    assert dry.reviews == []
+    engine.accounts().unblock(order.operation.account_id)
+    contrast = engine.execute_pre_trade_dry_run(order=order)
+    assert contrast
+    assert [(r.policy, r.mode) for r in contrast.reviews] == [
+        ("FullParityPolicy", "ReviewWithoutHold")
+    ]
+
+
+@pytest.mark.unit
+def test_review_instance_confirmed_start_without_hold_still_runs_main() -> None:
+    policy = ReviewInstancePolicy(start_reject=True, main_reject=False)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(policy, name="review", mode="ReviewWithoutHold")
+        .build()
+    )
+    order = openpit.Order(
+        operation=conftest.make_order().operation,
+        review=openpit.OrderReview(confirmed=True, already_held=True),
+    )
+    start = engine.start_pre_trade(order=order)
+    assert start.ok
+    assert start.request.reviews == []
+    result = start.request.execute()
+    assert result.ok
+    assert result.reviews == result.rejects == []
+    reservation = result.reservation
+    assert reservation is not None
+    assert reservation.lock.entries() == [(0, openpit.param.Price("99"))]
+    assert [a.entry.asset for a in reservation.account_adjustments] == ["USD"]
+    reservation.commit()
+    assert (
+        policy.start_calls,
+        policy.main_calls,
+        policy.commits,
+        policy.rollbacks,
+        policy.applied,
+    ) == (1, 1, 1, 0, 1)
 
 
 @pytest.mark.unit
