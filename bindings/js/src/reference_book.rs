@@ -199,6 +199,12 @@ impl JsReferenceBook {
     }
 
     /// Registers `instrument` under the next available instrument id.
+    ///
+    /// # Errors
+    ///
+    /// Throws `ReferenceBookRegistrationError` when the instrument is already
+    /// registered, or `TypeError` for a malformed instrument or an unknown
+    /// init key, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = register)]
     pub fn register(&mut self, instrument: InstrumentLike) -> Result<JsInstrumentId, JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;
@@ -210,6 +216,13 @@ impl JsReferenceBook {
     }
 
     /// Registers `instrument` under a caller-selected stable identifier.
+    ///
+    /// # Errors
+    ///
+    /// Throws `ReferenceBookRegistrationError` when the id or instrument is
+    /// already registered, or `TypeError` for a malformed instrument or an
+    /// unknown init key, `AssetError` for an invalid asset, or `ParamError`
+    /// for an invalid identifier.
     #[wasm_bindgen(js_name = registerWithId)]
     pub fn register_with_id(
         &mut self,
@@ -226,6 +239,11 @@ impl JsReferenceBook {
     }
 
     /// Resolves `instrument` to a registered id, or returns `undefined`.
+    ///
+    /// # Errors
+    ///
+    /// Throws `TypeError` for a malformed instrument or an unknown init key,
+    /// or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = resolve)]
     pub fn resolve(&self, instrument: InstrumentLike) -> Result<Option<JsInstrumentId>, JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;

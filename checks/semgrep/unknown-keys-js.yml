@@ -1,0 +1,125 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Closed JS option readers validate their own enumerable keys before use.
+rules:
+  - id: js-option-unknown-keys
+    message: Reject unknown keys on this JS option object before reading it.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include: [/bindings/js/src/**]
+      exclude:
+        # Order payloads accept structural classes with arbitrary metadata.
+        - /bindings/js/src/order.rs
+        # Execution-report payloads accept structural classes.
+        - /bindings/js/src/execution_report.rs
+        # Monetary amounts are execution-report fee payload values.
+        - /bindings/js/src/param/monetary_amount.rs
+        # Account-adjustment payloads accept structural classes.
+        - /bindings/js/src/account_adjustment.rs
+    patterns:
+      - pattern-either:
+          - pattern: Reflect::get($OBJ, &JsValue::from_str($KEY))
+          - pattern: js_sys::Reflect::get($OBJ, &JsValue::from_str($KEY))
+          - patterns:
+              - pattern-either:
+                  - pattern: $READ($OBJ, $KEY, ...)
+                  - pattern: $READ::<$WRAPPER>($OBJ, $KEY, ...)
+              - metavariable-regex:
+                  metavariable: $READ
+                  regex: >-
+                    (?x)^(?:
+                      read_field | has_own_field | required_field |
+                      required_string_field | optional_bool_field |
+                      optional_u16_field | optional_wrapper_field |
+                      optional_wrapper_iter_field | optional_limit_mode_entries |
+                      read_usize_field | read_f64_field | read_required_asset |
+                      get_field | has_field | optional_field | read_string |
+                      read_optional_string | read_optional_bool |
+                      read_policy_group_id | read_function | read_optional_function |
+                      parse_optional_outcome_amount | parse_optional_pnl_outcome
+                    )$
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '^(?:"|r#*")'
+      - pattern-not-inside: |
+          {
+              ...
+              reject_unknown_keys($OBJ, ..., ...)?;
+              ...
+          }
+      - pattern-not-inside: |
+          {
+              ...
+              reject_unknown_keys_with($OBJ, ..., ..., ...)?;
+              ...
+          }
+      - pattern-not-inside: |
+          {
+              ...
+              require_object($OBJ, ..., ...)?;
+              ...
+          }
+      # Wasm wrapper probing reads the pointer and clone hook.
+      - pattern-not-inside: |
+          fn clone_wrapper_value(...) -> $RESULT { ... }
+      # Error causes may expose message on any thrown object.
+      - pattern-not-inside: |
+          fn policy_callback_error(...) -> $RESULT { ... }
+      # AccountInfo exposes a lazy getter on an open shape.
+      - pattern-not-inside: |
+          fn resolve_account_group(...) -> $RESULT { ... }
+      # A custom policy is a class with methods and its own state.
+      - pattern-not-inside: |
+          fn from_js(policy: JsValue) -> Result<Self, JsValue> { ... }
+      # Thenable detection probes the synchronous callback protocol.
+      - pattern-not-inside: |
+          fn reject_thenable(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn read_user_data(...) -> $RESULT { ... }
+      # Thrown mutation errors use the open message protocol.
+      - pattern-not-inside: |
+          fn mutation_callback_error_details(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn parse_policy_reject(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn apply_policy_decision(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn apply_policy_pre_trade_result(...) -> $RESULT { ... }
+      # Custom-policy mutations expose methods on an open shape.
+      - pattern-not-inside: |
+          fn parse_policy_mutation(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn parse_account_outcome_entry(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn parse_optional_outcome_amount(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn parse_optional_pnl_outcome(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn parse_post_trade_result(...) -> $RESULT { ... }
+      # This custom-policy callback-result reader is outside the rule's scope.
+      - pattern-not-inside: |
+          fn parse_account_adjustment_return(...) -> $RESULT { ... }

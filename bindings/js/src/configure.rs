@@ -26,8 +26,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::domain::{
     clone_wrapper_value, has_own_field, is_plain_object, parse_asset, parse_bounded_number,
-    read_field, resolve_account_group_id, resolve_account_id, resolve_optional_quantity,
-    resolve_pnl,
+    read_field, reject_unknown_keys, resolve_account_group_id, resolve_account_id,
+    resolve_optional_quantity, resolve_pnl,
 };
 use crate::engine::EngineTrait;
 use crate::error::{configure_error_to_js, make_error, ErrorKind};
@@ -55,6 +55,7 @@ use crate::result::{JsAccountBlockOutcomes, JsPolicyConfigurationResult};
 const CONFIGURE_TS: &'static str = r#"
 /**
  * Runtime rate-limit configuration options.
+ * Unknown keys throw `TypeError`.
  * Omitted, `undefined` or `null` fields leave their axis unchanged. A
  * supplied iterable replaces every mode on the axis, and an empty one clears
  * it. Clearing every axis is valid; the policy then admits every order.
@@ -72,13 +73,19 @@ export interface RateLimitConfigureOptions {
   accountAssetBarriers?: Iterable<RateLimitAccountAssetBarrier> | null;
 }
 
-/** Runtime generic P&L-bounds kill-switch configuration options. */
+/**
+ * Runtime generic P&L-bounds kill-switch configuration options.
+ * Unknown keys throw `TypeError`.
+ */
 export interface PnlBoundsKillswitchConfigureOptions {
   brokerBarriers?: Iterable<PnlBoundsBrokerBarrier> | null;
   accountBarriers?: Iterable<PnlBoundsAccountAssetBarrierUpdate> | null;
 }
 
-/** Runtime generic P&L accumulator assignment options. */
+/**
+ * Runtime generic P&L accumulator assignment options.
+ * Unknown keys throw `TypeError`.
+ */
 export interface SetAccountPnlOptions {
   account: AccountId | number | bigint | string;
   settlementAsset: string;
@@ -87,6 +94,7 @@ export interface SetAccountPnlOptions {
 
 /**
  * Runtime order-size-limit configuration options.
+ * Unknown keys throw `TypeError`.
  * Omitted, `undefined` or `null` fields leave their axis unchanged. A
  * supplied iterable replaces the whole axis, and an empty one clears it.
  * `clearBroker: true` removes the broker barrier. Clearing every axis is
@@ -101,6 +109,7 @@ export interface OrderSizeLimitConfigureOptions {
 
 /**
  * Runtime review-rule configuration. Omitted or null rules keep their level.
+ * Unknown keys throw `TypeError`.
  * A supplied iterable replaces its entire level, and an empty one clears it.
  * Set `clearGlobalRule` to remove the global rule.
  */
@@ -111,19 +120,28 @@ export interface ReviewRuleConfigureOptions {
   accountRules?: Iterable<ReviewRule> | null;
 }
 
-/** Spot-funds per-account limit-mode runtime entry. */
+/**
+ * Spot-funds per-account limit-mode runtime entry.
+ * Unknown keys throw `TypeError`.
+ */
 export interface SpotFundsLimitModeAccountEntry {
   accountId: AccountId | number | bigint | string;
   mode?: import("../types.js").SpotFundsLimitMode | null;
 }
 
-/** Spot-funds per-account-group limit-mode runtime entry. */
+/**
+ * Spot-funds per-account-group limit-mode runtime entry.
+ * Unknown keys throw `TypeError`.
+ */
 export interface SpotFundsLimitModeAccountGroupEntry {
   accountGroupId: AccountGroupId | number | bigint | string;
   mode?: import("../types.js").SpotFundsLimitMode | null;
 }
 
-/** Position bound keyed by spot-funds account, asset and rule mode. */
+/**
+ * Position bound keyed by spot-funds account, asset and rule mode.
+ * Unknown keys throw `TypeError`.
+ */
 export interface SpotFundsPositionLimitEntry {
   accountId: AccountId | number | bigint | string;
   asset: string;
@@ -136,7 +154,10 @@ export interface SpotFundsPositionLimitEntry {
   limit: Quantity | string | number | bigint | null;
 }
 
-/** Runtime spot-funds slippage, pricing, limit-mode, and position options. */
+/**
+ * Runtime spot-funds slippage, pricing, limit-mode, and position options.
+ * Unknown keys throw `TypeError`.
+ */
 export interface SpotFundsConfigureOptions {
   globalSlippageBps?: number;
   pricingSource?: import("../types.js").SpotFundsPricingSource | null;
@@ -171,6 +192,7 @@ export interface SpotFundsConfigureOptions {
 
 /**
  * Runtime spot-funds P&L-bounds axis configuration options.
+ * Unknown keys throw `TypeError`.
  * Omitted or null options stay unchanged. A supplied iterable replaces every
  * mode of its global slot or group/account axis; an empty iterable clears it.
  * A repeated (tier, id, mode) key throws PolicyConfigureError before any
@@ -188,7 +210,10 @@ export interface SpotFundsPnlBoundsKillswitchConfigureOptions {
   accountBarriers?: Iterable<SpotFundsPnlBoundsAccountBarrier> | null;
 }
 
-/** Runtime spot-funds P&L accumulator assignment options. */
+/**
+ * Runtime spot-funds P&L accumulator assignment options.
+ * Unknown keys throw `TypeError`.
+ */
 export interface SetSpotFundsAccountPnlOptions {
   account: AccountId | number | bigint | string;
   state: Pnl | string | number | bigint | PnlHaltReason;
@@ -250,6 +275,7 @@ impl JsConfigurator {
     /// validation failure. Throws `TypeError` for malformed options. Throws
     /// `LifecycleError` when the owning engine is re-entered synchronously from
     /// one of its policy callbacks.
+    /// Unknown option keys throw `TypeError`.
     #[wasm_bindgen(js_name = rateLimit)]
     pub fn rate_limit(
         &self,
@@ -258,7 +284,16 @@ impl JsConfigurator {
     ) -> Result<(), JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "rateLimit options")?;
+        require_object(
+            &options,
+            "rateLimit options",
+            &[
+                "brokerBarriers",
+                "assetBarriers",
+                "accountBarriers",
+                "accountAssetBarriers",
+            ],
+        )?;
         let broker =
             optional_wrapper_iter_field::<JsRateLimitBrokerBarrier>(&options, "brokerBarriers")?;
         let assets =
@@ -316,6 +351,7 @@ impl JsConfigurator {
     /// validation failure, including a duplicate barrier key. Throws
     /// `TypeError` for malformed options and `LifecycleError` when the owning
     /// engine is re-entered synchronously from one of its policy callbacks.
+    /// Unknown option keys throw `TypeError`.
     #[wasm_bindgen(js_name = pnlBoundsKillswitch)]
     pub fn pnl_bounds_killswitch(
         &self,
@@ -324,7 +360,11 @@ impl JsConfigurator {
     ) -> Result<(), JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "pnlBoundsKillswitch options")?;
+        require_object(
+            &options,
+            "pnlBoundsKillswitch options",
+            &["brokerBarriers", "accountBarriers"],
+        )?;
         let brokers =
             optional_wrapper_iter_field::<JsPnlBoundsBrokerBarrier>(&options, "brokerBarriers")?;
         let accounts = optional_wrapper_iter_field::<JsPnlBoundsAccountAssetBarrierUpdate>(
@@ -359,6 +399,7 @@ impl JsConfigurator {
     /// `ParamError`, `RangeError`, `AssetError`, or `AccountIdError` for
     /// invalid values. Throws `LifecycleError` when the owning engine is
     /// re-entered synchronously from one of its policy callbacks.
+    /// Unknown option keys throw `TypeError`.
     #[wasm_bindgen(js_name = setAccountPnl)]
     pub fn set_account_pnl(
         &self,
@@ -367,7 +408,11 @@ impl JsConfigurator {
     ) -> Result<(), JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "setAccountPnl options")?;
+        require_object(
+            &options,
+            "setAccountPnl options",
+            &["account", "settlementAsset", "pnl"],
+        )?;
         let account = resolve_account_id(required_field(&options, "account")?)?;
         let settlement_asset = parse_asset(&required_string_field(&options, "settlementAsset")?)?;
         let pnl = resolve_pnl(required_field(&options, "pnl")?)?;
@@ -385,6 +430,7 @@ impl JsConfigurator {
     /// `ParamError` when `broker` is supplied with `clearBroker: true`. Throws
     /// `LifecycleError` when the owning engine is re-entered synchronously from
     /// one of its policy callbacks.
+    /// Unknown option keys throw `TypeError`.
     #[wasm_bindgen(js_name = orderSizeLimit)]
     pub fn order_size_limit(
         &self,
@@ -393,7 +439,16 @@ impl JsConfigurator {
     ) -> Result<(), JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "orderSizeLimit options")?;
+        require_object(
+            &options,
+            "orderSizeLimit options",
+            &[
+                "broker",
+                "clearBroker",
+                "assetBarriers",
+                "accountAssetBarriers",
+            ],
+        )?;
         let broker = optional_wrapper_field::<JsOrderSizeBrokerBarrier>(&options, "broker")?
             .map(|barrier| barrier.to_core());
         let clear_broker = optional_bool_field(&options, "clearBroker")?;
@@ -443,6 +498,7 @@ impl JsConfigurator {
     /// malformed options. Throws `LifecycleError` when the owning engine is
     /// re-entered synchronously from one of its policy callbacks.
     /// An error leaves every level unchanged.
+    /// Unknown option keys throw `TypeError`.
     #[wasm_bindgen(js_name = reviewRule)]
     pub fn review_rule(
         &self,
@@ -451,7 +507,16 @@ impl JsConfigurator {
     ) -> Result<(), JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "reviewRule options")?;
+        require_object(
+            &options,
+            "reviewRule options",
+            &[
+                "globalRule",
+                "clearGlobalRule",
+                "accountGroupRules",
+                "accountRules",
+            ],
+        )?;
         let global = optional_wrapper_field::<JsReviewRule>(&options, "globalRule")?;
         let clear_global = optional_bool_field(&options, "clearGlobalRule")? == Some(true);
         if global.is_some() && clear_global {
@@ -511,6 +576,7 @@ impl JsConfigurator {
     /// `positionLimits` entry's `limit` is not a finite safe integer.
     /// Throws `LifecycleError` when the owning engine is
     /// re-entered synchronously from one of its policy callbacks.
+    /// Unknown option or entry keys throw `TypeError`.
     #[wasm_bindgen(js_name = spotFunds)]
     pub fn spot_funds(
         &self,
@@ -519,7 +585,19 @@ impl JsConfigurator {
     ) -> Result<(), JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "spotFunds options")?;
+        require_object(
+            &options,
+            "spotFunds options",
+            &[
+                "globalSlippageBps",
+                "pricingSource",
+                "overrides",
+                "globalLimitMode",
+                "accountLimitModes",
+                "accountGroupLimitModes",
+                "positionLimits",
+            ],
+        )?;
         let global_slippage_bps = optional_u16_field(&options, "globalSlippageBps")?;
         let pricing_source = match read_field(&options, "pricingSource")? {
             value if value.is_undefined() || value.is_null() => None,
@@ -539,7 +617,8 @@ impl JsConfigurator {
             "accountGroupId",
             resolve_account_group_id,
         )?;
-        let position_limits = optional_position_limit_entries(&options)?;
+        let position_limits =
+            optional_position_limit_entries(read_field(&options, "positionLimits")?)?;
 
         self.inner
             .spot_funds(name, |settings| {
@@ -608,6 +687,7 @@ impl JsConfigurator {
     /// validation failure. Throws `TypeError` for malformed options. Throws
     /// `LifecycleError` when the owning engine is re-entered synchronously from
     /// one of its policy callbacks.
+    /// Unknown option keys throw `TypeError`.
     #[wasm_bindgen(js_name = spotFundsPnlBoundsKillswitch)]
     pub fn spot_funds_pnl_bounds_killswitch(
         &self,
@@ -616,7 +696,11 @@ impl JsConfigurator {
     ) -> Result<JsAccountBlockOutcomes, JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "spotFundsPnlBoundsKillswitch options")?;
+        require_object(
+            &options,
+            "spotFundsPnlBoundsKillswitch options",
+            &["globalBarriers", "accountGroupBarriers", "accountBarriers"],
+        )?;
         let global =
             optional_wrapper_iter_field::<JsSpotFundsPnlBoundsBarrier>(&options, "globalBarriers")?;
         let account_group = optional_wrapper_iter_field::<JsSpotFundsPnlBoundsAccountGroupBarrier>(
@@ -670,6 +754,7 @@ impl JsConfigurator {
     /// the target policy cannot apply the configuration. Throws
     /// `LifecycleError` when the owning engine is re-entered synchronously from
     /// one of its policy callbacks.
+    /// Unknown option keys throw `TypeError`.
     #[wasm_bindgen(js_name = setSpotFundsAccountPnl)]
     pub fn set_spot_funds_account_pnl(
         &self,
@@ -678,7 +763,11 @@ impl JsConfigurator {
     ) -> Result<JsPolicyConfigurationResult, JsValue> {
         self.ensure_callable()?;
         let options = options.into();
-        require_object(&options, "setSpotFundsAccountPnl options")?;
+        require_object(
+            &options,
+            "setSpotFundsAccountPnl options",
+            &["account", "state"],
+        )?;
         let account = resolve_account_id(required_field(&options, "account")?)?;
         let state = resolve_pnl_state(required_field(&options, "state")?)?;
         self.inner
@@ -704,7 +793,12 @@ impl JsConfigurator {
     }
 }
 
-fn require_object(value: &JsValue, label: &str) -> Result<(), JsValue> {
+fn require_object(value: &JsValue, label: &str, known_keys: &[&str]) -> Result<(), JsValue> {
+    require_object_shape(value, label)?;
+    reject_unknown_keys(value, label, known_keys)
+}
+
+fn require_object_shape(value: &JsValue, label: &str) -> Result<(), JsValue> {
     if is_plain_object(value) {
         Ok(())
     } else {
@@ -828,7 +922,8 @@ fn optional_limit_mode_entries<Identifier>(
     let mut entries = Vec::new();
     for item in iterator {
         let item = item?;
-        require_object(&item, field)?;
+        require_object_shape(&item, field)?;
+        reject_unknown_keys(&item, &format!("{field} entry"), &[id_field, "mode"])?;
         if !has_own_field(&item, "mode")? {
             continue;
         }
@@ -849,9 +944,8 @@ type PositionLimitEntry = (
 );
 
 fn optional_position_limit_entries(
-    options: &JsValue,
+    value: JsValue,
 ) -> Result<Option<Vec<PositionLimitEntry>>, JsValue> {
-    let value = read_field(options, "positionLimits")?;
     if value.is_undefined() || value.is_null() {
         return Ok(None);
     }
@@ -859,7 +953,11 @@ fn optional_position_limit_entries(
     let mut entries = Vec::new();
     for item in iterator {
         let item = item?;
-        require_object(&item, "positionLimits entry")?;
+        require_object(
+            &item,
+            "positionLimits entry",
+            &["accountId", "asset", "mode", "limit"],
+        )?;
         let mode = parse_rule_mode(&read_field(&item, "mode")?, "mode")?;
         let account_id = resolve_account_id(required_field(&item, "accountId")?)?;
         let asset = parse_asset(&required_string_field(&item, "asset")?)?;

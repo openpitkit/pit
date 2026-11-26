@@ -51,8 +51,8 @@ use wasm_bindgen::prelude::*;
 use crate::configure::JsConfigurator;
 use crate::context::LifecycleToken;
 use crate::domain::{
-    extract_cloned_wrapper, parse_asset, resolve_account_group_id, resolve_account_id,
-    AccountGroupIdLike, AccountIdLike,
+    extract_cloned_wrapper, parse_asset, reject_unknown_keys_with, resolve_account_group_id,
+    resolve_account_id, AccountGroupIdLike, AccountIdLike,
 };
 
 #[wasm_bindgen]
@@ -97,9 +97,9 @@ const POLICY_INSTANCE_TS: &str = r#"
 /** Registration identity and mode.
  * Omitted, null, or empty name uses the policy name.
  * Omitted or null mode is "Reject". A non-string name (unless null or
- * omitted) or an invalid mode throws EngineBuildError with kind
- * "InvalidConfiguration". Strings use exact PascalCase.
- * A throwing getter is rethrown unchanged.
+ * omitted), an invalid mode or an unknown key throws EngineBuildError with
+ * kind "InvalidConfiguration". Strings use exact PascalCase.
+ * Exceptions from getters or key enumeration propagate unchanged.
  */
 export interface PolicyInstance {
   name?: string | null;
@@ -134,6 +134,7 @@ fn parse_policy_instance(
     if !value.is_object() {
         return Err(invalid("instance must be an object"));
     }
+    reject_unknown_keys_with(&value, "instance", &["name", "mode"], invalid)?;
     let name = Reflect::get(&value, &JsValue::from_str("name"))?;
     let name = if name.is_undefined() || name.is_null() {
         None
@@ -1407,8 +1408,8 @@ impl JsEngineBuilder {
     /// Throws `TypeError` for a malformed policy or a non-numeric,
     /// non-nullish `policyGroupId`, and `RangeError` for a number outside the
     /// integers in `0..=65535`. A non-string instance name (unless null or
-    /// omitted) or an invalid mode throws `EngineBuildError` with kind
-    /// `InvalidConfiguration` during this registration call.
+    /// omitted), an invalid mode or an unknown instance key throws
+    /// `EngineBuildError` with kind `InvalidConfiguration`.
     #[wasm_bindgen(js_name = preTrade)]
     pub fn pre_trade(
         &self,
@@ -1439,8 +1440,8 @@ impl JsEngineBuilder {
     /// Throws `TypeError` when `readyBuilder` is not a builtin ready-builder
     /// token, or `EngineBuildError` or `ParamError` when the builtin's
     /// configuration is invalid. A non-string instance name (unless null or
-    /// omitted) or an invalid mode throws `EngineBuildError` with kind
-    /// `InvalidConfiguration` during this registration call.
+    /// omitted), an invalid mode or an unknown instance key throws
+    /// `EngineBuildError` with kind `InvalidConfiguration`.
     #[wasm_bindgen(js_name = builtin)]
     pub fn builtin(
         &self,
@@ -1492,8 +1493,8 @@ impl JsReadyEngineBuilder {
     /// non-nullish `policyGroupId`, and `RangeError` for a number outside the
     /// integers in `0..=65535`. Throws `LifecycleError` when the builder
     /// has already been consumed. A non-string instance name (unless null or
-    /// omitted) or an invalid mode throws `EngineBuildError` with kind
-    /// `InvalidConfiguration` during this registration call.
+    /// omitted), an invalid mode or an unknown instance key throws
+    /// `EngineBuildError` with kind `InvalidConfiguration`.
     #[wasm_bindgen(js_name = preTrade)]
     pub fn pre_trade(
         &self,
@@ -1522,8 +1523,8 @@ impl JsReadyEngineBuilder {
     /// token, `EngineBuildError` or `ParamError` when the builtin's
     /// configuration is invalid, or `LifecycleError` when the builder has
     /// already been consumed. A non-string instance name (unless null or
-    /// omitted) or an invalid mode throws `EngineBuildError` with kind
-    /// `InvalidConfiguration` during this registration call.
+    /// omitted), an invalid mode or an unknown instance key throws
+    /// `EngineBuildError` with kind `InvalidConfiguration`.
     #[wasm_bindgen(js_name = builtin)]
     pub fn builtin(
         &self,
