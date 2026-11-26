@@ -863,12 +863,6 @@ impl SpotFundsSettings {
             .barrier_for(mode, account_id, account_group_id, account_currency)
     }
 
-    /// Reads the global funds limit mode applied when no override matches.
-    #[cfg(test)]
-    pub(super) fn global_limit_mode(&self) -> SpotFundsLimitMode {
-        *self.limit_modes.global()
-    }
-
     /// Inserts or replaces a slippage override at the given cascade target.
     ///
     /// A `slippage_bps` of `None` clears any override previously set at the
@@ -2519,7 +2513,6 @@ mod tests {
     #[test]
     fn limit_mode_defaults_to_enforce() {
         let settings = default_settings();
-        assert_eq!(settings.global_limit_mode(), SpotFundsLimitMode::Enforce);
         assert_eq!(
             settings.limit_mode_for(account(7), &None),
             SpotFundsLimitMode::Enforce
@@ -2530,9 +2523,8 @@ mod tests {
     fn limit_mode_global_applies_when_no_override_matches() {
         let mut settings = default_settings();
         settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-        assert_eq!(settings.global_limit_mode(), SpotFundsLimitMode::TrackOnly);
-        // No per-account or per-group override -> global wins, with or without a
-        // bound account group.
+        // No per-account or per-group override -> global wins, with or without
+        // a bound account group.
         assert_eq!(
             settings.limit_mode_for(account(7), &None),
             SpotFundsLimitMode::TrackOnly
