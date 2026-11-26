@@ -89,7 +89,8 @@ impl JsOrderSizeLimit {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(constructor)]
     pub fn new(
         max_quantity: OptionalQuantityLike,
@@ -138,9 +139,9 @@ impl JsOrderSizeLimit {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid present field, or when the value is
-    /// neither an `OrderSizeLimit` nor a plain object. The core validates that
-    /// at least one cap is present when the policy is built.
+    /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid cap. The core
+    /// validates that at least one cap is present when the policy is built.
     fn coerce(value: JsValue) -> Result<JsOrderSizeLimit, JsValue> {
         if let Some(wrapped) = extract_cloned_wrapper::<JsOrderSizeLimit>(&value)? {
             return Ok(wrapped);
@@ -178,7 +179,8 @@ impl JsOrderSizeBrokerBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid limit.
+    /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid cap.
     #[wasm_bindgen(constructor)]
     pub fn new(limit: OrderSizeLimitLike) -> Result<JsOrderSizeBrokerBarrier, JsValue> {
         Ok(Self {
@@ -220,7 +222,9 @@ impl JsOrderSizeAssetBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `AssetError` when `asset` is empty.
+    /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid cap. An empty asset
+    /// throws `AssetError`.
     #[wasm_bindgen(constructor)]
     pub fn new(limit: OrderSizeLimitLike, asset: &str) -> Result<JsOrderSizeAssetBarrier, JsValue> {
         Ok(Self {
@@ -264,7 +268,9 @@ impl JsOrderSizeAccountAssetBarrier {
     ///
     /// # Errors
     ///
-    /// Throws `AssetError` when `asset` is empty.
+    /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid cap. An empty asset
+    /// throws `AssetError` and an invalid account throws `AccountIdError`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: OrderSizeLimitLike,

@@ -121,7 +121,9 @@ impl JsAccountGroupId {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is `0` (the reserved default group).
+    /// Throws `TypeError` for a non-number, `RangeError` for a number outside
+    /// the unsigned 32-bit integer range, or `ParamError` for `0` (the reserved
+    /// default group).
     #[wasm_bindgen(js_name = fromInt)]
     pub fn from_int(value: IntegerNumber) -> Result<JsAccountGroupId, JsValue> {
         let value = parse_bounded_number(value.into(), u64::from(u32::MAX), "account group id")?;

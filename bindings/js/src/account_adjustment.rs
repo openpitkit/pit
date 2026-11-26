@@ -179,7 +179,8 @@ impl JsAdjustmentAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(js_name = delta)]
     pub fn delta(value: PositionSizeLike) -> Result<JsAdjustmentAmount, JsValue> {
         let size = resolve_position_size(value.into())?;
@@ -194,7 +195,8 @@ impl JsAdjustmentAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(js_name = absolute)]
     pub fn absolute(value: PositionSizeLike) -> Result<JsAdjustmentAmount, JsValue> {
         let size = resolve_position_size(value.into())?;
@@ -281,7 +283,7 @@ impl JsAccountAdjustmentAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not an `AdjustmentAmount`.
+    /// Throws `TypeError` when a present value is not an `AdjustmentAmount`.
     #[wasm_bindgen(setter, js_name = balance)]
     pub fn set_balance(&mut self, value: AdjustmentAmountLike) -> Result<(), JsValue> {
         self.balance = resolve_optional_adjustment_amount(value.into())?;
@@ -298,7 +300,7 @@ impl JsAccountAdjustmentAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not an `AdjustmentAmount`.
+    /// Throws `TypeError` when a present value is not an `AdjustmentAmount`.
     #[wasm_bindgen(setter, js_name = held)]
     pub fn set_held(&mut self, value: AdjustmentAmountLike) -> Result<(), JsValue> {
         self.held = resolve_optional_adjustment_amount(value.into())?;
@@ -315,7 +317,7 @@ impl JsAccountAdjustmentAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not an `AdjustmentAmount`.
+    /// Throws `TypeError` when a present value is not an `AdjustmentAmount`.
     #[wasm_bindgen(setter, js_name = incoming)]
     pub fn set_incoming(&mut self, value: AdjustmentAmountLike) -> Result<(), JsValue> {
         self.incoming = resolve_optional_adjustment_amount(value.into())?;
@@ -393,7 +395,8 @@ impl JsAccountAdjustmentBalanceOperation {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = averageEntryPrice)]
     pub fn set_average_entry_price(&mut self, value: OptionalPriceLike) -> Result<(), JsValue> {
         self.average_entry_price = resolve_optional_price(value.into())?;
@@ -592,7 +595,8 @@ impl JsAccountAdjustmentPositionOperation {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = averageEntryPrice)]
     pub fn set_average_entry_price(&mut self, value: OptionalPriceLike) -> Result<(), JsValue> {
         self.average_entry_price = resolve_optional_price(value.into())?;
@@ -609,7 +613,8 @@ impl JsAccountAdjustmentPositionOperation {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not `"netting"`/`"hedged"`.
+    /// Throws `TypeError` for a non-string mode or `RangeError` for an unknown
+    /// string.
     #[wasm_bindgen(setter, js_name = mode)]
     pub fn set_mode(&mut self, value: OptionalPositionModeLike) -> Result<(), JsValue> {
         self.mode = resolve_optional_position_mode(value.into())?;
@@ -687,7 +692,8 @@ impl JsAccountAdjustmentBounds {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = balanceUpper)]
     pub fn set_balance_upper(&mut self, value: OptionalPositionSizeLike) -> Result<(), JsValue> {
         self.balance_upper = resolve_optional_position_size(value.into())?;
@@ -704,7 +710,8 @@ impl JsAccountAdjustmentBounds {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = balanceLower)]
     pub fn set_balance_lower(&mut self, value: OptionalPositionSizeLike) -> Result<(), JsValue> {
         self.balance_lower = resolve_optional_position_size(value.into())?;
@@ -721,7 +728,8 @@ impl JsAccountAdjustmentBounds {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = heldUpper)]
     pub fn set_held_upper(&mut self, value: OptionalPositionSizeLike) -> Result<(), JsValue> {
         self.held_upper = resolve_optional_position_size(value.into())?;
@@ -738,7 +746,8 @@ impl JsAccountAdjustmentBounds {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = heldLower)]
     pub fn set_held_lower(&mut self, value: OptionalPositionSizeLike) -> Result<(), JsValue> {
         self.held_lower = resolve_optional_position_size(value.into())?;
@@ -755,7 +764,8 @@ impl JsAccountAdjustmentBounds {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = incomingUpper)]
     pub fn set_incoming_upper(&mut self, value: OptionalPositionSizeLike) -> Result<(), JsValue> {
         self.incoming_upper = resolve_optional_position_size(value.into())?;
@@ -772,7 +782,8 @@ impl JsAccountAdjustmentBounds {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = incomingLower)]
     pub fn set_incoming_lower(&mut self, value: OptionalPositionSizeLike) -> Result<(), JsValue> {
         self.incoming_lower = resolve_optional_position_size(value.into())?;
@@ -883,7 +894,8 @@ impl JsAccountAdjustment {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when a literal field is invalid.
+    /// Throws `TypeError` for a malformed amount group or a field that is not
+    /// an `AdjustmentAmount`.
     #[wasm_bindgen(setter, js_name = amount)]
     pub fn set_amount(&mut self, value: AccountAdjustmentAmountLike) -> Result<(), JsValue> {
         self.amount = coerce_amount(value.into())?;
@@ -903,7 +915,8 @@ impl JsAccountAdjustment {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when a literal field is invalid.
+    /// Throws `TypeError` for a malformed group or field, `RangeError` for an
+    /// unsupported numeric bound, or `ParamError` for an invalid bound.
     #[wasm_bindgen(setter, js_name = bounds)]
     pub fn set_bounds(&mut self, value: AccountAdjustmentBoundsLike) -> Result<(), JsValue> {
         self.bounds = coerce_bounds(value.into())?;
@@ -1016,7 +1029,8 @@ const POSITION_OPERATION_FIELDS: [&str; 5] = [
 ///
 /// # Errors
 ///
-/// Throws `ParamError` on an invalid literal field or a non-object value.
+/// Throws `TypeError` for a malformed amount group or a field that is not an
+/// `AdjustmentAmount`.
 fn coerce_amount(value: JsValue) -> Result<Option<JsAccountAdjustmentAmount>, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Ok(None);
@@ -1037,7 +1051,8 @@ fn coerce_amount(value: JsValue) -> Result<Option<JsAccountAdjustmentAmount>, Js
 ///
 /// # Errors
 ///
-/// Throws `ParamError` on an invalid literal field or a non-object value.
+/// Throws `TypeError` for a malformed group or field, `RangeError` for an
+/// unsupported numeric bound, or `ParamError` for an invalid bound.
 fn coerce_bounds(value: JsValue) -> Result<Option<JsAccountAdjustmentBounds>, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Ok(None);
@@ -1165,9 +1180,9 @@ impl JsAccountAdjustment {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` on an invalid literal field, or
-    /// `ParamError` when the value is neither an `AccountAdjustment` nor a
-    /// plain object.
+    /// Adjustments may throw `TypeError` for malformed shapes, `RangeError` for
+    /// unsupported numbers or enum strings, `ParamError` for invalid domain
+    /// values, or `AssetError` for invalid assets.
     pub(crate) fn coerce(value: JsValue) -> Result<JsAccountAdjustment, JsValue> {
         if let Some(cloned) = clone_wrapper_value(&value)? {
             if let Ok(wrapped) = JsAccountAdjustment::try_from_js_value(cloned) {

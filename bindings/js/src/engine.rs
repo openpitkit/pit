@@ -610,8 +610,10 @@ impl JsEngine {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// Throws `TypeError` for a malformed order or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
     /// Throws `PolicyCallbackError` on callback failure. A malformed start-hook
     /// return has a `TypeError` cause for a missing field or wrong type,
@@ -643,8 +645,10 @@ impl JsEngine {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// Throws `TypeError` for a malformed order or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
     /// Throws `PolicyCallbackError` on callback failure. A malformed return
     /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
@@ -682,8 +686,10 @@ impl JsEngine {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// Throws `TypeError` for a malformed order or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
     /// Throws `PolicyCallbackError` on callback failure. A malformed return
     /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
@@ -714,8 +720,10 @@ impl JsEngine {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// Throws `TypeError` for a malformed order or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
     /// Throws `PolicyCallbackError` on callback failure. A malformed start-hook
     /// return has a `TypeError` cause for a missing field or wrong type,
@@ -741,8 +749,10 @@ impl JsEngine {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// Throws `TypeError` for a malformed order or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
     /// Throws `PolicyCallbackError` on callback failure. A malformed return
     /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
@@ -769,12 +779,14 @@ impl JsEngine {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when `report` is neither a valid
-    /// `ExecutionReport` nor a valid `ExecutionReportInit` literal. Throws
-    /// `LifecycleError` when this same engine is re-entered synchronously from
-    /// one of its policy callbacks. Throws `PolicyCallbackError` on callback
-    /// failure. A malformed return has a `TypeError` cause for an invalid
-    /// result shape, a non-iterable field, a wrong outcome type, or a thenable.
+    /// Throws `TypeError` for a malformed report or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier. Throws `LifecycleError` when this same
+    /// engine is re-entered synchronously from one of its policy callbacks.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return has
+    /// a `TypeError` cause for an invalid result shape, a non-iterable field, a
+    /// wrong outcome type, or a thenable.
     #[wasm_bindgen(js_name = applyExecutionReport)]
     pub fn apply_execution_report(
         &self,
@@ -802,13 +814,16 @@ impl JsEngine {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError`/`AccountIdError` when `accountId` or an
-    /// adjustment in the batch is invalid. Throws `LifecycleError` when this
-    /// same engine is re-entered synchronously from one of its policy callbacks.
-    /// Throws `PolicyCallbackError` on callback failure. A malformed return
-    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
-    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
-    /// invalid domain value, or `AssetError` for an invalid outcome asset.
+    /// Throws `AccountIdError` for an invalid account or `TypeError` for a
+    /// non-iterable batch. Adjustments may throw `TypeError` for malformed
+    /// shapes, `RangeError` for unsupported numbers or enum strings,
+    /// `ParamError` for invalid domain values, or `AssetError` for invalid
+    /// assets. Throws `LifecycleError` when this same engine is re-entered
+    /// synchronously from one of its policy callbacks. Throws
+    /// `PolicyCallbackError` on callback failure. A malformed return has a
+    /// `TypeError` cause for a missing field or wrong type, `RangeError` for an
+    /// invalid scope, mode, or numeric bound, `ParamError` for an invalid
+    /// domain value, or `AssetError` for an invalid outcome asset.
     #[wasm_bindgen(js_name = applyAccountAdjustment)]
     pub fn apply_account_adjustment(
         &self,
@@ -897,9 +912,10 @@ fn build_report_request(
 ///
 /// # Errors
 ///
-/// Throws `TypeError` when `adjustments` is not iterable, or
-/// `TypeError`/`ParamError`/`AssetError` when an element is neither a valid
-/// `AccountAdjustment` nor a valid literal.
+/// Throws `TypeError` for a non-iterable batch. Adjustments may throw
+/// `TypeError` for malformed shapes, `RangeError` for unsupported numbers or
+/// enum strings, `ParamError` for invalid domain values, or `AssetError` for
+/// invalid assets.
 fn collect_adjustments(
     adjustments: JsValue,
     callback_scope_id: u64,
@@ -1363,10 +1379,11 @@ impl JsEngineBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `policy` is not a valid `Policy` object.
-    /// A non-string instance name (unless null or omitted) or an invalid mode
-    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
-    /// registration call.
+    /// Throws `TypeError` for a malformed policy or a non-numeric,
+    /// non-nullish `policyGroupId`, and `RangeError` for a number outside the
+    /// integers in `0..=65535`. A non-string instance name (unless null or
+    /// omitted) or an invalid mode throws `EngineBuildError` with kind
+    /// `InvalidConfiguration` during this registration call.
     #[wasm_bindgen(js_name = preTrade)]
     pub fn pre_trade(
         &self,
@@ -1394,11 +1411,11 @@ impl JsEngineBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `readyBuilder` is not a builtin ready-builder
-    /// token, or `EngineBuildError` when the builtin's configuration is invalid.
-    /// A non-string instance name (unless null or omitted) or an invalid mode
-    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
-    /// registration call.
+    /// Throws `TypeError` when `readyBuilder` is not a builtin ready-builder
+    /// token, or `EngineBuildError` or `ParamError` when the builtin's
+    /// configuration is invalid. A non-string instance name (unless null or
+    /// omitted) or an invalid mode throws `EngineBuildError` with kind
+    /// `InvalidConfiguration` during this registration call.
     #[wasm_bindgen(js_name = builtin)]
     pub fn builtin(
         &self,
@@ -1446,11 +1463,12 @@ impl JsReadyEngineBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `policy` is not a valid `Policy` object, or
-    /// `LifecycleError` when the builder has already been consumed.
-    /// A non-string instance name (unless null or omitted) or an invalid mode
-    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
-    /// registration call.
+    /// Throws `TypeError` for a malformed policy or a non-numeric,
+    /// non-nullish `policyGroupId`, and `RangeError` for a number outside the
+    /// integers in `0..=65535`. Throws `LifecycleError` when the builder
+    /// has already been consumed. A non-string instance name (unless null or
+    /// omitted) or an invalid mode throws `EngineBuildError` with kind
+    /// `InvalidConfiguration` during this registration call.
     #[wasm_bindgen(js_name = preTrade)]
     pub fn pre_trade(
         &self,
@@ -1475,12 +1493,12 @@ impl JsReadyEngineBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `readyBuilder` is not a builtin ready-builder
-    /// token, `EngineBuildError` when the builtin's configuration is invalid, or
-    /// `LifecycleError` when the builder has already been consumed.
-    /// A non-string instance name (unless null or omitted) or an invalid mode
-    /// throws `EngineBuildError` with kind `InvalidConfiguration` during this
-    /// registration call.
+    /// Throws `TypeError` when `readyBuilder` is not a builtin ready-builder
+    /// token, `EngineBuildError` or `ParamError` when the builtin's
+    /// configuration is invalid, or `LifecycleError` when the builder has
+    /// already been consumed. A non-string instance name (unless null or
+    /// omitted) or an invalid mode throws `EngineBuildError` with kind
+    /// `InvalidConfiguration` during this registration call.
     #[wasm_bindgen(js_name = builtin)]
     pub fn builtin(
         &self,
@@ -1558,8 +1576,10 @@ impl JsReadyEngineBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `policy` is invalid, or `LifecycleError` when
-    /// the builder has already been consumed.
+    /// Throws `TypeError` for a malformed policy or a non-numeric,
+    /// non-nullish `policyGroupId`, and `RangeError` for a number outside the
+    /// integers in `0..=65535`. Throws `LifecycleError` when the builder
+    /// has already been consumed.
     fn register_pre_trade(
         &self,
         policy: JsValue,
@@ -1580,9 +1600,9 @@ impl JsReadyEngineBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `token` is not a builtin ready-builder,
-    /// `EngineBuildError` on an invalid builtin configuration, or
-    /// `LifecycleError` on a consumed builder.
+    /// Throws `TypeError` when `token` is not a builtin ready-builder,
+    /// `EngineBuildError` or `ParamError` on an invalid builtin configuration,
+    /// or `LifecycleError` on a consumed builder.
     fn register_builtin(
         &self,
         token: JsValue,

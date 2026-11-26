@@ -23,7 +23,7 @@
 //! the shared SDK wire contract.
 //!
 //! `policyGroupId` crosses the boundary as a JS `number` in `0..=65535`; a
-//! value outside that range is a `ParamError`. Prices cross as `Price` value
+//! value outside that range is a `RangeError`. Prices cross as `Price` value
 //! objects.
 
 use openpit::param::Price;
@@ -75,7 +75,8 @@ pub fn default_policy_group_id() -> u16 {
 ///
 /// # Errors
 ///
-/// Throws `ParamError` when `value` is outside `0..=65535`.
+/// Throws `TypeError` for a non-number or `RangeError` for a number that is
+/// not an integer in `0..=65535`.
 pub fn parse_policy_group_id(value: JsValue) -> Result<PolicyGroupId, JsValue> {
     let raw = parse_bounded_number(value, u64::from(u16::MAX), "policyGroupId")? as u16;
     Ok(PolicyGroupId::new(raw))
@@ -98,8 +99,9 @@ impl JsLock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid `policyGroupId`, a malformed entry, or
-    /// a non-iterable argument.
+    /// Throws `TypeError` for a malformed entry, non-iterable argument, or
+    /// wrong field type. A numeric field outside its supported range throws
+    /// `RangeError`; an invalid price value throws `ParamError`.
     #[wasm_bindgen(constructor)]
     pub fn new(entries: LockEntriesLike) -> Result<JsLock, JsValue> {
         let entries: JsValue = entries.into();
@@ -121,7 +123,8 @@ impl JsLock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid `policyGroupId` or price.
+    /// Throws `TypeError` for a wrong field type, `RangeError` for an invalid
+    /// numeric range, or `ParamError` for an invalid price value.
     #[wasm_bindgen(js_name = push)]
     pub fn push(
         &mut self,
@@ -140,7 +143,9 @@ impl JsLock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid `policyGroupId` or price.
+    /// Throws `TypeError` for a non-iterable argument or a wrong field type,
+    /// `RangeError` for an invalid numeric range, or `ParamError` for an
+    /// invalid price value.
     #[wasm_bindgen(js_name = pushMany)]
     pub fn push_many(
         &mut self,
@@ -159,7 +164,9 @@ impl JsLock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid entry or a non-iterable argument.
+    /// Throws `TypeError` for a malformed entry, non-iterable argument, or
+    /// wrong field type. A numeric field outside its supported range throws
+    /// `RangeError`; an invalid price value throws `ParamError`.
     #[wasm_bindgen(js_name = extend)]
     pub fn extend(&mut self, entries: LockEntryIterable) -> Result<(), JsValue> {
         push_pairs_into_lock(&mut self.inner, &entries.into())
@@ -193,7 +200,8 @@ impl JsLock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid `policyGroupId`.
+    /// Throws `TypeError` for a non-number or `RangeError` for a number that
+    /// is not an integer in `0..=65535`.
     #[wasm_bindgen(js_name = pricesOf)]
     pub fn prices_of(&self, policy_group_id: IntegerNumber) -> Result<Vec<JsPrice>, JsValue> {
         let policy_group_id = parse_policy_group_id(policy_group_id.into())?;
@@ -370,7 +378,9 @@ fn push_pairs_into_lock(lock: &mut PreTradeLock, entries: &JsValue) -> Result<()
 ///
 /// # Errors
 ///
-/// Throws `ParamError` when the argument is not iterable or a price is invalid.
+/// Throws `TypeError` for a non-iterable argument or a wrong price type,
+/// `RangeError` for an unsupported numeric price, or `ParamError` for an
+/// invalid price value. Iterator exceptions propagate unchanged.
 fn collect_prices(prices: JsValue) -> Result<Vec<Price>, JsValue> {
     let iterator = js_sys::try_iter(&prices)?.ok_or_else(|| {
         make_error(

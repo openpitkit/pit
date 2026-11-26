@@ -42,7 +42,9 @@ impl JsLeverage {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when the multiplier is outside `1..=3000`.
+    /// Throws `TypeError` for a non-number, `RangeError` for a number outside
+    /// the unsigned 16-bit integer range, or `ParamError` for an integer
+    /// multiplier outside `1..=3000`.
     #[wasm_bindgen(js_name = fromInt)]
     pub fn from_int(value: IntegerNumber) -> Result<JsLeverage, JsValue> {
         let value = parse_bounded_number(value.into(), u64::from(u16::MAX), "leverage")? as u16;

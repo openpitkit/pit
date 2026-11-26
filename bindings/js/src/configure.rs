@@ -312,7 +312,7 @@ impl JsConfigurator {
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
     /// validation failure, including a duplicate barrier key. Throws
-    /// `ParamError` for malformed options and `LifecycleError` when the owning
+    /// `TypeError` for malformed options and `LifecycleError` when the owning
     /// engine is re-entered synchronously from one of its policy callbacks.
     #[wasm_bindgen(js_name = pnlBoundsKillswitch)]
     pub fn pnl_bounds_killswitch(
@@ -353,8 +353,9 @@ impl JsConfigurator {
     /// # Errors
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
-    /// validation failure. Throws `ParamError`/`AssetError`/`AccountIdError`
-    /// for malformed options. Throws `LifecycleError` when the owning engine is
+    /// validation failure. Throws `TypeError` for malformed options and
+    /// `ParamError`, `RangeError`, `AssetError`, or `AccountIdError` for
+    /// invalid values. Throws `LifecycleError` when the owning engine is
     /// re-entered synchronously from one of its policy callbacks.
     #[wasm_bindgen(js_name = setAccountPnl)]
     pub fn set_account_pnl(
@@ -378,7 +379,8 @@ impl JsConfigurator {
     /// # Errors
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
-    /// validation failure. Throws `ParamError` for malformed options. Throws
+    /// validation failure. Throws `TypeError` for malformed options and
+    /// `ParamError` when `broker` is supplied with `clearBroker: true`. Throws
     /// `LifecycleError` when the owning engine is re-entered synchronously from
     /// one of its policy callbacks.
     #[wasm_bindgen(js_name = orderSizeLimit)]
@@ -498,9 +500,13 @@ impl JsConfigurator {
     /// # Errors
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
-    /// validation failure. Throws `ParamError`/`AssetError`/`AccountIdError`
-    /// for malformed options. Throws `RangeError` for an unknown mode string
-    /// or `TypeError` for a non-string mode in a `positionLimits` entry.
+    /// validation failure. Throws `TypeError` for malformed options, including
+    /// a non-string mode in a `positionLimits` entry. Throws
+    /// `ParamError`/`AssetError`/`AccountIdError` for invalid values. Throws
+    /// `RangeError` for an unknown limit mode, `positionLimits` rule mode,
+    /// or `pricingSource`. It also throws `RangeError` when a numeric
+    /// `globalSlippageBps` is not an integer in `0..=65535`, or a numeric
+    /// `positionLimits` entry's `limit` is not a finite safe integer.
     /// Throws `LifecycleError` when the owning engine is
     /// re-entered synchronously from one of its policy callbacks.
     #[wasm_bindgen(js_name = spotFunds)]
@@ -597,7 +603,7 @@ impl JsConfigurator {
     /// # Errors
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
-    /// validation failure. Throws `ParamError` for malformed options. Throws
+    /// validation failure. Throws `TypeError` for malformed options. Throws
     /// `LifecycleError` when the owning engine is re-entered synchronously from
     /// one of its policy callbacks.
     #[wasm_bindgen(js_name = spotFundsPnlBoundsKillswitch)]

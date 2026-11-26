@@ -1435,8 +1435,9 @@ fn mutation_callback_error_details(error: &JsValue, fallback: &str) -> String {
 ///
 /// # Errors
 ///
-/// Throws `TypeError` when the shape is malformed, `ParamError` for invalid
-/// numeric values, or `AssetError` for an invalid asset.
+/// Throws `TypeError` for a malformed shape, `RangeError` for an unsupported
+/// number, `ParamError` for an invalid domain value, or `AssetError` for an
+/// invalid asset.
 fn parse_account_outcome_entry(value: &JsValue) -> Result<AccountOutcomeEntry, JsValue> {
     if let Some(entry) = extract_cloned_wrapper::<JsAccountOutcomeEntry>(value)? {
         return entry.to_core();

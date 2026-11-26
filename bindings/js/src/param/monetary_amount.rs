@@ -60,8 +60,9 @@ impl JsMonetaryAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid fee or `AssetError` on an invalid
-    /// currency.
+    /// Throws `TypeError` for a malformed monetary amount, `RangeError` for an
+    /// unsupported number, `ParamError` for an invalid fee, or `AssetError` for
+    /// an invalid currency.
     #[wasm_bindgen(constructor)]
     pub fn new(amount: FeeLike, currency: &str) -> Result<JsMonetaryAmount, JsValue> {
         Ok(Self {
@@ -112,8 +113,9 @@ impl JsMonetaryAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when a present value cannot be
-    /// marshalled into the core value types.
+    /// Throws `TypeError` for a malformed monetary amount, `RangeError` for an
+    /// unsupported number, `ParamError` for an invalid fee, or `AssetError` for
+    /// an invalid currency.
     pub fn resolve_optional(value: JsValue) -> Result<Option<MonetaryAmount>, JsValue> {
         if value.is_undefined() || value.is_null() {
             return Ok(None);

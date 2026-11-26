@@ -132,7 +132,8 @@ macro_rules! define_decimal_value_type {
             ///
             /// # Errors
             ///
-            /// Throws `ParamError` on an invalid value or type.
+            /// Throws `TypeError` for a wrong value type, `RangeError` for an
+            /// unsupported number, or `ParamError` for an invalid domain value.
             #[wasm_bindgen(constructor)]
             pub fn new(value: DecimalInputLike) -> Result<$js_type, JsValue> {
                 let value: JsValue = value.into();
@@ -157,7 +158,8 @@ macro_rules! define_decimal_value_type {
             ///
             /// # Errors
             ///
-            /// Throws `ParamError` on an out-of-domain value.
+            /// Throws `TypeError` for a non-bigint or `ParamError` for an
+            /// out-of-domain value.
             #[wasm_bindgen(js_name = fromInt)]
             pub fn from_int(value: BigIntLike) -> Result<$js_type, JsValue> {
                 let value: JsValue = value.into();
@@ -191,7 +193,10 @@ macro_rules! define_decimal_value_type {
             ///
             /// # Errors
             ///
-            /// Throws `ParamError` on an invalid value, scale, or strategy.
+            /// Throws `TypeError` for a non-number scale, `RangeError` for a
+            /// scale outside the unsigned 32-bit integer range or an unknown
+            /// strategy, or `ParamError` when decimal conversion or rounding
+            /// fails.
             #[wasm_bindgen(js_name = fromStringRounded)]
             pub fn from_string_rounded(
                 value: &str,
@@ -216,7 +221,10 @@ macro_rules! define_decimal_value_type {
             ///
             /// # Errors
             ///
-            /// Throws `ParamError` on an invalid value, scale, or strategy.
+            /// Throws `TypeError` for a non-number scale, `RangeError` for a
+            /// scale outside the unsigned 32-bit integer range or an unknown
+            /// strategy, or `ParamError` when decimal conversion or rounding
+            /// fails.
             #[wasm_bindgen(js_name = fromFloatRounded)]
             pub fn from_float_rounded(
                 value: f64,
@@ -279,7 +287,9 @@ macro_rules! define_decimal_value_type {
             ///
             /// # Errors
             ///
-            /// Throws `ParamError` on overflow or an invalid scalar.
+            /// Throws `TypeError` for a wrong scalar type or `RangeError` for a
+            /// bigint outside the supported range. Arithmetic errors throw
+            /// `ParamError`.
             #[wasm_bindgen(js_name = mul)]
             pub fn mul(&self, scalar: ScalarLike) -> Result<$js_type, JsValue> {
                 match parse_scalar(&scalar.into())? {
@@ -294,8 +304,9 @@ macro_rules! define_decimal_value_type {
             ///
             /// # Errors
             ///
-            /// Throws `ParamError` on division by zero, overflow, or an invalid
-            /// scalar.
+            /// Throws `TypeError` for a wrong scalar type or `RangeError` for a
+            /// bigint outside the supported range. Division by zero or
+            /// arithmetic errors throw `ParamError`.
             #[wasm_bindgen(js_name = div)]
             pub fn div(&self, scalar: ScalarLike) -> Result<$js_type, JsValue> {
                 match parse_scalar(&scalar.into())? {
@@ -310,8 +321,9 @@ macro_rules! define_decimal_value_type {
             ///
             /// # Errors
             ///
-            /// Throws `ParamError` on division by zero, overflow, or an invalid
-            /// scalar.
+            /// Throws `TypeError` for a wrong scalar type or `RangeError` for a
+            /// bigint outside the supported range. Division by zero or
+            /// arithmetic errors throw `ParamError`.
             #[wasm_bindgen(js_name = mod)]
             pub fn rem(&self, scalar: ScalarLike) -> Result<$js_type, JsValue> {
                 match parse_scalar(&scalar.into())? {
@@ -599,7 +611,7 @@ impl JsPositionSize {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `side` is not `"BUY"`/`"SELL"`.
+    /// Throws `RangeError` when `side` is not `"BUY"` or `"SELL"`.
     #[wasm_bindgen(js_name = fromQuantityAndSide)]
     pub fn from_quantity_and_side(
         quantity: &JsQuantity,
@@ -658,7 +670,7 @@ impl JsPositionSize {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on overflow or when `side` is invalid.
+    /// Throws `ParamError` on overflow or `RangeError` for an unknown side.
     #[wasm_bindgen(js_name = checkedAddQuantity)]
     pub fn checked_add_quantity(
         &self,

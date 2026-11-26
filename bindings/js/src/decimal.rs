@@ -94,7 +94,7 @@ fn bigint_to_decimal_string(bigint: &BigInt) -> Result<String, JsValue> {
     }
 }
 
-/// Builds the `ParamError` raised for an unsupported `DecimalInput` JS type.
+/// Builds the `TypeError` raised for an unsupported `DecimalInput` JS type.
 fn invalid_decimal_input() -> JsValue {
     make_error(
         ErrorKind::Type,

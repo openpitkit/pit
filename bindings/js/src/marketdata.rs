@@ -342,7 +342,8 @@ impl JsInstrument {
 ///
 /// # Errors
 ///
-/// Throws `AssetError` when the field is missing/empty or not a string.
+/// Throws `TypeError` when the field is missing or not a string, or
+/// `AssetError` when the string is empty.
 fn read_required_asset(value: &JsValue, field: &str) -> Result<openpit::param::Asset, JsValue> {
     let field_value = Reflect::get(value, &JsValue::from_str(field))?;
     match field_value.as_string() {
@@ -545,7 +546,8 @@ impl JsQuote {
 
 /// Reads `field` off a JS options object, returning `undefined` when absent.
 ///
-/// A `Reflect::get` failure (non-object argument) is a `ParamError`.
+/// A non-object argument throws `TypeError`. Getter exceptions propagate
+/// unchanged.
 fn read_optional_field(options: &JsValue, field: &str) -> Result<JsValue, JsValue> {
     if !options.is_object() {
         return Err(make_error(
@@ -764,7 +766,8 @@ impl JsMarketDataService {
     /// # Errors
     ///
     /// Throws `AlreadyRegistered` when the instrument is already registered, or
-    /// `AssetError`/`ParamError` on an invalid literal.
+    /// `TypeError` for a malformed instrument or `AssetError` for an invalid
+    /// asset.
     #[wasm_bindgen(js_name = register)]
     pub fn register(&self, instrument: InstrumentLike) -> Result<JsInstrumentId, JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;
@@ -783,7 +786,8 @@ impl JsMarketDataService {
     /// # Errors
     ///
     /// Throws `AlreadyRegistered` when the instrument is already registered, or
-    /// `AssetError`/`ParamError` on an invalid literal.
+    /// `TypeError` for a malformed instrument or `AssetError` for an invalid
+    /// asset.
     #[wasm_bindgen(js_name = registerWithTtl)]
     pub fn register_with_ttl(
         &self,
@@ -806,7 +810,8 @@ impl JsMarketDataService {
     /// # Errors
     ///
     /// Throws `RegistrationError` when the id or instrument already exists, or
-    /// `AssetError`/`ParamError` on an invalid input.
+    /// `TypeError` for a malformed instrument, `AssetError` for an invalid
+    /// asset, or `ParamError` for an invalid identifier.
     #[wasm_bindgen(js_name = registerWithId)]
     pub fn register_with_id(
         &self,
@@ -830,7 +835,8 @@ impl JsMarketDataService {
     /// # Errors
     ///
     /// Throws `RegistrationError` when the id or instrument already exists, or
-    /// `AssetError`/`ParamError` on an invalid input.
+    /// `TypeError` for a malformed instrument, `AssetError` for an invalid
+    /// asset, or `ParamError` for an invalid identifier.
     #[wasm_bindgen(js_name = registerWithIdAndTtl)]
     pub fn register_with_id_and_ttl(
         &self,
@@ -854,7 +860,8 @@ impl JsMarketDataService {
     ///
     /// # Errors
     ///
-    /// Throws `AssetError`/`ParamError` on an invalid literal.
+    /// Throws `TypeError` for a malformed instrument or `AssetError` for an
+    /// invalid asset.
     #[wasm_bindgen(js_name = resolve)]
     pub fn resolve(&self, instrument: InstrumentLike) -> Result<Option<JsInstrumentId>, JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;
@@ -1104,9 +1111,10 @@ impl JsMarketDataService {
     ///
     /// # Errors
     ///
-    /// Throws `UnknownInstrumentId` when `instrumentId` is not registered, or
-    /// `ParamError` on an invalid identifier or quote literal, or `RangeError`
-    /// when `sourceAgeMs` is non-finite.
+    /// Throws `UnknownInstrumentId` when `instrumentId` is not registered,
+    /// `TypeError` for a malformed quote, `ParamError` for an invalid
+    /// identifier or domain price, or `RangeError` for an unsupported numeric
+    /// price or non-finite `sourceAgeMs`.
     #[wasm_bindgen(js_name = push)]
     pub fn push(
         &self,
@@ -1134,8 +1142,10 @@ impl JsMarketDataService {
     ///
     /// # Errors
     ///
-    /// Throws `AssetError`/`ParamError` on an invalid instrument or quote, or
-    /// `RangeError` when `sourceAgeMs` is non-finite.
+    /// Throws `TypeError` for a malformed instrument or quote, `AssetError` for
+    /// an invalid asset, `ParamError` for an invalid domain price, or
+    /// `RangeError` for an unsupported numeric price or non-finite
+    /// `sourceAgeMs`.
     #[wasm_bindgen(js_name = pushByInstrument)]
     pub fn push_by_instrument(
         &self,
@@ -1167,9 +1177,11 @@ impl JsMarketDataService {
     /// # Errors
     ///
     /// Throws `UnknownInstrumentId` when `instrumentId` is not registered,
-    /// `RangeError` when both target lists are empty or `sourceAgeMs` is
-    /// non-finite, or
-    /// `ParamError`/`AccountIdError` on an invalid input.
+    /// `TypeError` for a malformed quote or non-iterable target list,
+    /// `RangeError` when both target lists are empty, for an unsupported
+    /// numeric price, or for non-finite `sourceAgeMs`, `ParamError` for an
+    /// invalid instrument or group identifier or invalid domain price, or
+    /// `AccountIdError` for an invalid account.
     #[wasm_bindgen(js_name = pushFor)]
     pub fn push_for(
         &self,
@@ -1209,9 +1221,11 @@ impl JsMarketDataService {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AccountIdError` on an invalid identifier,
-    /// `resolution`, or a consulted `accountInfo` shape. Unknown instruments,
-    /// unavailable quotes, and expired quotes return `undefined`.
+    /// Invalid instrument or account identifiers throw `ParamError` or
+    /// `AccountIdError`, respectively. Malformed `resolution` or consulted
+    /// `accountInfo` values throw `TypeError`; an unknown resolution string
+    /// throws `RangeError`. Unknown instruments, unavailable quotes, and
+    /// expired quotes return `undefined`.
     #[wasm_bindgen(js_name = get)]
     pub fn get(
         &self,
@@ -1253,10 +1267,11 @@ impl JsMarketDataService {
     /// # Errors
     ///
     /// Throws `UnknownInstrument` when `instrumentId` is not registered,
-    /// `QuoteUnavailable` when no quote is available, `QuoteExpired` with the
-    /// selected stale quote when its TTL elapsed, and `ParamError`/
-    /// `AccountIdError` on an invalid identifier, `resolution`, or `accountInfo`
-    /// shape.
+    /// `QuoteUnavailable` when no quote is available, or `QuoteExpired` with
+    /// the selected stale quote when its TTL elapsed. Invalid instrument or
+    /// account identifiers throw `ParamError` or `AccountIdError`,
+    /// respectively. Malformed `resolution` or consulted `accountInfo` values
+    /// throw `TypeError`; an unknown resolution string throws `RangeError`.
     #[wasm_bindgen(js_name = getOrErr)]
     pub fn get_or_err(
         &self,
@@ -1288,8 +1303,8 @@ impl JsMarketDataService {
 ///
 /// # Errors
 ///
-/// Throws `TypeError` when the argument is not iterable, or
-/// `AccountIdError`/`ParamError` on an invalid element.
+/// Throws `TypeError` when the argument is not iterable or `AccountIdError` for
+/// an invalid element.
 fn collect_account_ids(value: JsValue) -> Result<Vec<openpit::param::AccountId>, JsValue> {
     let iterator = js_sys::try_iter(&value)?.ok_or_else(|| {
         make_error(

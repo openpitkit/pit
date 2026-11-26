@@ -231,8 +231,9 @@ impl JsAccountBlock {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `code` is not a recognized reject code, or
-    /// `RangeError` when `userData` exceeds the supported token range.
+    /// Throws `ParamError` when `code` is not a recognized reject code,
+    /// `TypeError` when a present `userData` is not a bigint, or `RangeError`
+    /// when it is outside the supported token range.
     #[wasm_bindgen(constructor)]
     pub fn new(
         policy: String,

@@ -159,7 +159,8 @@ impl JsTradeAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(js_name = quantity)]
     pub fn quantity(value: QuantityLike) -> Result<JsTradeAmount, JsValue> {
         let quantity = resolve_quantity(value.into())?;
@@ -174,7 +175,8 @@ impl JsTradeAmount {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(js_name = volume)]
     pub fn volume(value: VolumeLike) -> Result<JsTradeAmount, JsValue> {
         let volume = resolve_volume(value.into())?;
@@ -320,7 +322,8 @@ impl JsOrderOperation {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not `"BUY"`/`"SELL"`.
+    /// Throws `TypeError` for a non-string side or `RangeError` for an unknown
+    /// string.
     #[wasm_bindgen(setter, js_name = side)]
     pub fn set_side(&mut self, value: OptionalSideLike) -> Result<(), JsValue> {
         self.side = resolve_optional_side(value.into())?;
@@ -337,7 +340,7 @@ impl JsOrderOperation {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not a `TradeAmount`.
+    /// Throws `TypeError` when a present value is not a `TradeAmount`.
     #[wasm_bindgen(setter, js_name = tradeAmount)]
     pub fn set_trade_amount(&mut self, value: TradeAmountLike) -> Result<(), JsValue> {
         let value: JsValue = value.into();
@@ -359,7 +362,8 @@ impl JsOrderOperation {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid price.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = price)]
     pub fn set_price(&mut self, value: OptionalPriceLike) -> Result<(), JsValue> {
         self.price = resolve_optional_price(value.into())?;
@@ -448,7 +452,8 @@ impl JsOrderPosition {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not `"LONG"`/`"SHORT"`.
+    /// Throws `TypeError` for a non-string position side or `RangeError` for an
+    /// unknown string.
     #[wasm_bindgen(setter, js_name = positionSide)]
     pub fn set_position_side(&mut self, value: OptionalPositionSideLike) -> Result<(), JsValue> {
         self.position_side = resolve_optional_position_side(value.into())?;
@@ -708,7 +713,10 @@ impl JsOrder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when a literal field is invalid.
+    /// Throws `TypeError` for a malformed order or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier.
     #[wasm_bindgen(setter, js_name = operation)]
     pub fn set_operation(&mut self, value: OrderOperationLike) -> Result<(), JsValue> {
         self.operation = coerce_operation(value.into())?;
@@ -728,7 +736,8 @@ impl JsOrder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when a literal field is invalid.
+    /// Throws `TypeError` for a malformed position group or field, or
+    /// `RangeError` for an unknown position side.
     #[wasm_bindgen(setter, js_name = position)]
     pub fn set_position(&mut self, value: OrderPositionLike) -> Result<(), JsValue> {
         self.position = coerce_position(value.into())?;
@@ -747,7 +756,8 @@ impl JsOrder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when a literal field is invalid.
+    /// Throws `TypeError` for a malformed margin group or field, `ParamError`
+    /// for invalid leverage, or `AssetError` for an invalid collateral asset.
     #[wasm_bindgen(setter, js_name = margin)]
     pub fn set_margin(&mut self, value: OrderMarginLike) -> Result<(), JsValue> {
         self.margin = coerce_margin(value.into())?;
@@ -787,8 +797,10 @@ impl JsOrder {
 ///
 /// # Errors
 ///
-/// Throws `ParamError`/`AssetError` on an invalid literal field, or
-/// `ParamError` when the value is neither a wrapper nor a plain object.
+/// Throws `TypeError` for a malformed order or field, `RangeError` for an
+/// unsupported number or enum string, `ParamError` for an invalid domain value,
+/// `AssetError` for an invalid asset, or `AccountIdError` for an invalid
+/// account identifier.
 fn coerce_operation(value: JsValue) -> Result<Option<JsOrderOperation>, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Ok(None);
@@ -808,7 +820,8 @@ fn coerce_operation(value: JsValue) -> Result<Option<JsOrderOperation>, JsValue>
 ///
 /// # Errors
 ///
-/// Throws `ParamError` on an invalid literal field or a non-object value.
+/// Throws `TypeError` for a malformed position group or field, or `RangeError`
+/// for an unknown position side.
 fn coerce_position(value: JsValue) -> Result<Option<JsOrderPosition>, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Ok(None);
@@ -828,8 +841,8 @@ fn coerce_position(value: JsValue) -> Result<Option<JsOrderPosition>, JsValue> {
 ///
 /// # Errors
 ///
-/// Throws `ParamError`/`AssetError` on an invalid literal field or a non-object
-/// value.
+/// Throws `TypeError` for a malformed margin group or field, `ParamError` for
+/// invalid leverage, or `AssetError` for an invalid collateral asset.
 fn coerce_margin(value: JsValue) -> Result<Option<JsOrderMargin>, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Ok(None);
@@ -884,8 +897,10 @@ impl JsOrder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` on an invalid literal field, or
-    /// `ParamError` when the value is neither an `Order` nor a plain object.
+    /// Throws `TypeError` for a malformed order or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier.
     pub(crate) fn coerce(value: JsValue) -> Result<JsOrder, JsValue> {
         if let Some(cloned) = clone_wrapper_value(&value)? {
             if let Ok(wrapped) = JsOrder::try_from_js_value(cloned) {

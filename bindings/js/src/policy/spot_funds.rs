@@ -123,7 +123,10 @@ impl JsSpotFundsOverride {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when both `accountId` and `accountGroupId` are set.
+    /// Throws `ParamError` for an invalid instrument or group, or when both
+    /// account and group are set. An invalid account throws `AccountIdError`. A
+    /// present slippage of the wrong type throws `TypeError`, and a number
+    /// outside the unsigned 16-bit integer range throws `RangeError`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         instrument: InstrumentIdLike,
@@ -412,8 +415,10 @@ impl JsSpotFundsBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `defaultSlippageBps` is out of range or
-    /// `pricingSource` is invalid.
+    /// Throws `TypeError` for a wrong slippage or pricing-source type, a
+    /// non-iterable overrides argument, or a wrong override type. Throws
+    /// `RangeError` for an out-of-range slippage or unknown pricing-source
+    /// string.
     #[wasm_bindgen(
         js_name = marketData,
         unchecked_return_type = "SpotFundsReadyBuilder"
@@ -633,7 +638,7 @@ impl JsSpotFundsPnlBoundsKillswitchBuilder {
 ///
 /// # Errors
 ///
-/// Throws `ParamError` when the argument is not iterable or an element is not a
+/// Throws `TypeError` when the argument is not iterable or an element is not a
 /// `SpotFundsOverride`.
 fn collect_overrides(overrides: JsValue) -> Result<Vec<JsSpotFundsOverride>, JsValue> {
     if overrides.is_undefined() || overrides.is_null() {

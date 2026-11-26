@@ -597,8 +597,9 @@ pub fn has_own_field(value: &JsValue, field: &str) -> Result<bool, JsValue> {
 
 /// Reads an optional string property off a JS object literal.
 ///
-/// A missing/`undefined`/`null` value maps to `None`; any other type is a
-/// `ParamError`. Used by the group resolvers for asset-string fields.
+/// A missing, `undefined`, or `null` value maps to `None`. Any present
+/// non-string value throws `TypeError`. Group resolvers use this for asset
+/// strings.
 ///
 /// # Errors
 ///
@@ -621,7 +622,7 @@ pub fn read_optional_string(value: &JsValue, field: &str) -> Result<Option<Strin
 /// Reads an optional boolean property off a JS object literal.
 ///
 /// A missing/`undefined`/`null` value maps to `None` (leaving the field at its
-/// default); any other non-boolean type is a `ParamError`.
+/// default); any other non-boolean type is a `TypeError`.
 ///
 /// # Errors
 ///

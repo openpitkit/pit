@@ -207,7 +207,8 @@ impl JsTrade {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid price or quantity.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(constructor)]
     pub fn new(price: PriceLike, quantity: QuantityLike) -> Result<JsTrade, JsValue> {
         Ok(Self {
@@ -247,7 +248,9 @@ impl JsTrade {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid or missing `price`/`quantity`.
+    /// Throws `TypeError` for a missing or wrongly typed price or quantity,
+    /// `RangeError` for an unsupported number, or `ParamError` for an invalid
+    /// domain value.
     fn from_object(value: &JsValue) -> Result<Self, JsValue> {
         Ok(Self {
             inner: Trade {
@@ -265,7 +268,8 @@ impl JsTrade {
 ///
 /// # Errors
 ///
-/// Throws `ParamError` on an invalid literal field or a non-object value.
+/// Throws `TypeError` for a malformed trade or field, `RangeError` for an
+/// unsupported number, or `ParamError` for an invalid price or quantity.
 fn resolve_optional_trade(value: JsValue) -> Result<Option<Trade>, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Ok(None);
@@ -362,7 +366,8 @@ impl JsExecutionReportOperation {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not `"BUY"`/`"SELL"`.
+    /// Throws `TypeError` for a non-string side or `RangeError` for an unknown
+    /// string.
     #[wasm_bindgen(setter, js_name = side)]
     pub fn set_side(&mut self, value: OptionalSideLike) -> Result<(), JsValue> {
         self.side = resolve_optional_side(value.into())?;
@@ -404,7 +409,8 @@ impl JsFinancialImpact {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(constructor)]
     pub fn new(pnl: PnlLike, fee: FeeLike) -> Result<JsFinancialImpact, JsValue> {
         Ok(Self {
@@ -423,7 +429,8 @@ impl JsFinancialImpact {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = pnl)]
     pub fn set_pnl(&mut self, value: PnlLike) -> Result<(), JsValue> {
         self.pnl = Some(resolve_pnl(value.into())?);
@@ -440,7 +447,8 @@ impl JsFinancialImpact {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = fee)]
     pub fn set_fee(&mut self, value: FeeLike) -> Result<(), JsValue> {
         self.fee = Some(resolve_fee(value.into())?);
@@ -459,7 +467,8 @@ impl JsFinancialImpact {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid present `pnl`/`fee`.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     fn from_object(value: &JsValue) -> Result<Self, JsValue> {
         let pnl = read_field(value, "pnl")?;
         let fee = read_field(value, "fee")?;
@@ -534,8 +543,9 @@ impl JsExecutionReportFillDetails {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when a present value cannot be
-    /// marshalled into the core value types.
+    /// Throws `TypeError` for a malformed monetary amount, `RangeError` for an
+    /// unsupported number, `ParamError` for an invalid fee, or `AssetError` for
+    /// an invalid currency.
     #[wasm_bindgen(setter, js_name = fee)]
     pub fn set_fee(&mut self, value: MonetaryAmountLike) -> Result<(), JsValue> {
         self.fee = JsMonetaryAmount::resolve_optional(value.into())?;
@@ -592,7 +602,8 @@ impl JsExecutionReportFillDetails {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = remainingReservedQuantity)]
     pub fn set_remaining_reserved_quantity(
         &mut self,
@@ -613,8 +624,8 @@ impl JsExecutionReportFillDetails {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is neither a `Trade` nor a valid
-    /// literal.
+    /// Throws `TypeError` for a malformed trade or field, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid price or quantity.
     #[wasm_bindgen(setter, js_name = lastTrade)]
     pub fn set_last_trade(&mut self, value: TradeLike) -> Result<(), JsValue> {
         self.last_trade = resolve_optional_trade(value.into())?;
@@ -646,8 +657,10 @@ impl JsExecutionReportFillDetails {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when a present `lock` is not a `Lock`, or on an
-    /// invalid `lastTrade`/`remainingReservedQuantity`.
+    /// Throws `TypeError` for a malformed fill or field, including a present
+    /// `lock` that is not a `Lock`. An unsupported number throws `RangeError`,
+    /// an invalid domain value throws `ParamError`, and an invalid fee currency
+    /// throws `AssetError`.
     fn from_object(value: &JsValue) -> Result<Self, JsValue> {
         let lock_value = read_field(value, "lock")?;
         let lock = if lock_value.is_undefined() || lock_value.is_null() {
@@ -701,7 +714,8 @@ impl JsExecutionReportPositionImpact {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not `"OPEN"`/`"CLOSE"`.
+    /// Throws `TypeError` for a non-string position effect or `RangeError` for
+    /// an unknown string.
     #[wasm_bindgen(setter, js_name = positionEffect)]
     pub fn set_position_effect(
         &mut self,
@@ -721,7 +735,8 @@ impl JsExecutionReportPositionImpact {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when `value` is not `"LONG"`/`"SHORT"`.
+    /// Throws `TypeError` for a non-string position side or `RangeError` for an
+    /// unknown string.
     #[wasm_bindgen(setter, js_name = positionSide)]
     pub fn set_position_side(&mut self, value: OptionalPositionSideLike) -> Result<(), JsValue> {
         self.position_side = resolve_optional_position_side(value.into())?;
@@ -776,7 +791,9 @@ impl JsExecutionReport {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when a literal field is invalid.
+    /// Throws `TypeError` for a malformed operation or field, `RangeError` for
+    /// an unknown side, `AssetError` for an invalid asset, or `AccountIdError`
+    /// for an invalid account identifier.
     #[wasm_bindgen(setter, js_name = operation)]
     pub fn set_operation(&mut self, value: ExecutionReportOperationLike) -> Result<(), JsValue> {
         self.operation = coerce_group(
@@ -800,7 +817,8 @@ impl JsExecutionReport {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when a literal field is invalid.
+    /// Throws `TypeError` for a wrong value type, `RangeError` for an
+    /// unsupported number, or `ParamError` for an invalid domain value.
     #[wasm_bindgen(setter, js_name = financialImpact)]
     pub fn set_financial_impact(&mut self, value: FinancialImpactLike) -> Result<(), JsValue> {
         self.financial_impact = coerce_group(
@@ -824,7 +842,10 @@ impl JsExecutionReport {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when a present literal field is invalid.
+    /// Throws `TypeError` for a malformed fill or field, including a present
+    /// `lock` that is not a `Lock`. An unsupported number throws `RangeError`,
+    /// an invalid domain value throws `ParamError`, and an invalid fee currency
+    /// throws `AssetError`.
     #[wasm_bindgen(setter, js_name = fill)]
     pub fn set_fill(&mut self, value: ExecutionReportFillDetailsLike) -> Result<(), JsValue> {
         self.fill = coerce_group(
@@ -848,7 +869,8 @@ impl JsExecutionReport {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` when a literal field is invalid.
+    /// Throws `TypeError` for a malformed group or non-string enum field, or
+    /// `RangeError` for an unknown position effect or side.
     #[wasm_bindgen(setter, js_name = positionImpact)]
     pub fn set_position_impact(
         &mut self,
@@ -877,9 +899,8 @@ impl JsExecutionReport {
 ///
 /// # Errors
 ///
-/// Throws `ParamError`/`AssetError` on an invalid literal field, or
-/// `ParamError` (with `message`) when the value is neither a wrapper nor a
-/// plain object.
+/// Throws `TypeError` with `message` when the value is neither a wrapper nor a
+/// plain object. Errors from field conversion propagate unchanged.
 fn coerce_group<Wrapper>(
     value: JsValue,
     from_object: impl Fn(&JsValue) -> Result<Wrapper, JsValue>,
@@ -1011,9 +1032,10 @@ impl JsExecutionReport {
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` on an invalid literal field, or
-    /// `ParamError` when the value is neither an `ExecutionReport` nor a plain
-    /// object.
+    /// Throws `TypeError` for a malformed report or field, `RangeError` for an
+    /// unsupported number or enum string, `ParamError` for an invalid domain
+    /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
+    /// invalid account identifier.
     pub(crate) fn coerce(value: JsValue) -> Result<JsExecutionReport, JsValue> {
         if let Some(cloned) = clone_wrapper_value(&value)? {
             if let Ok(wrapped) = JsExecutionReport::try_from_js_value(cloned) {
