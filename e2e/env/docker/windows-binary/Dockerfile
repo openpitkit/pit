@@ -51,7 +51,7 @@ RUN Invoke-WebRequest 'https://www.python.org/ftp/python/3.10.11/python-3.10.11-
     if ($installer.ExitCode -ne 0) { throw ('Python installer failed with exit code ' + $installer.ExitCode) }; `
     Remove-Item C:\python-installer.exe
 
-RUN Invoke-WebRequest 'https://go.dev/dl/go1.22.3.windows-amd64.zip' -OutFile C:\go.zip; `
+RUN Invoke-WebRequest 'https://go.dev/dl/go1.26.11.windows-amd64.zip' -OutFile C:\go.zip; `
     Expand-Archive C:\go.zip -DestinationPath C:\; `
     Remove-Item C:\go.zip
 

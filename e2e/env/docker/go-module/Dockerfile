@@ -15,7 +15,7 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
-FROM golang:1.23-bookworm
+FROM golang:1.26.11-bookworm
 
 WORKDIR /opt/e2e
 

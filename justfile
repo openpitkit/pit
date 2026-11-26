@@ -18,6 +18,8 @@
 # Workspace build and test shortcuts.
 
 set windows-shell := ["cmd.exe", "/c"]
+set dotenv-load
+set dotenv-path := ".github/ci-versions.env"
 
 repo_dir := justfile_directory()
 venv_dir := env_var_or_default("PIT_VIRTUAL_ENV", repo_dir / ".venv")
@@ -46,6 +48,12 @@ export PATH := node_bin_dir + path_separator + venv_bin + path_separator + (carg
 export PIP_CACHE_DIR := env_var_or_default("PIP_CACHE_DIR", repo_dir / "target/pip-cache")
 export PIP_DISABLE_PIP_VERSION_CHECK := env_var_or_default("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 export GOCACHE := env_var_or_default("GOCACHE", repo_dir / "target/go-cache")
+export GOTOOLCHAIN := "go" + env_var("CI_GO")
+# Use Apple's SDK selection for cgo on macOS; explicit compiler choices win.
+[macos]
+export CC := env_var_or_default("CC", "/usr/bin/clang")
+[macos]
+export CXX := env_var_or_default("CXX", "/usr/bin/clang++")
 export GOLANGCI_LINT_CACHE := env_var_or_default("GOLANGCI_LINT_CACHE", repo_dir / "target/golangci-lint-cache")
 # Cap cargo build parallelism (default would use all 14 cores) to leave headroom
 # for language servers and concurrent sessions and avoid peak-memory link storms.
