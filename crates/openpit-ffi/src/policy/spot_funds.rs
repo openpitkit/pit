@@ -35,8 +35,9 @@ use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::marketdata::{OpenPitMarketDataInstrumentId, OpenPitMarketDataService};
 use crate::param::{OpenPitParamAccountId, OpenPitParamPnlOptional, OpenPitParamQuantity};
 use crate::reject::{
-    block_outcomes_to_list_owned, blocks_to_list_owned, OpenPitPretradeAccountBlockList,
-    OpenPitPretradeAccountBlockOutcomeList,
+    block_outcomes_to_list_owned, blocks_to_list_owned, import_rule_mode,
+    OpenPitPretradeAccountBlockList, OpenPitPretradeAccountBlockOutcomeList,
+    OpenPitPretradeRuleMode,
 };
 
 /// Raw selector for the spot-funds insufficient-funds behavior.
@@ -256,6 +257,9 @@ pub struct OpenPitPretradePoliciesSpotFundsOverride {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+    /// Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold.
+    /// Unknown values are invalid.
+    pub mode: OpenPitPretradeRuleMode,
     /// Currency matched when the account has an effective currency.
     pub currency: OpenPitStringView,
     /// Optional lower bound for accumulated P&L.
@@ -270,7 +274,7 @@ pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
 pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
     /// Account group the barrier applies to.
     pub account_group_id: OpenPitParamAccountGroupId,
-    /// Bounds for this group.
+    /// Bounds and rule mode for this group. A repeated (group, mode) is invalid.
     pub barrier: OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
 }
 
@@ -280,7 +284,7 @@ pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
 pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
     /// Account the barrier applies to.
     pub account_id: OpenPitParamAccountId,
-    /// Bounds for this account.
+    /// Bounds and rule mode for this account. A repeated (account, mode) is invalid.
     pub barrier: OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
 }
 
@@ -290,6 +294,17 @@ fn parse_pnl_barrier_or_error(
     index: usize,
     out_error: OpenPitOutError,
 ) -> Option<SpotFundsPnlBoundsBarrier> {
+    let mode = match import_rule_mode(entry.mode) {
+        Some(mode) => mode,
+        None => {
+            write_error_format!(
+                out_error,
+                "{label}[{index}] mode is invalid: {}",
+                entry.mode
+            );
+            return None;
+        }
+    };
     let currency = parse_asset_or_error(entry.currency, label, index, "currency", out_error)?;
     let lower_bound = match parse_optional_pnl_or_error(
         entry.lower_bound,
@@ -315,6 +330,7 @@ fn parse_pnl_barrier_or_error(
         currency,
         lower_bound,
         upper_bound,
+        mode,
     })
 }
 
@@ -323,6 +339,12 @@ fn parse_configure_pnl_barrier(
     label: &str,
     index: usize,
 ) -> Result<SpotFundsPnlBoundsBarrier, OpenPitConfigureError> {
+    let mode = import_rule_mode(entry.mode).ok_or_else(|| {
+        OpenPitConfigureError::validation(format!(
+            "{label}[{index}] mode is invalid: {}",
+            entry.mode
+        ))
+    })?;
     let currency = parse_configure_asset(entry.currency, label, index, "currency")?;
     let lower_bound = parse_configure_optional_pnl(entry.lower_bound, label, index, "lower_bound")?;
     let upper_bound = parse_configure_optional_pnl(entry.upper_bound, label, index, "upper_bound")?;
@@ -330,17 +352,21 @@ fn parse_configure_pnl_barrier(
         currency,
         lower_bound,
         upper_bound,
+        mode,
     })
 }
 
 type ParsedPnlBounds = (
-    Option<SpotFundsPnlBoundsBarrier>,
+    Vec<SpotFundsPnlBoundsBarrier>,
     Vec<SpotFundsPnlBoundsAccountGroupBarrier>,
     Vec<SpotFundsPnlBoundsAccountBarrier>,
 );
 
 unsafe fn parse_configure_pnl_bounds(
-    global: Option<*const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier>,
+    global: Option<(
+        *const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+        usize,
+    )>,
     account_group: Option<(
         *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
         usize,
@@ -350,14 +376,23 @@ unsafe fn parse_configure_pnl_bounds(
         usize,
     )>,
 ) -> Result<ParsedPnlBounds, OpenPitConfigureError> {
-    let global_barrier = match global {
-        Some(global) if !global.is_null() => Some(parse_configure_pnl_barrier(
-            unsafe { &*global },
-            "global",
-            0,
-        )?),
-        Some(_) | None => None,
-    };
+    let mut global_barriers = Vec::new();
+    if let Some((global, global_len)) = global {
+        let slice = unsafe {
+            try_slice_arg(
+                global,
+                global_len,
+                "spot_funds_pnl_bounds global",
+                std::ptr::null_mut(),
+            )
+        }
+        .ok_or_else(|| {
+            OpenPitConfigureError::validation("spot_funds_pnl_bounds global is null".to_owned())
+        })?;
+        for (index, entry) in slice.iter().enumerate() {
+            global_barriers.push(parse_configure_pnl_barrier(entry, "global", index)?);
+        }
+    }
     let account_group_barriers = if let Some((account_group, account_group_len)) = account_group {
         let slice = unsafe {
             try_slice_arg(
@@ -414,7 +449,7 @@ unsafe fn parse_configure_pnl_bounds(
     } else {
         Vec::new()
     };
-    Ok((global_barrier, account_group_barriers, account_barriers))
+    Ok((global_barriers, account_group_barriers, account_barriers))
 }
 
 fn override_target(
@@ -650,6 +685,12 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
 ///   compute P&L will be blocked by the core policy fail-safe.
 /// - At least one barrier must be provided across `global`,
 ///   `account_group`, or `account`.
+/// - `global` points to `global_len` barriers; zero length means none.
+///   Every non-empty array must be non-null.
+/// - Each barrier accepts mode 0 or 1 (Reject), 2 (ReviewWithHold), or
+///   3 (ReviewWithoutHold); unknown values are errors.
+/// - Repeated global modes, (group, mode), or (account, mode) fail the call
+///   through `out_error`; the duplicate message names the mode.
 /// - Each `currency` string view inside a barrier must be valid for the
 ///   duration of the call.
 /// - Barrier configuration never seeds or resets live account P&L.
@@ -661,6 +702,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
     market_data: *const OpenPitMarketDataService,
     policy_group_id: u16,
     global: *const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    global_len: usize,
     account_group: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
     account_group_len: usize,
     account: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier,
@@ -672,16 +714,24 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
         write_error(out_error, "engine builder is null");
         return false;
     }
-    let global_barrier = if global.is_null() {
-        None
-    } else {
-        let barrier = match parse_pnl_barrier_or_error(unsafe { &*global }, "global", 0, out_error)
-        {
-            Some(v) => v,
-            None => return false,
-        };
-        Some(barrier)
+    let global_slice = match unsafe {
+        try_slice_arg(
+            global,
+            global_len,
+            "spot_funds_pnl_bounds_policy global",
+            out_error,
+        )
+    } {
+        Some(slice) => slice,
+        None => return false,
     };
+    let mut global_barriers = Vec::with_capacity(global_slice.len());
+    for (index, entry) in global_slice.iter().enumerate() {
+        match parse_pnl_barrier_or_error(entry, "global", index, out_error) {
+            Some(barrier) => global_barriers.push(barrier),
+            None => return false,
+        }
+    }
 
     let account_group_slice = match unsafe {
         try_slice_arg(
@@ -770,7 +820,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
         }
     };
     let policy = match SpotFundsPolicy::<EngineLocking, EngineLocking>::pnl_bounds_kill_switch(
-        global_barrier,
+        global_barriers,
         account_group_barriers,
         account_barriers,
         market_orders,
@@ -950,8 +1000,15 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
 /// - This is a partial update (PATCH): each of the three tiers (global,
 ///   `account_group`, `account`) is replaced only when its `has_*` flag is
 ///   `true`; a `has_*` flag set to `false` leaves that tier unchanged.
-/// - When `has_global` is `true`, a null `global` clears the global barrier;
-///   a non-null `global` sets it.
+/// - `has_global == false` ignores `global` and `global_len`. When true,
+///   `global_len == 0` clears all global modes; otherwise the array replaces
+///   all global modes and must be non-null.
+/// - Modes are 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold.
+///   Unknown modes return Validation. Repeated global modes, (group, mode),
+///   or (account, mode) return Validation naming the mode, without changes.
+/// - A Reject-mode breach blocks the account. A review-mode breach adds a
+///   review mark on evaluation without blocking; evaluation failures block
+///   in every mode.
 /// - When `has_account_group` is `true`, the `account_group_len` entries at
 ///   `account_group` replace the whole per-account-group tier; an engaged
 ///   empty list (`has_account_group == true`, `account_group_len == 0`)
@@ -971,7 +1028,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
 ///   evaluations use the new bounds, including pre-trade checks, execution
 ///   reports, account-P&L adjustments and account-P&L force-sets. An account
 ///   whose effective barrier changed is evaluated against its stored account
-///   P&L here: an already halted account, or one already beyond the new
+///   P&L here: an already halted account, or one beyond a new Reject-mode
 ///   barrier, is blocked before this call returns and appears in the list,
 ///   which reports the blocks the engine has already recorded. Removing the
 ///   last effective barrier reports no block and does not release an existing
@@ -988,6 +1045,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,
     global: *const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    global_len: usize,
     has_global: bool,
     account_group: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
     account_group_len: usize,
@@ -1002,9 +1060,9 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
         None => return std::ptr::null_mut(),
     };
 
-    let (global_barrier, account_group_barriers, account_barriers) = match unsafe {
+    let (global_barriers, account_group_barriers, account_barriers) = match unsafe {
         parse_configure_pnl_bounds(
-            has_global.then_some(global),
+            has_global.then_some((global, global_len)),
             has_account_group.then_some((account_group, account_group_len)),
             has_account.then_some((account, account_len)),
         )
@@ -1020,7 +1078,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
         &name,
         |settings| -> Result<(), SpotFundsConfigError> {
             if has_global {
-                settings.set_pnl_global_barrier(global_barrier.clone())?;
+                settings.set_pnl_global_barriers(global_barriers.iter().cloned())?;
             }
             if has_account_group {
                 settings.set_pnl_account_group_barriers(account_group_barriers.iter().cloned())?;
@@ -1061,8 +1119,12 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
 /// - This is a partial update (PATCH): the global, account-group and account
 ///   tiers are each replaced only when their `has_*` flag is `true`. A false
 ///   flag leaves that tier unchanged and its arguments are ignored.
-/// - When `has_global` is `true`, a null `global` clears the global barrier;
-///   a non-null `global` sets it.
+/// - `has_global == false` ignores `global` and `global_len`. When true,
+///   `global_len == 0` clears all global modes; otherwise the array replaces
+///   all global modes and must be non-null.
+/// - Modes are 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold.
+///   Unknown modes return Validation. Repeated global modes, (group, mode),
+///   or (account, mode) return Validation naming the mode, without changes.
 /// - When `has_account_group` is `true`, the `account_group_len` entries at
 ///   `account_group` replace that whole tier; an engaged empty list clears it.
 /// - When `has_account` is `true`, the `account_len` entries at `account`
@@ -1070,12 +1132,13 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
 /// - Engaged slices with non-zero lengths must be non-null. Each barrier's
 ///   `currency` string view must be valid for the duration of the call.
 /// - Only the selected axis changes; realized bounds and P&L stay unchanged.
-/// - With an effective barrier, a breach or halt on an axis blocks with
-///   `PnlKillSwitchTriggered` at pre-trade, dry run, a fill, the account P&L
-///   force-set, and a retune that changes the axis's effective barrier.
+/// - With an effective barrier, a Reject-mode breach or a halt in any mode
+///   blocks with `PnlKillSwitchTriggered` at pre-trade, dry run, a fill, the
+///   account P&L force-set, and a retune that changes the effective barrier.
 ///   A fill checks axes for a trade or non-zero fee when the report gave no
 ///   block of its own. Moving an account to another account group does not
 ///   check the axes; the next order catches the breach.
+///   A review-mode breach yields a review mark without blocking.
 ///
 /// Success:
 /// - Returns a caller-owned account-block-outcome list, possibly empty;
@@ -1099,6 +1162,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_axis(
     name: OpenPitStringView,
     axis: OpenPitPretradePoliciesSpotFundsPnlBoundsAxis,
     global: *const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    global_len: usize,
     has_global: bool,
     account_group: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
     account_group_len: usize,
@@ -1119,9 +1183,9 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_axis(
             return std::ptr::null_mut();
         }
     };
-    let (global_barrier, account_group_barriers, account_barriers) = match unsafe {
+    let (global_barriers, account_group_barriers, account_barriers) = match unsafe {
         parse_configure_pnl_bounds(
-            has_global.then_some(global),
+            has_global.then_some((global, global_len)),
             has_account_group.then_some((account_group, account_group_len)),
             has_account.then_some((account, account_len)),
         )
@@ -1136,7 +1200,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_axis(
         &name,
         |settings| -> Result<(), SpotFundsConfigError> {
             if has_global {
-                settings.set_pnl_axis_global_barrier(axis, global_barrier.clone())?;
+                settings.set_pnl_axis_global_barriers(axis, global_barriers.iter().cloned())?;
             }
             if has_account_group {
                 settings.set_pnl_axis_account_group_barriers(
@@ -1169,11 +1233,13 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_axis(
 /// never resets the accumulator. A numeric state re-arms this account
 /// accumulator after a calculation halt. A halted state sets or keeps it
 /// halted and replaces the stored halt reason. Neither form affects a
-/// position-level accumulator. A numeric state beyond an effective bound, or a
-/// halted state with an effective barrier, returns the policy-reported
-/// `PnlKillSwitchTriggered` block. The engine processes that block request
-/// before returning. An existing first-cause block remains unchanged but does
-/// not suppress the returned block.
+/// position-level accumulator. A numeric state beyond an effective Reject-mode
+/// bound returns the policy-reported `PnlKillSwitchTriggered` block. A breach of
+/// a review-mode bound returns no block and no review mark: configuration does
+/// not issue review marks. A halted state with an effective barrier of any mode
+/// returns the block. The engine processes that block request before returning.
+/// An existing first-cause block remains unchanged but does not suppress the
+/// returned block.
 ///
 /// Contract:
 /// - on success, returns a caller-owned account-block list, possibly empty;
@@ -1324,8 +1390,8 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_limit_mode(
     finish_configure_spot_funds(result, out_error)
 }
 
-/// Pins or clears the spot-funds position limit for one account and asset on
-/// the policy registered under `name`.
+/// Pins or clears the spot-funds position limit for one account, asset and
+/// rule mode on the policy registered under `name`.
 ///
 /// Concurrency: caller-guaranteed exclusive in every mode, including
 /// `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
@@ -1335,8 +1401,9 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_limit_mode(
 /// - `engine` must be a valid non-null engine pointer.
 /// - `name` selects the policy; see
 ///   `openpit_engine_configure_spot_funds_global_limit_mode`.
-/// - `account_id` and `asset` select the position; `asset` must be valid UTF-8
-///   and a valid asset.
+/// - `(account_id, asset, mode)` selects one limit; `asset` must be valid
+///   UTF-8 and a valid asset. `mode` is 0 or 1 (Reject), 2 (ReviewWithHold), or
+///   3 (ReviewWithoutHold). Unknown values are invalid.
 /// - When `has_limit` is `true`, `limit` pins or replaces the inclusive
 ///   non-negative long and short magnitude for this position. The checked
 ///   position starts with recorded `available + held`, including a negative
@@ -1344,16 +1411,17 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_limit_mode(
 ///   projection subtracts open positive `held`. Only the side the order moves
 ///   toward is checked, so a position-reducing order passes while that
 ///   projection stays within the limit. `limit` must be a valid non-negative
-///   quantity. When `has_limit` is `false`, the limit is cleared and `limit`
-///   is ignored.
-/// - A breach rejects with `PositionLimitExceeded` at Order scope. A
-///   projection that cannot be computed exactly rejects with
-///   `ArithmeticOverflow` at Order scope. A change applies from the next order
-///   and does not re-evaluate open reservations.
+///   quantity. When `has_limit` is `false`, only this mode's limit is cleared
+///   and `limit` is ignored. Other modes' limits are unchanged by either call.
+/// - A Reject breach rejects with `PositionLimitExceeded` at Order scope.
+///   A review breach adds a `PositionLimitExceeded` review mark with the
+///   limit's mode. A projection that cannot be computed exactly rejects with
+///   `ArithmeticOverflow` at Order scope in every mode. A change applies from
+///   the next order and does not re-evaluate open reservations.
 ///
 /// Success / error: as
 /// `openpit_engine_configure_spot_funds_global_limit_mode`. An invalid
-/// `asset` or supplied `limit` returns `false` with a `Validation` error
+/// `asset`, `mode` or supplied `limit` returns `false` with a `Validation` error
 /// naming the invalid input.
 #[no_mangle]
 pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
@@ -1361,6 +1429,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
     name: OpenPitStringView,
     account_id: OpenPitParamAccountId,
     asset: OpenPitStringView,
+    mode: OpenPitPretradeRuleMode,
     limit: OpenPitParamQuantity,
     has_limit: bool,
     out_error: *mut *mut OpenPitConfigureError,
@@ -1373,6 +1442,18 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
         Ok(asset) => asset,
         Err(err) => {
             write_configure_error(out_error, err);
+            return false;
+        }
+    };
+    let mode = match import_rule_mode(mode) {
+        Some(mode) => mode,
+        None => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(format!(
+                    "position_limit mode is invalid: {mode}"
+                )),
+            );
             return false;
         }
     };
@@ -1396,7 +1477,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
     let result = unsafe { &*engine }.configurator().spot_funds(
         &name,
         |settings| -> Result<(), SpotFundsConfigError> {
-            settings.set_position_limit(account_id, asset, limit);
+            settings.set_position_limit(account_id, asset, mode, limit);
             Ok(())
         },
     );
@@ -1527,6 +1608,7 @@ mod tests {
     };
     use crate::param::OpenPitParamDecimal;
     use crate::string::openpit_destroy_shared_string;
+    use openpit::pretrade::RuleMode;
 
     fn null_out_error() -> OpenPitOutError {
         std::ptr::null_mut()
@@ -1672,6 +1754,7 @@ mod tests {
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
+                0,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -1693,6 +1776,7 @@ mod tests {
     fn add_builtin_spot_funds_pnl_bounds_delegates_to_policy_preset() {
         let builder = make_builder();
         let global = OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             currency: OpenPitStringView::from_utf8("USD"),
             lower_bound: OpenPitParamPnlOptional {
                 value: crate::param::OpenPitParamPnl(
@@ -1709,6 +1793,7 @@ mod tests {
                 std::ptr::null(),
                 7,
                 &global,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -1730,6 +1815,7 @@ mod tests {
 
     fn pnl_bounds_barrier(lower: &str) -> OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
         OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             currency: OpenPitStringView::from_utf8("USD"),
             lower_bound: OpenPitParamPnlOptional {
                 value: crate::param::OpenPitParamPnl(
@@ -1760,6 +1846,434 @@ mod tests {
         ),
     ];
 
+    fn add_pnl_bounds(
+        builder: *mut crate::engine::OpenPitEngineBuilder,
+        global: &[OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier],
+        groups: &[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier],
+        accounts: &[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier],
+    ) -> Result<(), String> {
+        let mut error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
+                builder,
+                std::ptr::null(),
+                0,
+                global.as_ptr(),
+                global.len(),
+                groups.as_ptr(),
+                groups.len(),
+                accounts.as_ptr(),
+                accounts.len(),
+                std::ptr::null(),
+                &mut error,
+            )
+        };
+        if ok {
+            assert!(error.is_null());
+            Ok(())
+        } else {
+            assert!(!error.is_null(), "builder failure returns out_error");
+            Err(cstr_to_string(error))
+        }
+    }
+
+    fn patch_pnl_bounds(
+        engine: *mut crate::engine::OpenPitEngine,
+        axis: Option<u8>,
+        global: &[OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier],
+        has_global: bool,
+        groups: Option<&[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier]>,
+        accounts: Option<&[OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier]>,
+    ) -> Result<(), String> {
+        let mut error = std::ptr::null_mut();
+        let group_entries = groups.unwrap_or(&[]);
+        let account_entries = accounts.unwrap_or(&[]);
+        let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+        let result = unsafe {
+            match axis {
+                None => openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
+                    engine,
+                    name,
+                    global.as_ptr(),
+                    global.len(),
+                    has_global,
+                    group_entries.as_ptr(),
+                    group_entries.len(),
+                    groups.is_some(),
+                    account_entries.as_ptr(),
+                    account_entries.len(),
+                    accounts.is_some(),
+                    &mut error,
+                ),
+                Some(axis) => openpit_engine_configure_spot_funds_pnl_bounds_axis(
+                    engine,
+                    name,
+                    axis,
+                    global.as_ptr(),
+                    global.len(),
+                    has_global,
+                    group_entries.as_ptr(),
+                    group_entries.len(),
+                    groups.is_some(),
+                    account_entries.as_ptr(),
+                    account_entries.len(),
+                    accounts.is_some(),
+                    &mut error,
+                ),
+            }
+        };
+        if result.is_null() {
+            assert!(
+                !error.is_null(),
+                "configure failure returns structured error"
+            );
+            assert_eq!(
+                crate::engine::openpit_configure_error_get_kind(error),
+                crate::engine::OpenPitConfigureErrorKind::Validation,
+                "configure error is Validation"
+            );
+            let message =
+                unsafe { cstr_arg(crate::engine::openpit_configure_error_get_message(error)) }
+                    .unwrap()
+                    .to_owned();
+            crate::engine::openpit_destroy_configure_error(error);
+            Err(message)
+        } else {
+            assert!(error.is_null());
+            crate::reject::openpit_destroy_pretrade_account_block_outcome_list(result);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn spot_funds_pnl_modes_round_trip_through_builder() {
+        for (wire, mode) in [
+            (0, RuleMode::Reject),
+            (1, RuleMode::Reject),
+            (2, RuleMode::ReviewWithHold),
+            (3, RuleMode::ReviewWithoutHold),
+        ] {
+            let builder = make_local_engine_builder();
+            let barrier = OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+                mode: wire,
+                ..pnl_bounds_barrier("-100")
+            };
+            let groups = [
+                OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+                    barrier,
+                    account_group_id: 7,
+                },
+            ];
+            let accounts = [OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+                barrier,
+                account_id: 42,
+            }];
+            add_pnl_bounds(builder, &[barrier], &groups, &accounts).unwrap();
+            let engine = crate::engine::openpit_engine_builder_build(
+                builder,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert!(!engine.is_null());
+            unsafe { &*engine }
+                .configurator()
+                .spot_funds("SpotFundsPolicy", |settings| {
+                    let mut expected = settings.clone();
+                    let barrier = SpotFundsPnlBoundsBarrier {
+                        currency: openpit::param::Asset::new("USD").unwrap(),
+                        lower_bound: Some(Pnl::from_str("-100").unwrap()),
+                        upper_bound: None,
+                        mode,
+                    };
+                    expected.set_pnl_global_barriers([barrier.clone()]).unwrap();
+                    expected
+                        .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
+                            barrier: barrier.clone(),
+                            account_group_id: AccountGroupId::from_u32(7).unwrap(),
+                        }])
+                        .unwrap();
+                    expected
+                        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+                            barrier,
+                            account_id: AccountId::from_u64(42),
+                        }])
+                        .unwrap();
+                    assert_eq!(
+                        format!("{settings:?}"),
+                        format!("{expected:?}"),
+                        "every mode reaches every configured tier"
+                    );
+                    Ok::<(), SpotFundsConfigError>(())
+                })
+                .unwrap();
+            crate::engine::openpit_destroy_engine(engine);
+            openpit_destroy_engine_builder(builder);
+        }
+        let builder = make_local_engine_builder();
+        let globals = [
+            pnl_bounds_barrier("-100"),
+            OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+                ..pnl_bounds_barrier("-10")
+            },
+        ];
+        add_pnl_bounds(builder, &globals, &[], &[]).unwrap();
+        let engine = crate::engine::openpit_engine_builder_build(
+            builder,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!engine.is_null());
+        let snapshot = position_limit_settings_snapshot(engine);
+        assert!(
+            snapshot.contains("Reject: SpotFundsPnlBoundsBarrier"),
+            "Reject global coexists"
+        );
+        assert!(
+            snapshot.contains("ReviewWithHold: SpotFundsPnlBoundsBarrier"),
+            "review global coexists"
+        );
+        crate::engine::openpit_destroy_engine(engine);
+        openpit_destroy_engine_builder(builder);
+    }
+
+    #[test]
+    fn spot_funds_pnl_invalid_modes_fail_without_change() {
+        for mode in [4, 255] {
+            let invalid = OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+                mode,
+                ..pnl_bounds_barrier("-10")
+            };
+            for tier in 0..3 {
+                let groups = [
+                    OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+                        barrier: invalid,
+                        account_group_id: 7,
+                    },
+                ];
+                let accounts = [OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+                    barrier: invalid,
+                    account_id: 42,
+                }];
+                let globals = if tier == 0 {
+                    std::slice::from_ref(&invalid)
+                } else {
+                    &[]
+                };
+                let group_entries = if tier == 1 { &groups[..] } else { &[] };
+                let account_entries = if tier == 2 { &accounts[..] } else { &[] };
+                let builder = make_local_engine_builder();
+                let error = add_pnl_bounds(builder, globals, group_entries, account_entries)
+                    .expect_err("invalid mode must fail builder");
+                assert!(
+                    error.contains(&format!("mode is invalid: {mode}")),
+                    "{error}"
+                );
+                add_pnl_bounds(builder, &[pnl_bounds_barrier("-100")], &[], &[]).unwrap();
+                openpit_destroy_engine_builder(builder);
+                for axis in [None, Some(0)] {
+                    let engine = engine_with_spot_funds();
+                    patch_pnl_bounds(
+                        engine,
+                        axis,
+                        &[pnl_bounds_barrier("-100")],
+                        true,
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                    let before = position_limit_settings_snapshot(engine);
+                    let error = patch_pnl_bounds(
+                        engine,
+                        axis,
+                        globals,
+                        true,
+                        Some(group_entries),
+                        Some(account_entries),
+                    )
+                    .expect_err("invalid mode must fail configure");
+                    assert!(
+                        error.contains(&format!("mode is invalid: {mode}")),
+                        "{error}"
+                    );
+                    assert_eq!(
+                        position_limit_settings_snapshot(engine),
+                        before,
+                        "invalid mode leaves every tier unchanged"
+                    );
+                    crate::engine::openpit_destroy_engine(engine);
+                }
+            }
+        }
+    }
+
+    fn assert_pnl_duplicate_tier_fails(tier: usize) {
+        let barrier = OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            ..pnl_bounds_barrier("-10")
+        };
+        let groups = [OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+            barrier,
+            account_group_id: 7,
+        }; 2];
+        let accounts = [OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+            barrier,
+            account_id: 42,
+        }; 2];
+        let globals = if tier == 0 { &[barrier; 2][..] } else { &[] };
+        let group_entries = if tier == 1 { &groups[..] } else { &[] };
+        let account_entries = if tier == 2 { &accounts[..] } else { &[] };
+        let builder = make_local_engine_builder();
+        let error = add_pnl_bounds(builder, globals, group_entries, account_entries)
+            .expect_err("duplicate mode must fail builder");
+        assert!(
+            error.contains("duplicate") && error.contains("ReviewWithHold"),
+            "{error}"
+        );
+        add_pnl_bounds(builder, &[pnl_bounds_barrier("-100")], &[], &[]).unwrap();
+        openpit_destroy_engine_builder(builder);
+        for axis in [None, Some(0)] {
+            let engine = engine_with_spot_funds();
+            patch_pnl_bounds(
+                engine,
+                axis,
+                &[pnl_bounds_barrier("-100")],
+                true,
+                None,
+                None,
+            )
+            .unwrap();
+            let before = position_limit_settings_snapshot(engine);
+            let error = patch_pnl_bounds(
+                engine,
+                axis,
+                globals,
+                true,
+                Some(group_entries),
+                Some(account_entries),
+            )
+            .expect_err("duplicate mode must fail configure");
+            assert!(
+                error.contains("duplicate") && error.contains("ReviewWithHold"),
+                "{error}"
+            );
+            assert_eq!(
+                position_limit_settings_snapshot(engine),
+                before,
+                "duplicate mode leaves every tier unchanged"
+            );
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn spot_funds_pnl_duplicate_global_modes_fail_without_change() {
+        assert_pnl_duplicate_tier_fails(0);
+    }
+
+    #[test]
+    fn spot_funds_pnl_duplicate_group_modes_fail_without_change() {
+        assert_pnl_duplicate_tier_fails(1);
+    }
+
+    #[test]
+    fn spot_funds_pnl_duplicate_account_modes_fail_without_change() {
+        assert_pnl_duplicate_tier_fails(2);
+    }
+
+    #[test]
+    fn spot_funds_pnl_global_lists_patch_all_modes() {
+        for axis in [None, Some(0)] {
+            let engine = engine_with_spot_funds();
+            let before = position_limit_settings_snapshot(engine);
+            let initial = [
+                pnl_bounds_barrier("-100"),
+                OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+                    mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+                    ..pnl_bounds_barrier("-10")
+                },
+            ];
+            patch_pnl_bounds(engine, axis, &initial, true, None, None).unwrap();
+            let initial_snapshot = position_limit_settings_snapshot(engine);
+            assert_ne!(initial_snapshot, before, "list installs global modes");
+            let invalid = [OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+                mode: 255,
+                ..initial[0]
+            }];
+            patch_pnl_bounds(engine, axis, &invalid, false, None, None).unwrap();
+            assert_eq!(
+                position_limit_settings_snapshot(engine),
+                initial_snapshot,
+                "has_global false ignores its array and preserves every mode"
+            );
+            let replacement = [OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+                mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+                ..pnl_bounds_barrier("-50")
+            }];
+            patch_pnl_bounds(engine, axis, &replacement, true, None, None).unwrap();
+            let replacement_snapshot = position_limit_settings_snapshot(engine);
+            patch_pnl_bounds(engine, axis, &[], true, None, None).unwrap();
+            assert_eq!(
+                position_limit_settings_snapshot(engine),
+                before,
+                "empty list clears every mode"
+            );
+            patch_pnl_bounds(engine, axis, &replacement, true, None, None).unwrap();
+            assert_eq!(
+                position_limit_settings_snapshot(engine),
+                replacement_snapshot,
+                "list replaces all previous modes instead of upserting"
+            );
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn spot_funds_pnl_zero_mode_matches_reject_at_runtime() {
+        for axis in [None, Some(0), Some(1), Some(2), Some(3)] {
+            let engine = engine_with_spot_funds();
+            let mut barrier = pnl_bounds_barrier("-100");
+            let mut groups = [
+                OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+                    barrier,
+                    account_group_id: 7,
+                },
+            ];
+            let mut accounts = [OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+                barrier,
+                account_id: 42,
+            }];
+            patch_pnl_bounds(
+                engine,
+                axis,
+                &[barrier],
+                true,
+                Some(&groups),
+                Some(&accounts),
+            )
+            .unwrap();
+            let expected = position_limit_settings_snapshot(engine);
+            barrier.mode = 0;
+            groups[0].barrier.mode = 0;
+            accounts[0].barrier.mode = 0;
+            patch_pnl_bounds(
+                engine,
+                axis,
+                &[barrier],
+                true,
+                Some(&groups),
+                Some(&accounts),
+            )
+            .unwrap();
+            assert_eq!(
+                position_limit_settings_snapshot(engine),
+                expected,
+                "zero selects the Reject slot in every tier, axis {axis:?}"
+            );
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
     #[test]
     fn configure_spot_funds_pnl_bounds_axis_selects_each_axis() {
         for (wire, (selector, axis)) in PNL_BOUNDS_AXES.into_iter().enumerate() {
@@ -1773,6 +2287,7 @@ mod tests {
                     OpenPitStringView::from_utf8("SpotFundsPolicy"),
                     selector,
                     &barrier,
+                    1,
                     true,
                     std::ptr::null(),
                     0,
@@ -1788,13 +2303,14 @@ mod tests {
             assert!(unsafe { &*result }.items.is_empty());
             let mut expected = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, []).unwrap();
             expected
-                .set_pnl_axis_global_barrier(
+                .set_pnl_axis_global_barriers(
                     axis,
-                    Some(SpotFundsPnlBoundsBarrier {
+                    [SpotFundsPnlBoundsBarrier {
                         currency: openpit::param::Asset::new("USD").unwrap(),
                         lower_bound: Some(Pnl::from_str("-100").unwrap()),
                         upper_bound: None,
-                    }),
+                        mode: openpit::pretrade::RuleMode::Reject,
+                    }],
                 )
                 .unwrap();
             assert_eq!(
@@ -1830,6 +2346,7 @@ mod tests {
                         OpenPitStringView::from_utf8("SpotFundsPolicy"),
                         selector,
                         if clear { std::ptr::null() } else { &barrier },
+                        usize::from(!clear),
                         has_global,
                         if clear {
                             std::ptr::null()
@@ -1857,9 +2374,10 @@ mod tests {
                 currency: openpit::param::Asset::new("USD").unwrap(),
                 lower_bound: Some(Pnl::from_str("-100").unwrap()),
                 upper_bound: None,
+                mode: openpit::pretrade::RuleMode::Reject,
             };
             expected
-                .set_pnl_axis_global_barrier(axis, Some(core_barrier.clone()))
+                .set_pnl_axis_global_barriers(axis, [core_barrier.clone()])
                 .unwrap();
             expected
                 .set_pnl_axis_account_group_barriers(
@@ -1892,7 +2410,7 @@ mod tests {
                 "{axis:?}: false flags preserve every tier"
             );
             update(true, false, false, true);
-            expected.set_pnl_axis_global_barrier(axis, None).unwrap();
+            expected.set_pnl_axis_global_barriers(axis, []).unwrap();
             assert_eq!(
                 position_limit_settings_snapshot(engine),
                 format!("{expected:?}"),
@@ -1939,6 +2457,7 @@ mod tests {
                     OpenPitStringView::from_utf8("SpotFundsPolicy"),
                     0,
                     &barrier,
+                    1,
                     true,
                     std::ptr::null(),
                     group_len,
@@ -1985,6 +2504,7 @@ mod tests {
                     OpenPitStringView::from_utf8("SpotFundsPolicy"),
                     axis,
                     &barrier,
+                    1,
                     true,
                     std::ptr::null(),
                     0,
@@ -2123,6 +2643,7 @@ mod tests {
                     OpenPitStringView::from_utf8("SpotFundsPolicy"),
                     axis,
                     &barrier,
+                    1,
                     true,
                     std::ptr::null(),
                     0,
@@ -2699,6 +3220,7 @@ mod tests {
                 OpenPitStringView::from_utf8("SpotFundsPolicy"),
                 42,
                 asset,
+                crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
                 OpenPitParamQuantity(limit),
                 true,
                 &mut out_error,
@@ -2857,6 +3379,214 @@ mod tests {
     }
 
     #[test]
+    fn configure_spot_funds_position_limit_modes_round_trip_and_clear_independently() {
+        let engine = engine_with_spot_funds();
+        let mut expected = None;
+        unsafe { &*engine }
+            .configurator()
+            .spot_funds("SpotFundsPolicy", |settings| {
+                expected = Some(settings.clone());
+                Ok::<(), SpotFundsConfigError>(())
+            })
+            .unwrap();
+        let mut expected = expected.unwrap();
+        let modes = [
+            (0, RuleMode::Reject),
+            (1, RuleMode::Reject),
+            (2, RuleMode::ReviewWithHold),
+            (3, RuleMode::ReviewWithoutHold),
+        ];
+        for has_limit in [true, false] {
+            for (wire, mode) in modes {
+                let quantity = openpit::param::Quantity::from_str(&wire.to_string()).unwrap();
+                assert!(unsafe {
+                    openpit_engine_configure_spot_funds_position_limit(
+                        engine,
+                        OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                        42,
+                        OpenPitStringView::from_utf8("AAPL"),
+                        wire,
+                        OpenPitParamQuantity(quantity.to_decimal().into()),
+                        has_limit,
+                        std::ptr::null_mut(),
+                    )
+                });
+                expected.set_position_limit(
+                    AccountId::from_u64(42),
+                    openpit::param::Asset::new("AAPL").unwrap(),
+                    mode,
+                    has_limit.then_some(quantity),
+                );
+                assert_eq!(
+                    position_limit_settings_snapshot(engine),
+                    format!("{expected:?}"),
+                    "mode {mode:?}, has_limit {has_limit}: only the selected mode changes"
+                );
+            }
+        }
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_position_limit_invalid_modes_leave_settings_unchanged() {
+        let engine = engine_with_spot_funds();
+        let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+        let asset = OpenPitStringView::from_utf8("AAPL");
+        let limit = OpenPitParamQuantity(OpenPitParamDecimal::default());
+        assert!(unsafe {
+            openpit_engine_configure_spot_funds_position_limit(
+                engine,
+                name,
+                42,
+                asset,
+                2,
+                limit,
+                true,
+                std::ptr::null_mut(),
+            )
+        });
+        let before = position_limit_settings_snapshot(engine);
+        for mode in [4, 255] {
+            for has_limit in [true, false] {
+                let mut error = std::ptr::null_mut();
+                assert!(
+                    !unsafe {
+                        openpit_engine_configure_spot_funds_position_limit(
+                            engine, name, 42, asset, mode, limit, has_limit, &mut error,
+                        )
+                    },
+                    "invalid mode {mode} was accepted, has_limit {has_limit}"
+                );
+                assert!(!error.is_null());
+                assert_eq!(
+                    crate::engine::openpit_configure_error_get_kind(error),
+                    crate::engine::OpenPitConfigureErrorKind::Validation
+                );
+                let message = crate::engine::openpit_configure_error_get_message(error);
+                let message_text = std::str::from_utf8(unsafe {
+                    std::slice::from_raw_parts(message.ptr, message.len)
+                })
+                .unwrap();
+                assert!(
+                    message_text.contains("position_limit mode"),
+                    "{message_text}"
+                );
+                assert!(message_text.contains(&mode.to_string()), "{message_text}");
+                crate::engine::openpit_destroy_configure_error(error);
+                assert_eq!(
+                    position_limit_settings_snapshot(engine),
+                    before,
+                    "invalid mode {mode} changed settings, has_limit {has_limit}"
+                );
+            }
+        }
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_position_limit_review_and_reject_breaches() {
+        for mode in [2, 3] {
+            let engine = engine_with_spot_funds();
+            let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+            assert!(crate::engine::openpit_engine_set_account_currency(
+                engine,
+                42,
+                OpenPitStringView::from_utf8("USD"),
+                null_out_error(),
+            ));
+            assert!(unsafe {
+                openpit_engine_configure_spot_funds_global_limit_mode(
+                    engine,
+                    name,
+                    OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
+                    std::ptr::null_mut(),
+                )
+            });
+            for (wire, limit) in [(1, "2"), (mode, "0")] {
+                assert!(unsafe {
+                    openpit_engine_configure_spot_funds_position_limit(
+                        engine,
+                        name,
+                        42,
+                        OpenPitStringView::from_utf8("AAPL"),
+                        wire,
+                        OpenPitParamQuantity(
+                            openpit::param::Quantity::from_str(limit)
+                                .unwrap()
+                                .to_decimal()
+                                .into(),
+                        ),
+                        true,
+                        std::ptr::null_mut(),
+                    )
+                });
+            }
+            for (quantity, passed) in [("1", true), ("3", false)] {
+                let mut order = crate::order::OpenPitOrder::default();
+                order.operation.is_set = true;
+                let operation = &mut order.operation.value;
+                operation.account_id.value = 42;
+                operation.account_id.is_set = true;
+                operation.instrument = crate::instrument::OpenPitInstrument {
+                    underlying_asset: OpenPitStringView::from_utf8("AAPL"),
+                    settlement_asset: OpenPitStringView::from_utf8("USD"),
+                };
+                operation.side = crate::param::OPENPIT_PARAM_SIDE_BUY;
+                operation.price.is_set = true;
+                operation.price.value = crate::param::OpenPitParamPrice(
+                    openpit::param::Price::from_str("100")
+                        .unwrap()
+                        .to_decimal()
+                        .into(),
+                );
+                operation.trade_amount = crate::param::OpenPitParamTradeAmount {
+                    kind: crate::param::OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
+                    value: openpit::param::Quantity::from_str(quantity)
+                        .unwrap()
+                        .to_decimal()
+                        .into(),
+                };
+                let mut report = std::ptr::null_mut();
+                assert!(crate::engine::openpit_engine_execute_pre_trade_dry_run(
+                    engine,
+                    &order,
+                    &mut report,
+                    null_out_error(),
+                ));
+                assert_eq!(
+                    crate::engine::openpit_pretrade_pre_trade_dry_run_report_is_pass(report),
+                    passed,
+                    "mode {mode}, quantity {quantity}: review passes and Reject rejects"
+                );
+                let list = if passed {
+                    crate::engine::openpit_pretrade_pre_trade_dry_run_report_get_reviews(report)
+                } else {
+                    crate::engine::openpit_pretrade_pre_trade_dry_run_report_get_rejects(report)
+                };
+                let items = &unsafe { &*list }.items;
+                assert_eq!(items.len(), 1, "one position-limit outcome");
+                assert_eq!(
+                    items[0].code,
+                    openpit::pretrade::RejectCode::PositionLimitExceeded
+                );
+                assert_eq!(items[0].scope, openpit::pretrade::RejectScope::Order);
+                assert_eq!(
+                    items[0].mode,
+                    if passed {
+                        import_rule_mode(mode).unwrap()
+                    } else {
+                        RuleMode::Reject
+                    },
+                    "position-limit outcome preserves its mode"
+                );
+                crate::reject::openpit_destroy_pretrade_reject_list(list);
+                crate::engine::openpit_destroy_pretrade_pre_trade_dry_run_report(report);
+            }
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
     fn configure_spot_funds_position_limit_ignores_limit_when_clearing() {
         let engine = engine_with_spot_funds();
         let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
@@ -2880,6 +3610,7 @@ mod tests {
                     name,
                     42,
                     asset,
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
                     OpenPitParamQuantity(OpenPitParamDecimal {
                         mantissa_lo: 1,
                         mantissa_hi: 0,
@@ -2897,6 +3628,7 @@ mod tests {
                     name,
                     42,
                     asset,
+                    crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
                     OpenPitParamQuantity(malformed),
                     false,
                     &mut out_error,
@@ -2945,6 +3677,7 @@ mod tests {
                 OpenPitStringView::from_utf8("SpotFundsPolicy"),
                 42,
                 asset,
+                crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
                 OpenPitParamQuantity(OpenPitParamDecimal {
                     mantissa_lo: 1,
                     mantissa_hi: 0,

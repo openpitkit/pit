@@ -1725,16 +1725,22 @@ impl PyConfigurator {
     /// when provided. ``account_limit_modes`` and ``account_group_limit_modes``
     /// pin or clear per-account and per-account-group limit-mode overrides via
     /// the named entities from ``openpit.pretrade.policies``.
-    /// ``position_limits`` pins, replaces, or clears a per-account asset
-    /// position bound. Each entry requires a limit; explicit ``None`` clears
-    /// it. The checked position starts with recorded available plus held. Long
-    /// projections add open positive incoming; short
-    /// projections subtract open positive held. Only the side the order moves
+    /// ``position_limits`` pins, replaces, or clears a bound keyed by account,
+    /// asset and rule mode. The mode defaults to ``RuleMode.REJECT``. Each
+    /// entry requires a limit; explicit ``None`` clears only that mode.
+    /// An invalid mode raises ``ValueError`` before core configuration is
+    /// attempted.
+    /// A repeated key raises ``PolicyConfigureError`` without applying any
+    /// changes. The checked position starts with recorded available plus held.
+    /// Long projections add open positive incoming; short projections subtract
+    /// open positive held. Only the side the order moves
     /// toward is checked, so a reducing order passes while its projection
     /// stays within the inclusive bound. A breach rejects the order with
-    /// ``PositionLimitExceeded`` at Order scope; an inexact projection rejects
-    /// it with ``ArithmeticOverflow`` at Order scope. Changes apply from the
-    /// next order without re-evaluating open reservations.
+    /// ``PositionLimitExceeded`` at Order scope in Reject mode. A review
+    /// breach adds a ``PositionLimitExceeded`` review mark with the limit's
+    /// mode. An inexact projection rejects with ``ArithmeticOverflow`` at
+    /// Order scope in every mode. Changes apply from the next order without
+    /// re-evaluating open reservations.
     #[pyo3(signature = (name, *, global_slippage_bps = None, pricing_source = None, overrides = vec![], global_limit_mode = None, account_limit_modes = vec![], account_group_limit_modes = vec![], position_limits = vec![]))]
     #[allow(clippy::too_many_arguments)]
     fn spot_funds(
@@ -1771,10 +1777,11 @@ impl PyConfigurator {
                 .iter()
                 .map(parse_spot_funds_account_group_limit_mode_entity)
                 .collect::<PyResult<_>>()?;
-        let parsed_position_limits: Vec<(AccountId, Asset, Option<Quantity>)> = position_limits
-            .iter()
-            .map(parse_spot_funds_position_limit_entity)
-            .collect::<PyResult<_>>()?;
+        let parsed_position_limits: Vec<(AccountId, Asset, RuleMode, Option<Quantity>)> =
+            position_limits
+                .iter()
+                .map(parse_spot_funds_position_limit_entity)
+                .collect::<PyResult<_>>()?;
 
         py.detach(|| {
             self.inner.spot_funds(name, |s| {
@@ -1796,9 +1803,7 @@ impl PyConfigurator {
                 for (account_group_id, mode) in &parsed_account_group_limit_modes {
                     s.set_account_group_limit_mode(*account_group_id, *mode);
                 }
-                for (account_id, asset, limit) in &parsed_position_limits {
-                    s.set_position_limit(*account_id, asset.clone(), *limit);
-                }
+                s.set_position_limits(parsed_position_limits)?;
                 Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
             })
         })
@@ -1811,10 +1816,12 @@ impl PyConfigurator {
     /// Retune the account P&L bounds axis of a spot-funds policy.
     ///
     /// ``name`` must match the name given to the policy at registration time.
-    /// Omitted axes stay unchanged. Passing ``None`` as ``global_barrier``
-    /// clears the singular global barrier; a barrier value replaces it. A
-    /// supplied group/account list replaces that axis wholesale, and an empty
-    /// list clears it. Each barrier must still configure at least one bound.
+    /// Omitted lists or ``None`` stay unchanged. A supplied global list replaces
+    /// every mode of the global slot. A supplied group or account list replaces
+    /// that tier wholesale: every group or account, every mode. An empty list
+    /// clears the corresponding tier or global slot.
+    /// Repeated modes for the same target raise ``PolicyConfigureError`` and
+    /// leave all settings unchanged. Each barrier needs at least one bound.
     /// With a known effective account currency, an account-tier mismatch fails
     /// closed and blocks the account; account-group and global mismatches are
     /// skipped. A known-currency account with no account barrier and no
@@ -1825,31 +1832,35 @@ impl PyConfigurator {
     ///
     /// An account whose effective barrier changed is evaluated against its
     /// stored account P&L before this call returns: an already halted account,
-    /// or one already beyond the new barrier, is blocked here rather than at
+    /// or one already beyond the new Reject-mode barrier, is blocked here before
     /// its next fill, and the returned result carries the block the engine has
     /// already recorded. Each ``AccountBlockOutcome`` identifies the affected
     /// account together with its newly inserted block. Removing the last
     /// effective barrier reports no block and does not release an existing
     /// block. Clearing an override can expose a fallback barrier; the fallback
     /// is evaluated normally and may record and report a block.
-    #[pyo3(signature = (name, *, global_barrier = Python::attach(|py| py.Ellipsis()), account_group_barriers = None, account_barriers = None))]
+    ///
+    /// Raises:
+    ///     ValueError: If a mode or barrier value is invalid. Validation happens
+    ///         during this call, before core configuration is attempted.
+    ///     PolicyConfigureError: If the policy is not found, has the wrong type,
+    ///         or the new settings fail core validation.
+    #[pyo3(signature = (name, *, global_barriers = None, account_group_barriers = None, account_barriers = None))]
     fn spot_funds_pnl_bounds_killswitch(
         &self,
         py: Python<'_>,
         name: &str,
-        global_barrier: Py<PyAny>,
+        global_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_group_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_barriers: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<PyAccountBlockOutcomes> {
-        let global_barrier = global_barrier.bind(py);
-        let ellipsis = py.Ellipsis();
-        let global = if global_barrier.is(ellipsis.bind(py)) {
-            None
-        } else if global_barrier.is_none() {
-            Some(None)
-        } else {
-            Some(Some(parse_spot_funds_pnl_bounds_barrier(global_barrier)?))
-        };
+        let global = global_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_spot_funds_pnl_bounds_barrier)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
         let account_group: Option<Vec<SpotFundsPnlBoundsAccountGroupBarrier>> =
             account_group_barriers
                 .map(|v| {
@@ -1870,7 +1881,7 @@ impl PyConfigurator {
             .detach(|| {
                 self.inner.spot_funds(name, |s| {
                     if let Some(v) = &global {
-                        s.set_pnl_global_barrier(v.clone())?;
+                        s.set_pnl_global_barriers(v.iter().cloned())?;
                     }
                     if let Some(v) = &account_group {
                         s.set_pnl_account_group_barriers(v.iter().cloned())?;
@@ -1892,10 +1903,12 @@ impl PyConfigurator {
     /// Unlike :meth:`spot_funds_pnl_bounds_killswitch`, which retunes bounds
     /// and never touches accumulated P&L, this is an absolute assignment
     /// (upsert) of the live accumulator for ``account``. A numeric value
-    /// outside an effective account P&L barrier and any halted value with such
-    /// a barrier return the policy-reported block even when the account is
-    /// already blocked. The engine processes the block request before returning
-    /// and preserves the existing first cause.
+    /// beyond an effective Reject-mode bound returns the policy-reported block.
+    /// A review-mode breach returns no block and no review mark: configuration
+    /// emits no marks. A halted value with an effective barrier of any mode
+    /// returns the block, even when the account is already blocked. The engine
+    /// processes the block before returning and preserves the existing first
+    /// cause.
     #[pyo3(signature = (name, *, account, state))]
     fn set_spot_funds_account_pnl(
         &self,
@@ -4759,12 +4772,12 @@ impl PyReadyEngineBuilder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(name = "_add_builtin_spot_funds_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, market_data = None, global_barrier = None, account_group_barriers = vec![], account_barriers = vec![], name=None, mode=None))]
+    #[pyo3(name = "_add_builtin_spot_funds_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, market_data = None, global_barriers = vec![], account_group_barriers = vec![], account_barriers = vec![], name=None, mode=None))]
     fn add_builtin_spot_funds_pnl_bounds_killswitch<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
         market_data: Option<PyRef<'_, PyMarketDataService>>,
-        global_barrier: Option<Bound<'_, PyAny>>,
+        global_barriers: Vec<Bound<'_, PyAny>>,
         account_group_barriers: Vec<Bound<'_, PyAny>>,
         account_barriers: Vec<Bound<'_, PyAny>>,
         name: Option<String>,
@@ -4783,7 +4796,7 @@ impl PyReadyEngineBuilder {
                 PolicyGroupId::new(policy_group_id),
                 engine_sync,
                 md_handle,
-                global_barrier,
+                global_barriers,
                 account_group_barriers,
                 account_barriers,
             )?
@@ -5228,6 +5241,7 @@ fn parse_spot_funds_pnl_bounds_barrier(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SpotFundsPnlBoundsBarrier> {
     ensure_policy_entity(obj, "SpotFundsPnlBoundsBarrier")?;
+    let mode = parse_rule_mode(&obj.getattr("mode")?, "SpotFundsPnlBoundsBarrier.mode")?;
     let currency = parse_asset_input(&obj.getattr("currency")?)?;
     let lower_bound_value = obj.getattr("lower_bound")?;
     let lower_bound = if lower_bound_value.is_none() {
@@ -5245,6 +5259,7 @@ fn parse_spot_funds_pnl_bounds_barrier(
         currency,
         lower_bound,
         upper_bound,
+        mode,
     })
 }
 
@@ -5254,8 +5269,9 @@ fn parse_spot_funds_pnl_account_group_barrier(
     ensure_policy_entity(obj, "SpotFundsPnlBoundsAccountGroupBarrier")?;
     let barrier_obj = obj.getattr("barrier")?;
     let account_group_id_obj = obj.getattr("account_group_id")?;
+    let barrier = parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?;
     Ok(SpotFundsPnlBoundsAccountGroupBarrier {
-        barrier: parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?,
+        barrier,
         account_group_id: parse_account_group_id_input(&account_group_id_obj)?,
     })
 }
@@ -5266,8 +5282,9 @@ fn parse_spot_funds_pnl_account_barrier(
     ensure_policy_entity(obj, "SpotFundsPnlBoundsAccountBarrier")?;
     let barrier_obj = obj.getattr("barrier")?;
     let account_id_obj = obj.getattr("account_id")?;
+    let barrier = parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?;
     Ok(SpotFundsPnlBoundsAccountBarrier {
-        barrier: parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?,
+        barrier,
         account_id: parse_account_id_input(&account_id_obj)?,
     })
 }
@@ -5339,8 +5356,9 @@ fn parse_spot_funds_account_limit_mode_entity(
 
 fn parse_spot_funds_position_limit_entity(
     value: &Bound<'_, PyAny>,
-) -> PyResult<(AccountId, Asset, Option<Quantity>)> {
+) -> PyResult<(AccountId, Asset, RuleMode, Option<Quantity>)> {
     ensure_policy_entity(value, "SpotFundsPositionLimitEntry")?;
+    let mode = parse_rule_mode(&value.getattr("mode")?, "SpotFundsPositionLimitEntry.mode")?;
     let account_id = value
         .getattr("account_id")?
         .extract::<PyRef<'_, PyAccountId>>()
@@ -5362,7 +5380,7 @@ fn parse_spot_funds_position_limit_entity(
             )
         })?
         .map(|quantity| quantity.inner);
-    Ok((account_id, asset, limit))
+    Ok((account_id, asset, mode, limit))
 }
 
 fn parse_spot_funds_account_group_limit_mode_entity(
@@ -5523,14 +5541,14 @@ fn make_spot_funds_pnl_bounds_killswitch_policy(
     policy_group_id: PolicyGroupId,
     engine_sync: SyncMode,
     market_data: Option<(EngineHandle<MarketDataService<EngineLocking>>, SyncMode)>,
-    global_barrier: Option<Bound<'_, PyAny>>,
+    global_barriers: Vec<Bound<'_, PyAny>>,
     account_group_barriers: Vec<Bound<'_, PyAny>>,
     account_barriers: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<SpotFundsPolicy<EngineLocking, EngineLocking>> {
-    let global = global_barrier
-        .as_ref()
+    let global = global_barriers
+        .iter()
         .map(parse_spot_funds_pnl_bounds_barrier)
-        .transpose()?;
+        .collect::<PyResult<Vec<_>>>()?;
     let account_group = account_group_barriers
         .iter()
         .map(parse_spot_funds_pnl_account_group_barrier)

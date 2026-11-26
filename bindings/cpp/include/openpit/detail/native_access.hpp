@@ -171,8 +171,6 @@ class NativeAccess final {
     friend class ::openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
     friend class ::openpit::pretrade::policies::RateLimitPolicy;
     friend class ::openpit::pretrade::policies::
-        SpotFundsPnlBoundsGlobalBarrierUpdate;
-    friend class ::openpit::pretrade::policies::
         SpotFundsPnlBoundsKillSwitchPolicy;
     friend class ::openpit::pretrade::policies::SpotFundsPolicy;
     friend struct ::openpit::pretrade::policies::OrderSizeAccountAssetBarrier;

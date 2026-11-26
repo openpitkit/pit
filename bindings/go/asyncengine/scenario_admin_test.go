@@ -1031,12 +1031,13 @@ func verifyAdministrativeCurrencyMutation(
 		t.Fatalf("NewAsset(EUR) error = %v", err)
 	}
 	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Mode:       reject.RuleModeReject,
 		Currency:   eur,
 		LowerBound: optional.Some(mustAdministrativePnl(t, "-10")),
 	}
 	outcomes, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		optional.Some(&barrier),
+		[]policies.SpotFundsPnlBoundsBarrier{barrier},
 		nil,
 		nil,
 	)
@@ -1099,6 +1100,7 @@ func newAdministrativePnlChainNativeEngine(t *testing.T) native.Engine {
 		t.Fatalf("NewAsset(USD) error = %v", err)
 	}
 	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Mode:       reject.RuleModeReject,
 		Currency:   usd,
 		LowerBound: optional.Some(mustAdministrativePnl(t, "-10")),
 	}

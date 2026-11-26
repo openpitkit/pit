@@ -16,6 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 use super::*;
+use crate::pretrade::RuleMode;
 
 use std::collections::HashMap;
 
@@ -730,7 +731,12 @@ impl Runner {
         let mut limits = HashMap::new();
         for ((account_id, asset), (_, limit)) in universe().zip(&case.slots) {
             if let Some(limit) = limit {
-                settings.set_position_limit(account_id, asset.clone(), Some(*limit));
+                settings.set_position_limit(
+                    account_id,
+                    asset.clone(),
+                    RuleMode::Reject,
+                    Some(*limit),
+                );
                 limits.insert((account_id, asset), limit.to_position_size());
             }
         }
@@ -1201,13 +1207,14 @@ proptest! {
             *slot = holdings;
         });
         let mut settings = settings(0);
-        settings.set_pnl_axis_global_barrier(
+        settings.set_pnl_axis_global_barriers(
             SpotFundsPnlBoundsAxis::PositionUnrealized,
-            Some(SpotFundsPnlBoundsBarrier {
+            [SpotFundsPnlBoundsBarrier {
                 currency: asset("USD"),
                 lower_bound: Some(Pnl::ZERO),
                 upper_bound: Some(Pnl::ZERO),
-            }),
+                mode: RuleMode::Reject,
+            }],
         ).unwrap();
         let block = policy.pnl_axis_block(&settings, account(1), None, Some(&asset("USD")), false);
         if delta == Pnl::ZERO {
@@ -1216,6 +1223,112 @@ proptest! {
             let side = if delta < Pnl::ZERO { "lower" } else { "upper" };
             let expected = format!("{side} bound breached: position unrealized pnl {delta}, lower bound 0, upper bound 0, currency USD, asset AAPL");
             prop_assert_eq!(block.unwrap().details, expected);
+        }
+    }
+
+    // The lifecycle model treats every policy Err as a rejection and commits
+    // all admitted orders. Exercise review verdicts separately rather than
+    // rewriting that lifecycle around the engine's per-mode rollback.
+    #[test]
+    fn position_rule_modes_match_one_order_oracle(
+        available in -10_000i64..=10_000,
+        held in -2_000i64..=2_000,
+        incoming in -2_000i64..=2_000,
+        quantity in 1i64..=10_000,
+        buy in any::<bool>(),
+        limits in prop::array::uniform3(prop::option::of(0i64..=15_000)),
+        extreme in 0u8..16,
+    ) {
+        let account_id = account(ACCOUNTS[0]);
+        let modes = [RuleMode::Reject, RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold];
+        let mut configured = settings(0);
+        configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+        configured.set_position_limits(modes.into_iter().zip(limits).map(|(mode, limit)| {
+            (account_id, asset("AAPL"), mode, limit.map(|v| qty(&hundredths(v))))
+        })).unwrap();
+        let builder = engine_builder();
+        let policy: TestPolicy = SpotFundsPolicy::new(configured, None, builder.storage_builder());
+        let available = match extreme {
+            0 => PositionSize::new(rust_decimal::Decimal::MAX),
+            1 => PositionSize::new(rust_decimal::Decimal::MIN),
+            _ => ps(&hundredths(available)),
+        };
+        let pre = Slot {
+            available,
+            held: ps(&hundredths(held)),
+            incoming: ps(&hundredths(incoming)),
+        };
+        // Public adjustment fields can seed all three recorded components.
+        let mut adjustment = adj(asset("AAPL"), Some(AdjustmentAmount::Absolute(pre.available)));
+        adjustment.held = Some(AdjustmentAmount::Absolute(pre.held));
+        adjustment.incoming = Some(AdjustmentAmount::Absolute(pre.incoming));
+        let mut mutations = Mutations::new();
+        run_adjustment(&policy, account_id, &adjustment, &mut mutations);
+        prop_assert!(!mutations.commit_all().failed());
+        let side = if buy { Side::Buy } else { Side::Sell };
+        let size = ps(&hundredths(quantity));
+        let step = Step {
+            asset: asset("AAPL"),
+            held: if buy { PositionSize::ZERO } else { size },
+            incoming: if buy { size } else { PositionSize::ZERO },
+        };
+        let mut expected_reject = None;
+        let mut expected_modes = Vec::new();
+        for (mode, limit) in modes.into_iter().zip(limits) {
+            let Some(limit) = limit else { continue };
+            match barrier(pre, &[&step], ps(&hundredths(limit))) {
+                Ok(()) => {},
+                Err(RejectCode::PositionLimitExceeded) if mode != RuleMode::Reject => expected_modes.push(mode),
+                Err(code) => { expected_reject = Some(code); break; },
+            }
+        }
+        // Slot writes can overflow even when there is no position limit.
+        let slot_write = pre.available.checked_sub(step.held)
+            .and_then(|_| pre.held.checked_add(step.held))
+            .and_then(|_| pre.incoming.checked_add(step.incoming));
+        if slot_write.is_err() { expected_reject = Some(RejectCode::ArithmeticOverflow); }
+        let request = make_order(account_id, instr("AAPL", "USD"), side,
+            TradeAmount::Quantity(qty(&hundredths(quantity))), Some(Price::ZERO));
+        let dry = dry_run_check(&policy, &request);
+        let before = holdings_of(&policy, account_id, &asset("AAPL"));
+        let mut mutations = Mutations::new();
+        let live = pre_trade_full(&policy, &request, &mut mutations);
+        match (&dry, &live) {
+            (Err(dry), Err(live)) => {
+                let (dry_records, dry_outcome) = dry.clone().into_parts();
+                let (live_records, live_outcome) = live.clone().into_parts();
+                prop_assert_eq!(dry_records, live_records, "dry and live records");
+                if !expected_modes.is_empty() {
+                    prop_assert!(dry_outcome.is_some(), "review marks must carry the dry-run policy result");
+                    prop_assert!(live_outcome.is_some(), "review marks must carry the live policy result");
+                }
+                prop_assert_eq!(
+                    dry_outcome.map(|result| (result.lock_prices, result.account_adjustments)),
+                    live_outcome.map(|result| (result.lock_prices, result.account_adjustments)),
+                    "dry and live policy results"
+                );
+            },
+            (Ok(Some(dry)), Ok(live)) => prop_assert_eq!(&dry.account_adjustments, &live.account_adjustments),
+            _ => prop_assert!(false, "dry and live verdicts differ"),
+        }
+        if let Some(code) = expected_reject {
+            let rejects = live.unwrap_err();
+            prop_assert_eq!(rejects[0].code, code);
+            prop_assert_eq!(rejects[0].mode, RuleMode::Reject);
+            prop_assert_eq!(&rejects[0].scope, &RejectScope::Order);
+        } else if expected_modes.is_empty() {
+            prop_assert!(live.is_ok(), "an unbreached order must pass");
+        } else {
+            let marks = live.unwrap_err();
+            prop_assert_eq!(marks.iter().map(|r| r.mode).collect::<Vec<_>>(), expected_modes,
+                "exactly one mark per exceeded review mode");
+            prop_assert!(marks.iter().all(|r| r.code == RejectCode::PositionLimitExceeded && r.scope == RejectScope::Order));
+        }
+        prop_assert!(!mutations.rollback_all().callback_failed());
+        // Near the decimal extrema a hold may round, an existing property
+        // model exclusion. Ordinary exact writes must roll back exactly.
+        if extreme > 1 {
+            prop_assert_eq!(holdings_of(&policy, account_id, &asset("AAPL")), before);
         }
     }
 

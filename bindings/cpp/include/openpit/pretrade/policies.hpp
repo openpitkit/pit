@@ -109,8 +109,6 @@ class PnlOptionalAccess final {
 
   friend class ::openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
   friend class ::openpit::pretrade::policies::
-      SpotFundsPnlBoundsGlobalBarrierUpdate;
-  friend class ::openpit::pretrade::policies::
       SpotFundsPnlBoundsKillSwitchPolicy;
   friend class ::openpit::pretrade::policies::SpotFundsPolicy;
   friend class ::openpit::Configurator;
@@ -763,6 +761,8 @@ struct SpotFundsPnlBoundsBarrier {
   ::openpit::param::Asset currency;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
+  /// Rejects by default; review modes mark a breach without blocking.
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
 
   explicit SpotFundsPnlBoundsBarrier(::openpit::param::Asset value)
       : currency(std::move(value)) {}
@@ -773,6 +773,7 @@ struct SpotFundsPnlBoundsBarrier {
   [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier Native()
       const noexcept {
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier raw{};
+    raw.mode = static_cast<OpenPitPretradeRuleMode>(mode);
     raw.currency = ::openpit::detail::Native(currency);
     raw.lower_bound =
         ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
@@ -829,47 +830,6 @@ struct SpotFundsPnlBoundsAccountBarrier {
   }
 };
 
-/// Tri-state runtime update for the singular SpotFunds global P&L barrier.
-///
-/// Use the explicitly named `Unchanged`, `Clear`, and `Set` factories. Direct
-/// construction is intentionally unavailable so legacy `std::nullopt` and
-/// barrier arguments fail to compile instead of silently changing meaning. A
-/// collection state is not representable because this axis is singular.
-class SpotFundsPnlBoundsGlobalBarrierUpdate {
- public:
-  /// Leaves the current global barrier unchanged.
-  [[nodiscard]] static SpotFundsPnlBoundsGlobalBarrierUpdate
-  Unchanged() noexcept {
-    return SpotFundsPnlBoundsGlobalBarrierUpdate(false, std::nullopt);
-  }
-
-  /// Clears the current global barrier.
-  [[nodiscard]] static SpotFundsPnlBoundsGlobalBarrierUpdate Clear() noexcept {
-    return SpotFundsPnlBoundsGlobalBarrierUpdate(true, std::nullopt);
-  }
-
-  /// Replaces the current global barrier.
-  [[nodiscard]] static SpotFundsPnlBoundsGlobalBarrierUpdate Set(
-      SpotFundsPnlBoundsBarrier barrier) {
-    return SpotFundsPnlBoundsGlobalBarrierUpdate(true, barrier);
-  }
-
-  [[nodiscard]] bool HasUpdate() const noexcept { return m_hasUpdate; }
-
-  [[nodiscard]] const std::optional<SpotFundsPnlBoundsBarrier>& Barrier()
-      const noexcept {
-    return m_barrier;
-  }
-
- private:
-  SpotFundsPnlBoundsGlobalBarrierUpdate(
-      bool hasUpdate, std::optional<SpotFundsPnlBoundsBarrier> barrier) noexcept
-      : m_hasUpdate(hasUpdate), m_barrier(std::move(barrier)) {}
-
-  bool m_hasUpdate{false};
-  std::optional<SpotFundsPnlBoundsBarrier> m_barrier;
-};
-
 /// Built-in spot-funds self-computed P&L bounds kill switch.
 ///
 /// This registers the regular `SpotFundsPolicy` name and configures its
@@ -894,10 +854,10 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
     return *this;
   }
 
-  /// Sets the global account P&L barrier.
+  /// Adds a global account P&L barrier. Repeated modes fail registration.
   SpotFundsPnlBoundsKillSwitchPolicy& GlobalBarrier(
       SpotFundsPnlBoundsBarrier barrier) {
-    m_globalBarrier = barrier;
+    m_globalBarriers.push_back(std::move(barrier));
     return *this;
   }
 
@@ -920,11 +880,10 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
         ::openpit::detail::PolicyInstanceToNative(instance);
-    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier globalRaw{};
-    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier* globalPtr = nullptr;
-    if (m_globalBarrier) {
-      globalRaw = ::openpit::detail::Native(*m_globalBarrier);
-      globalPtr = &globalRaw;
+    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier> globalRaw;
+    globalRaw.reserve(m_globalBarriers.size());
+    for (const auto& barrier : m_globalBarriers) {
+      globalRaw.push_back(::openpit::detail::Native(barrier));
     }
 
     std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier>
@@ -945,8 +904,9 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
             ::openpit::detail::Native(builder), m_marketData, m_policyGroupId,
-            globalPtr, accountGroupRaw.data(), accountGroupRaw.size(),
-            accountRaw.data(), accountRaw.size(), &rawInstance, &error)) {
+            globalRaw.data(), globalRaw.size(), accountGroupRaw.data(),
+            accountGroupRaw.size(), accountRaw.data(), accountRaw.size(),
+            &rawInstance, &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_"
@@ -956,7 +916,7 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
 
  private:
   const OpenPitMarketDataService* m_marketData = nullptr;
-  std::optional<SpotFundsPnlBoundsBarrier> m_globalBarrier;
+  std::vector<SpotFundsPnlBoundsBarrier> m_globalBarriers;
   std::vector<SpotFundsPnlBoundsAccountGroupBarrier> m_accountGroupBarriers;
   std::vector<SpotFundsPnlBoundsAccountBarrier> m_accountBarriers;
   std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;

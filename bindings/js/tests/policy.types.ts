@@ -176,8 +176,16 @@ const spotFundsBarrier = new SpotFundsPnlBoundsBarrier(
   "-100",
   undefined,
 );
-const spotFundsPnlReady =
-  buildSpotFundsPnlBoundsKillswitch().globalBarrier(spotFundsBarrier);
+const spotFundsPnlReady = buildSpotFundsPnlBoundsKillswitch().globalBarriers([
+  spotFundsBarrier,
+]);
+buildSpotFundsPnlBoundsKillswitch().globalBarriers(new Set([spotFundsBarrier]));
+new SpotFundsPnlBoundsBarrier("USD", "-100", undefined, "ReviewWithHold");
+new SpotFundsPnlBoundsBarrier("USD", "-100", undefined, "ReviewWithoutHold");
+// @ts-expect-error - the singular global barrier method was removed.
+void buildSpotFundsPnlBoundsKillswitch().globalBarrier;
+// @ts-expect-error - mode uses the case-sensitive RuleMode vocabulary.
+new SpotFundsPnlBoundsBarrier("USD", "-100", undefined, "review");
 ready.builtin(orderSizeReady);
 ready.builtin(rateLimitReady);
 ready.builtin(pnlReady);

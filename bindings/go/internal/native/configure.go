@@ -23,6 +23,7 @@ package native
 import "C"
 
 import (
+	"fmt"
 	"runtime"
 	"unsafe"
 )
@@ -252,19 +253,19 @@ func EngineConfigureSpotFunds(
 func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 	engine Engine,
 	name string,
-	globalBarrier *PretradePoliciesSpotFundsPnlBoundsBarrier,
-	hasGlobalBarrier bool,
+	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
 ) (PretradeAccountBlockOutcomeList, ConfigureError) {
 	tiers := prepareSpotFundsPnlBoundsTiers(
-		globalBarrier, hasGlobalBarrier, accountGroupBarriers, accountBarriers,
+		globalBarriers, accountGroupBarriers, accountBarriers,
 	)
 	var outError ConfigureError
 	blocks := C.openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
 		engine,
 		importString(name),
 		tiers.global,
+		tiers.globalLen,
 		tiers.hasGlobal,
 		tiers.accountGroup,
 		tiers.accountGroupLen,
@@ -274,7 +275,7 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 		tiers.hasAccount,
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
-	runtime.KeepAlive(globalBarrier)
+	runtime.KeepAlive(globalBarriers)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if blocks == nil {
@@ -287,9 +288,8 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 // measure of the named spot-funds policy at runtime. Realized bounds and P&L
 // stay unchanged. An unknown axis returns a validation error before any change.
 //
-// A false hasGlobalBarrier leaves the global tier unchanged; when true, a nil
-// globalBarrier clears it. Nil slices leave their tiers untouched; non-nil
-// empty slices clear them.
+// Nil slices leave their tiers untouched; non-nil empty slices clear them.
+// A non-empty list replaces every mode of its tier.
 //
 // On success it returns a caller-owned account-block-outcome list, possibly
 // empty. The caller must release it with
@@ -298,13 +298,12 @@ func EngineConfigureSpotFundsPnlBoundsAxis(
 	engine Engine,
 	name string,
 	axis PretradePoliciesSpotFundsPnlBoundsAxis,
-	globalBarrier *PretradePoliciesSpotFundsPnlBoundsBarrier,
-	hasGlobalBarrier bool,
+	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
 ) (PretradeAccountBlockOutcomeList, ConfigureError) {
 	tiers := prepareSpotFundsPnlBoundsTiers(
-		globalBarrier, hasGlobalBarrier, accountGroupBarriers, accountBarriers,
+		globalBarriers, accountGroupBarriers, accountBarriers,
 	)
 	var outError ConfigureError
 	blocks := C.openpit_engine_configure_spot_funds_pnl_bounds_axis(
@@ -312,6 +311,7 @@ func EngineConfigureSpotFundsPnlBoundsAxis(
 		importString(name),
 		axis,
 		tiers.global,
+		tiers.globalLen,
 		tiers.hasGlobal,
 		tiers.accountGroup,
 		tiers.accountGroupLen,
@@ -321,7 +321,7 @@ func EngineConfigureSpotFundsPnlBoundsAxis(
 		tiers.hasAccount,
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
-	runtime.KeepAlive(globalBarrier)
+	runtime.KeepAlive(globalBarriers)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if blocks == nil {
@@ -332,6 +332,7 @@ func EngineConfigureSpotFundsPnlBoundsAxis(
 
 type spotFundsPnlBoundsTiers struct {
 	global          *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
+	globalLen       C.size_t
 	hasGlobal       C.bool
 	accountGroup    *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
 	accountGroupLen C.size_t
@@ -342,15 +343,14 @@ type spotFundsPnlBoundsTiers struct {
 }
 
 func prepareSpotFundsPnlBoundsTiers(
-	globalBarrier *PretradePoliciesSpotFundsPnlBoundsBarrier,
-	hasGlobalBarrier bool,
+	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
 ) spotFundsPnlBoundsTiers {
 	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
-	if globalBarrier != nil {
+	if len(globalBarriers) > 0 {
 		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
-			unsafe.Pointer(globalBarrier),
+			unsafe.Pointer(&globalBarriers[0]),
 		)
 	}
 	var accountGroupPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
@@ -368,7 +368,8 @@ func prepareSpotFundsPnlBoundsTiers(
 
 	return spotFundsPnlBoundsTiers{
 		global:          globalPtr,
-		hasGlobal:       C.bool(hasGlobalBarrier),
+		globalLen:       C.size_t(len(globalBarriers)),
+		hasGlobal:       C.bool(globalBarriers != nil),
 		accountGroup:    accountGroupPtr,
 		accountGroupLen: C.size_t(len(accountGroupBarriers)),
 		hasAccountGroup: C.bool(accountGroupBarriers != nil),
@@ -454,30 +455,38 @@ func EngineConfigureSpotFundsAccountLimitMode(
 	return nil
 }
 
-// EngineConfigureSpotFundsPositionLimit pins or clears one account asset limit.
-// The limit is ignored when hasLimit is false. On failure, the caller owns the
+// EngineConfigureSpotFundsPositionLimit pins or clears one limit keyed by
+// account, asset and mode. The limit is ignored when hasLimit is false.
+// On success returns nil, nil.
+// An invalid mode returns a Go error. On a native failure, the caller owns the
 // returned ConfigureError and must release it with DestroyConfigureError.
 func EngineConfigureSpotFundsPositionLimit(
 	engine Engine,
 	name string,
 	accountID ParamAccountID,
 	asset string,
+	mode PretradeRuleMode,
 	limit ParamQuantity,
 	hasLimit bool,
-) ConfigureError {
+) (ConfigureError, error) {
+	cMode, ok := checkedRuleModeToC(mode)
+	if !ok {
+		return nil, fmt.Errorf("position_limit mode is invalid: %d", mode)
+	}
 	var outError ConfigureError
 	if !C.openpit_engine_configure_spot_funds_position_limit(
 		engine,
 		importString(name),
 		accountID,
 		importString(asset),
+		cMode,
 		limit,
 		C.bool(hasLimit),
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return outError
+		return outError, nil
 	}
-	return nil
+	return nil, nil //nolint:nilnil // both nil signals success
 }
 
 // EngineConfigureSpotFundsAccountGroupLimitMode pins or clears the spot-funds

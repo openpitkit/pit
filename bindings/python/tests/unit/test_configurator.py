@@ -729,10 +729,12 @@ def test_spot_funds_pnl_bounds_builder_and_configurator_use_named_entities() -> 
 
     engine.configure().spot_funds_pnl_bounds_killswitch(
         policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
-        global_barrier=policies.SpotFundsPnlBoundsBarrier(
-            currency=openpit.param.Asset("USD"),
-            lower_bound=openpit.param.Pnl("-100"),
-        ),
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl("-100"),
+            )
+        ],
         account_group_barriers=[
             policies.SpotFundsPnlBoundsAccountGroupBarrier(
                 barrier=policies.SpotFundsPnlBoundsBarrier(
@@ -768,7 +770,7 @@ def test_spot_funds_pnl_barrier_ignores_non_matching_currency() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("EUR"),
                     lower_bound=openpit.param.Pnl("-100"),
@@ -842,7 +844,7 @@ def test_spot_funds_pnl_barrier_applies_matching_currency() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=usd,
                     lower_bound=openpit.param.Pnl("-100"),
@@ -884,19 +886,23 @@ def test_spot_funds_runtime_pnl_barrier_rechecks_changed_currency() -> None:
 
     mismatched = engine.configure().spot_funds_pnl_bounds_killswitch(
         policies.SpotFundsBuilder.NAME,
-        global_barrier=policies.SpotFundsPnlBoundsBarrier(
-            currency=eur,
-            lower_bound=openpit.param.Pnl("-100"),
-        ),
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=eur,
+                lower_bound=openpit.param.Pnl("-100"),
+            )
+        ],
     )
     assert not mismatched.account_blocks
 
     matching = engine.configure().spot_funds_pnl_bounds_killswitch(
         policies.SpotFundsBuilder.NAME,
-        global_barrier=policies.SpotFundsPnlBoundsBarrier(
-            currency=usd,
-            lower_bound=openpit.param.Pnl("-100"),
-        ),
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=usd,
+                lower_bound=openpit.param.Pnl("-100"),
+            )
+        ],
     )
     assert len(matching.account_blocks) == 1
     assert (
@@ -968,10 +974,12 @@ def test_spot_funds_pnl_axes_can_be_enabled_replaced_and_cleared() -> None:
 
     engine.configure().spot_funds_pnl_bounds_killswitch(
         policies.SpotFundsBuilder.NAME,
-        global_barrier=policies.SpotFundsPnlBoundsBarrier(
-            currency=usd,
-            lower_bound=openpit.param.Pnl("-10"),
-        ),
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=usd,
+                lower_bound=openpit.param.Pnl("-10"),
+            )
+        ],
     )
 
     first_survivor_fill = engine.apply_execution_report(
@@ -1029,7 +1037,7 @@ def test_spot_funds_pnl_axes_can_be_enabled_replaced_and_cleared() -> None:
 
     engine.configure().spot_funds_pnl_bounds_killswitch(
         policies.SpotFundsBuilder.NAME,
-        global_barrier=None,
+        global_barriers=[],
         account_group_barriers=[],
         account_barriers=[],
     )
@@ -1046,22 +1054,326 @@ def test_spot_funds_pnl_axes_can_be_enabled_replaced_and_cleared() -> None:
 
 
 @pytest.mark.unit
-def test_spot_funds_pnl_runtime_global_barrier_is_not_a_collection() -> None:
+def test_spot_funds_pnl_runtime_global_barriers_rejects_scalar() -> None:
     policies = openpit.pretrade.policies
     engine = (
         openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
     )
 
-    with pytest.raises(TypeError, match="SpotFundsPnlBoundsBarrier"):
+    with pytest.raises(TypeError, match="global_barriers"):
         engine.configure().spot_funds_pnl_bounds_killswitch(
             policies.SpotFundsBuilder.NAME,
-            global_barrier=[
-                policies.SpotFundsPnlBoundsBarrier(
-                    currency=openpit.param.Asset("USD"),
-                    lower_bound=openpit.param.Pnl("-10"),
-                ),
-            ],
+            global_barriers=policies.SpotFundsPnlBoundsBarrier(
+                currency=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl("-10"),
+            ),
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("target", ["global", "group", "account"])
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+def test_spot_pnl_modes_reach_engine(
+    target: str, mode: openpit.pretrade.RuleMode
+) -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(83030)
+    group = openpit.param.AccountGroupId.from_int(83030)
+    barrier = policies.SpotFundsPnlBoundsBarrier(
+        currency=openpit.param.Asset("USD"),
+        lower_bound=openpit.param.Pnl("-10"),
+        mode=mode,
+    )
+    builder = policies.build_spot_funds_pnl_bounds_killswitch()
+    if target == "global":
+        ready = builder.global_barriers(barrier)
+    elif target == "group":
+        ready = builder.account_group_barriers(
+            policies.SpotFundsPnlBoundsAccountGroupBarrier(barrier, group)
+        )
+    else:
+        ready = builder.account_barriers(
+            policies.SpotFundsPnlBoundsAccountBarrier(barrier, account)
+        )
+    if mode is not openpit.pretrade.RuleMode.REJECT:
+        # A second call must append, keeping both modes on the same account.
+        ready.global_barriers(
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl("-100"),
+            )
+        )
+    engine = openpit.Engine.builder().no_sync().builtin(ready).build()
+    engine.accounts().set_currency(account, openpit.param.Asset("USD"))
+    engine.accounts().register_group([account], group)
+    configured = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl("-20"),
+    )
+    order = conftest.make_order(account_id=account)
+    dry_run = engine.execute_pre_trade_dry_run(order=order)
+    start = engine.start_pre_trade(order=order)
+    result = engine.execute_pre_trade(order=order)
+    if mode is openpit.pretrade.RuleMode.REJECT:
+        assert len(configured.account_blocks) == 1
+        for output in (start, dry_run, result):
+            assert not output
+            assert output.rejects[0].mode == mode
+            assert output.reviews == []
+        return
+
+    assert not configured.account_blocks
+    for output in (dry_run, result):
+        assert output
+        assert [mark.mode for mark in output.reviews] == [mode]
+        assert (
+            output.reviews[0].code
+            == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+        )
+    assert start.ok and start.reviews == []
+    assert result.reservation is not None
+    assert [mark.mode for mark in result.reservation.reviews] == [mode]
+    result.reservation.rollback()
+    breached = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl("-150"),
+    )
+    assert len(breached.account_blocks) == 1
+    assert not engine.start_pre_trade(order=order).ok
+
+
+@pytest.mark.parametrize("runtime", [False, True])
+@pytest.mark.unit
+def test_spot_pnl_omitted_mode_is_reject(runtime: bool) -> None:
+    policies = openpit.pretrade.policies
+    barrier = policies.SpotFundsPnlBoundsBarrier(
+        currency=openpit.param.Asset("USD"),
+        lower_bound=openpit.param.Pnl("-10"),
+    )
+    assert barrier.mode is openpit.pretrade.RuleMode.REJECT
+    initial = policies.SpotFundsPnlBoundsBarrier(
+        currency=openpit.param.Asset("USD"), lower_bound=openpit.param.Pnl("-100")
+    )
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
+                initial if runtime else barrier
+            )
+        )
+        .build()
+    )
+    account = openpit.param.AccountId.from_int(83031)
+    engine.accounts().set_currency(account, openpit.param.Asset("USD"))
+    if runtime:
+        engine.configure().spot_funds_pnl_bounds_killswitch(
+            policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+            global_barriers=[barrier],
+        )
+    result = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl("-20"),
+    )
+    assert len(result.account_blocks) == 1
+    rejected = engine.execute_pre_trade(order=conftest.make_order(account_id=account))
+    assert not rejected.ok
+    assert rejected.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
+
+
+@pytest.mark.parametrize("mode", ["reject", "reviewwithhold", "Unknown", 1, {}])
+@pytest.mark.unit
+def test_spot_pnl_invalid_mode_is_value_error(mode: object) -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(ValueError, match="SpotFundsPnlBoundsBarrier.mode must be"):
+        policies.SpotFundsPnlBoundsBarrier(
+            currency=openpit.param.Asset("USD"),
+            lower_bound=openpit.param.Pnl("-10"),
+            mode=mode,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+@pytest.mark.unit
+def test_spot_funds_rule_mode_strings_are_normalized(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    barrier = policies.SpotFundsPnlBoundsBarrier(
+        currency=openpit.param.Asset("USD"),
+        lower_bound=openpit.param.Pnl("-10"),
+        mode=mode.value,
+    )
+    position = policies.SpotFundsPositionLimitEntry(
+        openpit.param.AccountId.from_int(42),
+        openpit.param.Asset("AAPL"),
+        openpit.param.Quantity("1"),
+        mode=mode.value,
+    )
+    assert barrier.mode is mode
+    assert position.mode is mode
+
+
+@pytest.mark.parametrize("target", ["global", "group", "account"])
+@pytest.mark.unit
+def test_spot_pnl_duplicate_build_is_value_error(target: str) -> None:
+    policies = openpit.pretrade.policies
+    barrier = policies.SpotFundsPnlBoundsBarrier(
+        currency=openpit.param.Asset("USD"),
+        lower_bound=openpit.param.Pnl("-10"),
+        mode=openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+    )
+    builder = policies.build_spot_funds_pnl_bounds_killswitch()
+    if target == "global":
+        ready = builder.global_barriers(barrier).global_barriers(barrier)
+    elif target == "group":
+        entry = policies.SpotFundsPnlBoundsAccountGroupBarrier(
+            barrier, openpit.param.AccountGroupId.from_int(83032)
+        )
+        ready = builder.account_group_barriers(entry).account_group_barriers(entry)
+    else:
+        entry = policies.SpotFundsPnlBoundsAccountBarrier(
+            barrier, openpit.param.AccountId.from_int(83032)
+        )
+        ready = builder.account_barriers(entry).account_barriers(entry)
+    with pytest.raises(ValueError, match="duplicate"):
+        openpit.Engine.builder().no_sync().builtin(ready).build()
+
+
+@pytest.mark.parametrize("patch", ["omitted", "none", "empty", "replace", "review"])
+@pytest.mark.unit
+def test_spot_pnl_global_patch_modes(patch: str) -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
+                policies.SpotFundsPnlBoundsBarrier(
+                    currency=usd, lower_bound=openpit.param.Pnl("-100")
+                ),
+                policies.SpotFundsPnlBoundsBarrier(
+                    currency=usd,
+                    lower_bound=openpit.param.Pnl("-10"),
+                    mode=openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+                ),
+            )
+        )
+        .build()
+    )
+    account = openpit.param.AccountId.from_int(83033)
+    engine.accounts().set_currency(account, usd)
+    configured = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl("-20"),
+    )
+    assert not configured.account_blocks
+    kwargs = {}
+    if patch == "none":
+        kwargs["global_barriers"] = None
+    elif patch == "empty":
+        kwargs["global_barriers"] = []
+    elif patch in ("replace", "review"):
+        kwargs["global_barriers"] = [
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=usd,
+                lower_bound=openpit.param.Pnl("-30" if patch == "replace" else "-10"),
+                mode=(
+                    openpit.pretrade.RuleMode.REJECT
+                    if patch == "replace"
+                    else openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
+                ),
+            )
+        ]
+    retuned = engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME, **kwargs
+    )
+    assert not retuned.account_blocks
+    report = engine.execute_pre_trade_dry_run(
+        order=conftest.make_order(account_id=account)
+    )
+    assert report.is_pass
+    expected = (
+        [openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD]
+        if patch in ("omitted", "none")
+        else [openpit.pretrade.RuleMode.REVIEW_WITH_HOLD] if patch == "review" else []
+    )
+    assert [mark.mode for mark in report.reviews] == expected
+    forced = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl("-40"),
+    )
+    assert bool(forced.account_blocks) == (patch == "replace")
+    if patch in ("omitted", "none", "empty", "review"):
+        forced = engine.configure().set_spot_funds_account_pnl(
+            policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+            account=account,
+            state=openpit.param.Pnl("-150"),
+        )
+        assert bool(forced.account_blocks) == (patch in ("omitted", "none"))
+
+
+@pytest.mark.parametrize("target", ["global", "group", "account"])
+@pytest.mark.unit
+def test_spot_pnl_duplicate_runtime_is_atomic(target: str) -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
+    account = openpit.param.AccountId.from_int(83034)
+    group = openpit.param.AccountGroupId.from_int(83034)
+    old = policies.SpotFundsPnlBoundsBarrier(
+        currency=usd,
+        lower_bound=openpit.param.Pnl("-10"),
+        mode=openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+    )
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(old))
+        .build()
+    )
+    engine.accounts().set_currency(account, usd)
+    engine.accounts().register_group([account], group)
+    engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl("-20"),
+    )
+    new = policies.SpotFundsPnlBoundsBarrier(
+        currency=usd, lower_bound=openpit.param.Pnl("-100")
+    )
+    kwargs = {"global_barriers": [new]}
+    if target == "global":
+        kwargs["global_barriers"] = [new, new]
+    elif target == "group":
+        entry = policies.SpotFundsPnlBoundsAccountGroupBarrier(new, group)
+        kwargs["account_group_barriers"] = [entry, entry]
+    else:
+        entry = policies.SpotFundsPnlBoundsAccountBarrier(new, account)
+        kwargs["account_barriers"] = [entry, entry]
+    with pytest.raises(openpit.PolicyConfigureError, match="duplicate"):
+        engine.configure().spot_funds_pnl_bounds_killswitch(
+            policies.SpotFundsPnlBoundsKillswitchBuilder.NAME, **kwargs
+        )
+    report = engine.execute_pre_trade_dry_run(
+        order=conftest.make_order(account_id=account)
+    )
+    assert report.is_pass
+    assert [mark.mode for mark in report.reviews] == [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
+    ]
+    forced = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        state=openpit.param.Pnl("-150"),
+    )
+    assert not forced.account_blocks
+    assert engine.start_pre_trade(order=conftest.make_order(account_id=account)).ok
 
 
 @pytest.mark.unit
@@ -1392,7 +1704,7 @@ def test_set_spot_funds_account_pnl_force_sets_live_accumulator() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=usd,
                     lower_bound=openpit.param.Pnl("-100"),
@@ -1459,10 +1771,12 @@ def test_spot_funds_barrier_sweep_pairs_blocks_with_accounts() -> None:
 
     swept = engine.configure().spot_funds_pnl_bounds_killswitch(
         policies.SpotFundsBuilder.NAME,
-        global_barrier=policies.SpotFundsPnlBoundsBarrier(
-            currency=openpit.param.Asset("USD"),
-            lower_bound=openpit.param.Pnl("-10"),
-        ),
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                currency=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl("-10"),
+            )
+        ],
     )
 
     assert len(swept.account_blocks) == 2
@@ -1486,7 +1800,7 @@ def test_set_spot_funds_account_pnl_accepts_explicit_halt() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-100"),
@@ -1635,7 +1949,7 @@ def test_set_spot_funds_account_pnl_unknown_policy() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-100"),
@@ -1863,6 +2177,178 @@ def test_spot_funds_position_limit_requires_explicit_limit() -> None:
         )
 
 
+def _spot_funds_position_limit_engine() -> (
+    tuple[openpit.Engine, openpit.param.AccountId, openpit.param.Asset]
+):
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(99224416)
+    asset = openpit.param.Asset("AAPL")
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+    engine.accounts().set_currency(account, openpit.param.Asset("USD"))
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        global_limit_mode=policies.SpotFundsLimitMode.TRACK_ONLY,
+    )
+    return engine, account, asset
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_spot_funds_position_limit_modes_coexist_and_clear(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine, account, asset = _spot_funds_position_limit_engine()
+    rejecting = policies.SpotFundsPositionLimitEntry(
+        account,
+        asset,
+        openpit.param.Quantity("2"),
+    )
+    assert rejecting.mode is openpit.pretrade.RuleMode.REJECT
+    reviewing = policies.SpotFundsPositionLimitEntry(
+        account, asset, openpit.param.Quantity("0"), mode=mode
+    )
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME, position_limits=[rejecting, reviewing]
+    )
+
+    def check_order(quantity: str, passed: bool, review_count: int) -> None:
+        result = engine.execute_pre_trade(
+            order=conftest.make_order(
+                account_id=account,
+                trade_amount=openpit.param.TradeAmount.quantity(quantity),
+            )
+        )
+        try:
+            assert result.ok is passed, "review passes and Reject rejects"
+            if passed:
+                assert result.rejects == []
+                assert len(result.reviews) == review_count
+                if review_count:
+                    assert result.reviews[0].mode == mode
+                    assert result.reviews[0].code == (
+                        openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED
+                    )
+                    assert result.reviews[0].scope == openpit.pretrade.RejectScope.ORDER
+            else:
+                assert len(result.rejects) == 1
+                assert result.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
+                assert result.rejects[0].code == (
+                    openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED
+                )
+        finally:
+            if result.reservation is not None:
+                result.reservation.rollback()
+
+    check_order("1", True, 1)
+    check_order("3", False, 0)
+    explicit_none = policies.SpotFundsPositionLimitEntry(
+        account, asset, openpit.param.Quantity("1"), mode=None
+    )
+    assert explicit_none.mode is openpit.pretrade.RuleMode.REJECT
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[explicit_none],
+    )
+    check_order("1", True, 1)
+    check_order("2", False, 0)
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME, position_limits=[rejecting]
+    )
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            policies.SpotFundsPositionLimitEntry(account, asset, None, mode=mode)
+        ],
+    )
+    check_order("1", True, 0)
+    check_order("3", False, 0)
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            reviewing,
+            policies.SpotFundsPositionLimitEntry(account, asset, None),
+        ],
+    )
+    check_order("3", True, 1)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+def test_spot_funds_position_limit_duplicate_is_atomic(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine, account, asset = _spot_funds_position_limit_engine()
+    reviewing_mode = openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        position_limits=[
+            policies.SpotFundsPositionLimitEntry(
+                account, asset, openpit.param.Quantity("2")
+            ),
+            policies.SpotFundsPositionLimitEntry(
+                account, asset, openpit.param.Quantity("0"), mode=reviewing_mode
+            ),
+        ],
+    )
+    with pytest.raises(openpit.PolicyConfigureError, match="duplicate"):
+        engine.configure().spot_funds(
+            policies.SpotFundsBuilder.NAME,
+            position_limits=[
+                policies.SpotFundsPositionLimitEntry(
+                    account, asset, openpit.param.Quantity("100")
+                ),
+                policies.SpotFundsPositionLimitEntry(
+                    account, asset, openpit.param.Quantity("100"), mode=mode
+                ),
+                policies.SpotFundsPositionLimitEntry(account, asset, None, mode=mode),
+            ],
+        )
+    for quantity, passed in [("1", True), ("3", False)]:
+        report = engine.execute_pre_trade_dry_run(
+            order=conftest.make_order(
+                account_id=account,
+                trade_amount=openpit.param.TradeAmount.quantity(quantity),
+            )
+        )
+        assert (
+            report.is_pass is passed
+        ), "duplicate batch must preserve the Reject bound"
+        if passed:
+            assert [mark.mode for mark in report.reviews] == [reviewing_mode]
+            assert (
+                report.reviews[0].code
+                == openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED
+            )
+        else:
+            assert (
+                report.rejects[0].code
+                == openpit.pretrade.RejectCode.POSITION_LIMIT_EXCEEDED
+            )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["Unknown", "reject", "reviewwithhold", 1, {}])
+def test_spot_funds_position_limit_invalid_mode_is_value_error(mode: object) -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(ValueError, match="SpotFundsPositionLimitEntry.mode must be"):
+        policies.SpotFundsPositionLimitEntry(
+            openpit.param.AccountId.from_int(42),
+            openpit.param.Asset("AAPL"),
+            None,
+            mode=mode,  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.unit
 def test_spot_funds_position_limit_rejects_invalid_entries_atomically() -> None:
     policies = openpit.pretrade.policies
@@ -1976,7 +2462,7 @@ def test_configurator_rejects_obsolete_tuple_and_string_inputs() -> None:
     with pytest.raises(TypeError, match="SpotFundsPnlBoundsBarrier"):
         configurator.spot_funds_pnl_bounds_killswitch(
             policies.SpotFundsBuilder.NAME,
-            global_barrier=object(),
+            global_barriers=[object()],
         )
     with pytest.raises(TypeError, match="SpotFundsPnlBoundsAccountBarrier"):
         configurator.spot_funds_pnl_bounds_killswitch(
@@ -2056,7 +2542,7 @@ def test_spot_funds_pnl_bounds_builder_rejects_wrong_barrier_types() -> None:
             openpit.Engine.builder()
             .no_sync()
             .builtin(
-                policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+                policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                     object()
                 )
             )

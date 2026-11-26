@@ -1957,6 +1957,7 @@ fn configure_spot_funds_axis_retune_returns_only_new_changed_barrier_blocks() {
                 currency: Asset::new("USD").unwrap(),
                 lower_bound: Some(Pnl::from_str(lower).unwrap()),
                 upper_bound: Some(Pnl::from_str("10").unwrap()),
+                mode: openpit::pretrade::RuleMode::Reject,
             };
             let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
             engine
@@ -1964,7 +1965,7 @@ fn configure_spot_funds_axis_retune_returns_only_new_changed_barrier_blocks() {
                 .spot_funds::<SpotFundsConfigError>(name, |settings| {
                     settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
                     if narrowing {
-                        settings.set_pnl_axis_global_barrier(axis, Some(barrier("-100")))?;
+                        settings.set_pnl_axis_global_barriers(axis, [barrier("-100")])?;
                     }
                     Ok(())
                 })
@@ -1972,7 +1973,7 @@ fn configure_spot_funds_axis_retune_returns_only_new_changed_barrier_blocks() {
             let retuned = engine
                 .configure()
                 .spot_funds::<SpotFundsConfigError>(name, |settings| {
-                    settings.set_pnl_axis_global_barrier(axis, Some(barrier("-10")))
+                    settings.set_pnl_axis_global_barriers(axis, [barrier("-10")])
                 })
                 .unwrap();
             assert_eq!(
@@ -2004,7 +2005,7 @@ fn configure_spot_funds_axis_retune_returns_only_new_changed_barrier_blocks() {
             let already_blocked = engine
                 .configure()
                 .spot_funds::<SpotFundsConfigError>(name, |settings| {
-                    settings.set_pnl_axis_global_barrier(axis, Some(barrier("-5")))
+                    settings.set_pnl_axis_global_barriers(axis, [barrier("-5")])
                 })
                 .unwrap();
             assert!(
@@ -2017,7 +2018,7 @@ fn configure_spot_funds_axis_retune_returns_only_new_changed_barrier_blocks() {
                 .spot_funds::<SpotFundsConfigError>(name, |settings| {
                     settings.set_global_slippage_bps(12)?;
                     settings.set_global_limit_mode(SpotFundsLimitMode::Enforce);
-                    settings.set_pnl_axis_global_barrier(axis, Some(barrier("-5")))
+                    settings.set_pnl_axis_global_barriers(axis, [barrier("-5")])
                 })
                 .unwrap();
             assert!(
@@ -2124,6 +2125,7 @@ fn configure_spot_funds_position_limit_applies_to_the_next_order() {
             settings.set_position_limit(
                 account_id,
                 aapl.clone(),
+                openpit::pretrade::RuleMode::Reject,
                 Some(Quantity::from_str("0").expect("limit must be valid")),
             );
             Ok(())
@@ -2142,6 +2144,7 @@ fn configure_spot_funds_position_limit_applies_to_the_next_order() {
             settings.set_position_limit(
                 account_id,
                 aapl.clone(),
+                openpit::pretrade::RuleMode::Reject,
                 Some(Quantity::from_str("1").expect("limit must be valid")),
             );
             Ok(())
@@ -2155,7 +2158,12 @@ fn configure_spot_funds_position_limit_applies_to_the_next_order() {
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_position_limit(account_id, aapl, None);
+            settings.set_position_limit(
+                account_id,
+                aapl,
+                openpit::pretrade::RuleMode::Reject,
+                None,
+            );
             Ok(())
         })
         .expect("clearing the position limit must publish");

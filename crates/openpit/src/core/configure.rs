@@ -538,7 +538,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// An update that arms, narrows, or otherwise changes an account's
     /// effective account P&L barrier evaluates that barrier against the stored
     /// account P&L before returning: an account already halted or already
-    /// beyond the new barrier is blocked here rather than at its next fill.
+    /// beyond a Reject barrier is blocked here rather than at its next fill.
+    /// Review barriers block only on halted P&L or currency mismatch. A numeric
+    /// breach produces no block or review mark during configuration.
     /// The returned blocks are the ones the engine has already recorded. An
     /// update that leaves an account's effective barrier as it was does not
     /// re-evaluate it, so retuning slippage, pricing, or the limit mode never
@@ -718,7 +720,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// This updates only the account-scoped current P&L ledger. It does not
     /// retune bounds and does not reset any other accumulator. The policy
     /// reports an account block when the replacement violates an effective
-    /// realized P&L barrier, either by exceeding a bound or by being halted.
+    /// realized P&L barrier: a Reject-mode breach, or halted P&L or currency
+    /// mismatch in any mode. A review-mode breach produces no block or mark.
     /// When realized P&L gives no block, the policy also evaluates the P&L
     /// bound axes, so the result can contain an axis block the replacement
     /// did not cause. The engine processes that block before returning it. If

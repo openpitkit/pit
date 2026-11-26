@@ -299,10 +299,10 @@ class Configurator {
 
   /// Retunes the SpotFunds self-computed P&L bounds axis.
   ///
-  /// The global update uses the explicitly named `Unchanged`, `Clear`, and
-  /// `Set` operations. Optional group/account vectors are PATCH axes:
-  /// `std::nullopt` leaves the axis unchanged and an engaged empty vector
-  /// clears it. Account updates preserve each live accumulated P&L value.
+  /// Optional vectors are PATCH tiers: `std::nullopt` leaves a tier unchanged,
+  /// an engaged empty vector clears it, and a list replaces every mode.
+  /// Repeated (key, mode) entries throw ConfigureError without changes.
+  /// Account updates preserve each live accumulated P&L value.
   /// With a known effective account currency, an account-tier mismatch fails
   /// closed and blocks the account; account-group and global mismatches are
   /// skipped. A known-currency account with no account barrier and no matching
@@ -312,29 +312,32 @@ class Configurator {
   ///
   /// An account whose effective barrier changed is evaluated against its
   /// stored account P&L in the same call: an already halted account, or one
-  /// already beyond the new barrier, is blocked before this call returns and
+  /// beyond a new Reject-mode barrier, is blocked before this call returns and
   /// its block is reported here as already recorded by the engine. Each
   /// returned `accounts::AccountBlockOutcome` names the account that owns its
   /// newly inserted block. Removing the last effective barrier reports no
   /// block and does not release an existing block. Clearing an override can
   /// expose a fallback barrier; the fallback is evaluated normally and may
   /// record and report a block.
+  /// Review-mode breaches yield review marks during evaluation without
+  /// blocking. Evaluation failures block in every mode.
   [[nodiscard]] ::openpit::AccountBlockOutcomes SpotFundsPnlBoundsKillSwitch(
       std::string_view name,
-      ::openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate
-          global = ::openpit::pretrade::policies::
-              SpotFundsPnlBoundsGlobalBarrierUpdate::Unchanged(),
+      std::optional<
+          std::vector<::openpit::pretrade::policies::SpotFundsPnlBoundsBarrier>>
+          global = std::nullopt,
       std::optional<std::vector<
           ::openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier>>
           accountGroups = std::nullopt,
       std::optional<std::vector<
           ::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier>>
           accounts = std::nullopt) const {
-    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier globalRaw{};
-    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier* globalPtr = nullptr;
-    if (global.HasUpdate() && global.Barrier()) {
-      globalRaw = ::openpit::detail::Native(*global.Barrier());
-      globalPtr = &globalRaw;
+    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier> globalRaw;
+    if (global) {
+      globalRaw.reserve(global->size());
+      for (const auto& barrier : *global) {
+        globalRaw.push_back(::openpit::detail::Native(barrier));
+      }
     }
 
     std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier>
@@ -358,10 +361,10 @@ class Configurator {
     OpenPitConfigureError* error = nullptr;
     OpenPitPretradeAccountBlockOutcomeList* blocks =
         openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
-            m_engine, ::openpit::detail::MakeStringView(name), globalPtr,
-            global.HasUpdate(), accountGroupRaw.data(), accountGroupRaw.size(),
-            accountGroups.has_value(), accountRaw.data(), accountRaw.size(),
-            accounts.has_value(), &error);
+            m_engine, ::openpit::detail::MakeStringView(name), globalRaw.data(),
+            globalRaw.size(), global.has_value(), accountGroupRaw.data(),
+            accountGroupRaw.size(), accountGroups.has_value(),
+            accountRaw.data(), accountRaw.size(), accounts.has_value(), &error);
     if (blocks == nullptr) {
       ::openpit::detail::ThrowFromConfigureError(
           error,
@@ -378,10 +381,12 @@ class Configurator {
   ///
   /// This is separate from barrier retuning and re-arms the accumulator after
   /// a calculation halt. It does not affect any position-level accumulator.
-  /// A value outside the effective bounds returns the policy-reported block,
-  /// even when the account already has a block. The engine processes the block
-  /// request before returning and preserves the existing first cause. Otherwise
-  /// the returned block list is empty.
+  /// A value outside an effective Reject-mode bound returns the policy-reported
+  /// block, even when the account already has a block. A breach of a
+  /// review-mode bound returns no block and no review mark: configuration does
+  /// not issue review marks. The engine processes the block request before
+  /// returning and preserves the existing first cause. Otherwise the returned
+  /// block list is empty.
   [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
       std::string_view name, ::openpit::param::AccountId accountId,
       ::openpit::param::Pnl pnl) const {
@@ -393,10 +398,10 @@ class Configurator {
   /// Replaces one SpotFunds live account P&L accumulator with a halt reason.
   ///
   /// This is separate from barrier retuning and does not affect any
-  /// position-level accumulator. When an effective account P&L barrier is
-  /// configured, the result reports the policy block even when the account is
-  /// already blocked. The engine processes the block request before returning
-  /// and preserves the existing first cause.
+  /// position-level accumulator. When an effective account P&L barrier of any
+  /// mode is configured, the result reports the policy block even when the
+  /// account is already blocked. The engine processes the block request before
+  /// returning and preserves the existing first cause.
   [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
       std::string_view name, ::openpit::param::AccountId accountId,
       ::openpit::accountadjustment::PnlHaltReason reason) const {
@@ -436,25 +441,32 @@ class Configurator {
   }
 
   /// Pins, replaces, or clears the inclusive long and short position magnitude
-  /// limit for an account and asset in the named SpotFunds policy. The checked
-  /// position starts with recorded available + held, including a negative held
-  /// residual. A long projection adds open positive incoming; a short
-  /// projection subtracts open positive held. Only the side the order moves
-  /// toward is checked, so a position-reducing order passes while that
-  /// projection stays within the limit. A breach rejects with
-  /// PositionLimitExceeded at Order scope. A projection that cannot be computed
-  /// exactly rejects with ArithmeticOverflow at Order scope. A change applies
-  /// from the next order and does not re-evaluate open reservations.
-  /// `std::nullopt` clears the limit.
+  /// limit for an account, asset and mode in the named SpotFunds policy. The
+  /// checked position starts with recorded available + held, including a
+  /// negative held residual. A long projection adds open positive incoming; a
+  /// short projection subtracts open positive held. Only the side the order
+  /// moves toward is checked, so a position-reducing order passes while that
+  /// projection stays within the limit. A Reject breach rejects with
+  /// PositionLimitExceeded at Order scope. A review breach adds a
+  /// PositionLimitExceeded review mark with the limit's mode. A projection that
+  /// cannot be computed exactly rejects with ArithmeticOverflow at Order scope
+  /// in every mode.
+  /// A change applies from the next order and does not re-evaluate open
+  /// reservations.
+  /// `std::nullopt` clears only this mode's limit; other modes are unchanged
+  /// by either upsert or clear. Modes are Reject, ReviewWithHold and
+  /// ReviewWithoutHold. Zero means Reject; unknown modes throw ConfigureError
+  /// with ConfigureErrorKind::Validation.
   void SpotFundsPositionLimit(
       std::string_view name, ::openpit::param::AccountId accountId,
-      const ::openpit::param::Asset& asset,
+      const ::openpit::param::Asset& asset, ::openpit::reject::RuleMode mode,
       std::optional<::openpit::param::Quantity> limit) const {
     OpenPitConfigureError* error = nullptr;
     if (!openpit_engine_configure_spot_funds_position_limit(
             m_engine, ::openpit::detail::MakeStringView(name),
             ::openpit::detail::Native(accountId),
             ::openpit::detail::Native(asset),
+            static_cast<OpenPitPretradeRuleMode>(mode),
             limit ? ::openpit::detail::Native(*limit) : OpenPitParamQuantity{},
             limit.has_value(), &error)) {
       ::openpit::detail::ThrowFromConfigureError(

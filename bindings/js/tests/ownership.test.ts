@@ -73,9 +73,9 @@ describe("wasm wrapper ownership", () => {
     expect(() => ready.builtin(incomplete as never)).toThrow(
       /require at least one barrier/,
     );
-    const corrected = incomplete.globalBarrier(
+    const corrected = incomplete.globalBarriers([
       new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
-    );
+    ]);
     expect(() => ready.builtin(corrected)).not.toThrow();
     expect(() => ready.build()).not.toThrow();
   });
@@ -130,10 +130,10 @@ describe("wasm wrapper ownership", () => {
     const groupSpot = new SpotFundsPnlBoundsAccountGroupBarrier(8, globalSpot);
     const accountSpot = new SpotFundsPnlBoundsAccountBarrier(7, globalSpot);
     const spotBuilder = buildSpotFundsPnlBoundsKillswitch();
-    spotBuilder.globalBarrier(globalSpot);
+    spotBuilder.globalBarriers([globalSpot]);
     spotBuilder.accountGroupBarriers([groupSpot]);
     spotBuilder.accountBarriers([accountSpot]);
-    expect(() => spotBuilder.globalBarrier(globalSpot)).not.toThrow();
+    expect(() => spotBuilder.globalBarriers([globalSpot])).not.toThrow();
     expect(() => spotBuilder.accountGroupBarriers([groupSpot])).not.toThrow();
     expect(() => spotBuilder.accountBarriers([accountSpot])).not.toThrow();
     expect(() => globalSpot.clone()).not.toThrow();

@@ -29,7 +29,6 @@ use crate::pretrade::{AccountBlock, RejectCode};
 use crate::storage::ConfigCell;
 use crate::{Mutation, Mutations, PnlState};
 
-use super::rejects::account_pnl_block_for_state;
 use super::{
     AccountPnlEntry, AccountPnlLeaseGuard, ActiveHoldingsMutationGuard, HoldingsKey,
     SpotFundsPolicy, SPOT_FUNDS_POLICY_NAME,
@@ -240,32 +239,32 @@ where
                 }
                 let current_group = state_snapshot.account_group();
                 let current_currency = state_snapshot.account_currency();
-                let current_barrier = settings.with(|settings| {
-                    settings
-                        .pnl_barrier_for(account_id, current_group, current_currency.as_ref())
-                        .cloned()
-                });
-                if let Some(barrier) = current_barrier.as_ref() {
-                    if let Some(block) = account_pnl_block_for_state(
+                let current_block = settings.with(|settings| {
+                    super::rejects::account_pnl_block_for_barriers(
+                        settings.pnl_barriers().barriers_for(
+                            account_id,
+                            current_group,
+                            current_currency.as_ref(),
+                        ),
                         current_currency.as_ref(),
                         final_state,
-                        barrier,
                         final_provenance,
-                    ) {
-                        #[cfg(test)]
-                        match &account_control {
-                            Some(control) => {
-                                result.report.account_blocks.push(block.clone());
-                                control.block(block);
-                            }
-                            None => {
-                                result.report.account_blocks.push(block);
-                            }
-                        }
-                        #[cfg(not(test))]
-                        if let Some(control) = &account_control {
+                    )
+                });
+                if let Some(block) = current_block {
+                    #[cfg(test)]
+                    match &account_control {
+                        Some(control) => {
+                            result.report.account_blocks.push(block.clone());
                             control.block(block);
                         }
+                        None => {
+                            result.report.account_blocks.push(block);
+                        }
+                    }
+                    #[cfg(not(test))]
+                    if let Some(control) = &account_control {
+                        control.block(block);
                     }
                 }
                 #[cfg(test)]

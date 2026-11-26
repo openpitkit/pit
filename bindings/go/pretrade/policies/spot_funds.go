@@ -27,6 +27,7 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/reject"
 )
 
 // SpotFundsPricingSource selects the base price the spot funds policy uses to
@@ -145,6 +146,9 @@ func (v SpotFundsPnlBoundsAxis) String() string {
 // and publishing. Without an effective currency, the first in-scope barrier
 // applies. Bounds are compared as stored and are never FX-converted.
 type SpotFundsPnlBoundsBarrier struct {
+	// Mode selects reject or review behavior. Zero means Reject; unknown modes
+	// are invalid.
+	Mode reject.RuleMode
 	// Currency identifies the currency matched when the account has one.
 	Currency param.Asset
 	// LowerBound is typically negative and represents the loss limit.
@@ -203,14 +207,15 @@ type SpotFundsPnlBoundsKillSwitchBuilder struct {
 // SpotFundsPnlBoundsKillSwitchReadyBuilder holds a fully-configured
 // spot-funds self-computed P&L bounds policy.
 type SpotFundsPnlBoundsKillSwitchReadyBuilder struct {
-	marketData             *marketdata.Service
-	globalBarrier          *native.PretradePoliciesSpotFundsPnlBoundsBarrier
-	accountGroupBarriers   []native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
-	accountBarriers        []native.PretradePoliciesSpotFundsPnlBoundsAccountBarrier
-	globalBarrierCurrency  param.Asset
-	accountGroupCurrencies []param.Asset
-	accountCurrencies      []param.Asset
-	policyGroupID          model.PolicyGroupID
+	marketData              *marketdata.Service
+	globalBarriers          []native.PretradePoliciesSpotFundsPnlBoundsBarrier
+	accountGroupBarriers    []native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
+	accountBarriers         []native.PretradePoliciesSpotFundsPnlBoundsAccountBarrier
+	globalBarrierCurrencies []param.Asset
+	accountGroupCurrencies  []param.Asset
+	accountCurrencies       []param.Asset
+	policyGroupID           model.PolicyGroupID
+	err                     error
 }
 
 // BuildSpotFunds returns a new spot funds policy builder.
@@ -268,22 +273,31 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) PolicyGroupID(
 	return b
 }
 
-// GlobalBarrier sets the global account P&L bounds and returns a ready
+// GlobalBarriers appends global account P&L bounds and returns a ready
 // builder.
-func (b *SpotFundsPnlBoundsKillSwitchBuilder) GlobalBarrier(
-	barrier SpotFundsPnlBoundsBarrier,
+func (b *SpotFundsPnlBoundsKillSwitchBuilder) GlobalBarriers(
+	barriers ...SpotFundsPnlBoundsBarrier,
 ) *SpotFundsPnlBoundsKillSwitchReadyBuilder {
-	b.builder.GlobalBarrier(barrier)
+	b.builder.GlobalBarriers(barriers...)
 	return b.builder
 }
 
-// GlobalBarrier sets the global account P&L bounds.
-func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) GlobalBarrier(
-	barrier SpotFundsPnlBoundsBarrier,
+// GlobalBarriers appends global account P&L bounds. Repeated modes fail Build.
+func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) GlobalBarriers(
+	barriers ...SpotFundsPnlBoundsBarrier,
 ) *SpotFundsPnlBoundsKillSwitchReadyBuilder {
-	nativeBarrier := newNativeSpotFundsPnlBoundsBarrier(barrier)
-	b.globalBarrier = &nativeBarrier
-	b.globalBarrierCurrency = barrier.Currency
+	if b.err != nil {
+		return b
+	}
+	for _, barrier := range barriers {
+		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier)
+		if err != nil {
+			b.err = fmt.Errorf("global[%d]: %w", len(b.globalBarriers), err)
+			return b
+		}
+		b.globalBarriers = append(b.globalBarriers, nativeBarrier)
+		b.globalBarrierCurrencies = append(b.globalBarrierCurrencies, barrier.Currency)
+	}
 	return b
 }
 
@@ -300,8 +314,15 @@ func (b *SpotFundsPnlBoundsKillSwitchBuilder) AccountGroupBarriers(
 func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) AccountGroupBarriers(
 	barriers ...SpotFundsPnlBoundsAccountGroupBarrier,
 ) *SpotFundsPnlBoundsKillSwitchReadyBuilder {
+	if b.err != nil {
+		return b
+	}
 	for _, barrier := range barriers {
-		nativeBarrier := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		if err != nil {
+			b.err = fmt.Errorf("account_group[%d]: %w", len(b.accountGroupBarriers), err)
+			return b
+		}
 		b.accountGroupBarriers = append(
 			b.accountGroupBarriers,
 			native.NewPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier(
@@ -330,8 +351,15 @@ func (b *SpotFundsPnlBoundsKillSwitchBuilder) AccountBarriers(
 func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) AccountBarriers(
 	barriers ...SpotFundsPnlBoundsAccountBarrier,
 ) *SpotFundsPnlBoundsKillSwitchReadyBuilder {
+	if b.err != nil {
+		return b
+	}
 	for _, barrier := range barriers {
-		nativeBarrier := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		nativeBarrier, err := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		if err != nil {
+			b.err = fmt.Errorf("account[%d]: %w", len(b.accountBarriers), err)
+			return b
+		}
 		b.accountBarriers = append(
 			b.accountBarriers,
 			native.NewPretradePoliciesSpotFundsPnlBoundsAccountBarrier(
@@ -468,6 +496,9 @@ func (b *SpotFundsBuilder) Build(builder native.EngineBuilder, instance *native.
 // given engine builder. The preset uses TrackOnly and therefore does not reject
 // reservations for insufficient funds.
 func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBuilder, instance *native.PolicyInstance) error {
+	if b.err != nil {
+		return b.err
+	}
 	var marketDataHandle native.MarketDataService
 	if b.marketData != nil {
 		var err error
@@ -481,7 +512,7 @@ func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBu
 		builder,
 		marketDataHandle,
 		native.PolicyGroupID(b.policyGroupID),
-		b.globalBarrier,
+		b.globalBarriers,
 		b.accountGroupBarriers,
 		b.accountBarriers,
 		instance,
@@ -523,8 +554,9 @@ func NativeSpotFundsLimitModeOption(
 
 func newNativeSpotFundsPnlBoundsBarrier(
 	barrier SpotFundsPnlBoundsBarrier,
-) native.PretradePoliciesSpotFundsPnlBoundsBarrier {
+) (native.PretradePoliciesSpotFundsPnlBoundsBarrier, error) {
 	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+		native.PretradeRuleMode(barrier.Mode),
 		barrier.Currency.Handle(),
 		newParamPnlOptionalFromOptional(barrier.LowerBound),
 		newParamPnlOptionalFromOptional(barrier.UpperBound),

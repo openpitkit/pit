@@ -1793,17 +1793,19 @@ fn fill_with_fee(
 fn build_pnl_killswitch_engine(grp: AccountGroupId) -> TestEngine {
     let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
-        Some(SpotFundsPnlBoundsBarrier {
+        [SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-1000")),
             upper_bound: None,
-        }),
+            mode: openpit::pretrade::RuleMode::Reject,
+        }],
         [SpotFundsPnlBoundsAccountGroupBarrier {
             account_group_id: grp,
             barrier: SpotFundsPnlBoundsBarrier {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
+                mode: openpit::pretrade::RuleMode::Reject,
             },
         }],
         std::iter::empty::<SpotFundsPnlBoundsAccountBarrier>(),
@@ -1932,11 +1934,12 @@ fn pnl_killswitch_account_barrier_currency_mismatch_blocks_through_the_public_en
     let aapl_usd = instr("AAPL", "USD");
     let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
-        Some(SpotFundsPnlBoundsBarrier {
+        [SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-1000")),
             upper_bound: None,
-        }),
+            mode: openpit::pretrade::RuleMode::Reject,
+        }],
         std::iter::empty::<SpotFundsPnlBoundsAccountGroupBarrier>(),
         [SpotFundsPnlBoundsAccountBarrier {
             account_id: acc,
@@ -1944,6 +1947,7 @@ fn pnl_killswitch_account_barrier_currency_mismatch_blocks_through_the_public_en
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-1000")),
                 upper_bound: None,
+                mode: openpit::pretrade::RuleMode::Reject,
             },
         }],
         None::<SpotFundsMarketData<FullSync>>,

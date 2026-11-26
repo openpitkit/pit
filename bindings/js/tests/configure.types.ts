@@ -121,10 +121,27 @@ const positionLimitEntry: SpotFundsPositionLimitEntry = {
 };
 void positionLimitEntry;
 
+const positionLimitModes: readonly (RuleMode | null)[] = [
+  "Reject",
+  "ReviewWithHold",
+  "ReviewWithoutHold",
+  null,
+];
+for (const mode of positionLimitModes) {
+  const entry: SpotFundsPositionLimitEntry = { ...positionLimitEntry, mode };
+  void entry;
+}
+const numericPositionLimitMode: SpotFundsPositionLimitEntry = {
+  ...positionLimitEntry,
+  // @ts-expect-error - a numeric value is not a rule mode.
+  mode: 1,
+};
+void numericPositionLimitMode;
+
 const sweptPnlConfiguration = configurator.spotFundsPnlBoundsKillswitch(
   SpotFundsPnlBoundsKillswitchBuilder.NAME,
   {
-    globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-500", undefined),
+    globalBarriers: [new SpotFundsPnlBoundsBarrier("USD", "-500", undefined)],
     accountBarriers: [
       new SpotFundsPnlBoundsAccountBarrier(
         99_224_416n,
@@ -135,6 +152,34 @@ const sweptPnlConfiguration = configurator.spotFundsPnlBoundsKillswitch(
 );
 void sweptPnlConfiguration.accountBlocks[0]?.accountId.value;
 void sweptPnlConfiguration.accountBlocks[0]?.block.code;
+configurator.spotFundsPnlBoundsKillswitch(
+  SpotFundsPnlBoundsKillswitchBuilder.NAME,
+  {
+    globalBarriers: new Set([
+      new SpotFundsPnlBoundsBarrier("USD", "-10", undefined, "ReviewWithHold"),
+    ]),
+  },
+);
+configurator.spotFundsPnlBoundsKillswitch(
+  SpotFundsPnlBoundsKillswitchBuilder.NAME,
+  {
+    globalBarriers: null,
+  },
+);
+configurator.spotFundsPnlBoundsKillswitch(
+  SpotFundsPnlBoundsKillswitchBuilder.NAME,
+  {
+    // @ts-expect-error - the singular global barrier option was removed.
+    globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+  },
+);
+configurator.spotFundsPnlBoundsKillswitch(
+  SpotFundsPnlBoundsKillswitchBuilder.NAME,
+  {
+    // @ts-expect-error - global barriers require an iterable.
+    globalBarriers: new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+  },
+);
 
 const numericPnlConfiguration = configurator.setSpotFundsAccountPnl(
   SpotFundsPnlBoundsKillswitchBuilder.NAME,

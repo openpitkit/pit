@@ -21,7 +21,8 @@ use crate::core::sync_mode::SyncMode;
 use crate::marketdata::MarketDataSync;
 use crate::param::{AccountGroupId, AccountId, Asset, Pnl, PositionSize, Price};
 use crate::pretrade::holdings::PositionPnlState;
-use crate::pretrade::AccountBlock;
+use crate::pretrade::RuleMode;
+use crate::pretrade::{AccountBlock, Reject};
 use crate::{PnlHaltReason, PnlState};
 
 use super::{
@@ -44,11 +45,10 @@ where
         carry_account_total_provenance: bool,
     ) -> Option<AccountBlock> {
         let barriers = SpotFundsPnlBoundsAxis::ALL.map(|axis| {
-            settings.pnl_axis_barriers(axis).barrier_for(
-                account_id,
-                account_group_id,
-                account_currency,
-            )
+            settings
+                .pnl_axis_barriers(axis)
+                .barriers_for(account_id, account_group_id, account_currency)
+                .collect()
         });
         self.pnl_axis_block_for_barriers(
             barriers,
@@ -56,6 +56,7 @@ where
             account_group_id,
             account_currency,
             carry_account_total_provenance,
+            None,
         )
     }
 
@@ -65,15 +66,21 @@ where
     /// No barrier means no holdings or market-data reads. Position values are
     /// full-close realized contributions; no value is persisted. Fill and
     /// retune callers carry record provenance on account total.
+    ///
+    /// Pre-trade (including drop-copy) and dry-run pass `Some(reviews)` to
+    /// collect review breaches as marks. Fill, adjustment, retune and account
+    /// P&L force-set (`SetSpotFundsAccountPnl`) pass `None`: review breaches
+    /// never block. Halt and currency mismatch block in either case.
     pub(super) fn pnl_axis_block_for_barriers(
         &self,
-        barriers: [Option<&SpotFundsPnlBoundsBarrier>; 4],
+        barriers: [Vec<(RuleMode, &SpotFundsPnlBoundsBarrier)>; 4],
         account_id: AccountId,
         account_group_id: Option<AccountGroupId>,
         account_currency: Option<&Asset>,
         carry_account_total_provenance: bool,
+        mut reviews: Option<&mut Vec<Reject>>,
     ) -> Option<AccountBlock> {
-        if barriers.iter().all(Option::is_none) {
+        if barriers.iter().all(Vec::is_empty) {
             return None;
         }
 
@@ -141,46 +148,77 @@ where
         let account_total = Self::sum_pnl_states([account_realized, account_unrealized]);
 
         for (axis, barrier) in SpotFundsPnlBoundsAxis::ALL.into_iter().zip(barriers) {
-            let Some(barrier) = barrier else { continue };
-            if let Some(block) =
-                super::rejects::pnl_axis_currency_mismatch_block(axis, account_currency, barrier)
-            {
-                return Some(block);
-            }
-            match axis {
-                SpotFundsPnlBoundsAxis::AccountUnrealized
-                | SpotFundsPnlBoundsAxis::AccountTotal => {
-                    let state = if axis == SpotFundsPnlBoundsAxis::AccountUnrealized {
-                        account_unrealized
-                    } else {
-                        account_total
-                    };
-                    if let Some(mut block) =
-                        super::rejects::pnl_axis_block_for_state(axis, None, state, barrier)
-                    {
-                        if axis == SpotFundsPnlBoundsAxis::AccountTotal
-                            && carry_account_total_provenance
-                        {
-                            block.provenance = assertion_token;
-                        }
-                        return Some(block);
-                    }
+            for (mode, barrier) in barrier {
+                let evaluation_mode = if reviews.is_some() {
+                    RuleMode::Reject
+                } else {
+                    mode
+                };
+                if let Some(block) = super::rejects::pnl_axis_currency_mismatch_block(
+                    axis,
+                    account_currency,
+                    barrier,
+                ) {
+                    return Some(block);
                 }
-                SpotFundsPnlBoundsAxis::PositionUnrealized
-                | SpotFundsPnlBoundsAxis::PositionTotal => {
-                    for (asset, unrealized, total) in &positions {
-                        let state = if axis == SpotFundsPnlBoundsAxis::PositionUnrealized {
-                            *unrealized
+                match axis {
+                    SpotFundsPnlBoundsAxis::AccountUnrealized
+                    | SpotFundsPnlBoundsAxis::AccountTotal => {
+                        let state = if axis == SpotFundsPnlBoundsAxis::AccountUnrealized {
+                            account_unrealized
                         } else {
-                            *total
+                            account_total
                         };
-                        if let Some(block) = super::rejects::pnl_axis_block_for_state(
+                        if let Some(mut block) = super::rejects::pnl_axis_block_for_state(
                             axis,
-                            Some(asset),
+                            None,
                             state,
+                            evaluation_mode,
                             barrier,
                         ) {
-                            return Some(block);
+                            if axis == SpotFundsPnlBoundsAxis::AccountTotal
+                                && carry_account_total_provenance
+                            {
+                                block.provenance = assertion_token;
+                            }
+                            if mode != RuleMode::Reject && matches!(state, PnlState::Value(_)) {
+                                if let Some(marks) = reviews.as_mut() {
+                                    super::rejects::collect_review_mark(
+                                        marks,
+                                        Reject::from(block).with_mode(mode),
+                                    );
+                                }
+                            } else {
+                                return Some(block);
+                            }
+                        }
+                    }
+                    SpotFundsPnlBoundsAxis::PositionUnrealized
+                    | SpotFundsPnlBoundsAxis::PositionTotal => {
+                        for (asset, unrealized, total) in &positions {
+                            let state = if axis == SpotFundsPnlBoundsAxis::PositionUnrealized {
+                                *unrealized
+                            } else {
+                                *total
+                            };
+                            if let Some(block) = super::rejects::pnl_axis_block_for_state(
+                                axis,
+                                Some(asset),
+                                state,
+                                evaluation_mode,
+                                barrier,
+                            ) {
+                                if mode != RuleMode::Reject && matches!(state, PnlState::Value(_)) {
+                                    if let Some(marks) = reviews.as_mut() {
+                                        super::rejects::collect_review_mark(
+                                            marks,
+                                            Reject::from(block).with_mode(mode),
+                                        );
+                                    }
+                                } else {
+                                    return Some(block);
+                                }
+                            }
                         }
                     }
                 }

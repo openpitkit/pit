@@ -702,27 +702,49 @@ class SpotFundsLimitModeAccountEntry:
 
 @dataclasses.dataclass(frozen=True)
 class SpotFundsPositionLimitEntry:
-    """Position bound for one account and asset.
+    """Position bound keyed by account, asset and rule mode.
 
     The checked position begins with recorded available plus held. A long
     projection adds open positive incoming; a short projection subtracts open
     positive held. Only the side an order moves toward is checked, so a
     position-reducing order passes while that projection stays within the
-    inclusive bound. A breach produces ``PositionLimitExceeded`` at Order
-    scope; an inexact projection produces ``ArithmeticOverflow`` at Order
-    scope. Changes take effect on the next order without re-evaluating open
-    reservations.
+    inclusive bound. A Reject breach rejects with ``PositionLimitExceeded``
+    at Order scope; a review breach adds a ``PositionLimitExceeded`` review
+    mark with the limit's mode. An inexact projection rejects with
+    ``ArithmeticOverflow`` at Order scope in any mode. Changes take effect
+    on the next order without re-evaluating open reservations.
 
     Args:
         account_id: Account to bound.
         asset: Asset to bound.
         limit: Required non-negative long and short magnitude to pin. Pass
-            ``None`` explicitly to clear the bound.
+            ``None`` explicitly to clear only this mode's bound. Upsert and
+            clear leave other modes' bounds unchanged.
+        mode: Enforcement mode. Defaults to ``None``, which means
+            ``RuleMode.REJECT``. The exact strings ``"Reject"``,
+            ``"ReviewWithHold"``, and ``"ReviewWithoutHold"`` are also accepted.
+
+    Raises:
+        ValueError: If *mode* is invalid.
     """
 
     account_id: param.AccountId
     asset: param.Asset
     limit: param.Quantity | None
+    mode: RuleMode | None = dataclasses.field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        try:
+            mode = RuleMode.REJECT if self.mode is None else RuleMode(self.mode)
+        except ValueError:
+            message = (
+                "SpotFundsPositionLimitEntry.mode must be 'Reject', 'ReviewWithHold', "
+                "or 'ReviewWithoutHold'"
+            )
+            if isinstance(self.mode, str):
+                message += f", got {self.mode!r}"
+            raise ValueError(message) from None
+        object.__setattr__(self, "mode", mode)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -831,20 +853,45 @@ class SpotFundsPnlBoundsBarrier:
         currency: Currency matched when the account has an effective currency.
         lower_bound: Optional lower P&L bound (typically a negative loss limit).
         upper_bound: Optional upper P&L bound (typically a positive profit limit).
+        mode: Enforcement mode. Defaults to ``None``, which means
+            ``RuleMode.REJECT``. The exact strings ``"Reject"``,
+            ``"ReviewWithHold"``, and ``"ReviewWithoutHold"`` are also accepted.
+            A review breach produces a review mark without blocking the account.
+            Halted P&L and account-tier currency mismatch block in any mode.
 
     At least one of *lower_bound* or *upper_bound* must be provided.
+
+    Raises:
+        ValueError: If *mode* is invalid.
     """
 
     currency: param.Asset
     lower_bound: param.Pnl | None = None
     upper_bound: param.Pnl | None = None
+    mode: RuleMode | None = dataclasses.field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        try:
+            mode = RuleMode.REJECT if self.mode is None else RuleMode(self.mode)
+        except ValueError:
+            message = (
+                "SpotFundsPnlBoundsBarrier.mode must be 'Reject', 'ReviewWithHold', "
+                "or 'ReviewWithoutHold'"
+            )
+            if isinstance(self.mode, str):
+                message += f", got {self.mode!r}"
+            raise ValueError(message) from None
+        object.__setattr__(self, "mode", mode)
 
 
 @dataclasses.dataclass(frozen=True)
 class SpotFundsPnlBoundsAccountGroupBarrier:
     """Per-account-group account P&L bounds refinement.
 
-    Pairs bounds with an account-group identity.
+    Pairs bounds with an account-group identity; the nested barrier carries
+    the rule mode. Repeated (account group, mode) pairs raise ``ValueError``
+    when the policy is built and ``PolicyConfigureError`` during runtime
+    configuration.
 
     Args:
         barrier: Bounds for this account-group barrier.
@@ -859,7 +906,9 @@ class SpotFundsPnlBoundsAccountGroupBarrier:
 class SpotFundsPnlBoundsAccountBarrier:
     """Per-account P&L bounds refinement.
 
-    Pairs bounds with an account identity.
+    Pairs bounds with an account identity; the nested barrier carries the
+    rule mode. Repeated (account, mode) pairs raise ``ValueError`` when the
+    policy is built and ``PolicyConfigureError`` during runtime configuration.
 
     Args:
         barrier: Bounds for this account barrier.
@@ -1012,7 +1061,7 @@ class SpotFundsPnlBoundsKillswitchReadyBuilder:
 
     def __init__(self) -> None:
         self._market_data: marketdata.MarketDataService | None = None
-        self._global: SpotFundsPnlBoundsBarrier | None = None
+        self._global: list[SpotFundsPnlBoundsBarrier] = []
         self._account_group: list[SpotFundsPnlBoundsAccountGroupBarrier] = []
         self._account: list[SpotFundsPnlBoundsAccountBarrier] = []
         self._policy_group_id = DEFAULT_POLICY_GROUP_ID
@@ -1031,11 +1080,11 @@ class SpotFundsPnlBoundsKillswitchReadyBuilder:
         self._market_data = service
         return self
 
-    def global_barrier(
-        self, barrier: SpotFundsPnlBoundsBarrier
+    def global_barriers(
+        self, *barriers: SpotFundsPnlBoundsBarrier
     ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
-        """Set the global account P&L bounds barrier."""
-        self._global = barrier
+        """Append global P&L bounds; repeated modes fail with ``ValueError``."""
+        self._global.extend(barriers)
         return self
 
     def account_group_barriers(
@@ -1065,7 +1114,7 @@ class SpotFundsPnlBoundsKillswitchReadyBuilder:
             mode=mode,
             policy_group_id=self._policy_group_id,
             market_data=self._market_data,
-            global_barrier=self._global,
+            global_barriers=self._global,
             account_group_barriers=self._account_group,
             account_barriers=self._account,
         )
@@ -1099,11 +1148,11 @@ class SpotFundsPnlBoundsKillswitchBuilder:
         """Configure the market-data service used for FX conversion."""
         return self._ready.market_data(service)
 
-    def global_barrier(
-        self, barrier: SpotFundsPnlBoundsBarrier
+    def global_barriers(
+        self, *barriers: SpotFundsPnlBoundsBarrier
     ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
-        """Set global P&L bounds and return a ready builder."""
-        return self._ready.global_barrier(barrier)
+        """Append global P&L bounds; repeated modes fail with ``ValueError``."""
+        return self._ready.global_barriers(*barriers)
 
     def account_group_barriers(
         self, *barriers: SpotFundsPnlBoundsAccountGroupBarrier

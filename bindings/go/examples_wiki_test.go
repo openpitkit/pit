@@ -2095,13 +2095,15 @@ func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 		NoSync().
 		Builtin(
 			policies.BuildSpotFundsPnlBoundsKillSwitch().
-				GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+				GlobalBarriers(policies.SpotFundsPnlBoundsBarrier{
+					Mode:       reject.RuleModeReject,
 					Currency:   currency,
 					LowerBound: optional.Some(lower),
 				}).
 				AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
 					AccountID: account,
 					Barrier: policies.SpotFundsPnlBoundsBarrier{
+						Mode:       reject.RuleModeReject,
 						Currency:   currency,
 						LowerBound: optional.Some(accountLower),
 					},
@@ -2124,7 +2126,8 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 		NoSync().
 		Builtin(
 			policies.BuildSpotFundsPnlBoundsKillSwitch().
-				GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+				GlobalBarriers(policies.SpotFundsPnlBoundsBarrier{
+					Mode:       reject.RuleModeReject,
 					Currency:   currency,
 					LowerBound: optional.Some(initialLower),
 				}),
@@ -2140,6 +2143,7 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	newLower, _ := param.NewPnlFromString("-500")
 	outside, _ := param.NewPnlFromString("-600")
 	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
+		Mode:       reject.RuleModeReject,
 		Currency:   currency,
 		LowerBound: optional.Some(newLower),
 	}
@@ -2160,7 +2164,7 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	// Tightening the barrier checks the known account and records the block now.
 	retune, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		optional.Some(&globalBarrier),
+		[]policies.SpotFundsPnlBoundsBarrier{globalBarrier},
 		nil,
 		nil,
 	)
@@ -2281,13 +2285,14 @@ func TestExampleWikiSpotFundsPnlAxisReconfigure(t *testing.T) {
 	}
 	lower, _ := param.NewPnlFromString("-5")
 	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Mode:       reject.RuleModeReject,
 		Currency:   usd,
 		LowerBound: optional.Some(lower),
 	}
 	retune, err := engine.Configure().SpotFundsPnlBoundsAxis(
 		policies.SpotFundsPolicyName,
 		policies.SpotFundsPnlBoundsAxisAccountUnrealized,
-		optional.Some(&barrier), nil, nil,
+		[]policies.SpotFundsPnlBoundsBarrier{barrier}, nil, nil,
 	)
 	if err != nil {
 		panic(err)

@@ -2837,14 +2837,22 @@ class Configurator:
         *position_limits* contains
         :class:`~openpit.pretrade.policies.SpotFundsPositionLimitEntry`
         entries. Each pins or replaces an inclusive long and short position
-        magnitude for one account asset; each entry requires a ``limit`` and
-        explicit ``None`` clears it. The checked position starts with recorded
+        magnitude keyed by account, asset and rule mode. The mode is normalized
+        and validated when ``SpotFundsPositionLimitEntry`` is constructed;
+        omitted or explicit ``None`` is stored as ``RuleMode.REJECT``.
+        Each entry requires a ``limit``; explicit ``None``
+        clears only that mode's bound, leaving other modes unchanged.
+        Repeated (account, asset, mode) keys raise ``PolicyConfigureError``
+        without applying any changes.
+        The checked position starts with recorded
         available plus held. Long projections
         add open positive incoming, and short projections subtract open
         positive held. Only the side the order moves toward is checked, so a
         reducing order passes while its projection stays within the bound.
-        A breach is ``PositionLimitExceeded`` at Order scope; an inexact
-        projection is ``ArithmeticOverflow`` at Order scope. Changes apply
+        A Reject breach is ``PositionLimitExceeded`` at Order scope; a review
+        breach adds a ``PositionLimitExceeded`` review mark with the limit's
+        mode. An inexact projection rejects with ``ArithmeticOverflow`` at
+        Order scope in every mode. Changes apply
         from the next order without re-evaluating open reservations.
 
         Raises:
@@ -2856,7 +2864,9 @@ class Configurator:
         self,
         name: str,
         *,
-        global_barrier: pretrade.policies.SpotFundsPnlBoundsBarrier | None = ...,
+        global_barriers: (
+            list[pretrade.policies.SpotFundsPnlBoundsBarrier] | None
+        ) = None,
         account_group_barriers: (
             list[pretrade.policies.SpotFundsPnlBoundsAccountGroupBarrier] | None
         ) = None,
@@ -2869,11 +2879,13 @@ class Configurator:
         *name* must match the name given to the spot-funds policy at
         registration time.
 
-        Omitted axes stay unchanged. Passing ``None`` as *global_barrier*
-        clears the singular global barrier; a barrier value replaces it. A
-        supplied group/account list REPLACES that axis wholesale, and an empty
-        list clears it. Each barrier must specify its currency and configure at
-        least one bound.
+        Omitted lists or ``None`` stay unchanged. A supplied global list replaces
+        every mode of the global slot. A supplied group or account list replaces
+        that tier wholesale: every group or account, every mode. An empty list
+        clears the corresponding tier or global slot.
+        Repeated modes for the same target raise ``PolicyConfigureError`` and
+        leave all settings unchanged. Each barrier must specify its currency
+        and configure at least one bound.
 
         With a known effective account currency, an account-tier mismatch
         fails closed and blocks the account; account-group and global
@@ -2885,7 +2897,7 @@ class Configurator:
 
         An account whose effective barrier changed is evaluated against its
         stored account P&L before this call returns: an already halted account,
-        or one already beyond the new barrier, is blocked here rather than at
+        or one already beyond the new Reject-mode barrier, is blocked here before
         its next fill, and the result carries the block the engine has already
         recorded. Each ``AccountBlockOutcome`` identifies the affected account
         together with its newly inserted block. Removing the last effective
@@ -2894,6 +2906,8 @@ class Configurator:
         evaluated normally and may record and report a block.
 
         Raises:
+            ValueError: If a barrier value is invalid. Validation happens
+                during this call, before core configuration is attempted.
             PolicyConfigureError: If the policy is not found, has the wrong
                 type, or the new settings fail validation.
         """
@@ -2913,10 +2927,12 @@ class Configurator:
         Unlike :meth:`spot_funds_pnl_bounds_killswitch`, which retunes bounds
         and never touches accumulated P&L, this is an absolute assignment
         (upsert) of the live accumulator for ``account``. A numeric assignment
-        outside an effective account P&L barrier and any halted assignment with
-        such a barrier return the policy-reported block even when the account is
-        already blocked. The engine processes the block request before returning
-        and preserves the existing first cause.
+        beyond an effective Reject-mode bound returns the policy-reported block.
+        A review-mode breach returns no block and no review mark: configuration
+        emits no marks. A halted assignment with an effective barrier of any
+        mode returns the block, even when the account is already blocked. The
+        engine processes the block before returning and preserves the existing
+        first cause.
 
         Raises:
             PolicyConfigureError: If the policy is not found or has a different

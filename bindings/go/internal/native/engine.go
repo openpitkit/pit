@@ -111,7 +111,8 @@ func newPolicyInstance(instance *PolicyInstance) (*C.OpenPitPolicyInstance, func
 	if instance == nil {
 		return nil, func() {}, nil
 	}
-	if instance.Mode > RuleModeReviewWithoutHold {
+	mode, ok := checkedRuleModeToC(instance.Mode)
+	if !ok {
 		return nil, nil, fmt.Errorf("invalid instance mode: %d", instance.Mode)
 	}
 	var name C.OpenPitStringView
@@ -122,7 +123,7 @@ func newPolicyInstance(instance *PolicyInstance) (*C.OpenPitPolicyInstance, func
 	}
 	return &C.OpenPitPolicyInstance{
 		name: name,
-		mode: ruleModeToC(instance.Mode),
+		mode: mode,
 	}, func() { C.free(unsafe.Pointer(name.ptr)) }, nil
 }
 
@@ -394,7 +395,7 @@ func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 	builder EngineBuilder,
 	marketData MarketDataService,
 	groupID PolicyGroupID,
-	globalBarrier *PretradePoliciesSpotFundsPnlBoundsBarrier,
+	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
 	instance *PolicyInstance,
@@ -405,9 +406,9 @@ func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 	}
 	defer release()
 	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
-	if globalBarrier != nil {
+	if len(globalBarriers) > 0 {
 		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
-			unsafe.Pointer(globalBarrier),
+			unsafe.Pointer(&globalBarriers[0]),
 		)
 	}
 	var accountGroupPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
@@ -429,6 +430,7 @@ func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 		marketData,
 		groupID,
 		globalPtr,
+		C.size_t(len(globalBarriers)),
 		accountGroupPtr,
 		C.size_t(len(accountGroupBarriers)),
 		accountPtr,
@@ -436,7 +438,7 @@ func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
-	runtime.KeepAlive(globalBarrier)
+	runtime.KeepAlive(globalBarriers)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if !ok {

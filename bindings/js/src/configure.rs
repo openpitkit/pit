@@ -47,7 +47,7 @@ use crate::policy::spot_funds::{
     JsSpotFundsPnlBoundsAccountBarrier, JsSpotFundsPnlBoundsAccountGroupBarrier,
     JsSpotFundsPnlBoundsBarrier,
 };
-use crate::policy::CallbackErrorScope;
+use crate::policy::{parse_rule_mode, CallbackErrorScope};
 use crate::result::{JsAccountBlockOutcomes, JsPolicyConfigurationResult};
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -110,10 +110,16 @@ export interface SpotFundsLimitModeAccountGroupEntry {
   mode?: import("../types.js").SpotFundsLimitMode | null;
 }
 
-/** Position bound for one spot-funds account and asset; null clears it. */
+/** Position bound keyed by spot-funds account, asset and rule mode. */
 export interface SpotFundsPositionLimitEntry {
   accountId: AccountId | number | bigint | string;
   asset: string;
+  /**
+   * Rule mode; omitted, undefined or null means Reject. Non-strings throw
+   * TypeError; unknown strings throw RangeError.
+   */
+  mode?: import("../types.js").RuleMode | null;
+  /** Inclusive magnitude; null clears only this mode's bound. */
   limit: Quantity | string | number | bigint | null;
 }
 
@@ -127,24 +133,29 @@ export interface SpotFundsConfigureOptions {
   accountGroupLimitModes?: Iterable<SpotFundsLimitModeAccountGroupEntry> | null;
   /**
    * Pin, replace, or clear an inclusive long and short position magnitude per
-   * account asset. Each entry requires a limit; null clears its bound. Omit
+   * (account, asset, mode). Each entry requires a limit; null clears only that
+   * mode's bound. Other modes are unchanged by upsert or clear. Repeated keys
+   * throw PolicyConfigureError without applying any changes. Omit
    * this option or pass null to leave existing bounds unchanged.
    * The checked position starts with recorded available plus held. A long
    * projection adds open positive incoming; a short projection subtracts open
    * positive held. Only the side the order moves toward is checked, so a
    * position-reducing order passes while that projection stays within the
-   * bound. A breach is PositionLimitExceeded at Order scope; an inexact
-   * projection is ArithmeticOverflow at Order scope. Changes apply from the
-   * next order without re-evaluating open reservations.
+   * bound. A Reject breach is PositionLimitExceeded at Order scope; a review
+   * breach adds a PositionLimitExceeded review mark with the limit's mode.
+   * An inexact projection rejects with ArithmeticOverflow at Order scope in
+   * every mode. Changes apply from the next order without re-evaluating open
+   * reservations.
    */
   positionLimits?: Iterable<SpotFundsPositionLimitEntry> | null;
 }
 
 /**
  * Runtime spot-funds P&L-bounds axis configuration options.
- * Omitted axes stay unchanged. `globalBarrier: null` clears the singular
- * barrier, while a barrier value replaces it. Supplied group/account iterables
- * replace their axes.
+ * Omitted or null options stay unchanged. A supplied iterable replaces every
+ * mode of its global slot or group/account axis; an empty iterable clears it.
+ * A repeated (tier, id, mode) key throws PolicyConfigureError before any
+ * settings apply, leaving every previous setting unchanged.
  * With a known effective account currency, an account-tier mismatch fails
  * closed and blocks the account; account-group and global mismatches are
  * skipped. A known-currency account with no account barrier and no matching
@@ -153,7 +164,7 @@ export interface SpotFundsConfigureOptions {
  * applies. Bounds are compared as stored and are never FX-converted.
  */
 export interface SpotFundsPnlBoundsKillswitchConfigureOptions {
-  globalBarrier?: SpotFundsPnlBoundsBarrier | null;
+  globalBarriers?: Iterable<SpotFundsPnlBoundsBarrier> | null;
   accountGroupBarriers?: Iterable<SpotFundsPnlBoundsAccountGroupBarrier> | null;
   accountBarriers?: Iterable<SpotFundsPnlBoundsAccountBarrier> | null;
 }
@@ -402,7 +413,9 @@ impl JsConfigurator {
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
     /// validation failure. Throws `ParamError`/`AssetError`/`AccountIdError`
-    /// for malformed options. Throws `LifecycleError` when the owning engine is
+    /// for malformed options. Throws `RangeError` for an unknown mode string
+    /// or `TypeError` for a non-string mode in a `positionLimits` entry.
+    /// Throws `LifecycleError` when the owning engine is
     /// re-entered synchronously from one of its policy callbacks.
     #[wasm_bindgen(js_name = spotFunds)]
     pub fn spot_funds(
@@ -462,9 +475,7 @@ impl JsConfigurator {
                     }
                 }
                 if let Some(entries) = position_limits {
-                    for (account, asset, limit) in entries {
-                        settings.set_position_limit(account, asset, limit);
-                    }
+                    settings.set_position_limits(entries)?;
                 }
                 Ok::<(), SpotFundsConfigError>(())
             })
@@ -486,13 +497,16 @@ impl JsConfigurator {
     ///
     /// An account whose effective barrier changed is evaluated against its
     /// stored account P&L in the same call: an already halted account, or one
-    /// already beyond the new barrier, is blocked before this call returns and
-    /// appears in the returned result, which reports the blocks the engine has
-    /// already recorded. Each returned `AccountBlockOutcome` identifies the
+    /// already beyond a new reject barrier, is blocked before this call returns
+    /// and appears in the returned result, which reports the blocks the engine
+    /// has already recorded. Each returned `AccountBlockOutcome` identifies the
     /// affected account together with its newly inserted block. Removing the
     /// last effective barrier reports no block and does not release an existing
     /// block. Clearing an override can expose a fallback barrier; the fallback
     /// is evaluated normally and may record and report a block.
+    /// A review breach yields a review mark on the next order without an
+    /// account block. Halted P&L and an account-tier currency mismatch reject
+    /// and block in any mode.
     ///
     /// # Errors
     ///
@@ -509,10 +523,8 @@ impl JsConfigurator {
         self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "spotFundsPnlBoundsKillswitch options")?;
-        let global = optional_nullable_wrapper_field::<JsSpotFundsPnlBoundsBarrier>(
-            &options,
-            "globalBarrier",
-        )?;
+        let global =
+            optional_wrapper_iter_field::<JsSpotFundsPnlBoundsBarrier>(&options, "globalBarriers")?;
         let account_group = optional_wrapper_iter_field::<JsSpotFundsPnlBoundsAccountGroupBarrier>(
             &options,
             "accountGroupBarriers",
@@ -524,9 +536,9 @@ impl JsConfigurator {
 
         self.inner
             .spot_funds(name, |settings| {
-                if let Some(barrier) = global {
-                    settings.set_pnl_global_barrier(
-                        barrier.as_ref().map(JsSpotFundsPnlBoundsBarrier::to_core),
+                if let Some(barriers) = global {
+                    settings.set_pnl_global_barriers(
+                        barriers.iter().map(JsSpotFundsPnlBoundsBarrier::to_core),
                     )?;
                 }
                 if let Some(barriers) = account_group {
@@ -552,10 +564,10 @@ impl JsConfigurator {
     /// Force-sets live accumulated spot-funds account-wide P&L state.
     ///
     /// The new state is checked against the effective account P&L barrier in
-    /// the same call. A barrier breach or halted state under a barrier returns
-    /// the policy-reported block even when the account already has a block. The
-    /// engine processes the block request before returning and preserves the
-    /// existing first cause.
+    /// the same call. A reject-barrier breach or halted state under any barrier
+    /// returns the policy-reported block even when the account already has a
+    /// block. The engine processes the block request before returning and
+    /// preserves the existing first cause.
     ///
     /// # Errors
     ///
@@ -660,23 +672,6 @@ where
     extract_wrapper(field_value, field).map(Some)
 }
 
-fn optional_nullable_wrapper_field<T>(
-    value: &JsValue,
-    field: &str,
-) -> Result<Option<Option<T>>, JsValue>
-where
-    T: TryFromJsValue,
-{
-    let field_value = read_field(value, field)?;
-    if field_value.is_undefined() {
-        return Ok(None);
-    }
-    if field_value.is_null() {
-        return Ok(Some(None));
-    }
-    extract_wrapper(field_value, field).map(|value| Some(Some(value)))
-}
-
 fn optional_wrapper_iter_field<T>(value: &JsValue, field: &str) -> Result<Option<Vec<T>>, JsValue>
 where
     T: TryFromJsValue,
@@ -743,11 +738,12 @@ fn optional_limit_mode_entries<Id>(
     Ok(Some(entries))
 }
 
-/// One parsed `positionLimits` entry: account, asset, and the limit to pin or
-/// `None` to clear.
+/// One parsed `positionLimits` entry: account, asset, mode, and the limit to
+/// pin or `None` to clear.
 type PositionLimitEntry = (
     openpit::param::AccountId,
     openpit::param::Asset,
+    openpit::pretrade::RuleMode,
     Option<openpit::param::Quantity>,
 );
 
@@ -763,6 +759,7 @@ fn optional_position_limit_entries(
     for item in iterator {
         let item = item?;
         require_object(&item, "positionLimits entry")?;
+        let mode = parse_rule_mode(&read_field(&item, "mode")?, "mode")?;
         let account_id = resolve_account_id(required_field(&item, "accountId")?)?;
         let asset = parse_asset(&required_string_field(&item, "asset")?)?;
         if !has_own_field(&item, "limit")? {
@@ -781,7 +778,7 @@ fn optional_position_limit_entries(
             ));
         }
         let limit = resolve_optional_quantity(limit_value)?;
-        entries.push((account_id, asset, limit));
+        entries.push((account_id, asset, mode, limit));
     }
     Ok(Some(entries))
 }

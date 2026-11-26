@@ -23,18 +23,18 @@
 
 use crate::param::{AccountId, Asset, PositionSize, Quantity};
 use crate::pretrade::holdings::Holdings;
-use crate::pretrade::{Reject, RejectCode, RejectScope, Rejects};
+use crate::pretrade::{Reject, RejectCode, RejectScope, Rejects, RuleMode};
 
 use super::market_data::SpotFundsSettings;
 use super::pre_trade::ReservationStep;
-use super::rejects::arithmetic_overflow_reject;
+use super::rejects::{arithmetic_overflow_reject, collect_review_mark};
 use super::SPOT_FUNDS_POLICY_NAME;
 
 #[derive(Clone, Copy)]
 pub(super) enum Check {
     FirstStepTransition,
     Position {
-        limit: Quantity,
+        limits: [Option<(RuleMode, Quantity)>; 3],
         earlier_held: PositionSize,
         earlier_incoming: PositionSize,
     },
@@ -94,13 +94,14 @@ pub(super) fn verify(
     current: Holdings,
     held: PositionSize,
     incoming: PositionSize,
+    marks: &mut Vec<Reject>,
 ) -> Result<(), Rejects> {
     let Some(check) = check else {
         return Ok(());
     };
 
     let Check::Position {
-        limit,
+        limits,
         earlier_held,
         earlier_incoming,
     } = check
@@ -122,33 +123,45 @@ pub(super) fn verify(
         .map_err(|cause| arithmetic_reject(asset, "pre-order reconstruction", cause))?;
     let owned = exact_add(available, held_before_order)
         .map_err(|cause| arithmetic_reject(asset, "pre-order reconstruction", cause))?;
-    let limit = limit.to_position_size();
-
-    let (side, projected, exceeded) = if net > PositionSize::ZERO {
+    let (side, projected) = if net > PositionSize::ZERO {
         let open_incoming = incoming_before_order.max(PositionSize::ZERO);
         let projected = exact_add(owned, open_incoming)
             .and_then(|position| exact_add(position, net))
             .map_err(|cause| arithmetic_reject(asset, "projection", cause))?;
-        ("long", projected, projected > limit)
+        ("long", projected)
     } else {
         let open_held = held_before_order.max(PositionSize::ZERO);
         let projected = exact_sub(owned, open_held)
             .and_then(|position| exact_add(position, net))
             .map_err(|cause| arithmetic_reject(asset, "projection", cause))?;
-        ("short", projected, projected < -limit)
+        ("short", projected)
     };
 
-    if exceeded {
-        return Err(Reject::new(
+    for (mode, limit) in limits.into_iter().flatten() {
+        let limit = limit.to_position_size();
+        let exceeded = if net > PositionSize::ZERO {
+            projected > limit
+        } else {
+            projected < -limit
+        };
+        if !exceeded {
+            continue;
+        }
+        let reject = Reject::new(
             SPOT_FUNDS_POLICY_NAME,
             RejectScope::Order,
             RejectCode::PositionLimitExceeded,
             "position limit exceeded",
             format!(
-                "asset {asset}, side {side}, projected worst-case position {projected}, limit {limit}"
+                "asset {asset}, side {side}, projected worst-case position \
+                 {projected}, limit {limit}"
             ),
         )
-        .into());
+        .with_mode(mode);
+        if mode == RuleMode::Reject {
+            return Err(reject.into());
+        }
+        collect_review_mark(marks, reject);
     }
     Ok(())
 }
@@ -159,13 +172,12 @@ fn check_for(
     step: &ReservationStep,
     earlier: Option<&ReservationStep>,
 ) -> Option<Check> {
-    settings
-        .position_limit_for(account_id, &step.asset)
-        .map(|limit| Check::Position {
-            limit,
-            earlier_held: earlier.map_or(PositionSize::ZERO, |step| step.held),
-            earlier_incoming: earlier.map_or(PositionSize::ZERO, |step| step.incoming),
-        })
+    let limits = settings.position_limit_for(account_id, &step.asset);
+    limits.iter().any(Option::is_some).then(|| Check::Position {
+        limits,
+        earlier_held: earlier.map_or(PositionSize::ZERO, |step| step.held),
+        earlier_incoming: earlier.map_or(PositionSize::ZERO, |step| step.incoming),
+    })
 }
 
 fn touches(step: &ReservationStep) -> bool {

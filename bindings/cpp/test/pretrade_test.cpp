@@ -2193,6 +2193,7 @@ TEST(BuiltinPolicy, SpotFundsMarketOrdersAcceptServiceWrapper) {
 
 TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierPreservesBounds) {
   policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
+  EXPECT_EQ(barrier.mode, RuleMode::Reject);
   barrier.lowerBound = openpit::param::Pnl::FromString("-1000");
   barrier.upperBound = openpit::param::Pnl::FromString("250");
 
@@ -2200,6 +2201,120 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierPreservesBounds) {
   ASSERT_TRUE(barrier.upperBound.has_value());
   EXPECT_EQ(barrier.lowerBound->ToString(), "-1000");
   EXPECT_EQ(barrier.upperBound->ToString(), "250");
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlModesReachPolicy) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    policies::SpotFundsPnlBoundsBarrier rejecting(openpit::param::Asset("USD"));
+    rejecting.lowerBound = openpit::param::Pnl::FromString("-100");
+    auto reviewing = rejecting;
+    reviewing.mode = mode;
+    reviewing.lowerBound = openpit::param::Pnl::FromString("-10");
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}
+                    .GlobalBarrier(rejecting)
+                    .GlobalBarrier(reviewing));
+    const auto engine = builder.Build();
+    const auto account = openpit::param::AccountId::FromUint64(83301);
+    SeedSpotFundsLifecycleAccount(engine, account);
+    const auto seeded = engine.Configure().SetSpotFundsAccountPnl(
+        policies::SpotFundsPolicyName, account,
+        openpit::param::Pnl::FromString("-50"));
+    ASSERT_TRUE(seeded.accountBlocks.empty());
+    const auto report =
+        engine.ExecutePreTradeDryRun(SpotFundsLifecycleOrder(account));
+    ASSERT_TRUE(report.Passed());
+    const auto reviews = report.Reviews();
+    ASSERT_EQ(reviews.size(), 1U);
+    EXPECT_EQ(reviews.front().mode, mode);
+    EXPECT_EQ(reviews.front().code, RejectCode::PnlKillSwitchTriggered);
+    const auto breached = engine.Configure().SetSpotFundsAccountPnl(
+        policies::SpotFundsPolicyName, account,
+        openpit::param::Pnl::FromString("-150"));
+    ASSERT_EQ(breached.accountBlocks.size(), 1U);
+    EXPECT_EQ(breached.accountBlocks.front().code,
+              RejectCode::PnlKillSwitchTriggered);
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlDuplicateModeFailsBuild) {
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
+  barrier.mode = RuleMode::ReviewWithHold;
+  barrier.lowerBound = openpit::param::Pnl::FromString("-10");
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  const auto config = policies::SpotFundsPnlBoundsKillSwitchPolicy{}
+                          .GlobalBarrier(barrier)
+                          .GlobalBarrier(barrier);
+  try {
+    config.AddTo(builder);
+    FAIL() << "duplicate mode must fail builder";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.Message(),
+                testing::HasSubstr(
+                    "duplicate global P&L barrier for mode ReviewWithHold"));
+  }
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlGlobalListsPatchAllModes) {
+  policies::SpotFundsPnlBoundsBarrier rejecting(openpit::param::Asset("USD"));
+  rejecting.lowerBound = openpit::param::Pnl::FromString("-100");
+  auto reviewing = rejecting;
+  reviewing.mode = RuleMode::ReviewWithHold;
+  reviewing.lowerBound = openpit::param::Pnl::FromString("-10");
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(
+      policies::SpotFundsPnlBoundsKillSwitchPolicy{}.GlobalBarrier(rejecting));
+  const auto engine = builder.Build();
+  const auto account = openpit::param::AccountId::FromUint64(83302);
+  SeedSpotFundsLifecycleAccount(engine, account);
+  const auto seeded = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("-50"));
+  ASSERT_TRUE(seeded.accountBlocks.empty());
+  const auto checkReviews = [&](std::size_t count) {
+    const auto report =
+        engine.ExecutePreTradeDryRun(SpotFundsLifecycleOrder(account));
+    ASSERT_TRUE(report.Passed());
+    const auto reviews = report.Reviews();
+    ASSERT_EQ(reviews.size(), count);
+    if (count != 0) {
+      EXPECT_EQ(reviews.front().mode, RuleMode::ReviewWithHold);
+    }
+  };
+  const auto update =
+      [&](std::optional<std::vector<policies::SpotFundsPnlBoundsBarrier>>
+              barriers) {
+        const auto result = engine.Configure().SpotFundsPnlBoundsKillSwitch(
+            policies::SpotFundsPolicyName, std::move(barriers));
+        EXPECT_TRUE(result.accountBlocks.empty());
+      };
+  update(
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{rejecting, reviewing});
+  checkReviews(1);
+  update(std::nullopt);
+  checkReviews(1);
+  try {
+    update(
+        std::vector<policies::SpotFundsPnlBoundsBarrier>{reviewing, reviewing});
+    FAIL() << "duplicate mode must fail configure";
+  } catch (const openpit::ConfigureError& error) {
+    EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
+    EXPECT_THAT(error.Message(), testing::HasSubstr("ReviewWithHold"));
+  }
+  checkReviews(1);
+  update(std::vector<policies::SpotFundsPnlBoundsBarrier>{rejecting});
+  checkReviews(0);
+  update(
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{rejecting, reviewing});
+  update(std::vector<policies::SpotFundsPnlBoundsBarrier>{});
+  checkReviews(0);
+  const auto cleared = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("-150"));
+  EXPECT_TRUE(cleared.accountBlocks.empty());
+  checkReviews(0);
 }
 
 TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierIgnoresNonMatchingCurrency) {
@@ -2393,14 +2508,14 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeBarrierRechecksChangedCurrency) {
   mismatched.lowerBound = openpit::param::Pnl::FromString("-100");
   const auto first = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(mismatched));
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{mismatched});
   EXPECT_TRUE(first.accountBlocks.empty());
 
   policies::SpotFundsPnlBoundsBarrier matching(openpit::param::Asset("USD"));
   matching.lowerBound = openpit::param::Pnl::FromString("-100");
   const auto second = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(matching));
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{matching});
   ASSERT_EQ(second.accountBlocks.size(), 1U);
   EXPECT_EQ(second.accountBlocks[0].block.code,
             RejectCode::PnlKillSwitchTriggered);
@@ -2503,10 +2618,9 @@ TEST(BuiltinPolicy, SpotFundsOpeningFillHaltsPositionLedgerOnly) {
 }
 
 TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
-  using GlobalBarrierUpdate = policies::SpotFundsPnlBoundsGlobalBarrierUpdate;
-  static_assert(!std::is_default_constructible_v<GlobalBarrierUpdate>);
-  static_assert(!std::is_constructible_v<GlobalBarrierUpdate, std::nullopt_t>);
-  static_assert(!std::is_constructible_v<GlobalBarrierUpdate,
+  using GlobalBarriers =
+      std::optional<std::vector<policies::SpotFundsPnlBoundsBarrier>>;
+  static_assert(!std::is_constructible_v<GlobalBarriers,
                                          policies::SpotFundsPnlBoundsBarrier>);
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
@@ -2529,7 +2643,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
   EXPECT_NO_THROW({
     const auto retune = engine.Configure().SpotFundsPnlBoundsKillSwitch(
         policies::SpotFundsPolicyName,
-        GlobalBarrierUpdate::Set(std::move(global)),
+        std::vector<policies::SpotFundsPnlBoundsBarrier>{std::move(global)},
         std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{
             policies::SpotFundsPnlBoundsAccountGroupBarrier(
                 openpit::param::AccountGroupId::FromUint32(7),
@@ -2607,7 +2721,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
   accountBarrier.lowerBound = openpit::param::Pnl::FromString("-10");
   const auto armed = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(global),
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{global},
       std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{
           policies::SpotFundsPnlBoundsAccountGroupBarrier(group, groupBarrier)},
       std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{
@@ -2655,9 +2769,8 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
   // omitted global and group axes remain in force for their respective keys.
   // Only accountSpecific changes tier, and the wider global bound admits it.
   const auto cleared = engine.Configure().SpotFundsPnlBoundsKillSwitch(
-      policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Unchanged(),
-      std::nullopt, std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{});
+      policies::SpotFundsPolicyName, std::nullopt, std::nullopt,
+      std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{});
   EXPECT_TRUE(cleared.accountBlocks.empty());
   EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, accountSpecific).empty());
   ExpectSpotFundsPnlPreTradeReject(engine, accountGroup);
@@ -2668,7 +2781,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
   // creates no block.
   const auto fullClear = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Clear(),
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{},
       std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{},
       std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{});
   EXPECT_TRUE(fullClear.accountBlocks.empty());
@@ -2695,7 +2808,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl) {
   initial.lowerBound = openpit::param::Pnl::FromString("-30");
   const auto armed = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(initial));
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{initial});
   EXPECT_EQ(armed.accountBlocks.size(), 1U);
   engine.Accounts().Unblock(account);
 
@@ -2705,7 +2818,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl) {
   replacement.lowerBound = openpit::param::Pnl::FromString("-20");
   const auto replaced = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(replacement));
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{replacement});
   EXPECT_EQ(replaced.accountBlocks.size(), 1U);
   ExpectSpotFundsPnlPreTradeReject(engine, account);
 }

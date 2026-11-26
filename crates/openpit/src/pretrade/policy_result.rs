@@ -91,9 +91,10 @@ pub struct AccountBlockOutcomes {
 
 /// Per-policy result of a runtime configuration operation.
 ///
-/// A SpotFunds account-P&L force-set exposes its policy-reported breach or halt
-/// block even when an existing first-cause block prevents a new insertion. The
-/// engine processes every exposed block before returning without replacing an
+/// A SpotFunds account-P&L force-set exposes a Reject-mode breach, or a halt
+/// or currency mismatch in any mode, even when an existing first-cause block
+/// prevents a new insertion. A review-mode breach produces no block or mark.
+/// The engine processes every exposed block before returning, preserving an
 /// existing cause. The caller supplies the affected account to this operation,
 /// so the blocks do not repeat that identity.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -108,10 +109,6 @@ pub struct PolicyConfigurationResult {
 /// Runtime configuration operation dispatched to a built-in policy.
 #[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "Retunes carry four selected barriers without an allocation."
-)]
 pub enum PolicyRuntimeConfiguration {
     /// Sets the account-scoped SpotFunds realized-PnL state.
     SetSpotFundsAccountPnl {
@@ -132,7 +129,11 @@ pub enum PolicyRuntimeConfiguration {
         account_group_id: Option<AccountGroupId>,
         /// Effective account currency observed for this transition.
         account_currency: Option<Asset>,
-        /// Selected effective barriers in `SpotFundsPnlBoundsAxis::ALL` order.
-        barriers: [Option<crate::pretrade::policies::SpotFundsPnlBoundsBarrier>; 4],
+        /// Selected barriers by axis (`SpotFundsPnlBoundsAxis::ALL` order),
+        /// then mode (Reject first, followed by the review modes).
+        barriers: [Vec<(
+            super::RuleMode,
+            crate::pretrade::policies::SpotFundsPnlBoundsBarrier,
+        )>; 4],
     },
 }

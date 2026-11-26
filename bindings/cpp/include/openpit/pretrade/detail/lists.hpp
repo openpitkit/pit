@@ -136,8 +136,6 @@ class ListAccess final {
   friend class ::openpit::pretrade::Request;
   friend class ::openpit::pretrade::Reservation;
   friend class ::openpit::pretrade::policies::
-      SpotFundsPnlBoundsGlobalBarrierUpdate;
-  friend class ::openpit::pretrade::policies::
       SpotFundsPnlBoundsKillSwitchPolicy;
   friend class ::openpit::pretrade::policies::SpotFundsPolicy;
 };

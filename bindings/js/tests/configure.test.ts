@@ -346,6 +346,15 @@ describe("P&L-bounds kill switch", () => {
   });
 });
 
+function spotFundsPositionLimitEngine(): Engine {
+  const engine = Engine.builder().builtin(buildSpotFunds()).build();
+  engine.accounts().setCurrency(ACCOUNT, "USD");
+  engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+    globalLimitMode: SpotFundsLimitMode.TrackOnly,
+  });
+  return engine;
+}
+
 describe("empty policy lifecycle", () => {
   it("cycles every rate-limit axis through empty settings", () => {
     const engine = Engine.builder()
@@ -1082,6 +1091,156 @@ describe("runtime configurator", () => {
     cleared.reservation?.rollback();
   });
 
+  it.each(["ReviewWithHold", "ReviewWithoutHold"] as const)(
+    "keeps Reject and %s position limits independent",
+    (mode) => {
+      const engine = spotFundsPositionLimitEngine();
+      const reviewing = {
+        accountId: ACCOUNT,
+        asset: "AAPL",
+        mode,
+        limit: "0",
+      };
+      const checkOrder = (
+        quantity: string,
+        passed: boolean,
+        reviewCount: number,
+      ) => {
+        const result = engine.executePreTrade(makeOrder(quantity));
+        try {
+          expect(result.ok, "review passes and Reject rejects").toBe(passed);
+          if (passed) {
+            expect(result.rejects).toEqual([]);
+            expect(result.reviews).toHaveLength(reviewCount);
+            if (reviewCount > 0) {
+              expect(result.reviews[0]?.mode).toBe(mode);
+              expect(result.reviews[0]?.code).toBe("PositionLimitExceeded");
+              expect(result.reviews[0]?.scope).toBe("order");
+            }
+          } else {
+            expect(result.rejects).toHaveLength(1);
+            expect(result.rejects[0]?.mode).toBe("Reject");
+            expect(result.rejects[0]?.code).toBe("PositionLimitExceeded");
+          }
+        } finally {
+          result.reservation?.rollback();
+        }
+      };
+      const rejecting = { accountId: ACCOUNT, asset: "AAPL", limit: "2" };
+      for (const entry of [
+        rejecting,
+        { ...rejecting, mode: null },
+        { ...rejecting, mode: "Reject" as const },
+      ]) {
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+          positionLimits: [entry, reviewing],
+        });
+        checkOrder("1", true, 1);
+        checkOrder("3", false, 0);
+      }
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        positionLimits: [{ ...reviewing, limit: null }],
+      });
+      checkOrder("1", true, 0);
+      checkOrder("3", false, 0);
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        positionLimits: [
+          reviewing,
+          { accountId: ACCOUNT, asset: "AAPL", mode: "Reject", limit: null },
+        ],
+      });
+      checkOrder("3", true, 1);
+    },
+  );
+
+  it.each(["Reject", "ReviewWithHold", "ReviewWithoutHold"] as const)(
+    "rejects a duplicate %s position limit atomically",
+    (mode) => {
+      const engine = spotFundsPositionLimitEngine();
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        positionLimits: [
+          { accountId: ACCOUNT, asset: "AAPL", limit: "2" },
+          {
+            accountId: ACCOUNT,
+            asset: "AAPL",
+            mode: "ReviewWithHold",
+            limit: "0",
+          },
+        ],
+      });
+      const patch = {
+        positionLimits: [
+          { accountId: ACCOUNT, asset: "AAPL", limit: "100" },
+          { accountId: ACCOUNT, asset: "AAPL", mode, limit: "100" },
+          { accountId: ACCOUNT, asset: "AAPL", mode, limit: null },
+        ],
+      };
+      expect(() =>
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, patch),
+      ).toThrow(PolicyConfigureError);
+      expect(() =>
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, patch),
+      ).toThrow(/duplicate/);
+      const review = engine.executePreTradeDryRun(makeOrder("1"));
+      expect(review.isPass).toBe(true);
+      expect(review.reviews.map((mark) => mark.mode)).toEqual([
+        "ReviewWithHold",
+      ]);
+      expect(review.reviews[0]?.code).toBe("PositionLimitExceeded");
+      const rejecting = engine.executePreTradeDryRun(makeOrder("3"));
+      expect(
+        rejecting.isPass,
+        "duplicate batch preserves the Reject bound",
+      ).toBe(false);
+      expect(rejecting.rejects[0]?.code).toBe("PositionLimitExceeded");
+    },
+  );
+
+  it.each([
+    ["Unknown", RangeError],
+    ["reject", RangeError],
+    ["reviewwithhold", RangeError],
+    [1, TypeError],
+    [{}, TypeError],
+  ] as const)(
+    "rejects invalid position-limit mode %s without changing settings",
+    (mode, error) => {
+      const engine = spotFundsPositionLimitEngine();
+      engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+        positionLimits: [{ accountId: ACCOUNT, asset: "AAPL", limit: "2" }],
+      });
+      expect(() =>
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+          positionLimits: [
+            {
+              accountId: ACCOUNT,
+              asset: "AAPL",
+              limit: null,
+              mode: mode as never,
+            },
+          ],
+        }),
+      ).toThrow(error);
+      expect(() =>
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+          positionLimits: [
+            {
+              accountId: ACCOUNT,
+              asset: "AAPL",
+              limit: null,
+              mode: mode as never,
+            },
+          ],
+        }),
+      ).toThrow(/mode must be/);
+      const result = engine.executePreTradeDryRun(makeOrder("3"));
+      expect(result.isPass, "invalid mode preserves the Reject bound").toBe(
+        false,
+      );
+      expect(result.rejects[0]?.code).toBe("PositionLimitExceeded");
+    },
+  );
+
   it("requires an explicit spot-funds position limit to preserve an existing bound", () => {
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
     const adjustment = engine.applyAccountAdjustment(ACCOUNT, [
@@ -1153,9 +1312,9 @@ describe("runtime configurator", () => {
 
       .builtin(
         buildSpotFundsPnlBoundsKillswitch()
-          .globalBarrier(
+          .globalBarriers([
             new SpotFundsPnlBoundsBarrier("USD", "-1000", undefined),
-          )
+          ])
           .accountBarriers([
             new SpotFundsPnlBoundsAccountBarrier(
               accountId,
@@ -1172,9 +1331,9 @@ describe("runtime configurator", () => {
   it("ignores a spot-funds pnl barrier with a non-matching currency", () => {
     const engine = Engine.builder()
       .builtin(
-        buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+        buildSpotFundsPnlBoundsKillswitch().globalBarriers([
           new SpotFundsPnlBoundsBarrier("EUR", "-100", undefined),
-        ),
+        ]),
       )
       .build();
     engine.accounts().setCurrency(ACCOUNT, "USD");
@@ -1231,9 +1390,9 @@ describe("runtime configurator", () => {
   it("applies a spot-funds pnl barrier with a matching currency", () => {
     const engine = Engine.builder()
       .builtin(
-        buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+        buildSpotFundsPnlBoundsKillswitch().globalBarriers([
           new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
-        ),
+        ]),
       )
       .build();
     engine.accounts().setCurrency(ACCOUNT, "USD");
@@ -1345,13 +1504,13 @@ describe("runtime configurator", () => {
     };
 
     engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
-      globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+      globalBarriers: [new SpotFundsPnlBoundsBarrier("USD", "-10", undefined)],
     });
 
     const firstSurvivorFill = fillWithFee(survivor, "9");
     expect(firstSurvivorFill.accountBlocks).toHaveLength(0);
 
-    // An omitted globalBarrier retains both its threshold and live P&L.
+    // Omitted globalBarriers retain both their thresholds and live P&L.
     engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
       accountGroupBarriers: [
         new SpotFundsPnlBoundsAccountGroupBarrier(
@@ -1408,7 +1567,7 @@ describe("runtime configurator", () => {
     expect(globalRecheck.accountBlocks[0]!.code).toBe("PnlKillSwitchTriggered");
 
     engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
-      globalBarrier: null,
+      globalBarriers: [],
       accountGroupBarriers: [],
       accountBarriers: [],
     });
@@ -1436,9 +1595,9 @@ describe("runtime configurator", () => {
     const forcedAccount = 99_224_417n;
     const engine = Engine.builder()
       .builtin(
-        buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+        buildSpotFundsPnlBoundsKillswitch().globalBarriers([
           new SpotFundsPnlBoundsBarrier("USD", "-1000", undefined),
-        ),
+        ]),
       )
       .build();
 
@@ -1455,7 +1614,9 @@ describe("runtime configurator", () => {
     const retune = engine
       .configure()
       .spotFundsPnlBoundsKillswitch(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
-        globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-500", undefined),
+        globalBarriers: [
+          new SpotFundsPnlBoundsBarrier("USD", "-500", undefined),
+        ],
       });
     expect(retune.accountBlocks).toHaveLength(1);
     expect(retune.accountBlocks[0]!.accountId.value).toBe(retunedAccount);
@@ -1490,7 +1651,9 @@ describe("runtime configurator", () => {
     const swept = engine
       .configure()
       .spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
-        globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+        globalBarriers: [
+          new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+        ],
       });
 
     expect(swept.accountBlocks).toHaveLength(2);

@@ -34,10 +34,13 @@ use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
 /// retune that changes the axis's effective barrier. An account-group
 /// membership change does not check axes; the next order catches a breach.
 ///
-/// A breach or halted value of an axis with an effective barrier blocks the
-/// account with `PnlKillSwitchTriggered` in every limit mode. An account-tier
-/// barrier in a different currency than a known account currency also blocks
-/// it. A position axis compares each position.
+/// A Reject-mode breach blocks the account with `PnlKillSwitchTriggered` in
+/// every funds limit mode. A review-mode breach yields a pre-trade review mark
+/// without blocking; non-order operations produce neither a mark nor a block.
+/// Halted values and account-tier currency mismatches block in any rule mode.
+/// Review barriers are evaluated whether or not the order is confirmed. A Reject
+/// breach ends evaluation. A position axis compares each position. Barrier
+/// precedence is resolved independently per rule mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SpotFundsPnlBoundsAxis {
     /// Sum of unrealized P&L over the account's positions, in the account
@@ -79,12 +82,17 @@ pub struct SpotFundsPnlBoundsBarrier {
     pub lower_bound: Option<Pnl>,
     /// Optional upper bound, typically a positive profit-taking limit.
     pub upper_bound: Option<Pnl>,
+    /// Rule mode, part of the barrier's configuration key.
+    ///
+    /// A review-mode breach yields a review mark with this mode and no account
+    /// block. Halted P&L and a currency mismatch reject and block in any mode.
+    pub mode: crate::pretrade::RuleMode,
 }
 
 /// Account-group P&L bounds refinement for spot funds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsAccountGroupBarrier {
-    /// Bounds for the group.
+    /// Bounds for the group, including the rule mode in the configuration key.
     pub barrier: SpotFundsPnlBoundsBarrier,
     /// Account group this barrier applies to.
     pub account_group_id: AccountGroupId,
@@ -93,7 +101,7 @@ pub struct SpotFundsPnlBoundsAccountGroupBarrier {
 /// Account P&L bounds refinement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsAccountBarrier {
-    /// Bounds for the account.
+    /// Bounds for the account, including the rule mode in the configuration key.
     pub barrier: SpotFundsPnlBoundsBarrier,
     /// Account this barrier applies to.
     pub account_id: AccountId,

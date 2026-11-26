@@ -65,6 +65,13 @@ func ruleModeToC(mode PretradeRuleMode) C.OpenPitPretradeRuleMode {
 	return mode + 1
 }
 
+func checkedRuleModeToC(mode PretradeRuleMode) (C.OpenPitPretradeRuleMode, bool) {
+	if mode > RuleModeReviewWithoutHold {
+		return 0, false
+	}
+	return ruleModeToC(mode), true
+}
+
 func PretradeRejectGetPolicy(reject PretradeReject) StringView {
 	return newStringView(reject.policy)
 }

@@ -1166,7 +1166,7 @@ def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
         .no_sync()
         .builtin(
             openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch()
-            .global_barrier(
+            .global_barriers(
                 openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl(-1000),
@@ -1196,7 +1196,7 @@ def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl(-1000),
@@ -1220,10 +1220,12 @@ def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
     # Tightening the barrier checks the known account and records the block now.
     retune = engine.configure().spot_funds_pnl_bounds_killswitch(
         openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
-        global_barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
-            currency=openpit.param.Asset("USD"),
-            lower_bound=openpit.param.Pnl(-500),
-        ),
+        global_barriers=[
+            openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                currency=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl(-500),
+            )
+        ],
     )
     assert len(retune.account_blocks) == 1
     assert retune.account_blocks[0].account_id == retuned_account

@@ -764,9 +764,9 @@ describe("spot-funds validation", () => {
     expect(() =>
       Engine.builder()
         .builtin(
-          buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+          buildSpotFundsPnlBoundsKillswitch().globalBarriers([
             new SpotFundsPnlBoundsBarrier("USD", undefined, undefined),
-          ),
+          ]),
         )
         .build(),
     ).toThrow("spot-funds P&L bounds must configure at least one bound");
@@ -776,9 +776,9 @@ describe("spot-funds validation", () => {
     expect(() =>
       Engine.builder()
         .builtin(
-          buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+          buildSpotFundsPnlBoundsKillswitch().globalBarriers([
             new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
-          ),
+          ]),
         )
         .build(),
     ).not.toThrow();
@@ -798,7 +798,7 @@ describe("spot-funds validation", () => {
     };
 
     const withoutMarketData = Engine.builder()
-      .builtin(buildSpotFundsPnlBoundsKillswitch().globalBarrier(barrier()))
+      .builtin(buildSpotFundsPnlBoundsKillswitch().globalBarriers([barrier()]))
       .build();
     expect(
       withoutMarketData.executePreTrade(marketOrder).rejects[0]?.code,
@@ -813,7 +813,7 @@ describe("spot-funds validation", () => {
     const withMarketData = Engine.builder()
       .builtin(
         buildSpotFundsPnlBoundsKillswitch()
-          .globalBarrier(barrier())
+          .globalBarriers([barrier()])
           .marketData(marketData),
       )
       .build();

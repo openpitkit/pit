@@ -19,6 +19,7 @@
 
 mod position_limit;
 mod properties;
+mod review_pnl;
 mod unrealized;
 
 use super::execution::single_lock_price;
@@ -30,6 +31,7 @@ use crate::param::{
     AccountGroupId, AccountId, AdjustmentAmount, Asset, Fee, MonetaryAmount, Pnl, PositionSize,
     Price, Quantity, Side, Trade, TradeAmount, Volume,
 };
+use crate::pretrade::RuleMode;
 use crate::pretrade::{
     holdings::Holdings, PolicyPreTradeResult, PreTradeContext, PreTradeLock, PreTradePolicy,
     Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
@@ -516,7 +518,7 @@ fn build_policy_from_settings(
 fn build_policy_with_pnl_global_barrier(barrier: SpotFundsPnlBoundsBarrier) -> TestPolicy {
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(barrier))
+        .set_pnl_global_barriers([barrier])
         .expect("global account PnL barrier must set");
     build_policy_from_settings(settings, None)
 }
@@ -2897,11 +2899,12 @@ fn rejected_position_assertion_restores_basis_and_realized_pnl() {
     let mut configured = settings(0);
     configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-100")),
             upper_bound: Some(pnl_value("100")),
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("barrier must set");
     let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let policy: TestPolicy = SpotFundsPolicy::new(configured, None, builder.storage_builder());
@@ -3003,11 +3006,12 @@ fn pruned_position_rollback_resolves_the_default_group_currency() {
     let mut configured = settings(0);
     configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-100")),
             upper_bound: Some(pnl_value("100")),
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("barrier must set");
     let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let policy: TestPolicy = SpotFundsPolicy::new(configured, None, builder.storage_builder());
@@ -7318,11 +7322,12 @@ fn opening_fill_zero_fee_without_account_currency_does_not_halt_account_pnl() {
     let mut settings = settings(0);
     settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global account PnL barrier must set");
     let policy = build_policy_from_settings(settings, None);
     seed(&policy, acc, asset("USD"), "10000");
@@ -8465,11 +8470,12 @@ fn pnl_bounds_cascade_uses_account_group_then_global() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-5")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     s.set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
         account_group_id: grp,
@@ -8477,6 +8483,7 @@ fn pnl_bounds_cascade_uses_account_group_then_global() {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-50")),
             upper_bound: None,
+            mode: RuleMode::Reject,
         },
     }])
     .expect("group pnl barrier must set");
@@ -8487,6 +8494,7 @@ fn pnl_bounds_cascade_uses_account_group_then_global() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account pnl barrier must set");
@@ -8551,11 +8559,12 @@ fn global_barrier_blocks_account_when_account_pnl_fx_is_missing() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("EUR"),
         lower_bound: Some(pnl_value("-10")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -8608,11 +8617,12 @@ fn fee_in_foreign_currency_debits_fee_asset_and_contributes_to_account_pnl() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-10")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
 
@@ -8642,11 +8652,12 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-10")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("EUR"), "10");
@@ -8744,6 +8755,7 @@ fn unknown_currency_keeps_an_account_barrier_on_the_missing_currency_path() {
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
             account_id: acc,
         }])
@@ -8801,11 +8813,12 @@ fn fee_only_execution_report_missing_fx_applies_report_then_blocks_account() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
@@ -8837,11 +8850,12 @@ fn missing_account_fx_halts_account_then_blocks_under_pnl_control() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("EUR"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -8884,11 +8898,12 @@ fn missing_fee_fx_halts_account_and_blocks_after_applying_report() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     // No market-data service at all: the EUR->USD fee FX is missing, but the
     // USD settlement leg needs no FX because it is already in account currency.
@@ -8925,11 +8940,12 @@ fn fee_in_account_currency_needs_no_fx_and_does_not_block() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -9042,11 +9058,12 @@ fn fill_with_fee_reported_realized_pnl_agrees_with_barrier_no_double_count() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-1000")),
         upper_bound: Some(pnl_value("1000")),
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
@@ -9159,11 +9176,12 @@ fn fee_only_execution_report_untracked_slot_still_contributes_to_barrier() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-2")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("EUR"), "10");
@@ -9498,11 +9516,12 @@ fn fee_only_position_pnl_overflow_still_updates_account_pnl() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     seed(&policy, acc, asset("USD"), "1000");
@@ -9534,11 +9553,12 @@ fn fill_position_pnl_overflow_still_updates_account_pnl() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     seed(&policy, acc, asset("USD"), "1000");
@@ -9581,6 +9601,7 @@ fn account_pnl_accumulator_overflow_halts_account_pnl() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-100")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account pnl barrier must set");
@@ -9663,6 +9684,7 @@ fn account_pnl_accumulator_negative_overflow_halts_account_pnl() {
                 currency: asset("USD"),
                 lower_bound: None,
                 upper_bound: Some(pnl_value("100")),
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account pnl barrier must set");
@@ -9704,11 +9726,12 @@ fn fee_pnl_conversion_overflow_halts_position_and_account_pnl() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
 
@@ -9739,11 +9762,12 @@ fn pnl_bounds_block_lower_and_upper_boundary_breaches() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-10")),
         upper_bound: Some(pnl_value("10")),
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -9823,6 +9847,7 @@ fn account_pnl_config_correction_is_account_scoped() {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("-10")),
                     upper_bound: None,
+                    mode: RuleMode::Reject,
                 },
             },
             SpotFundsPnlBoundsAccountBarrier {
@@ -9831,6 +9856,7 @@ fn account_pnl_config_correction_is_account_scoped() {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("-10")),
                     upper_bound: None,
+                    mode: RuleMode::Reject,
                 },
             },
         ])
@@ -9892,11 +9918,12 @@ fn halted_account_pnl_adjustment_with_effective_barrier_blocks_account() {
     let acc = account(99224416);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global account PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
     engine.accounts().set_currency(acc, asset("USD"));
@@ -9946,11 +9973,12 @@ fn numeric_account_pnl_adjustment_blocks_on_out_of_bounds_value() {
     let acc = account(99224416);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global account PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
 
@@ -9978,11 +10006,12 @@ fn committed_out_of_bounds_account_pnl_adjustment_keeps_the_account_blocked() {
     let acc = account(99224416);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global account PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
 
@@ -10011,6 +10040,7 @@ fn account_pnl_rollback_preserves_fill_delta_and_rechecks_barrier() {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-120")),
         upper_bound: None,
+        mode: RuleMode::Reject,
     };
     let policy = build_policy_with_pnl_global_barrier(barrier);
     policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-100")));
@@ -10330,6 +10360,7 @@ fn account_pnl_inverse_rollback_overflow_halts_and_blocks() {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-1")),
         upper_bound: None,
+        mode: RuleMode::Reject,
     };
     let policy = build_policy_with_pnl_global_barrier(barrier);
     policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::new(Decimal::MAX)));
@@ -10432,6 +10463,7 @@ fn rejected_same_owner_account_pnl_batch_clears_intermediate_breach_block() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -10587,11 +10619,12 @@ fn halted_account_pnl_configuration_with_effective_barrier_blocks_account() {
     let acc = account(99224416);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global account PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
     engine.accounts().set_currency(acc, asset("USD"));
@@ -10640,11 +10673,12 @@ fn numeric_account_pnl_configuration_blocks_on_out_of_bounds_value() {
     let acc = account(99224416);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global account PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
     engine.accounts().set_currency(acc, asset("USD"));
@@ -10672,11 +10706,12 @@ fn explicit_and_group_currencies_match_a_barrier_but_the_default_does_not() {
     let group_id = group(7);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global account PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
     let accounts = engine.accounts();
@@ -10733,6 +10768,7 @@ fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-50")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account PnL barrier must set");
@@ -10759,6 +10795,7 @@ fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("-30")),
                     upper_bound: None,
+                    mode: RuleMode::Reject,
                 },
             }])
         })
@@ -10813,6 +10850,7 @@ fn set_account_barrier_in_currency(
                                 currency: currency.clone(),
                                 lower_bound: Some(lower_bound),
                                 upper_bound: None,
+                                mode: RuleMode::Reject,
                             },
                         }])?;
                     }
@@ -10943,11 +10981,12 @@ fn halted_account_pnl_under_a_nonmatching_barrier_stays_uncontrolled() {
     let acc = account(99224416);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
     engine.accounts().set_currency(acc, asset("EUR"));
@@ -10986,6 +11025,7 @@ fn pre_trade_halted_account_pnl_reports_account_barrier_currency_mismatch() {
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -11031,6 +11071,7 @@ fn post_trade_halts_report_account_barrier_currency_mismatch() {
                     currency: asset("EUR"),
                     lower_bound: Some(pnl_value("-10")),
                     upper_bound: None,
+                    mode: RuleMode::Reject,
                 },
             },
             SpotFundsPnlBoundsAccountBarrier {
@@ -11039,6 +11080,7 @@ fn post_trade_halts_report_account_barrier_currency_mismatch() {
                     currency: asset("EUR"),
                     lower_bound: Some(pnl_value("-10")),
                     upper_bound: None,
+                    mode: RuleMode::Reject,
                 },
             },
         ])
@@ -11113,6 +11155,7 @@ fn account_barrier_currency_mismatch_blocks_a_report_that_engages_no_account_pnl
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -11174,6 +11217,7 @@ fn group_and_global_barrier_currency_mismatch_leave_a_no_pnl_report_silent() {
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("group barrier must set");
@@ -11192,11 +11236,12 @@ fn group_and_global_barrier_currency_mismatch_leave_a_no_pnl_report_silent() {
 
     let mut global = settings(0);
     global
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("EUR"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global barrier must set");
     let global_policy = build_policy_from_settings(global, None);
     global_policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-5")));
@@ -11218,11 +11263,12 @@ fn nonmatching_group_barrier_falls_through_to_the_matching_global_barrier() {
     let account_group = group(77);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global PnL barrier must set");
     settings
         .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
@@ -11231,6 +11277,7 @@ fn nonmatching_group_barrier_falls_through_to_the_matching_global_barrier() {
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-100")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("group PnL barrier must set");
@@ -11289,11 +11336,12 @@ fn global_barrier_retune_resolves_group_and_default_group_currencies() {
             .spot_funds::<SpotFundsConfigError>(
                 SpotFundsPolicy::<FullSync, FullSync>::NAME,
                 |settings| {
-                    settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+                    settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                         currency,
                         lower_bound: Some(pnl_value("1")),
                         upper_bound: None,
-                    }))
+                        mode: RuleMode::Reject,
+                    }])
                 },
             )
             .expect("global barrier update must publish")
@@ -11338,11 +11386,12 @@ fn membership_transitions_preserve_stored_account_pnl() {
     let account_group = group(93);
     let mut configured = settings(0);
     configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-100")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global barrier must set");
     configured
         .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
@@ -11351,6 +11400,7 @@ fn membership_transitions_preserve_stored_account_pnl() {
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-100")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("group barrier must set");
@@ -11404,11 +11454,12 @@ fn currency_matched_pnl_barrier_accepts_values_on_both_bounds() {
     let upper = account(99224417);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: Some(pnl_value("10")),
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
     engine.accounts().set_currency(lower, asset("USD"));
@@ -11443,11 +11494,12 @@ fn known_effective_currency_without_matching_fallback_adds_no_control() {
     let mut configured = settings(0);
     configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("EUR"),
             lower_bound: Some(pnl_value("-1")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global pnl barrier must set");
     configured
         .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
@@ -11456,6 +11508,7 @@ fn known_effective_currency_without_matching_fallback_adds_no_control() {
                 currency: asset("CHF"),
                 lower_bound: Some(pnl_value("-1")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("group pnl barrier must set");
@@ -11494,11 +11547,12 @@ fn account_pnl_adjustment_ignores_a_nonmatching_barrier_currency() {
     let acc = account(99224416);
     let mut settings = settings(0);
     settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global PnL barrier must set");
     let engine = build_account_pnl_test_engine(settings);
     engine.accounts().set_currency(acc, asset("EUR"));
@@ -11577,11 +11631,12 @@ fn barrier_sweep_pairs_new_blocks_with_their_accounts() {
         .spot_funds::<SpotFundsConfigError>(
             SpotFundsPolicy::<FullSync, FullSync>::NAME,
             |settings| {
-                settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+                settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("-10")),
                     upper_bound: None,
-                }))
+                    mode: RuleMode::Reject,
+                }])
             },
         )
         .expect("barrier sweep must succeed");
@@ -11645,11 +11700,12 @@ fn global_barrier_sweeps_account_known_only_by_explicit_currency() {
         .spot_funds::<SpotFundsConfigError>(
             SpotFundsPolicy::<FullSync, FullSync>::NAME,
             |settings| {
-                settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+                settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("1")),
                     upper_bound: None,
-                }))
+                    mode: RuleMode::Reject,
+                }])
             },
         )
         .expect("global barrier update must publish");
@@ -11672,11 +11728,12 @@ fn global_barrier_sweeps_account_known_only_by_holdings() {
         .spot_funds::<SpotFundsConfigError>(
             SpotFundsPolicy::<FullSync, FullSync>::NAME,
             |settings| {
-                settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+                settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("1")),
                     upper_bound: None,
-                }))
+                    mode: RuleMode::Reject,
+                }])
             },
         )
         .expect("global barrier update must publish");
@@ -11709,6 +11766,7 @@ fn group_barrier_sweeps_registered_members_without_pnl() {
                         currency: asset("USD"),
                         lower_bound: Some(pnl_value("1")),
                         upper_bound: None,
+                        mode: RuleMode::Reject,
                     },
                 }])
             },
@@ -11752,6 +11810,7 @@ fn global_barrier_sweeps_remaining_known_account_sources() {
                         currency: asset("USD"),
                         lower_bound: Some(pnl_value("-1")),
                         upper_bound: None,
+                        mode: RuleMode::Reject,
                     },
                 }])
                 .expect("initial account barrier must set");
@@ -11770,11 +11829,12 @@ fn global_barrier_sweeps_remaining_known_account_sources() {
             .spot_funds::<SpotFundsConfigError>(
                 SpotFundsPolicy::<FullSync, FullSync>::NAME,
                 |settings| {
-                    settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+                    settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                         currency: asset("USD"),
                         lower_bound: Some(pnl_value("1")),
                         upper_bound: None,
-                    }))?;
+                        mode: RuleMode::Reject,
+                    }])?;
                     if explicit_account_barrier {
                         settings.set_pnl_account_barriers([])?;
                     }
@@ -11793,6 +11853,63 @@ fn global_barrier_sweeps_remaining_known_account_sources() {
 }
 
 #[test]
+fn reject_global_retune_reaches_accounts_known_only_by_review_barriers() {
+    use crate::pretrade::RuleMode;
+
+    let acc = account(99224417);
+    let mut initial = settings(0);
+    initial
+        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("USD"),
+                lower_bound: Some(pnl_value("1")),
+                upper_bound: None,
+                mode: RuleMode::ReviewWithHold,
+            },
+            account_id: acc,
+        }])
+        .unwrap();
+    let engine = build_account_pnl_test_engine(initial);
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    let review = engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+                currency: asset("USD"),
+                lower_bound: Some(pnl_value("1")),
+                upper_bound: None,
+                mode: RuleMode::ReviewWithoutHold,
+            }])
+        })
+        .unwrap();
+    assert!(
+        review.account_blocks.is_empty(),
+        "a review breach must not create an account block"
+    );
+    let rejected = engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+                currency: asset("USD"),
+                lower_bound: Some(pnl_value("1")),
+                upper_bound: None,
+                mode: RuleMode::Reject,
+            }])
+        })
+        .unwrap();
+    assert_eq!(
+        rejected.account_blocks.len(),
+        1,
+        "reject sweep includes accounts configured only in another mode"
+    );
+    assert_eq!(rejected.account_blocks[0].account_id, acc);
+    assert_eq!(
+        rejected.account_blocks[0].block.code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+}
+
+#[test]
 fn masked_broader_tier_changes_do_not_reblock_account_override() {
     for (case, group_tier) in [("global", false), ("group", true)] {
         let acc = account(99224416);
@@ -11801,6 +11918,7 @@ fn masked_broader_tier_changes_do_not_reblock_account_override() {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-100")),
             upper_bound: None,
+            mode: RuleMode::Reject,
         };
         let mut initial = settings(0);
         if group_tier {
@@ -11812,7 +11930,7 @@ fn masked_broader_tier_changes_do_not_reblock_account_override() {
                 .expect("initial group barrier must set");
         } else {
             initial
-                .set_pnl_global_barrier(Some(old_broader_barrier))
+                .set_pnl_global_barriers([old_broader_barrier])
                 .expect("initial global barrier must set");
         }
         initial
@@ -11822,6 +11940,7 @@ fn masked_broader_tier_changes_do_not_reblock_account_override() {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("-30")),
                     upper_bound: None,
+                    mode: RuleMode::Reject,
                 },
             }])
             .expect("account override must set");
@@ -11852,6 +11971,7 @@ fn masked_broader_tier_changes_do_not_reblock_account_override() {
                         currency: asset("USD"),
                         lower_bound: Some(pnl_value("-20")),
                         upper_bound: None,
+                        mode: RuleMode::Reject,
                     };
                     if group_tier {
                         settings.set_pnl_account_group_barriers([
@@ -11861,7 +11981,7 @@ fn masked_broader_tier_changes_do_not_reblock_account_override() {
                             },
                         ])
                     } else {
-                        settings.set_pnl_global_barrier(Some(new_broader_barrier))
+                        settings.set_pnl_global_barriers([new_broader_barrier])
                     }
                 },
             )
@@ -11888,6 +12008,7 @@ fn membership_changes_recheck_only_a_changed_effective_barrier() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("1")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("group barrier must set");
@@ -11926,11 +12047,12 @@ fn membership_changes_recheck_only_a_changed_effective_barrier() {
     let unregister_account = account(99224418);
     let mut unregister_settings = settings(0);
     unregister_settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("1")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global barrier must set");
     unregister_settings
         .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
@@ -11939,6 +12061,7 @@ fn membership_changes_recheck_only_a_changed_effective_barrier() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-1")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("group barrier must set");
@@ -11969,11 +12092,12 @@ fn membership_changes_recheck_only_a_changed_effective_barrier() {
     let masked_account = account(99224419);
     let mut masked_settings = settings(0);
     masked_settings
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("1")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global barrier must set");
     masked_settings
         .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
@@ -11982,6 +12106,7 @@ fn membership_changes_recheck_only_a_changed_effective_barrier() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-100")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("group barrier must set");
@@ -11992,6 +12117,7 @@ fn membership_changes_recheck_only_a_changed_effective_barrier() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-1")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -12033,6 +12159,7 @@ fn register_group_uses_the_currency_from_each_side_of_the_transition() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("1")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -12074,11 +12201,12 @@ fn register_group_resolving_the_currency_keeps_an_unchanged_fallback_silent() {
     let group_id = group(98);
     let mut configured = settings(0);
     configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("1")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global barrier must set");
     let engine = build_account_pnl_test_engine(configured);
     let accounts = engine.accounts();
@@ -12111,6 +12239,7 @@ fn register_group_resolving_a_mismatching_account_barrier_currency_blocks() {
                 currency: asset("EUR"),
                 lower_bound: Some(pnl_value("-1000")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -12144,6 +12273,7 @@ fn unregister_group_uses_the_currency_from_each_side_of_the_transition() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("1")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -12241,11 +12371,12 @@ fn clearing_account_barrier_exposes_and_evaluates_global_fallback() {
     let mut configured = settings(0);
     configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
             lower_bound: Some(pnl_value("-10")),
             upper_bound: None,
-        }))
+            mode: RuleMode::Reject,
+        }])
         .expect("global barrier must set");
     configured
         .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
@@ -12254,6 +12385,7 @@ fn clearing_account_barrier_exposes_and_evaluates_global_fallback() {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-100")),
                 upper_bound: None,
+                mode: RuleMode::Reject,
             },
         }])
         .expect("account barrier must set");
@@ -12327,11 +12459,12 @@ fn unrelated_retune_preserves_an_operator_unblock() {
 fn non_engaging_fill_preserves_operator_unblock_but_stored_halt_reblocks() {
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-500")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let policy: SpotFundsPolicy<FullSync, FullSync> =
@@ -12433,11 +12566,12 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                 currency: asset("USD"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
-            }))
+                mode: RuleMode::Reject,
+            }])
         })
         .expect("runtime configuration must add a P&L axis to ordinary spot funds");
 
@@ -12465,6 +12599,7 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("-20")),
                     upper_bound: None,
+                    mode: RuleMode::Reject,
                 },
             }])
         })
@@ -12524,7 +12659,7 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_global_barrier(None)?;
+            settings.set_pnl_global_barriers([])?;
             settings.set_pnl_account_group_barriers([])?;
             settings.set_pnl_account_barriers([])
         })
@@ -13693,11 +13828,12 @@ fn same_asset_buy_classifies_pnl_from_the_sequential_underlying_state() {
     let usd = asset("USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: None,
         upper_bound: Some(pnl_value("7")),
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     let initial = TestAdjustment {
@@ -15144,10 +15280,12 @@ fn account_id_is_not_leaked_into_pnl_bound_block_and_details_name_currency() {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-10")),
         upper_bound: None,
+        mode: RuleMode::Reject,
     };
     let block = super::rejects::account_pnl_block_for_state(
         Some(&asset("USD")),
         crate::PnlState::Value(pnl_value("-11")),
+        RuleMode::Reject,
         &barrier,
         None,
     )
@@ -15281,11 +15419,12 @@ fn account_id_is_not_leaked_into_missing_fx_block() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("EUR"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -15308,11 +15447,12 @@ fn account_id_is_not_leaked_into_fee_realized_pnl_overflow_block() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
         currency: asset("USD"),
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }))
+        mode: RuleMode::Reject,
+    }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     seed(&policy, acc, asset("USD"), "1000");
@@ -15528,11 +15668,12 @@ fn finalized_pruned_account_is_not_a_historical_retune_candidate() {
         .spot_funds::<SpotFundsConfigError>(
             SpotFundsPolicy::<FullSync, FullSync>::NAME,
             |settings| {
-                settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+                settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                     currency: asset("USD"),
                     lower_bound: Some(pnl_value("1")),
                     upper_bound: None,
-                }))
+                    mode: RuleMode::Reject,
+                }])
             },
         )
         .expect("barrier retune must publish");
@@ -15704,8 +15845,8 @@ fn retire_spot_funds_refuses_while_position_limit_names_account() {
     policy
         .settings
         .update::<std::convert::Infallible>(|settings| {
-            settings.set_position_limit(target, usd.clone(), Some(qty("10")));
-            settings.set_position_limit(other, usd.clone(), Some(qty("10")));
+            settings.set_position_limit(target, usd.clone(), RuleMode::Reject, Some(qty("10")));
+            settings.set_position_limit(other, usd.clone(), RuleMode::Reject, Some(qty("10")));
             Ok(())
         })
         .expect("valid settings");
@@ -15720,7 +15861,7 @@ fn retire_spot_funds_refuses_while_position_limit_names_account() {
     policy
         .settings
         .update::<std::convert::Infallible>(|settings| {
-            settings.set_position_limit(target, usd.clone(), None);
+            settings.set_position_limit(target, usd.clone(), RuleMode::Reject, None);
             Ok(())
         })
         .expect("valid settings");
@@ -15734,7 +15875,7 @@ fn retire_spot_funds_refuses_while_position_limit_names_account() {
         policy
             .settings
             .with(|settings| settings.position_limit_for(other, &usd)),
-        Some(qty("10"))
+        [Some((RuleMode::Reject, qty("10"))), None, None]
     );
 }
 

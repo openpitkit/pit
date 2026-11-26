@@ -1708,12 +1708,14 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
         currency: usd.clone(),
         lower_bound: Some(Pnl::from_str("-1000")?),
         upper_bound: None,
+        mode: openpit::pretrade::RuleMode::Reject,
     };
     let account_barrier = SpotFundsPnlBoundsAccountBarrier {
         barrier: SpotFundsPnlBoundsBarrier {
             currency: usd.clone(),
             lower_bound: Some(Pnl::from_str("-250")?),
             upper_bound: None,
+            mode: openpit::pretrade::RuleMode::Reject,
         },
         account_id: account,
     };
@@ -1722,7 +1724,7 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
     // produces the same SpotFundsPolicy, registered under the same name.
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
-        Some(global_barrier),
+        [global_barrier],
         [],
         [account_barrier],
         None::<SpotFundsMarketData<FullSync>>,
@@ -1764,11 +1766,12 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
     let usd = Asset::new("USD")?;
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
-        Some(SpotFundsPnlBoundsBarrier {
+        [SpotFundsPnlBoundsBarrier {
             currency: usd.clone(),
             lower_bound: Some(Pnl::from_str("-1000")?),
             upper_bound: None,
-        }),
+            mode: openpit::pretrade::RuleMode::Reject,
+        }],
         [],
         [],
         None::<SpotFundsMarketData<FullSync>>,
@@ -1792,11 +1795,12 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
     let retune = engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
                 currency: usd.clone(),
                 lower_bound: Some(new_lower),
                 upper_bound: None,
-            }))
+                mode: openpit::pretrade::RuleMode::Reject,
+            }])
         })?;
     assert_eq!(retune.account_blocks.len(), 1);
     assert_eq!(retune.account_blocks[0].account_id, retuned_account);
@@ -1915,13 +1919,14 @@ fn example_wiki_spot_funds_pnl_axis_reconfigure() -> Result<(), Box<dyn std::err
     let retune = engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_axis_global_barrier(
+            settings.set_pnl_axis_global_barriers(
                 SpotFundsPnlBoundsAxis::AccountUnrealized,
-                Some(SpotFundsPnlBoundsBarrier {
+                [SpotFundsPnlBoundsBarrier {
                     currency: usd.clone(),
                     lower_bound: Some(lower),
                     upper_bound: None,
-                }),
+                    mode: openpit::pretrade::RuleMode::Reject,
+                }],
             )
         })?;
     assert_eq!(retune.account_blocks.len(), 1);

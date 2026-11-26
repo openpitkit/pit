@@ -239,6 +239,11 @@ describe("custom policy review modes", () => {
       const callbackError = failure as PolicyCallbackError;
       expect(callbackError.cause).toBeInstanceOf(causeType);
       expect((callbackError.cause as Error).message).toContain("reject.mode");
+      expect((callbackError.cause as Error).message).toBe(
+        typeof mode === "string"
+          ? 'reject.mode must be "Reject", "ReviewWithHold", or "ReviewWithoutHold"'
+          : "reject.mode must be a string",
+      );
       expect(callbackError.result).toBeUndefined();
     }
   });

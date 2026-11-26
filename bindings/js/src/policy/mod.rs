@@ -382,8 +382,8 @@ export interface SpotFundsReadyBuilder extends SpotFundsBuilder {
 export interface SpotFundsPnlBoundsKillswitchReadyBuilder
   extends SpotFundsPnlBoundsKillswitchBuilder {
   readonly [builtinReadyBuilderBrand]: true;
-  globalBarrier(
-    ...args: Parameters<SpotFundsPnlBoundsKillswitchBuilder["globalBarrier"]>
+  globalBarriers(
+    ...args: Parameters<SpotFundsPnlBoundsKillswitchBuilder["globalBarriers"]>
   ): SpotFundsPnlBoundsKillswitchReadyBuilder;
   accountGroupBarriers(
     ...args: Parameters<

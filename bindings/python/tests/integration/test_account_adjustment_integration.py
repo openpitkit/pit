@@ -145,7 +145,7 @@ def test_account_pnl_operation_reaches_builtin_spot_funds_batch_path() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-100"),
@@ -182,7 +182,7 @@ def _spot_funds_killswitch_engine() -> openpit.Engine:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
                 policies.SpotFundsPnlBoundsBarrier(
                     currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-100"),

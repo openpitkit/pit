@@ -26,6 +26,7 @@ import (
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade/policies"
+	"go.openpit.dev/openpit/reject"
 )
 
 // Handle 0 of an AccountGroupID legally names param.DefaultAccountGroup, the
@@ -48,6 +49,7 @@ func newEURAccountBarrierEngine(
 		barriers = append(barriers, policies.SpotFundsPnlBoundsAccountBarrier{
 			AccountID: account,
 			Barrier: policies.SpotFundsPnlBoundsBarrier{
+				Mode:       reject.RuleModeReject,
 				Currency:   mustAsset(t, "EUR"),
 				LowerBound: optional.Some(mustPnl(t, "-100")),
 			},

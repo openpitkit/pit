@@ -18,6 +18,7 @@
 //! Engine checks for unrealized and total P&L bounds.
 
 use super::*;
+use crate::pretrade::RuleMode;
 use crate::{PnlHaltReason, PnlState};
 
 const MAX: &str = "79228162514264337593543950335";
@@ -39,13 +40,13 @@ fn retune_checks_only_changed_axes_in_the_defined_order() {
         initial.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
         for axis in SpotFundsPnlBoundsAxis::ALL {
             initial
-                .set_pnl_axis_global_barrier(
+                .set_pnl_axis_global_barriers(
                     axis,
-                    Some(if axis == changed {
+                    [if axis == changed {
                         barrier(Some("-100"), Some("100"))
                     } else {
                         barrier(Some("-10"), Some("10"))
-                    }),
+                    }],
                 )
                 .unwrap();
         }
@@ -54,8 +55,7 @@ fn retune_checks_only_changed_axes_in_the_defined_order() {
         let result = engine
             .configure()
             .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
-                settings
-                    .set_pnl_axis_global_barrier(changed, Some(barrier(Some("-10"), Some("10"))))
+                settings.set_pnl_axis_global_barriers(changed, [barrier(Some("-10"), Some("10"))])
             })
             .unwrap();
         assert_eq!(
@@ -70,8 +70,7 @@ fn retune_checks_only_changed_axes_in_the_defined_order() {
         .configure()
         .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
             for axis in SpotFundsPnlBoundsAxis::ALL.into_iter().rev() {
-                settings
-                    .set_pnl_axis_global_barrier(axis, Some(barrier(Some("-10"), Some("10"))))?;
+                settings.set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])?;
             }
             Ok(())
         })
@@ -94,7 +93,7 @@ fn retune_arms_or_narrows_each_axis_and_returns_its_recorded_block() {
                 initial.set_global_limit_mode(mode);
                 if narrowing {
                     initial
-                        .set_pnl_axis_global_barrier(axis, Some(barrier(Some("-100"), Some("100"))))
+                        .set_pnl_axis_global_barriers(axis, [barrier(Some("-100"), Some("100"))])
                         .unwrap();
                 }
                 configure(&policy, initial);
@@ -102,10 +101,8 @@ fn retune_arms_or_narrows_each_axis_and_returns_its_recorded_block() {
                 let outcome = engine
                     .configure()
                     .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
-                        settings.set_pnl_axis_global_barrier(
-                            axis,
-                            Some(barrier(Some("-10"), Some("10"))),
-                        )
+                        settings
+                            .set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])
                     })
                     .unwrap();
                 assert_eq!(
@@ -154,9 +151,9 @@ fn retune_unchanged_effective_axes_do_not_reblock_an_operator_unblocked_account(
                 .configure()
                 .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
                     match change {
-                        0 => settings.set_pnl_axis_global_barrier(
+                        0 => settings.set_pnl_axis_global_barriers(
                             axis,
-                            Some(barrier(Some("-10"), Some("10"))),
+                            [barrier(Some("-10"), Some("10"))],
                         )?,
                         1 => settings.set_global_slippage_bps(12)?,
                         2 => settings.set_global_limit_mode(SpotFundsLimitMode::Enforce),
@@ -173,10 +170,8 @@ fn retune_unchanged_effective_axes_do_not_reblock_an_operator_unblocked_account(
                                 }],
                             )?;
                         }
-                        4 => settings.set_pnl_axis_global_barrier(
-                            axis,
-                            Some(barrier(Some("-5"), Some("5"))),
-                        )?,
+                        4 => settings
+                            .set_pnl_axis_global_barriers(axis, [barrier(Some("-5"), Some("5"))])?,
                         _ => unreachable!(),
                     }
                     Ok(())
@@ -234,7 +229,7 @@ fn retune_axis_candidates_follow_global_group_and_account_tiers() {
                 .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
                     let narrowed = barrier(Some("-10"), Some("10"));
                     match tier {
-                        0 => settings.set_pnl_axis_global_barrier(axis, Some(narrowed)),
+                        0 => settings.set_pnl_axis_global_barriers(axis, [narrowed]),
                         1 => settings.set_pnl_axis_account_group_barriers(
                             axis,
                             [SpotFundsPnlBoundsAccountGroupBarrier {
@@ -310,8 +305,8 @@ fn retune_realized_block_precedes_axes_and_prevents_market_data_reads() {
         let outcome = engine
             .configure()
             .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
-                settings.set_pnl_global_barrier(Some(barrier(Some("-10"), Some("10"))))?;
-                settings.set_pnl_axis_global_barrier(axis, Some(barrier(Some("-10"), Some("10"))))
+                settings.set_pnl_global_barriers([barrier(Some("-10"), Some("10"))])?;
+                settings.set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])
             })
             .unwrap();
         assert_eq!(
@@ -343,8 +338,8 @@ fn retune_checks_axes_for_accounts_that_pass_realized_despite_other_realized_blo
     let outcome = engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
-            settings.set_pnl_global_barrier(Some(barrier(Some("-10"), Some("10"))))?;
-            settings.set_pnl_axis_global_barrier(axis, Some(barrier(Some("-10"), Some("10"))))
+            settings.set_pnl_global_barriers([barrier(Some("-10"), Some("10"))])?;
+            settings.set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])
         })
         .unwrap();
     assert_eq!(
@@ -391,7 +386,7 @@ fn retune_without_changed_axes_reads_no_market_data() {
             .configure()
             .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
                 settings.set_global_slippage_bps(12)?;
-                settings.set_pnl_axis_global_barrier(axis, Some(barrier(Some("-10"), Some("10"))))
+                settings.set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])
             })
             .unwrap();
         assert_eq!(
@@ -415,7 +410,7 @@ fn group_membership_changes_defer_axis_breaches_until_the_next_order() {
             initial.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
             if unregister {
                 initial
-                    .set_pnl_axis_global_barrier(axis, Some(barrier(Some("-10"), Some("10"))))
+                    .set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])
                     .unwrap();
             }
             initial
@@ -570,7 +565,7 @@ fn realized_fill_block_prevents_an_additional_axis_block() {
     let policy = marked(axis, "90");
     let mut settings = configured(axis, Some("-10"), Some("10"));
     settings
-        .set_pnl_global_barrier(Some(barrier(Some("-1"), None)))
+        .set_pnl_global_barriers([barrier(Some("-1"), None)])
         .unwrap();
     configure(&policy, settings);
     let engine = engine(policy, Some("USD"), None);
@@ -879,7 +874,7 @@ fn realized_force_set_block_prevents_axis_reads_on_both_routes() {
             let reads = Arc::new(AtomicUsize::new(0));
             let mut settings = configured(axis, Some("-10"), Some("10"));
             settings
-                .set_pnl_global_barrier(Some(barrier(Some("-10"), None)))
+                .set_pnl_global_barriers([barrier(Some("-10"), None)])
                 .unwrap();
             let policy = counted_position(settings, &reads);
             let engine = crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>()
@@ -945,6 +940,7 @@ fn barrier(lower: Option<&str>, upper: Option<&str>) -> SpotFundsPnlBoundsBarrie
         currency: asset("USD"),
         lower_bound: lower.map(pnl_value),
         upper_bound: upper.map(pnl_value),
+        mode: RuleMode::Reject,
     }
 }
 
@@ -956,7 +952,7 @@ fn configured(
     let mut configured = settings(0);
     configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     configured
-        .set_pnl_axis_global_barrier(axis, Some(barrier(lower, upper)))
+        .set_pnl_axis_global_barriers(axis, [barrier(lower, upper)])
         .unwrap();
     configured
 }
@@ -1312,7 +1308,7 @@ fn each_axis_skips_group_and_global_currency_mismatches() {
         let mut mismatched = barrier(Some("-10"), None);
         mismatched.currency = asset("EUR");
         settings
-            .set_pnl_axis_global_barrier(axis, Some(mismatched.clone()))
+            .set_pnl_axis_global_barriers(axis, [mismatched.clone()])
             .unwrap();
         settings
             .set_pnl_axis_account_group_barriers(
@@ -1577,7 +1573,7 @@ fn realized_bounds_reject_first_with_unchanged_details() {
         let policy = marked(axis, "110");
         let mut settings = configured(axis, Some("-10"), Some("10"));
         settings
-            .set_pnl_global_barrier(Some(barrier(Some("-10"), None)))
+            .set_pnl_global_barriers([barrier(Some("-10"), None)])
             .unwrap();
         configure(&policy, settings);
         seed_with_avg(&policy, account(1), asset("AAPL"), "2", px("100"));
@@ -1602,13 +1598,13 @@ fn each_axis_reads_its_own_barrier_and_uses_the_defined_axis_order() {
         settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
         for other in SpotFundsPnlBoundsAxis::ALL {
             settings
-                .set_pnl_axis_global_barrier(
+                .set_pnl_axis_global_barriers(
                     other,
-                    Some(if other == axis {
+                    [if other == axis {
                         barrier(Some("-10"), Some("10"))
                     } else {
                         barrier(Some("-100"), Some("100"))
-                    }),
+                    }],
                 )
                 .unwrap();
         }
@@ -1636,7 +1632,7 @@ fn each_axis_reads_its_own_barrier_and_uses_the_defined_axis_order() {
     );
     for axis in SpotFundsPnlBoundsAxis::ALL {
         settings
-            .set_pnl_axis_global_barrier(axis, Some(barrier(Some("-10"), Some("10"))))
+            .set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])
             .unwrap();
     }
     configure(&policy, settings);
@@ -1706,9 +1702,9 @@ fn no_axis_scope_or_effective_barrier_reads_no_market_data() {
             let mut mismatched = barrier(Some("-10"), None);
             mismatched.currency = asset("EUR");
             settings
-                .set_pnl_axis_global_barrier(
+                .set_pnl_axis_global_barriers(
                     SpotFundsPnlBoundsAxis::AccountUnrealized,
-                    Some(mismatched),
+                    [mismatched],
                 )
                 .unwrap();
         } else {
@@ -1760,7 +1756,7 @@ fn all_four_axes_price_each_position_only_once_per_check() {
         settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
         for axis in axes {
             settings
-                .set_pnl_axis_global_barrier(axis, Some(barrier(Some("-10"), Some("10"))))
+                .set_pnl_axis_global_barriers(axis, [barrier(Some("-10"), Some("10"))])
                 .unwrap();
         }
         let policy = counted_position(settings, &reads);

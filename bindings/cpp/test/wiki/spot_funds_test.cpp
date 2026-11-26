@@ -222,7 +222,7 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
   global.lowerBound = Pnl::FromString("-500");
   const auto retune = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(std::move(global)));
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{std::move(global)});
   EXPECT_EQ(retune.accountBlocks.size(), 1U);
   EXPECT_EQ(retune.accountBlocks[0].accountId, retunedAccount);
 

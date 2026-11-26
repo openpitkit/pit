@@ -1859,7 +1859,8 @@ TEST(EngineConfigure, SpotFundsPositionLimitRoundTrip) {
           .Passed());
 
   engine.Configure().SpotFundsPositionLimit(
-      policies::SpotFundsPolicyName, account, aapl, Quantity::FromString("0"));
+      policies::SpotFundsPolicyName, account, aapl,
+      openpit::pretrade::RuleMode::Reject, Quantity::FromString("0"));
   auto limited = engine.ExecutePreTrade(TestOrder(1));
   EXPECT_FALSE(limited.Passed());
   ASSERT_EQ(limited.rejects.size(), 1u);
@@ -1868,7 +1869,8 @@ TEST(EngineConfigure, SpotFundsPositionLimitRoundTrip) {
             openpit::pretrade::RejectScope::Order);
 
   engine.Configure().SpotFundsPositionLimit(
-      policies::SpotFundsPolicyName, account, aapl, Quantity::FromString("1"));
+      policies::SpotFundsPolicyName, account, aapl,
+      openpit::pretrade::RuleMode::Reject, Quantity::FromString("1"));
   auto replaced = engine.ExecutePreTrade(TestOrder(1));
   ASSERT_TRUE(replaced.Passed());
   ASSERT_TRUE(replaced.reservation.has_value());
@@ -1882,8 +1884,9 @@ TEST(EngineConfigure, SpotFundsPositionLimitRoundTrip) {
   EXPECT_EQ(stillLimited.rejects.front().scope,
             openpit::pretrade::RejectScope::Order);
 
-  engine.Configure().SpotFundsPositionLimit(policies::SpotFundsPolicyName,
-                                            account, aapl, std::nullopt);
+  engine.Configure().SpotFundsPositionLimit(
+      policies::SpotFundsPolicyName, account, aapl,
+      openpit::pretrade::RuleMode::Reject, std::nullopt);
   auto cleared = engine.ExecutePreTrade(TwoQuantityOrder());
   ASSERT_TRUE(cleared.Passed());
   ASSERT_TRUE(cleared.reservation.has_value());
@@ -1891,8 +1894,83 @@ TEST(EngineConfigure, SpotFundsPositionLimitRoundTrip) {
 
   EXPECT_THROW(
       engine.Configure().SpotFundsPositionLimit(
-          "missing-spot-funds", account, aapl, Quantity::FromString("1")),
+          "missing-spot-funds", account, aapl,
+          openpit::pretrade::RuleMode::Reject, Quantity::FromString("1")),
       openpit::ConfigureError);
+}
+
+TEST(EngineConfigure, SpotFundsPositionLimitModes) {
+  using openpit::pretrade::RuleMode;
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    EngineBuilder builder(SyncPolicy::None);
+    builder.Add(policies::SpotFundsPolicy{});
+    const auto engine = builder.Build();
+    const auto account = AccountId::FromUint64(1);
+    const openpit::param::Asset asset("AAPL");
+    engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
+    engine.Configure().SpotFundsGlobalLimitMode(
+        policies::SpotFundsPolicyName, policies::SpotFundsLimitMode::TrackOnly);
+    const auto configureLimit = [&](RuleMode selectedMode,
+                                    std::optional<Quantity> limit) {
+      engine.Configure().SpotFundsPositionLimit(
+          policies::SpotFundsPolicyName, account, asset, selectedMode, limit);
+    };
+    const auto checkOrder = [&](std::string_view quantity, bool passed,
+                                std::size_t reviewCount) {
+      SCOPED_TRACE(quantity);
+      const auto report =
+          engine.ExecutePreTradeDryRun(SizedOrder(quantity, "100"));
+      ASSERT_EQ(report.Passed(), passed) << "review passes and Reject rejects";
+      if (!passed) {
+        const auto rejects = report.Rejects();
+        ASSERT_EQ(rejects.size(), 1U);
+        EXPECT_EQ(rejects.front().code, RejectCode::PositionLimitExceeded);
+        EXPECT_EQ(rejects.front().mode, RuleMode::Reject);
+        EXPECT_EQ(rejects.front().scope, openpit::pretrade::RejectScope::Order);
+        return;
+      }
+      EXPECT_TRUE(report.Rejects().empty());
+      const auto reviews = report.Reviews();
+      ASSERT_EQ(reviews.size(), reviewCount);
+      if (reviewCount > 0) {
+        EXPECT_EQ(reviews.front().code, RejectCode::PositionLimitExceeded);
+        EXPECT_EQ(reviews.front().mode, mode);
+        EXPECT_EQ(reviews.front().scope, openpit::pretrade::RejectScope::Order);
+      }
+    };
+    configureLimit(RuleMode::Reject, Quantity::FromString("2"));
+    configureLimit(mode, Quantity::FromString("0"));
+    checkOrder("1", true, 1);
+    checkOrder("3", false, 0);
+    configureLimit(static_cast<RuleMode>(0), Quantity::FromString("1"));
+    checkOrder("1", true, 1);
+    checkOrder("2", false, 0);
+    configureLimit(static_cast<RuleMode>(0), std::nullopt);
+    checkOrder("3", true, 1);
+    configureLimit(static_cast<RuleMode>(0), Quantity::FromString("2"));
+    for (const auto invalidMode : {4, 255}) {
+      for (const auto& limit :
+           {std::optional<Quantity>(Quantity::FromString("0")),
+            std::optional<Quantity>{}}) {
+        try {
+          configureLimit(static_cast<RuleMode>(invalidMode), limit);
+          FAIL() << "invalid mode " << invalidMode << " was accepted";
+        } catch (const openpit::ConfigureError& error) {
+          EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
+        }
+        checkOrder("1", true, 1);
+        checkOrder("3", false, 0);
+      }
+    }
+    configureLimit(mode, std::nullopt);
+    checkOrder("1", true, 0);
+    checkOrder("3", false, 0);
+    configureLimit(mode, Quantity::FromString("0"));
+    configureLimit(RuleMode::Reject, std::nullopt);
+    checkOrder("3", true, 1);
+  }
 }
 
 //------------------------------------------------------------------------------

@@ -20,6 +20,323 @@ use super::*;
 const ACCOUNT: u64 = 99_224_416;
 const ONE_PLUS_EPSILON: &str = "1.0000000000000000000000000001";
 
+fn review_position_engine(
+    rules: &[(RuleMode, &str)],
+) -> crate::FullSyncEngine<TestOrder, TestReport, TestAdjustment> {
+    let mut configured = settings(0);
+    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    configured
+        .set_position_limits(
+            rules
+                .iter()
+                .map(|&(mode, limit)| (account(ACCOUNT), asset("AAPL"), mode, Some(qty(limit)))),
+        )
+        .unwrap();
+    let engine = position_limit_engine(configured);
+    seed_balance_via_engine(&engine, account(ACCOUNT), asset("USD"), ps("10"));
+    engine
+}
+
+#[test]
+fn position_review_limits_preserve_modes_reservations_and_dry_run_parity() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        for side in [Side::Buy, Side::Sell] {
+            let engine = review_position_engine(&[(mode, "1"), (RuleMode::Reject, "3")]);
+            let boundary = order(account(ACCOUNT), side, "1", "1");
+            let report = engine.execute_pre_trade_dry_run(boundary);
+            assert!(report.is_pass());
+            assert!(report.reviews().is_empty(), "the review bound is inclusive");
+
+            let request = order(account(ACCOUNT), side, "2", "1");
+            let dry = engine.execute_pre_trade_dry_run(request.clone());
+            assert!(dry.is_pass(), "a review-only breach must pass");
+            assert!(dry.account_block().is_none());
+            assert_eq!(dry.reviews().len(), 1, "one breached review mode must mark");
+            assert_eq!(dry.reviews()[0].mode, mode);
+            assert_position_limit_reject(&Rejects::new(dry.reviews().to_vec()));
+
+            let mut live = engine.execute_pre_trade(request).unwrap();
+            assert_eq!(
+                live.reviews(),
+                dry.reviews(),
+                "dry and live marks must match"
+            );
+            if mode == RuleMode::ReviewWithHold {
+                assert_eq!(live.account_adjustments(), dry.account_adjustments());
+                assert_eq!(live.account_adjustments().len(), 2);
+                assert_eq!(live.lock().len(), 1);
+                let held = &live.account_adjustments()[0].entry;
+                assert_eq!(held.held.unwrap().absolute, ps("2"));
+            } else {
+                assert!(
+                    live.account_adjustments().is_empty(),
+                    "without-hold must roll back"
+                );
+                assert!(live.lock().is_empty());
+            }
+            let next = engine.execute_pre_trade_dry_run(order(account(ACCOUNT), side, "2", "1"));
+            assert_eq!(
+                next.is_pass(),
+                mode == RuleMode::ReviewWithoutHold,
+                "the next projection must see only a with-hold reservation"
+            );
+            live.rollback();
+
+            let request = order(account(ACCOUNT), side, "4", "1");
+            let dry = engine.execute_pre_trade_dry_run(request.clone());
+            assert!(!dry.is_pass(), "the Reject limit must remain effective");
+            assert!(
+                dry.reviews().is_empty(),
+                "effective rejection discards marks"
+            );
+            let rejects = engine.execute_pre_trade(request).err().unwrap();
+            assert_position_limit_reject(&rejects);
+            assert_eq!(rejects[0].mode, RuleMode::Reject);
+            assert_eq!(rejects[0].details, dry.rejects().unwrap()[0].details);
+        }
+    }
+}
+
+#[test]
+fn position_limit_upsert_and_clear_change_only_the_named_mode() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        for cleared in [mode, RuleMode::Reject] {
+            let engine = review_position_engine(&[(mode, "1"), (RuleMode::Reject, "3")]);
+            engine
+                .configure()
+                .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
+                    settings.set_position_limit(
+                        account(ACCOUNT),
+                        asset("AAPL"),
+                        mode,
+                        Some(qty("2")),
+                    );
+                    Ok(())
+                })
+                .unwrap();
+            let on_review =
+                engine.execute_pre_trade_dry_run(order(account(ACCOUNT), Side::Buy, "2", "1"));
+            assert!(on_review.is_pass());
+            assert!(
+                on_review.reviews().is_empty(),
+                "upsert must replace this mode's bound"
+            );
+            let above_reject =
+                engine.execute_pre_trade_dry_run(order(account(ACCOUNT), Side::Buy, "4", "1"));
+            assert!(
+                !above_reject.is_pass(),
+                "upsert must preserve the Reject mode"
+            );
+
+            engine
+                .configure()
+                .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
+                    settings.set_position_limit(account(ACCOUNT), asset("AAPL"), cleared, None);
+                    Ok(())
+                })
+                .unwrap();
+            let request = order(account(ACCOUNT), Side::Buy, "4", "1");
+            let report = engine.execute_pre_trade_dry_run(request.clone());
+            if cleared == mode {
+                assert!(!report.is_pass(), "clearing review must preserve Reject");
+                assert_position_limit_reject(&engine.execute_pre_trade(request).err().unwrap());
+                let smaller =
+                    engine.execute_pre_trade_dry_run(order(account(ACCOUNT), Side::Buy, "3", "1"));
+                assert!(smaller.is_pass());
+                assert!(
+                    smaller.reviews().is_empty(),
+                    "the cleared review must not mark"
+                );
+            } else {
+                assert!(report.is_pass(), "clearing Reject must preserve review");
+                let mut live = engine.execute_pre_trade(request).unwrap();
+                assert_eq!(live.reviews().len(), 1);
+                assert_eq!(live.reviews()[0].mode, mode);
+                live.rollback();
+            }
+        }
+    }
+}
+
+#[test]
+fn duplicate_position_limits_are_atomic_and_display_asset_and_mode() {
+    for mode in super::super::market_data::rule_modes() {
+        for first in [None, Some(qty("100"))] {
+            let mut configured = settings(0);
+            configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+            configured.set_position_limit(account(ACCOUNT), asset("AAPL"), mode, Some(qty("1")));
+            let error = configured
+                .set_position_limits([
+                    (
+                        account(ACCOUNT),
+                        asset("USD"),
+                        RuleMode::Reject,
+                        Some(Quantity::ZERO),
+                    ),
+                    (account(ACCOUNT), asset("AAPL"), mode, first),
+                    (account(ACCOUNT), asset("AAPL"), mode, Some(qty("100"))),
+                ])
+                .unwrap_err();
+            assert_eq!(
+                error,
+                SpotFundsConfigError::DuplicatePositionLimit {
+                    account_id: account(ACCOUNT),
+                    asset: asset("AAPL"),
+                    mode,
+                }
+            );
+            assert_eq!(
+                error.to_string(),
+                format!("duplicate position limit for asset AAPL, mode {mode:?}")
+            );
+            let engine = position_limit_engine(configured);
+            seed_balance_via_engine(&engine, account(ACCOUNT), asset("USD"), PositionSize::ZERO);
+            let request = order(account(ACCOUNT), Side::Buy, "2", "1");
+            let report = engine.execute_pre_trade_dry_run(request.clone());
+            if mode == RuleMode::Reject {
+                assert!(!report.is_pass(), "the previous Reject limit must survive");
+                let rejects = engine.execute_pre_trade(request).err().unwrap();
+                assert_position_limit_reject(&rejects);
+                assert!(
+                    rejects[0].details.contains("asset AAPL"),
+                    "the failed list must not install its USD Reject limit"
+                );
+            } else {
+                assert!(
+                    report.is_pass(),
+                    "a failed list must not install its USD Reject limit"
+                );
+                let mut live = engine.execute_pre_trade(request).unwrap();
+                assert_eq!(
+                    live.reviews().len(),
+                    1,
+                    "the previous review limit must survive"
+                );
+                assert_eq!(live.reviews()[0].mode, mode);
+                assert!(
+                    live.reviews()[0].details.contains("limit 1"),
+                    "the previous AAPL review limit must remain 1"
+                );
+                live.rollback();
+            }
+        }
+    }
+}
+
+#[test]
+fn review_only_position_projection_failures_still_reject() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        for (holding, quantity, cause) in [
+            (rust_decimal::Decimal::MAX.to_string(), "1", "overflow"),
+            ("100000000000".to_owned(), "0.000000000000000001", "inexact"),
+        ] {
+            let engine = review_position_engine(&[(mode, &holding)]);
+            seed_balance_via_engine(&engine, account(ACCOUNT), asset("AAPL"), ps(&holding));
+            let request = order(account(ACCOUNT), Side::Buy, quantity, "0");
+            let dry = engine.execute_pre_trade_dry_run(request.clone());
+            assert!(
+                !dry.is_pass(),
+                "review mode must not soften arithmetic failure"
+            );
+            assert!(dry.reviews().is_empty());
+            let rejects = engine.execute_pre_trade(request).err().unwrap();
+            assert_position_limit_arithmetic_reject(&rejects, "AAPL", "projection", cause);
+            assert_eq!(rejects[0].mode, RuleMode::Reject);
+        }
+    }
+}
+
+#[test]
+fn position_marks_deduplicate_across_steps_and_after_pnl() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        for with_pnl in [false, true] {
+            for different_modes in [false, true] {
+                let other = match mode {
+                    RuleMode::ReviewWithHold => RuleMode::ReviewWithoutHold,
+                    RuleMode::ReviewWithoutHold => RuleMode::ReviewWithHold,
+                    RuleMode::Reject => unreachable!(),
+                };
+                let position_mode = if different_modes { other } else { mode };
+                let engine = review_position_engine(&[(position_mode, "1")]);
+                seed_balance_via_engine(
+                    &engine,
+                    account(ACCOUNT),
+                    asset("USD"),
+                    PositionSize::ZERO,
+                );
+                engine
+                    .accounts()
+                    .set_currency(account(ACCOUNT), asset("USD"));
+                if with_pnl {
+                    engine
+                        .configure()
+                        .set_spot_funds_account_pnl(
+                            TestPolicy::NAME,
+                            account(ACCOUNT),
+                            crate::PnlState::Value(pnl_value("-20")),
+                        )
+                        .unwrap();
+                }
+                engine
+                    .configure()
+                    .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
+                        // The USD step runs before AAPL and projects zero to -2.
+                        settings.set_position_limit(
+                            account(ACCOUNT),
+                            asset("USD"),
+                            mode,
+                            Some(qty("1")),
+                        );
+                        if with_pnl {
+                            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+                                currency: asset("USD"),
+                                lower_bound: Some(pnl_value("-10")),
+                                upper_bound: None,
+                                mode,
+                            }])?;
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                let request = order(account(ACCOUNT), Side::Buy, "2", "1");
+                let dry = engine.execute_pre_trade_dry_run(request.clone());
+                assert!(dry.is_pass());
+                let mut live = engine.execute_pre_trade(request).unwrap();
+                assert_eq!(live.reviews(), dry.reviews());
+                assert_eq!(
+                    live.reviews().len(),
+                    if different_modes { 2 } else { 1 },
+                    "keep exactly the first breach of each mode"
+                );
+                assert_eq!(live.reviews()[0].mode, mode);
+                if with_pnl {
+                    assert_eq!(
+                        live.reviews()[0].code,
+                        RejectCode::PnlKillSwitchTriggered,
+                        "P&L must win within a mode"
+                    );
+                } else {
+                    assert_eq!(live.reviews()[0].code, RejectCode::PositionLimitExceeded);
+                    assert!(
+                        live.reviews()[0].details.contains("asset USD"),
+                        "first reservation step must win within a mode"
+                    );
+                }
+                if different_modes {
+                    assert_eq!(live.reviews()[1].mode, other);
+                    assert_eq!(live.reviews()[1].code, RejectCode::PositionLimitExceeded);
+                    assert!(live.reviews()[1].details.contains("asset AAPL"));
+                    assert!(
+                        live.account_adjustments().is_empty(),
+                        "without-hold wins across modes"
+                    );
+                }
+                live.rollback();
+            }
+        }
+    }
+}
+
 fn policy_with_position_limit(
     account_id: AccountId,
     limited_asset: Asset,
@@ -29,7 +346,12 @@ fn policy_with_position_limit(
     let builder = engine_builder();
     let mut settings = settings(0);
     settings.set_global_limit_mode(limit_mode);
-    settings.set_position_limit(account_id, limited_asset, Some(qty(limit)));
+    settings.set_position_limit(
+        account_id,
+        limited_asset,
+        RuleMode::Reject,
+        Some(qty(limit)),
+    );
     SpotFundsPolicy::new(settings, None, builder.storage_builder())
 }
 
@@ -45,7 +367,7 @@ fn set_runtime_position_limit(
     let cell =
         <TestPolicy as ConfigurablePolicy<crate::storage::FullLocking>>::settings_cell(policy);
     cell.update(|settings| {
-        settings.set_position_limit(account_id, limited_asset, limit.map(qty));
+        settings.set_position_limit(account_id, limited_asset, RuleMode::Reject, limit.map(qty));
         Ok::<(), SpotFundsConfigError>(())
     })
     .expect("position-limit update must publish");
@@ -734,45 +1056,51 @@ fn same_asset_fresh_slot_dry_run_matches_mutating_reject_and_rollback() {
 
 #[test]
 fn same_asset_short_inexact_first_step_transition_fails_closed() {
-    let account_id = account(ACCOUNT);
-    let usd = asset("USD");
-    let policy = policy_with_position_limit(
-        account_id,
-        usd.clone(),
-        "79228162514.264337593543950332",
-        SpotFundsLimitMode::TrackOnly,
-    );
-    seed(
-        &policy,
-        account_id,
-        usd.clone(),
-        "-79228162514.264337593543950325",
-    );
-    let before = holdings_of(&policy, account_id, &usd).expect("slot must exist");
-    let same_asset_sell = make_order(
-        account_id,
-        instr("USD", "USD"),
-        Side::Sell,
-        TradeAmount::Quantity(qty("0.000000000000000016")),
-        Some(px("0.5")),
-    );
+    for mode in super::super::market_data::rule_modes() {
+        let account_id = account(ACCOUNT);
+        let usd = asset("USD");
+        let mut configured = settings(0);
+        configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+        configured.set_position_limit(
+            account_id,
+            usd.clone(),
+            mode,
+            Some(qty("79228162514.264337593543950332")),
+        );
+        let builder = engine_builder();
+        let policy: TestPolicy = SpotFundsPolicy::new(configured, None, builder.storage_builder());
+        seed(
+            &policy,
+            account_id,
+            usd.clone(),
+            "-79228162514.264337593543950325",
+        );
+        let before = holdings_of(&policy, account_id, &usd).expect("slot must exist");
+        let same_asset_sell = make_order(
+            account_id,
+            instr("USD", "USD"),
+            Side::Sell,
+            TradeAmount::Quantity(qty("0.000000000000000016")),
+            Some(px("0.5")),
+        );
 
-    let dry_rejects = dry_run_check(&policy, &same_asset_sell)
-        .expect_err("the dry-run first-step subtraction must fail closed");
-    assert_position_limit_arithmetic_reject(
-        &dry_rejects,
-        "USD",
-        "first-step transition",
-        "inexact",
-    );
-    assert_eq!(holdings_of(&policy, account_id, &usd), Some(before));
+        let dry_rejects = dry_run_check(&policy, &same_asset_sell)
+            .expect_err("the dry-run first-step subtraction must fail closed");
+        assert_position_limit_arithmetic_reject(
+            &dry_rejects,
+            "USD",
+            "first-step transition",
+            "inexact",
+        );
+        assert_eq!(holdings_of(&policy, account_id, &usd), Some(before));
 
-    let mut mutations = Mutations::with_capacity(2);
-    let real_rejects = pre_trade_check(&policy, &same_asset_sell, &mut mutations)
-        .expect_err("the mutating first-step subtraction must fail closed");
-    assert_eq!(real_rejects[0], dry_rejects[0]);
-    assert!(mutations.is_empty());
-    assert_eq!(holdings_of(&policy, account_id, &usd), Some(before));
+        let mut mutations = Mutations::with_capacity(2);
+        let real_rejects = pre_trade_check(&policy, &same_asset_sell, &mut mutations)
+            .expect_err("the mutating first-step subtraction must fail closed");
+        assert_eq!(real_rejects[0], dry_rejects[0]);
+        assert!(mutations.is_empty());
+        assert_eq!(holdings_of(&policy, account_id, &usd), Some(before));
+    }
 }
 
 #[test]
@@ -872,7 +1200,7 @@ fn market_order_uses_stored_incoming_after_quote_change() {
         )
         .expect("first quote must publish");
     let mut settings = settings(0);
-    settings.set_position_limit(account_id, asset("AAPL"), Some(qty("14")));
+    settings.set_position_limit(account_id, asset("AAPL"), RuleMode::Reject, Some(qty("14")));
     let policy = SpotFundsPolicy::new(
         settings,
         Some(SpotFundsMarketData::new(Arc::clone(&service))),
@@ -932,10 +1260,12 @@ fn dry_run_matches_mutating_reject_and_changes_no_state() {
     assert!(holdings_of(&policy, account_id, &asset("AAPL")).is_none());
 }
 
-fn drop_copy_engine(
+fn position_limit_engine(
     settings: SpotFundsSettings,
 ) -> crate::FullSyncEngine<TestOrder, TestReport, TestAdjustment> {
-    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+        .with_order_review()
+        .full_sync();
     let policy: SpotFundsPolicy<FullSync, FullSync> =
         SpotFundsPolicy::new(settings, None, builder.storage_builder());
     builder
@@ -948,9 +1278,11 @@ fn drop_copy_engine(
 fn drop_copy_bypasses_limit_and_matches_no_limit_bookkeeping() {
     let account_id = account(ACCOUNT);
     let mut limited_settings = settings(0);
-    limited_settings.set_position_limit(account_id, asset("AAPL"), Some(Quantity::ZERO));
-    let limited = drop_copy_engine(limited_settings);
-    let unlimited = drop_copy_engine(settings(0));
+    for mode in super::super::market_data::rule_modes() {
+        limited_settings.set_position_limit(account_id, asset("AAPL"), mode, Some(Quantity::ZERO));
+    }
+    let limited = position_limit_engine(limited_settings);
+    let unlimited = position_limit_engine(settings(0));
     let copied_order = order(account_id, Side::Buy, "2", "1");
 
     let mut limited_operation = limited
@@ -1015,7 +1347,7 @@ fn position_limit_check_observes_a_prior_committed_reservation() {
     let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let mut configured = settings(0);
     configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    configured.set_position_limit(account_id, asset("USD"), Some(qty("1")));
+    configured.set_position_limit(account_id, asset("USD"), RuleMode::Reject, Some(qty("1")));
     let policy: TestPolicy = SpotFundsPolicy::new(configured, None, builder.storage_builder());
     let entered = Arc::new(std::sync::Barrier::new(2));
     let release = Arc::new(std::sync::Barrier::new(2));

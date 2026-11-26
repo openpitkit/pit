@@ -36,7 +36,7 @@ use crate::storage::ConfigCell;
 use crate::{Mutations, PnlState};
 
 use super::rejects::{
-    account_adjustment_bounds_exceeded_reject, account_pnl_block_for_state, adj_field,
+    account_adjustment_bounds_exceeded_reject, account_pnl_block_for_barriers, adj_field,
     arithmetic_overflow_reject,
 };
 use super::rollback::{AccountPnlAssertionRollback, AdjustmentRollback, AvgRestore, PnlRestore};
@@ -460,9 +460,6 @@ where
             let state_snapshot = ctx.operation_snapshot();
             let account_currency = ctx.account_currency();
             self.settings.with_snapshot(|settings| {
-                let barrier = settings
-                    .pnl_barrier_for(account_id, account_group, account_currency.as_ref())
-                    .cloned();
                 let token = crate::core::mutation::next_mutation_owner_id();
                 let previous =
                     self.pnl
@@ -490,22 +487,27 @@ where
                 // when the batch rejects and only records them once every
                 // mutation is committed, so by the time the cause exists its
                 // assertion is over and no rollback can invalidate a tag.
-                let account_blocks = barrier
-                    .as_ref()
-                    .and_then(|barrier| {
-                        account_pnl_block_for_state(account_currency.as_ref(), state, barrier, None)
-                    })
-                    .or_else(|| {
-                        self.pnl_axis_block(
-                            settings,
-                            account_id,
-                            account_group,
-                            account_currency.as_ref(),
-                            false,
-                        )
-                    })
-                    .into_iter()
-                    .collect();
+                let account_blocks = account_pnl_block_for_barriers(
+                    settings.pnl_barriers().barriers_for(
+                        account_id,
+                        account_group,
+                        account_currency.as_ref(),
+                    ),
+                    account_currency.as_ref(),
+                    state,
+                    None,
+                )
+                .or_else(|| {
+                    self.pnl_axis_block(
+                        settings,
+                        account_id,
+                        account_group,
+                        account_currency.as_ref(),
+                        false,
+                    )
+                })
+                .into_iter()
+                .collect();
                 Ok(PolicyAccountAdjustmentResult {
                     account_adjustments: Vec::new(),
                     account_blocks,

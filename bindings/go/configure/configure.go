@@ -538,23 +538,30 @@ func (c Configurator) SpotFundsAccountLimitMode(
 }
 
 // SpotFundsPositionLimit pins, replaces, or clears the inclusive long and short
-// position magnitude limit for one account and asset in the named SpotFunds
+// position magnitude limit for one account, asset and mode in the named SpotFunds
 // policy. The checked position starts with recorded available + held,
 // including a negative held residual. A long projection adds open positive
 // incoming; a short projection subtracts open positive held. Only the side the
 // order moves toward is checked, so a position-reducing order passes while
-// that projection stays within the limit. A breach rejects with
-// PositionLimitExceeded at Order scope. A projection that cannot be computed
-// exactly rejects with ArithmeticOverflow at Order scope. A change applies
-// from the next order and does not re-evaluate open reservations.
+// that projection stays within the limit. A Reject breach rejects with
+// PositionLimitExceeded at Order scope. A review breach adds a
+// PositionLimitExceeded review mark with the limit's mode. A projection that
+// cannot be computed exactly rejects with ArithmeticOverflow at Order scope
+// in every mode.
+// A change applies from the next order and does not re-evaluate open
+// reservations.
 //
-// optional.Some pins or replaces the limit; optional.None clears the limit.
+// optional.Some pins or replaces this mode's limit; optional.None clears only
+// this mode's limit. Other modes' limits are unchanged. The modes are
+// RuleModeReject, RuleModeReviewWithHold and RuleModeReviewWithoutHold.
+// Zero means Reject; unknown modes return an Error with ErrorKindValidation.
 //
 // Returns a *Error on a domain error.
 func (c Configurator) SpotFundsPositionLimit(
 	name string,
 	accountID param.AccountID,
 	asset param.Asset,
+	mode reject.RuleMode,
 	limit optional.Option[param.Quantity],
 ) error {
 	var nativeLimit native.ParamQuantity
@@ -562,15 +569,19 @@ func (c Configurator) SpotFundsPositionLimit(
 	if hasLimit {
 		nativeLimit = value.Handle()
 	}
-	configErr := native.EngineConfigureSpotFundsPositionLimit(
+	configErr, err := native.EngineConfigureSpotFundsPositionLimit(
 		c.engine,
 		name,
 		accountID.Handle(),
 		asset.Handle(),
+		native.PretradeRuleMode(mode),
 		nativeLimit,
 		hasLimit,
 	)
 	runtime.KeepAlive(asset)
+	if err != nil {
+		return &Error{Kind: ErrorKindValidation, Message: err.Error()}
+	}
 	if configErr != nil {
 		return newErrorFromHandle(configErr)
 	}
@@ -607,8 +618,8 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 // SpotFundsPnlBoundsKillSwitch updates the realized account P&L bounds of
 // the named spot-funds policy.
 //
-// globalBarrier uses three states: optional.None leaves the global barrier
-// unchanged, optional.Some(nil) clears it, and optional.Some(&barrier) sets it.
+// globalBarriers uses three states: nil leaves the global slot unchanged,
+// a non-nil empty slice clears it, and a list replaces every mode.
 // Nil slices leave their tiers untouched; non-nil empty slices clear them.
 // Barrier updates preserve live accumulated P&L.
 // With a known effective account currency, an account-tier mismatch fails
@@ -620,32 +631,37 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 //
 // An account whose effective barrier changed is evaluated against its stored
 // account P&L before this call returns: an already halted account, or one
-// already beyond the new barrier, is blocked here rather than at its next
+// beyond a new Reject-mode barrier, is blocked here rather than at its next
 // fill, and appears in the returned AccountBlocks. Each outcome identifies the
 // affected account together with its newly inserted block. Removing the last
 // effective barrier reports no block and does not release an existing block.
 // Clearing an override can expose a fallback barrier; the fallback is evaluated
 // normally and may record and report a block.
 //
-// Returns a *Error on a domain error.
+// Review-mode breaches yield review marks during evaluation without blocking.
+// Evaluation failures block in every mode. Returns a *Error on a domain error.
+// Invalid or repeated (key, mode) entries return a *Error with
+// ErrorKindValidation and leave settings unchanged.
 func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 	name string,
-	globalBarrier optional.Option[*policies.SpotFundsPnlBoundsBarrier],
+	globalBarriers []policies.SpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
 ) (AccountBlockOutcomes, error) {
-	nativeGlobal, hasGlobal, nativeAccountGroups, nativeAccounts := nativeSpotFundsPnlBoundsTiers(
-		globalBarrier, accountGroupBarriers, accountBarriers,
+	nativeGlobal, nativeAccountGroups, nativeAccounts, err := nativeSpotFundsPnlBoundsTiers(
+		globalBarriers, accountGroupBarriers, accountBarriers,
 	)
+	if err != nil {
+		return AccountBlockOutcomes{}, &Error{Kind: ErrorKindValidation, Message: err.Error()}
+	}
 	blocks, configErr := native.EngineConfigureSpotFundsPnlBoundsKillSwitch(
 		c.engine,
 		name,
 		nativeGlobal,
-		hasGlobal,
 		nativeAccountGroups,
 		nativeAccounts,
 	)
-	runtime.KeepAlive(globalBarrier)
+	runtime.KeepAlive(globalBarriers)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if configErr != nil {
@@ -659,17 +675,18 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 // total P&L. Only the selected axis changes; realized bounds and P&L stay
 // unchanged.
 //
-// globalBarrier uses three states: optional.None leaves the global barrier
-// unchanged, optional.Some(nil) clears it, and optional.Some(&barrier) sets it.
+// globalBarriers uses three states: nil leaves the global slot unchanged,
+// a non-nil empty slice clears it, and a list replaces every mode.
 // Nil slices leave their tiers untouched; non-nil empty slices clear them.
 // The currency rules of SpotFundsPnlBoundsBarrier apply.
 //
-// With an effective barrier, a breach or halt on the axis blocks the account
-// with PnlKillSwitchTriggered at pre-trade, dry run, a fill, the account P&L
-// force-set, and a retune that changes the axis's effective barrier. A fill
+// With an effective barrier, a Reject-mode breach or a halt in any mode blocks
+// the account with PnlKillSwitchTriggered at pre-trade, dry run, a fill, the
+// account P&L force-set, and a retune that changes the effective barrier. A fill
 // checks axes for a trade or non-zero fee when the report gave no block of its
 // own. A change of an account's group membership does not check the axes;
 // the next order catches the breach.
+// A review-mode breach yields a review mark without blocking.
 //
 // Accounts whose effective barrier changes are evaluated before return. Each
 // returned outcome pairs the affected account with its recorded block. Removing
@@ -677,28 +694,31 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 // block. Clearing an override can expose a lower-tier barrier that is evaluated
 // and may record and report a block.
 //
-// Returns a *Error on a domain error. An unknown axis returns
-// ErrorKindValidation. On any error, settings stay unchanged.
+// Returns a *Error on a domain error. An unknown axis, invalid mode, or
+// repeated (key, mode) returns ErrorKindValidation. On any error, settings
+// stay unchanged.
 func (c Configurator) SpotFundsPnlBoundsAxis(
 	name string,
 	axis policies.SpotFundsPnlBoundsAxis,
-	globalBarrier optional.Option[*policies.SpotFundsPnlBoundsBarrier],
+	globalBarriers []policies.SpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
 ) (AccountBlockOutcomes, error) {
-	nativeGlobal, hasGlobal, nativeAccountGroups, nativeAccounts := nativeSpotFundsPnlBoundsTiers(
-		globalBarrier, accountGroupBarriers, accountBarriers,
+	nativeGlobal, nativeAccountGroups, nativeAccounts, err := nativeSpotFundsPnlBoundsTiers(
+		globalBarriers, accountGroupBarriers, accountBarriers,
 	)
+	if err != nil {
+		return AccountBlockOutcomes{}, &Error{Kind: ErrorKindValidation, Message: err.Error()}
+	}
 	blocks, configErr := native.EngineConfigureSpotFundsPnlBoundsAxis(
 		c.engine,
 		name,
 		axis.Handle(),
 		nativeGlobal,
-		hasGlobal,
 		nativeAccountGroups,
 		nativeAccounts,
 	)
-	runtime.KeepAlive(globalBarrier)
+	runtime.KeepAlive(globalBarriers)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if configErr != nil {
@@ -708,20 +728,25 @@ func (c Configurator) SpotFundsPnlBoundsAxis(
 }
 
 func nativeSpotFundsPnlBoundsTiers(
-	globalBarrier optional.Option[*policies.SpotFundsPnlBoundsBarrier],
+	globalBarriers []policies.SpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
 ) (
-	*native.PretradePoliciesSpotFundsPnlBoundsBarrier,
-	bool,
+	[]native.PretradePoliciesSpotFundsPnlBoundsBarrier,
 	[]native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	[]native.PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
+	error,
 ) {
-	var nativeGlobal *native.PretradePoliciesSpotFundsPnlBoundsBarrier
-	globalValue, hasGlobal := globalBarrier.Get()
-	if hasGlobal && globalValue != nil {
-		barrier := nativeSpotFundsPnlBoundsBarrier(*globalValue)
-		nativeGlobal = &barrier
+	var nativeGlobal []native.PretradePoliciesSpotFundsPnlBoundsBarrier
+	if globalBarriers != nil {
+		nativeGlobal = make([]native.PretradePoliciesSpotFundsPnlBoundsBarrier, 0, len(globalBarriers))
+		for index, barrier := range globalBarriers {
+			nativeBarrier, err := nativeSpotFundsPnlBoundsBarrier(barrier)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("global[%d]: %w", index, err)
+			}
+			nativeGlobal = append(nativeGlobal, nativeBarrier)
+		}
 	}
 
 	var nativeAccountGroups []native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
@@ -731,12 +756,16 @@ func nativeSpotFundsPnlBoundsTiers(
 			0,
 			len(accountGroupBarriers),
 		)
-		for _, b := range accountGroupBarriers {
+		for index, b := range accountGroupBarriers {
+			barrier, err := nativeSpotFundsPnlBoundsBarrier(b.Barrier)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("account_group[%d]: %w", index, err)
+			}
 			nativeAccountGroups = append(
 				nativeAccountGroups,
 				native.NewPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier(
 					b.AccountGroupID.Handle(),
-					nativeSpotFundsPnlBoundsBarrier(b.Barrier),
+					barrier,
 				),
 			)
 		}
@@ -749,18 +778,22 @@ func nativeSpotFundsPnlBoundsTiers(
 			0,
 			len(accountBarriers),
 		)
-		for _, b := range accountBarriers {
+		for index, b := range accountBarriers {
+			barrier, err := nativeSpotFundsPnlBoundsBarrier(b.Barrier)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("account[%d]: %w", index, err)
+			}
 			nativeAccounts = append(
 				nativeAccounts,
 				native.NewPretradePoliciesSpotFundsPnlBoundsAccountBarrier(
 					b.AccountID.Handle(),
-					nativeSpotFundsPnlBoundsBarrier(b.Barrier),
+					barrier,
 				),
 			)
 		}
 	}
 
-	return nativeGlobal, hasGlobal, nativeAccountGroups, nativeAccounts
+	return nativeGlobal, nativeAccountGroups, nativeAccounts, nil
 }
 
 // AccountBlockOutcome is a block inserted for an account selected by the
@@ -810,11 +843,14 @@ func newAccountBlockOutcomes(
 // [Configurator.SpotFundsPnlBoundsKillSwitch], which retunes bounds and never
 // touches accumulated P&L.
 //
-// On success it returns PolicyConfigurationResult. A numeric breach or halted
-// state under an effective barrier returns the policy-reported block even when
-// the account is already blocked. The engine processes the block request before
-// returning and preserves the existing first cause. A configuration failure
-// returns the existing configure error.
+// On success it returns PolicyConfigurationResult. A numeric value beyond an
+// effective Reject-mode bound returns the policy-reported block. A breach of a
+// review-mode bound returns no block and no review mark: configuration does not
+// issue review marks. A halted state under an effective barrier of any mode
+// returns the block. Either block is returned even when the account is already
+// blocked. The engine processes the block request before returning and
+// preserves the existing first cause. A configuration failure returns the
+// existing configure error.
 func (c Configurator) SetSpotFundsAccountPnl(
 	name string,
 	account param.AccountID,
@@ -890,8 +926,9 @@ func pnlOptionalToNative(value optional.Option[param.Pnl]) native.ParamPnlOption
 
 func nativeSpotFundsPnlBoundsBarrier(
 	barrier policies.SpotFundsPnlBoundsBarrier,
-) native.PretradePoliciesSpotFundsPnlBoundsBarrier {
+) (native.PretradePoliciesSpotFundsPnlBoundsBarrier, error) {
 	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+		native.PretradeRuleMode(barrier.Mode),
 		barrier.Currency.Handle(),
 		pnlOptionalToNative(barrier.LowerBound),
 		pnlOptionalToNative(barrier.UpperBound),

@@ -190,7 +190,6 @@ class OrderSizeLimitPolicy;
 class OrderValidationPolicy;
 class PnlBoundsKillSwitchPolicy;
 class RateLimitPolicy;
-class SpotFundsPnlBoundsGlobalBarrierUpdate;
 class SpotFundsPnlBoundsKillSwitchPolicy;
 class SpotFundsPolicy;
 

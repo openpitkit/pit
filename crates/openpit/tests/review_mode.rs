@@ -38,7 +38,7 @@ use openpit::{
     AccountAdjustmentAccountPnlOperation, AccountOutcomeEntry, ConfigureError, Engine,
     EngineBuildError, ExecutionReportOperation, HasAccountId, HasAlreadyHeld, HasConfirmed,
     Instrument, LocalEngine, LocalSync, Mutation, Mutations, OrderOperation, OrderReview,
-    OutcomeAmount, PnlState, PolicyGroupId, PolicyInstance, RequestFieldAccessError,
+    OutcomeAmount, PnlHaltReason, PnlState, PolicyGroupId, PolicyInstance, RequestFieldAccessError,
     SpotFundsMarketData, WithExecutionReportFillDetails, WithOrderOperation, WithOrderReview,
 };
 
@@ -1722,6 +1722,7 @@ fn execution_report_mixed_blocks_keep_the_first_effective_cause() {
 
 fn barrier(lower: &str) -> SpotFundsPnlBoundsBarrier {
     SpotFundsPnlBoundsBarrier {
+        mode: RuleMode::Reject,
         currency: Asset::new("USD").unwrap(),
         lower_bound: Some(Pnl::from_str(lower).unwrap()),
         upper_bound: None,
@@ -1765,13 +1766,161 @@ fn spot_funds_engine(
 }
 
 #[test]
+fn confirmed_spot_funds_pnl_review_rerun_drops_marks_without_blocking() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, []).unwrap();
+        settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+        settings
+            .set_pnl_global_barriers([
+                barrier("-50"),
+                SpotFundsPnlBoundsBarrier {
+                    mode,
+                    ..barrier("-10")
+                },
+            ])
+            .unwrap();
+        let engine = spot_funds_engine(RuleMode::Reject, settings);
+        assert!(engine
+            .configure()
+            .set_spot_funds_account_pnl(
+                "funds",
+                AccountId::from_u64(1),
+                PnlState::Value(Pnl::from_str("-20").unwrap()),
+            )
+            .unwrap()
+            .account_blocks
+            .is_empty());
+
+        let mut pending = engine.execute_pre_trade(order(false)).unwrap();
+        assert_eq!(pending.reviews().len(), 1);
+        assert_eq!(
+            pending.reviews()[0].code,
+            RejectCode::PnlKillSwitchTriggered
+        );
+        assert_eq!(pending.reviews()[0].mode, mode);
+        pending.rollback();
+
+        let mut confirmed = engine.execute_pre_trade(order(true)).unwrap();
+        assert!(confirmed.reviews().is_empty());
+        confirmed.rollback();
+
+        engine
+            .configure()
+            .spot_funds("funds", |settings| settings.set_pnl_global_barriers([]))
+            .unwrap();
+        assert!(engine.start_pre_trade(order(false)).is_ok());
+    }
+}
+
+#[test]
+fn confirmed_spot_funds_pnl_keeps_rejects_and_halts_effective() {
+    for state in [
+        PnlState::Value(Pnl::from_str("-60").unwrap()),
+        PnlState::Halted(PnlHaltReason::MissingInitialPnl),
+    ] {
+        for confirmed in [false, true] {
+            let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, []).unwrap();
+            settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+            let review_barrier = SpotFundsPnlBoundsBarrier {
+                mode: RuleMode::ReviewWithoutHold,
+                ..barrier("-10")
+            };
+            // A halted calculation must reject even with only a review barrier.
+            let barriers = match state {
+                PnlState::Value(_) => vec![barrier("-50"), review_barrier],
+                PnlState::Halted(_) => vec![review_barrier],
+            };
+            settings.set_pnl_global_barriers(barriers).unwrap();
+            let engine = spot_funds_engine(RuleMode::Reject, settings);
+            let result = engine
+                .configure()
+                .set_spot_funds_account_pnl("funds", AccountId::from_u64(1), state)
+                .unwrap();
+            assert_eq!(result.account_blocks.len(), 1);
+            assert_eq!(
+                result.account_blocks[0].code,
+                RejectCode::PnlKillSwitchTriggered
+            );
+            engine.accounts().unblock(AccountId::from_u64(1));
+
+            let rejects = engine.execute_pre_trade(order(confirmed)).err().unwrap();
+            assert_eq!(rejects.len(), 1);
+            assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+            assert_eq!(rejects[0].mode, RuleMode::Reject);
+            assert_eq!(rejects[0].scope, RejectScope::Account);
+
+            engine
+                .configure()
+                .spot_funds("funds", |settings| settings.set_pnl_global_barriers([]))
+                .unwrap();
+            let rejects = engine.start_pre_trade(order(confirmed)).err().unwrap();
+            assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
+            assert_eq!(rejects[0].mode, RuleMode::Reject);
+        }
+    }
+}
+
+#[test]
+fn confirmed_spot_funds_position_review_rerun_keeps_reject_limit() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        let account = AccountId::from_u64(1);
+        let asset = Asset::new("AAPL").unwrap();
+        let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, []).unwrap();
+        settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+        settings.set_position_limit(
+            account,
+            asset.clone(),
+            RuleMode::Reject,
+            Some(Quantity::from_str("2").unwrap()),
+        );
+        settings.set_position_limit(
+            account,
+            asset.clone(),
+            mode,
+            Some(Quantity::from_str("0.5").unwrap()),
+        );
+        let engine = spot_funds_engine(RuleMode::Reject, settings);
+
+        let mut pending = engine.execute_pre_trade(order(false)).unwrap();
+        assert_eq!(pending.reviews().len(), 1);
+        assert_eq!(pending.reviews()[0].code, RejectCode::PositionLimitExceeded);
+        assert_eq!(pending.reviews()[0].mode, mode);
+        pending.rollback();
+
+        let mut confirmed = engine.execute_pre_trade(order(true)).unwrap();
+        assert!(confirmed.reviews().is_empty());
+        confirmed.rollback();
+
+        for confirmed in [false, true] {
+            let mut oversized = order(confirmed);
+            oversized.operation.trade_amount =
+                TradeAmount::Quantity(Quantity::from_str("3").unwrap());
+            let rejects = engine.execute_pre_trade(oversized).err().unwrap();
+            assert_eq!(rejects.len(), 1);
+            assert_eq!(rejects[0].code, RejectCode::PositionLimitExceeded);
+            assert_eq!(rejects[0].mode, RuleMode::Reject);
+            assert_eq!(rejects[0].scope, RejectScope::Order);
+        }
+
+        engine
+            .configure()
+            .spot_funds("funds", |settings| {
+                settings.set_position_limits([
+                    (account, asset.clone(), RuleMode::Reject, None),
+                    (account, asset, mode, None),
+                ])
+            })
+            .unwrap();
+        assert!(engine.start_pre_trade(order(false)).is_ok());
+    }
+}
+
+#[test]
 fn spot_funds_force_set_filters_blocks() {
     for mode in [RuleMode::Reject, RuleMode::ReviewWithHold] {
         let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, []).unwrap();
         settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-        settings
-            .set_pnl_global_barrier(Some(barrier("-10")))
-            .unwrap();
+        settings.set_pnl_global_barriers([barrier("-10")]).unwrap();
         let engine = spot_funds_engine(mode, settings);
         let result = engine
             .configure()
@@ -1795,7 +1944,7 @@ fn spot_funds_force_set_filters_blocks() {
         }
         engine
             .configure()
-            .spot_funds("funds", |settings| settings.set_pnl_global_barrier(None))
+            .spot_funds("funds", |settings| settings.set_pnl_global_barriers([]))
             .unwrap();
         assert_eq!(
             engine.start_pre_trade(order(false)).is_err(),
@@ -1812,11 +1961,9 @@ fn spot_funds_retune_filters_realized_and_axis_blocks() {
             let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, []).unwrap();
             settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
             match axis {
-                None => settings
-                    .set_pnl_global_barrier(Some(barrier("-50")))
-                    .unwrap(),
+                None => settings.set_pnl_global_barriers([barrier("-50")]).unwrap(),
                 Some(axis) => settings
-                    .set_pnl_axis_global_barrier(axis, Some(barrier("-50")))
+                    .set_pnl_axis_global_barriers(axis, [barrier("-50")])
                     .unwrap(),
             }
             let engine = spot_funds_engine(mode, settings);
@@ -1833,8 +1980,8 @@ fn spot_funds_retune_filters_realized_and_axis_blocks() {
             let result = engine
                 .configure()
                 .spot_funds("funds", |settings| match axis {
-                    None => settings.set_pnl_global_barrier(Some(barrier("-30"))),
-                    Some(axis) => settings.set_pnl_axis_global_barrier(axis, Some(barrier("-30"))),
+                    None => settings.set_pnl_global_barriers([barrier("-30")]),
+                    Some(axis) => settings.set_pnl_axis_global_barriers(axis, [barrier("-30")]),
                 })
                 .unwrap();
             let kept = mode == RuleMode::Reject;
@@ -1853,8 +2000,8 @@ fn spot_funds_retune_filters_realized_and_axis_blocks() {
             engine
                 .configure()
                 .spot_funds("funds", |settings| match axis {
-                    None => settings.set_pnl_global_barrier(None),
-                    Some(axis) => settings.set_pnl_axis_global_barrier(axis, None),
+                    None => settings.set_pnl_global_barriers([]),
+                    Some(axis) => settings.set_pnl_axis_global_barriers(axis, []),
                 })
                 .unwrap();
             assert_eq!(

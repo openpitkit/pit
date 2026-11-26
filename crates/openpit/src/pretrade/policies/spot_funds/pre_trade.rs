@@ -24,6 +24,7 @@ use crate::core::{
     AccountControl, AccountOutcomeEntry, HasInstrument, HasOrderPrice, HasSide, HasTradeAmount,
 };
 use crate::marketdata::{AccountInfo, MarketDataSync};
+use crate::pretrade::RuleMode;
 
 use super::market_data::SpotFundsPriceError;
 use super::{SpotFundsLimitMode, SpotFundsSettings};
@@ -54,41 +55,73 @@ where
         settings: &SpotFundsSettings,
         account_id: AccountId,
         account_group_id: Option<crate::param::AccountGroupId>,
-    ) -> Result<(), Rejects> {
-        let has_barrier = settings.has_pnl_barrier_scope(account_id, account_group_id);
-        if !has_barrier
-            && !super::SpotFundsPnlBoundsAxis::ALL.into_iter().any(|axis| {
+    ) -> Result<Vec<Reject>, Rejects> {
+        let mut marks = Vec::new();
+        // Avoid currency resolution only; this guard decides nothing else.
+        if settings
+            .pnl_barriers()
+            .barriers_for(account_id, account_group_id, None)
+            .next()
+            .is_none()
+            && super::SpotFundsPnlBoundsAxis::ALL.into_iter().all(|axis| {
                 settings
                     .pnl_axis_barriers(axis)
-                    .has_scope(account_id, account_group_id)
+                    .barriers_for(account_id, account_group_id, None)
+                    .next()
+                    .is_none()
             })
         {
-            return Ok(());
+            return Ok(marks);
         }
         let account_currency = ctx.account_currency();
-        let barrier =
-            settings.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref());
-        if let Some(barrier) = barrier {
-            let state = self.account_pnl_state(account_id);
+        let mut realized_state = None;
+        for (mode, barrier) in settings.pnl_barriers().barriers_for(
+            account_id,
+            account_group_id,
+            account_currency.as_ref(),
+        ) {
+            if let Some(block) = super::rejects::account_pnl_barrier_currency_mismatch_block(
+                account_currency.as_ref(),
+                barrier,
+            ) {
+                return Err(Reject::from(block).into());
+            }
+            let state = *realized_state.get_or_insert_with(|| self.account_pnl_state(account_id));
+            // Build the same breach details as Reject mode, then classify the
+            // numeric breach. A halted state always keeps effective Reject.
             if let Some(block) = super::rejects::account_pnl_block_for_state(
                 account_currency.as_ref(),
                 state,
+                RuleMode::Reject,
                 barrier,
                 None,
             ) {
-                return Err(Rejects::from(Reject::from(block)));
+                if mode == RuleMode::Reject || matches!(state, crate::PnlState::Halted(_)) {
+                    return Err(Reject::from(block).into());
+                }
+                super::rejects::collect_review_mark(
+                    &mut marks,
+                    Reject::from(block).with_mode(mode),
+                );
             }
         }
-        if let Some(block) = self.pnl_axis_block(
-            settings,
+        let barriers = super::SpotFundsPnlBoundsAxis::ALL.map(|axis| {
+            settings
+                .pnl_axis_barriers(axis)
+                .barriers_for(account_id, account_group_id, account_currency.as_ref())
+                .collect::<Vec<_>>()
+        });
+        if let Some(block) = self.pnl_axis_block_for_barriers(
+            barriers,
             account_id,
             account_group_id,
             account_currency.as_ref(),
             false,
+            Some(&mut marks),
         ) {
-            return Err(Rejects::from(Reject::from(block)));
+            return Err(Reject::from(block).into());
         }
-        Ok(())
+        Ok(marks)
     }
 
     /// Returns a [`Reject`] appropriate for the given [`SpotFundsPriceError`].
@@ -430,9 +463,12 @@ where
                     );
                 }
             }
-        } else {
-            pnl_rejects?;
         }
+        let mut marks = match pnl_rejects {
+            Ok(marks) => marks,
+            Err(_) if ctx.is_drop_copy() => Vec::new(),
+            Err(rejects) => return Err(rejects),
+        };
 
         let legs = self
             .compute_reservation_legs(&request, &account_group, ctx, settings)
@@ -473,6 +509,7 @@ where
                 ctx.account_control.clone(),
                 mutations,
                 &mut outcome,
+                &mut marks,
             )?;
         }
 
@@ -480,7 +517,11 @@ where
             outcome.lock_prices.push(p);
         }
 
-        Ok(Some(outcome))
+        if marks.is_empty() {
+            Ok(Some(outcome))
+        } else {
+            Err(Rejects::new(marks).with_policy_result(outcome))
+        }
     }
 
     /// Read-only twin of [`Self::perform_pre_trade_check_impl`] for dry-runs.
@@ -513,7 +554,8 @@ where
         request: OrderRequestView<'_>,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         let account_group = ctx.account_group();
-        self.reject_halted_account_pnl(ctx, settings, request.account_id, account_group)?;
+        let mut marks =
+            self.reject_halted_account_pnl(ctx, settings, request.account_id, account_group)?;
 
         let legs = self
             .compute_reservation_legs(&request, &account_group, ctx, settings)
@@ -551,6 +593,7 @@ where
             first_position_limit,
             None,
             &mut outcome,
+            &mut marks,
         )?;
         let second_current = if first.asset == second.asset {
             first_after
@@ -566,13 +609,18 @@ where
             second_position_limit,
             second_current,
             &mut outcome,
+            &mut marks,
         )?;
 
         if let Some(p) = legs.lock_price {
             outcome.lock_prices.push(p);
         }
 
-        Ok(Some(outcome))
+        if marks.is_empty() {
+            Ok(Some(outcome))
+        } else {
+            Err(Rejects::new(marks).with_policy_result(outcome))
+        }
     }
 
     fn reservation_controls(
@@ -620,6 +668,7 @@ where
         position_limit: Option<super::position_limit::Check>,
         current: Option<Holdings>,
         outcome: &mut PolicyPreTradeResult,
+        marks: &mut Vec<Reject>,
     ) -> Result<Option<Holdings>, Rejects> {
         if held_amount.is_zero() && incoming_amount.is_zero() {
             return Ok(current);
@@ -657,6 +706,7 @@ where
             current,
             held_amount,
             incoming_amount,
+            marks,
         )?;
 
         outcome.account_adjustments.push(reservation_outcome_entry(
@@ -686,6 +736,7 @@ where
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
         mutations: &mut Mutations,
         outcome: &mut PolicyPreTradeResult,
+        marks: &mut Vec<Reject>,
     ) -> Result<(), Rejects>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
@@ -737,6 +788,7 @@ where
                             current,
                             held_amount,
                             incoming_amount,
+                            marks,
                         )?;
                         *slot = new;
                         Ok((new, is_new))

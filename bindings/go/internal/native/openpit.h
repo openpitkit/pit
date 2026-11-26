@@ -2780,6 +2780,11 @@ struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
  */
 struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
     /**
+     * Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold. Unknown
+     * values are invalid.
+     */
+    OpenPitPretradeRuleMode mode;
+    /**
      * Currency matched when the account has an effective currency.
      */
     OpenPitStringView currency;
@@ -2802,7 +2807,7 @@ struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
      */
     OpenPitParamAccountGroupId account_group_id;
     /**
-     * Bounds for this group.
+     * Bounds and rule mode for this group. A repeated (group, mode) is invalid.
      */
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
 };
@@ -2816,7 +2821,8 @@ struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
      */
     OpenPitParamAccountId account_id;
     /**
-     * Bounds for this account.
+     * Bounds and rule mode for this account. A repeated (account, mode) is
+     * invalid.
      */
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
 };
@@ -8018,6 +8024,12 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
  *   compute P&L will be blocked by the core policy fail-safe.
  * - At least one barrier must be provided across `global`, `account_group`,
  *   or `account`.
+ * - `global` points to `global_len` barriers; zero length means none. Every
+ *   non-empty array must be non-null.
+ * - Each barrier accepts mode 0 or 1 (Reject), 2 (ReviewWithHold), or 3
+ *   (ReviewWithoutHold); unknown values are errors.
+ * - Repeated global modes, (group, mode), or (account, mode) fail the call
+ *   through `out_error`; the duplicate message names the mode.
  * - Each `currency` string view inside a barrier must be valid for the
  *   duration of the call.
  * - Barrier configuration never seeds or resets live account P&L.
@@ -8030,6 +8042,7 @@ bool openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
     const OpenPitMarketDataService * market_data,
     uint16_t policy_group_id,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
+    size_t global_len,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
     size_t account_group_len,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
@@ -8110,8 +8123,15 @@ bool openpit_engine_configure_spot_funds(
  * - This is a partial update (PATCH): each of the three tiers (global,
  *   `account_group`, `account`) is replaced only when its `has_*` flag is
  *   `true`; a `has_*` flag set to `false` leaves that tier unchanged.
- * - When `has_global` is `true`, a null `global` clears the global barrier;
- *   a non-null `global` sets it.
+ * - `has_global == false` ignores `global` and `global_len`. When true,
+ *   `global_len == 0` clears all global modes; otherwise the array replaces
+ *   all global modes and must be non-null.
+ * - Modes are 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold. Unknown
+ *   modes return Validation. Repeated global modes, (group, mode), or
+ *   (account, mode) return Validation naming the mode, without changes.
+ * - A Reject-mode breach blocks the account. A review-mode breach adds a
+ *   review mark on evaluation without blocking; evaluation failures block in
+ *   every mode.
  * - When `has_account_group` is `true`, the `account_group_len` entries at
  *   `account_group` replace the whole per-account-group tier; an engaged
  *   empty list (`has_account_group == true`, `account_group_len == 0`)
@@ -8131,7 +8151,7 @@ bool openpit_engine_configure_spot_funds(
  *   pre-trade checks, execution reports, account-P&L adjustments and
  *   account-P&L force-sets. An account whose effective barrier changed is
  *   evaluated against its stored account P&L here: an already halted
- *   account, or one already beyond the new barrier, is blocked before this
+ *   account, or one beyond a new Reject-mode barrier, is blocked before this
  *   call returns and appears in the list, which reports the blocks the
  *   engine has already recorded. Removing the last effective barrier reports
  *   no block and does not release an existing block. Clearing an override
@@ -8151,6 +8171,7 @@ openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
     OpenPitEngine * engine,
     OpenPitStringView name,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
+    size_t global_len,
     bool has_global,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
     size_t account_group_len,
@@ -8180,8 +8201,12 @@ openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
  * - This is a partial update (PATCH): the global, account-group and account
  *   tiers are each replaced only when their `has_*` flag is `true`. A false
  *   flag leaves that tier unchanged and its arguments are ignored.
- * - When `has_global` is `true`, a null `global` clears the global barrier;
- *   a non-null `global` sets it.
+ * - `has_global == false` ignores `global` and `global_len`. When true,
+ *   `global_len == 0` clears all global modes; otherwise the array replaces
+ *   all global modes and must be non-null.
+ * - Modes are 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold. Unknown
+ *   modes return Validation. Repeated global modes, (group, mode), or
+ *   (account, mode) return Validation naming the mode, without changes.
  * - When `has_account_group` is `true`, the `account_group_len` entries at
  *   `account_group` replace that whole tier; an engaged empty list clears
  *   it.
@@ -8190,12 +8215,13 @@ openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
  * - Engaged slices with non-zero lengths must be non-null. Each barrier's
  *   `currency` string view must be valid for the duration of the call.
  * - Only the selected axis changes; realized bounds and P&L stay unchanged.
- * - With an effective barrier, a breach or halt on an axis blocks with
- *   `PnlKillSwitchTriggered` at pre-trade, dry run, a fill, the account P&L
- *   force-set, and a retune that changes the axis's effective barrier. A
- *   fill checks axes for a trade or non-zero fee when the report gave no
+ * - With an effective barrier, a Reject-mode breach or a halt in any mode
+ *   blocks with `PnlKillSwitchTriggered` at pre-trade, dry run, a fill, the
+ *   account P&L force-set, and a retune that changes the effective barrier.
+ *   A fill checks axes for a trade or non-zero fee when the report gave no
  *   block of its own. Moving an account to another account group does not
- *   check the axes; the next order catches the breach.
+ *   check the axes; the next order catches the breach. A review-mode breach
+ *   yields a review mark without blocking.
  *
  * Success:
  * - Returns a caller-owned account-block-outcome list, possibly empty;
@@ -8222,6 +8248,7 @@ openpit_engine_configure_spot_funds_pnl_bounds_axis(
     OpenPitStringView name,
     OpenPitPretradePoliciesSpotFundsPnlBoundsAxis axis,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
+    size_t global_len,
     bool has_global,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
     size_t account_group_len,
@@ -8240,11 +8267,13 @@ openpit_engine_configure_spot_funds_pnl_bounds_axis(
  * never resets the accumulator. A numeric state re-arms this account
  * accumulator after a calculation halt. A halted state sets or keeps it halted
  * and replaces the stored halt reason. Neither form affects a position-level
- * accumulator. A numeric state beyond an effective bound, or a halted state
- * with an effective barrier, returns the policy-reported
- * `PnlKillSwitchTriggered` block. The engine processes that block request
- * before returning. An existing first-cause block remains unchanged but does
- * not suppress the returned block.
+ * accumulator. A numeric state beyond an effective Reject-mode bound returns
+ * the policy-reported `PnlKillSwitchTriggered` block. A breach of a
+ * review-mode bound returns no block and no review mark: configuration does
+ * not issue review marks. A halted state with an effective barrier of any mode
+ * returns the block. The engine processes that block request before returning.
+ * An existing first-cause block remains unchanged but does not suppress the
+ * returned block.
  *
  * Contract:
  * - on success, returns a caller-owned account-block list, possibly empty;
@@ -8334,8 +8363,8 @@ bool openpit_engine_configure_spot_funds_account_limit_mode(
 );
 
 /**
- * Pins or clears the spot-funds position limit for one account and asset on
- * the policy registered under `name`.
+ * Pins or clears the spot-funds position limit for one account, asset and rule
+ * mode on the policy registered under `name`.
  *
  * Concurrency: caller-guaranteed exclusive in every mode, including
  * `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
@@ -8345,8 +8374,9 @@ bool openpit_engine_configure_spot_funds_account_limit_mode(
  * - `engine` must be a valid non-null engine pointer.
  * - `name` selects the policy; see
  *   `openpit_engine_configure_spot_funds_global_limit_mode`.
- * - `account_id` and `asset` select the position; `asset` must be valid
- *   UTF-8 and a valid asset.
+ * - `(account_id, asset, mode)` selects one limit; `asset` must be valid
+ *   UTF-8 and a valid asset. `mode` is 0 or 1 (Reject), 2 (ReviewWithHold),
+ *   or 3 (ReviewWithoutHold). Unknown values are invalid.
  * - When `has_limit` is `true`, `limit` pins or replaces the inclusive
  *   non-negative long and short magnitude for this position. The checked
  *   position starts with recorded `available + held`, including a negative
@@ -8354,22 +8384,25 @@ bool openpit_engine_configure_spot_funds_account_limit_mode(
  *   short projection subtracts open positive `held`. Only the side the order
  *   moves toward is checked, so a position-reducing order passes while that
  *   projection stays within the limit. `limit` must be a valid non-negative
- *   quantity. When `has_limit` is `false`, the limit is cleared and `limit`
- *   is ignored.
- * - A breach rejects with `PositionLimitExceeded` at Order scope. A
- *   projection that cannot be computed exactly rejects with
- *   `ArithmeticOverflow` at Order scope. A change applies from the next
- *   order and does not re-evaluate open reservations.
+ *   quantity. When `has_limit` is `false`, only this mode's limit is cleared
+ *   and `limit` is ignored. Other modes' limits are unchanged by either
+ *   call.
+ * - A Reject breach rejects with `PositionLimitExceeded` at Order scope. A
+ *   review breach adds a `PositionLimitExceeded` review mark with the
+ *   limit's mode. A projection that cannot be computed exactly rejects with
+ *   `ArithmeticOverflow` at Order scope in every mode. A change applies from
+ *   the next order and does not re-evaluate open reservations.
  *
  * Success / error: as `openpit_engine_configure_spot_funds_global_limit_mode`.
- * An invalid `asset` or supplied `limit` returns `false` with a `Validation`
- * error naming the invalid input.
+ * An invalid `asset`, `mode` or supplied `limit` returns `false` with a
+ * `Validation` error naming the invalid input.
  */
 bool openpit_engine_configure_spot_funds_position_limit(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountId account_id,
     OpenPitStringView asset,
+    OpenPitPretradeRuleMode mode,
     OpenPitParamQuantity limit,
     bool has_limit,
     OpenPitConfigureError ** out_error

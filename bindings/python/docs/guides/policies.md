@@ -171,9 +171,27 @@ blocked individually in place.
 `SpotFundsPnlBoundsBarrier` is a frozen dataclass whose `currency` field is
 required; `lower_bound` and `upper_bound` default to `None`, and at least one
 of them must be given. The same dataclass is used at construction time, through
-`global_barrier()`, `account_group_barriers()` and `account_barriers()` on
+`global_barriers()`, `account_group_barriers()` and `account_barriers()` on
 `build_spot_funds_pnl_bounds_killswitch()`, and at runtime, through
 `engine.configure().spot_funds_pnl_bounds_killswitch(...)`.
+
+The keyword-only `mode` defaults to `None`, which the dataclass stores as
+`RuleMode.REJECT`. The exact strings `"Reject"`, `"ReviewWithHold"` and
+`"ReviewWithoutHold"` are also accepted. Any other value raises `ValueError`
+when the dataclass is constructed. A review breach produces a review mark
+with that mode without blocking the account; a Reject breach rejects and blocks.
+Halted P&L and account-tier currency mismatch block in any mode. Group and
+account records carry the mode on their nested barrier, and the cascade
+resolves independently for each mode.
+
+Builder methods append barriers. A repeated global mode, (group, mode) or
+(account, mode) raises `ValueError` when the policy is built. At runtime,
+omitted lists or `None` leave their tier or global slot unchanged. A supplied
+global list replaces every mode of the global slot. A supplied group or
+account list replaces that tier wholesale: every group or account, every
+mode. An empty list clears the corresponding tier or global slot.
+Duplicates raise `PolicyConfigureError` and leave all settings
+unchanged. Runtime configuration emits no review marks for review breaches.
 
 `currency` validates account-specific barriers and filters fallback barriers:
 

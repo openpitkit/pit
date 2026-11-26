@@ -208,15 +208,23 @@ func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 }
 
 func NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+	mode PretradeRuleMode,
 	currency string,
 	lowerBound ParamPnlOptional,
 	upperBound ParamPnlOptional,
-) PretradePoliciesSpotFundsPnlBoundsBarrier {
+) (PretradePoliciesSpotFundsPnlBoundsBarrier, error) {
+	cMode, ok := checkedRuleModeToC(mode)
+	if !ok {
+		return PretradePoliciesSpotFundsPnlBoundsBarrier{}, fmt.Errorf(
+			"SpotFundsPnlBoundsBarrier.mode is invalid: %d", mode,
+		)
+	}
 	return PretradePoliciesSpotFundsPnlBoundsBarrier{
+		mode:        cMode,
 		currency:    importString(currency),
 		lower_bound: lowerBound,
 		upper_bound: upperBound,
-	}
+	}, nil
 }
 
 func NewPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier(
