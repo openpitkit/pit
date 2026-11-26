@@ -550,9 +550,9 @@ class Service {
     return raw;
   }
 
-  template <typename T>
-  [[nodiscard]] static const T* DataOrNull(
-      const std::vector<T>& values) noexcept {
+  template <typename Element>
+  [[nodiscard]] static const Element* DataOrNull(
+      const std::vector<Element>& values) noexcept {
     return values.empty() ? nullptr : values.data();
   }
 

@@ -1645,23 +1645,23 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[derive(Clone)]
 struct CountingMarketData(Arc<AtomicUsize>);
 
-struct CountingLock<T> {
-    inner: std::sync::RwLock<T>,
+struct CountingLock<LockedValue> {
+    inner: std::sync::RwLock<LockedValue>,
     reads: Arc<AtomicUsize>,
 }
 
 impl crate::marketdata::sealed::Sealed for CountingMarketData {}
 
 impl crate::marketdata::MarketDataSync for CountingMarketData {
-    type Shared<T: 'static> = Arc<T>;
-    type Lock<T> = CountingLock<T>;
+    type Shared<SharedValue: 'static> = Arc<SharedValue>;
+    type Lock<LockedValue> = CountingLock<LockedValue>;
     type Gate = AtomicBool;
 
-    fn new_shared<T: 'static>(&self, inner: T) -> Arc<T> {
+    fn new_shared<SharedValue: 'static>(&self, inner: SharedValue) -> Arc<SharedValue> {
         Arc::new(inner)
     }
 
-    fn new_lock<T>(&self, inner: T) -> CountingLock<T> {
+    fn new_lock<LockedValue>(&self, inner: LockedValue) -> CountingLock<LockedValue> {
         CountingLock {
             inner: std::sync::RwLock::new(inner),
             reads: Arc::clone(&self.0),
@@ -1669,18 +1669,21 @@ impl crate::marketdata::MarketDataSync for CountingMarketData {
     }
 }
 
-// SAFETY: the standard RwLock owns all access; the counter never accesses T.
-unsafe impl<T> crate::marketdata::MarketDataLock<T> for CountingLock<T> {
+// SAFETY: the standard RwLock owns all access; the counter never accesses
+// LockedValue.
+unsafe impl<LockedValue> crate::marketdata::MarketDataLock<LockedValue>
+    for CountingLock<LockedValue>
+{
     type ReadGuard<'a>
-        = std::sync::RwLockReadGuard<'a, T>
+        = std::sync::RwLockReadGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
     type WriteGuard<'a>
-        = std::sync::RwLockWriteGuard<'a, T>
+        = std::sync::RwLockWriteGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
 
     fn read(&self) -> Self::ReadGuard<'_> {
         self.reads.fetch_add(1, Ordering::Relaxed);

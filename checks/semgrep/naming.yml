@@ -1,0 +1,150 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Source: the project style contract requires full generic parameter names.
+# Each rule reports the declaration containing the first short name.
+# Semgrep fixtures are tested separately, including other rules' code samples.
+rules:
+  - id: short-generic-parameter-rust
+    message: Use a full name that describes the generic parameter.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      exclude: [/checks/semgrep/tests/**]
+    pattern-regex: |
+      (?x)
+      (?(DEFINE)
+        (?<group>
+          <(?:->|[^<>{}()\[\];]|(?&group))*>
+          | \((?:[^()]|(?&group))*\)
+          | \[(?:[^\[\]]|(?&group))*\]
+          | \{(?:[^{}]|(?&group))*\}
+        )
+      )
+      \b(?:(?:fn|struct|enum|union|trait|type)\s+\w+|impl)\s*<
+      (?:(?:->|[^<>{}()\[\];,]|(?&group))*,)*
+      \s*(?:const\s+)?(?:[A-Z][A-Z0-9]*|[A-Za-z_]\w)\b
+      (?=\s*[:,>=])
+
+  - id: short-generic-parameter-go
+    message: Use a full name that describes the generic parameter.
+    severity: ERROR
+    # Use the regex engine so valid generic aliases bypass the Go parser.
+    languages: [regex]
+    paths:
+      include: ['*.go']
+      exclude: [/checks/semgrep/tests/**]
+    pattern-either:
+      - pattern-regex: |
+          (?x)
+          (?(DEFINE)
+            (?<group>
+              \[(?:[^\[\]]|(?&group))*\]
+              | \{(?:[^{}]|(?&group))*\}
+              | \((?:[^()]|(?&group))*\)
+            )
+          )
+          (?:
+            \bfunc\s+\w+\s*\[
+            (?:(?:[^{}()\[\],;]|(?&group))*,)*\s*
+            (?:[A-Z][A-Z0-9]*|[A-Za-z_]\w)\b
+            (?=(?:\s*,\s*\w+)*\s+(?:[\w~\[<]|\*\s*\w))
+            |
+            \bfunc\s*\(\s*(?:\w+\s+)?\*?\w+\s*\[
+            (?:\s*\w+\s*,)*\s*(?:[A-Z][A-Z0-9]*|[A-Za-z_]\w)\b
+            (?=\s*[,\]])
+          )
+      - patterns:
+          # Bound the header search to a type header or a full type group.
+          - pattern-regex: |
+              (?x)
+              (?(DEFINE)
+                (?<literal>
+                  "(?:\\.|[^"\\])*" | '(?:\\.|[^'\\])*' | `[^`]*`
+                  | //[^\r\n]* | /\*(?s:.*?)\*/
+                )
+                (?<paren>\((?:[^()"'`/]++|/(?![/*])|(?&literal)|(?&paren))*\))
+                (?<list>\[(?:[^\[\]"'`/]++|/(?![/*])|(?&literal)|(?&list))*\])
+              )
+              \btype(?:\s+\w+\s*(?&list)|\s*(?&paren))
+          # A multiplication-shaped array length is ambiguous with a lone
+          # pointer constraint. Type keywords and bracket types disambiguate.
+          - pattern-regex: |
+              (?mx)
+              (?(DEFINE)
+                (?<comment>//[^\r\n]* | /\*(?s:.*?)\*/)
+                (?<literal>
+                  "(?:\\.|[^"\\])*" | '(?:\\.|[^'\\])*' | `[^`]*`
+                  | (?&comment)
+                )
+                (?<layout>(?:\s|(?&comment))*)
+                (?<group>
+                  \[(?&part)*\] | \{(?&part)*\} | \((?&part)*\)
+                )
+                (?<part>[^{}\[\]()"'`/]++|/(?![/*])|(?&literal)|(?&group))
+              )
+              (?:
+                (?&literal) | (?=\[)(?&group)
+                | \b(?:struct|interface)(?&layout)(?=\{)(?&group)
+                | \bfunc(?&layout)(?=\()(?&group)
+                  (?:(?&layout)(?=\()(?&group))?
+              )
+              (*SKIP)(*F)
+              |
+              (?:\btype\s+|^\h*|(?<=[;(])\h*)\w+\s*\[
+              (?!\s*\w+\s*\*(?!\s*(?:(?:struct|interface|map|func|chan)\b|\[))
+                (?:[^{}()\[\],;~]|(?&group))*\])
+              (?:(?:[^{}()\[\],;]|(?&group))*,)*\s*
+              (?:[A-Z][A-Z0-9]*|[A-Za-z_]\w)\b
+              (?=(?:\s*,\s*\w+)*\s+(?:[\w~\[<]|\*\s*[\w\[]))
+
+  - id: short-generic-parameter-cpp
+    message: Use a full name that describes the template parameter.
+    severity: ERROR
+    languages: [cpp]
+    paths:
+      exclude: [/checks/semgrep/tests/**]
+    pattern-regex: |
+      (?x)
+      (?(DEFINE)(?<angles><(?:[^<>{};]|(?&angles))*>))
+      \btemplate\s*<
+      (?:(?:[^<>{};,]|(?&angles))*,)*
+      \s*(?:template\s*(?&angles)\s*)?
+      [:\w]+(?:\s+[\w:]+)*?\s*(?:\.\.\.|\s)\s*
+      (?:[A-Z][A-Z0-9]*|[A-Za-z_]\w)\b(?=\s*[,>=])
+
+  - id: short-generic-parameter-js
+    message: Use a full name that describes the generic parameter.
+    severity: ERROR
+    languages: [javascript, typescript]
+    paths:
+      exclude: [/checks/semgrep/tests/**]
+    pattern-regex: |
+      (?x)
+      (?(DEFINE)
+        (?<part>[^<>{};,]|=>|\{[^{}]*\}|<(?:[^<>{};]|<[^<>{};]*>)*>)
+      )
+      (?:
+        \b(?:function\b\s*\*?(?:\s*\w+)?|class\b(?:\s+\w+)?
+          |(?:interface|type)\s+\w+)\s*<
+        |
+        (?<![\w.])(?:\w+\s*)?<
+        (?=(?:(?&part)|,)*>\s*
+          \((?:[^()]|\([^()]*\))*\)\s*(?:=>|:|\{))
+      )
+      (?:(?&part)*,)*\s*(?:(?:const|in|out)\s+)*
+      (?:[A-Z][A-Z0-9]*|[A-Za-z_$][\w$])(?=\s*(?:extends\b|[,>=]))

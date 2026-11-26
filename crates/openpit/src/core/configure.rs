@@ -90,21 +90,21 @@ pub(crate) enum ConfigEntry<Factory: LockingPolicyFactory> {
 /// holds the transition until it is published or dropped, so a caller can take
 /// a lease over the publication and its sweep without holding it over the
 /// computation.
-struct PreparedTransition<'a, T, Cell> {
+struct PreparedTransition<'a, Settings, Cell> {
     _transition: parking_lot::MutexGuard<'a, ()>,
     cell: &'a Cell,
-    previous: T,
-    current: T,
+    previous: Settings,
+    current: Settings,
 }
 
-impl<T, Cell> PreparedTransition<'_, T, Cell>
+impl<Settings, Cell> PreparedTransition<'_, Settings, Cell>
 where
-    T: Clone + 'static,
-    Cell: ConfigCell<T>,
+    Settings: Clone + 'static,
+    Cell: ConfigCell<Settings>,
 {
     /// Publishes the prepared settings, then passes the previous and the
     /// published settings to `observe`.
-    fn publish<Error>(self, observe: impl FnOnce(&T, &T)) -> Result<(), Error> {
+    fn publish<Error>(self, observe: impl FnOnce(&Settings, &Settings)) -> Result<(), Error> {
         let Self {
             _transition,
             cell,
@@ -123,14 +123,14 @@ where
 
 /// Applies `update` to a copy of the settings under `transition` and returns
 /// the result unpublished.
-fn prepare_serialized_transition<'a, T, Cell, Error>(
+fn prepare_serialized_transition<'a, Settings, Cell, Error>(
     transition: &'a parking_lot::Mutex<()>,
     cell: &'a Cell,
-    update: impl FnOnce(&mut T) -> Result<(), Error>,
-) -> Result<PreparedTransition<'a, T, Cell>, Error>
+    update: impl FnOnce(&mut Settings) -> Result<(), Error>,
+) -> Result<PreparedTransition<'a, Settings, Cell>, Error>
 where
-    T: Clone + 'static,
-    Cell: ConfigCell<T>,
+    Settings: Clone + 'static,
+    Cell: ConfigCell<Settings>,
 {
     let transition = transition.lock();
     let previous = cell.with(Clone::clone);
@@ -858,33 +858,33 @@ mod tests {
     use super::{active_holdings_accounts, prepare_serialized_transition};
 
     // Prepares and publishes in one step, as a caller without a lease does.
-    fn update_serialized_transition<T, Cell, Error>(
+    fn update_serialized_transition<Settings, Cell, Error>(
         transition: &parking_lot::Mutex<()>,
         cell: &Cell,
-        update: impl FnOnce(&mut T) -> Result<(), Error>,
-        observe: impl FnOnce(&T, &T),
+        update: impl FnOnce(&mut Settings) -> Result<(), Error>,
+        observe: impl FnOnce(&Settings, &Settings),
     ) -> Result<(), Error>
     where
-        T: Clone + 'static,
-        Cell: ConfigCell<T>,
+        Settings: Clone + 'static,
+        Cell: ConfigCell<Settings>,
     {
         prepare_serialized_transition(transition, cell, update)?.publish(observe)
     }
 
     #[derive(Clone)]
-    struct BlockingReadConfigCell<T>(Arc<Mutex<T>>);
+    struct BlockingReadConfigCell<Settings>(Arc<Mutex<Settings>>);
 
-    impl<T: Clone + 'static> ConfigCell<T> for BlockingReadConfigCell<T> {
-        fn new(value: T) -> Self {
+    impl<Settings: Clone + 'static> ConfigCell<Settings> for BlockingReadConfigCell<Settings> {
+        fn new(value: Settings) -> Self {
             Self(Arc::new(Mutex::new(value)))
         }
 
-        fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        fn with<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output {
             let value = self.0.lock().expect("test config mutex must not poison");
             f(&value)
         }
 
-        fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        fn with_snapshot<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output {
             let value = {
                 let value = self.0.lock().expect("test config mutex must not poison");
                 value.clone()
@@ -892,7 +892,10 @@ mod tests {
             f(&value)
         }
 
-        fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E> {
+        fn update<UpdateError>(
+            &self,
+            f: impl FnOnce(&mut Settings) -> Result<(), UpdateError>,
+        ) -> Result<(), UpdateError> {
             let mut value = self.0.lock().expect("test config mutex must not poison");
             let mut next = value.clone();
             f(&mut next)?;

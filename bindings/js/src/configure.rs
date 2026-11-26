@@ -234,7 +234,8 @@ pub struct JsConfigurator {
     callback_scope_id: u64,
 }
 
-type SpotFundsLimitModeEntry<Id> = (Id, Option<openpit::pretrade::SpotFundsLimitMode>);
+type SpotFundsLimitModeEntry<Identifier> =
+    (Identifier, Option<openpit::pretrade::SpotFundsLimitMode>);
 
 #[wasm_bindgen(js_class = Configurator)]
 impl JsConfigurator {
@@ -753,9 +754,9 @@ fn optional_u16_field(value: &JsValue, field: &str) -> Result<Option<u16>, JsVal
     ))
 }
 
-fn optional_wrapper_field<T>(value: &JsValue, field: &str) -> Result<Option<T>, JsValue>
+fn optional_wrapper_field<Wrapper>(value: &JsValue, field: &str) -> Result<Option<Wrapper>, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let field_value = read_field(value, field)?;
     if field_value.is_undefined() || field_value.is_null() {
@@ -764,9 +765,12 @@ where
     extract_wrapper(field_value, field).map(Some)
 }
 
-fn optional_wrapper_iter_field<T>(value: &JsValue, field: &str) -> Result<Option<Vec<T>>, JsValue>
+fn optional_wrapper_iter_field<Wrapper>(
+    value: &JsValue,
+    field: &str,
+) -> Result<Option<Vec<Wrapper>>, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let field_value = read_field(value, field)?;
     if field_value.is_undefined() || field_value.is_null() {
@@ -775,9 +779,9 @@ where
     collect_wrappers(field_value, field).map(Some)
 }
 
-fn collect_wrappers<T>(value: JsValue, field: &str) -> Result<Vec<T>, JsValue>
+fn collect_wrappers<Wrapper>(value: JsValue, field: &str) -> Result<Vec<Wrapper>, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let iterator = js_sys::try_iter(&value)?.ok_or_else(|| iterable_error(field))?;
     let mut result = Vec::new();
@@ -787,12 +791,12 @@ where
     Ok(result)
 }
 
-fn extract_wrapper<T>(value: JsValue, field: &str) -> Result<T, JsValue>
+fn extract_wrapper<Wrapper>(value: JsValue, field: &str) -> Result<Wrapper, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let value = clone_wrapper_value(&value)?.unwrap_or(value);
-    T::try_from_js_value(value).map_err(|_| {
+    Wrapper::try_from_js_value(value).map_err(|_| {
         make_error(
             ErrorKind::Type,
             &format!("{field} contains an invalid entry"),
@@ -809,12 +813,12 @@ fn iterable_error(field: &str) -> JsValue {
     make_error(ErrorKind::Type, &format!("{field} must be iterable"), None)
 }
 
-fn optional_limit_mode_entries<Id>(
+fn optional_limit_mode_entries<Identifier>(
     options: &JsValue,
     field: &str,
     id_field: &str,
-    parse_id: impl Fn(JsValue) -> Result<Id, JsValue>,
-) -> Result<Option<Vec<SpotFundsLimitModeEntry<Id>>>, JsValue> {
+    parse_id: impl Fn(JsValue) -> Result<Identifier, JsValue>,
+) -> Result<Option<Vec<SpotFundsLimitModeEntry<Identifier>>>, JsValue> {
     let value = read_field(options, field)?;
     if value.is_undefined() || value.is_null() {
         return Ok(None);

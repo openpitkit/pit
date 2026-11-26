@@ -428,12 +428,12 @@ func assertOptionalBoolValuesEqual(t *testing.T, got optional.Bool, want optiona
 	}
 }
 
-func assertOptionBy[T any](
+func assertOptionBy[Value any](
 	t *testing.T,
 	name string,
-	got optional.Option[T],
-	want optional.Option[T],
-	assertValue func(got T, want T),
+	got optional.Option[Value],
+	want optional.Option[Value],
+	assertValue func(got Value, want Value),
 ) {
 	t.Helper()
 	gotValue, gotIsSet := got.Get()

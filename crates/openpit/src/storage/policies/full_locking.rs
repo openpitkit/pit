@@ -52,7 +52,7 @@ impl LockingPolicyFactory for FullLocking {
     /// Multi-thread regime; `AtomicBool` provides lock-free synchronization.
     type IndexFlag = std::sync::atomic::AtomicBool;
 
-    type Shared<T: 'static> = std::sync::Arc<T>;
+    type Shared<SharedValue: 'static> = std::sync::Arc<SharedValue>;
 
     type Config<Settings: Clone + 'static> = ArcSwapConfigCell<Settings>;
 
@@ -63,7 +63,7 @@ impl LockingPolicyFactory for FullLocking {
         }
     }
 
-    fn new_shared<T: 'static>(value: T) -> std::sync::Arc<T> {
+    fn new_shared<SharedValue: 'static>(value: SharedValue) -> std::sync::Arc<SharedValue> {
         std::sync::Arc::new(value)
     }
 
@@ -89,9 +89,9 @@ pub struct FullLockingPolicy {
 // support the storage-level read-from-read re-entry contract even when a
 // writer is queued.
 unsafe impl LockingPolicy for FullLockingPolicy {
-    type OnceValue<T> = std::sync::OnceLock<T>;
+    type OnceValue<Value> = std::sync::OnceLock<Value>;
 
-    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+    fn new_once_value<Value>(&self) -> Self::OnceValue<Value> {
         std::sync::OnceLock::new()
     }
 

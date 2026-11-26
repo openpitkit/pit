@@ -67,7 +67,7 @@ const accepting: Policy = {
 };
 
 // Runs `body` on a host with no `Performance` object, restoring it afterwards.
-function withoutPerformance<T>(body: () => T): T {
+function withoutPerformance<Output>(body: () => Output): Output {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
   if (descriptor === undefined) {
     throw new Error("this host exposes no globalThis.performance to remove");

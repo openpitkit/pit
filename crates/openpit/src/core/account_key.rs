@@ -57,21 +57,23 @@ impl AccountKey for AccountId {
     }
 }
 
-impl<T> AccountKey for (AccountId, T) {
+impl<FirstComponent> AccountKey for (AccountId, FirstComponent) {
     #[inline]
     fn account_id(&self) -> AccountId {
         self.0
     }
 }
 
-impl<T1, T2> AccountKey for (AccountId, T1, T2) {
+impl<FirstComponent, SecondComponent> AccountKey for (AccountId, FirstComponent, SecondComponent) {
     #[inline]
     fn account_id(&self) -> AccountId {
         self.0
     }
 }
 
-impl<T1, T2, T3> AccountKey for (AccountId, T1, T2, T3) {
+impl<FirstComponent, SecondComponent, ThirdComponent> AccountKey
+    for (AccountId, FirstComponent, SecondComponent, ThirdComponent)
+{
     #[inline]
     fn account_id(&self) -> AccountId {
         self.0

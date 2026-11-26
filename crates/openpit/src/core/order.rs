@@ -63,8 +63,8 @@ impl HasAlreadyHeld for OrderOperation {
 /// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
 /// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithOrderOperation<T> {
-    pub inner: T,
+pub struct WithOrderOperation<InnerOrder> {
+    pub inner: InnerOrder,
     pub operation: OrderOperation,
 }
 
@@ -151,8 +151,8 @@ pub struct OrderPosition {
 /// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
 /// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithOrderPosition<T> {
-    pub inner: T,
+pub struct WithOrderPosition<InnerOrder> {
+    pub inner: InnerOrder,
     pub position: OrderPosition,
 }
 
@@ -190,8 +190,8 @@ pub struct OrderMargin {
 /// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
 /// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithOrderMargin<T> {
-    pub inner: T,
+pub struct WithOrderMargin<InnerOrder> {
+    pub inner: InnerOrder,
     pub margin: OrderMargin,
 }
 
@@ -201,7 +201,7 @@ impl HasOrderCollateralAsset for OrderMargin {
     }
 }
 
-impl<T> HasOrderCollateralAsset for WithOrderMargin<T> {
+impl<InnerOrder> HasOrderCollateralAsset for WithOrderMargin<InnerOrder> {
     fn collateral_asset(&self) -> Result<Option<&Asset>, RequestFieldAccessError> {
         self.margin.collateral_asset()
     }

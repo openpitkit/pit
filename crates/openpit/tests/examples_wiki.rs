@@ -306,7 +306,8 @@ struct ReserveThenValidatePolicy {
     limit: Volume,
 }
 
-impl<O, R, A, Sync> PreTradePolicy<O, R, A, Sync> for ReserveThenValidatePolicy
+impl<Order, ExecutionReport, AccountAdjustment, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for ReserveThenValidatePolicy
 where
     Sync: openpit::SyncMode,
 {
@@ -317,7 +318,7 @@ where
     fn perform_pre_trade_check(
         &self,
         _ctx: &PreTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        _order: &O,
+        _order: &Order,
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         let prev = *self.reserved.borrow();
@@ -336,7 +337,9 @@ where
 
         if next > self.limit {
             return Err(Rejects::from(Reject::new(
-                <Self as PreTradePolicy<O, R, A, Sync>>::name(self),
+                <Self as PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>>::name(
+                    self,
+                ),
                 RejectScope::Order,
                 RejectCode::RiskLimitExceeded,
                 "temporary reservation exceeds limit",
@@ -349,7 +352,7 @@ where
     fn apply_execution_report(
         &self,
         _ctx: &PostTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        _report: &R,
+        _report: &ExecutionReport,
     ) -> Option<openpit::PostTradeResult> {
         None
     }
@@ -362,9 +365,10 @@ struct NotionalCapPolicy {
     max_abs_notional: Volume,
 }
 
-impl<O, R, A, Sync> PreTradePolicy<O, R, A, Sync> for NotionalCapPolicy
+impl<Order, ExecutionReport, AccountAdjustment, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for NotionalCapPolicy
 where
-    O: HasTradeAmount + HasOrderPrice,
+    Order: HasTradeAmount + HasOrderPrice,
     Sync: openpit::SyncMode,
 {
     fn name(&self) -> &str {
@@ -374,7 +378,7 @@ where
     fn perform_pre_trade_check(
         &self,
         _ctx: &PreTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        order: &O,
+        order: &Order,
         _mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         // Translate the public order surface into one number that this policy
@@ -383,7 +387,9 @@ where
             Ok(trade_amount) => trade_amount,
             Err(error) => {
                 return Err(Rejects::from(Reject::new(
-                    <Self as PreTradePolicy<O, R, A, Sync>>::name(self),
+                    <Self as PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>>::name(
+                        self,
+                    ),
                     RejectScope::Order,
                     RejectCode::MissingRequiredField,
                     "required order field missing",
@@ -395,7 +401,9 @@ where
             Ok(price) => price,
             Err(error) => {
                 return Err(Rejects::from(Reject::new(
-                    <Self as PreTradePolicy<O, R, A, Sync>>::name(self),
+                    <Self as PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>>::name(
+                        self,
+                    ),
                     RejectScope::Order,
                     RejectCode::MissingRequiredField,
                     "required order field missing",
@@ -410,7 +418,12 @@ where
                     Ok(v) => v,
                     Err(_) => {
                         return Err(Rejects::from(Reject::new(
-                            <Self as PreTradePolicy<O, R, A, Sync>>::name(self),
+                            <Self as PreTradePolicy<
+                                Order,
+                                ExecutionReport,
+                                AccountAdjustment,
+                                Sync,
+                            >>::name(self),
                             RejectScope::Order,
                             RejectCode::OrderValueCalculationFailed,
                             "order value calculation failed",
@@ -421,7 +434,9 @@ where
             }
             (TradeAmount::Quantity(_), None) => {
                 return Err(Rejects::from(Reject::new(
-                    <Self as PreTradePolicy<O, R, A, Sync>>::name(self),
+                    <Self as PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>>::name(
+                        self,
+                    ),
                     RejectScope::Order,
                     RejectCode::OrderValueCalculationFailed,
                     "order value calculation failed",
@@ -430,7 +445,9 @@ where
             }
             _ => {
                 return Err(Rejects::from(Reject::new(
-                    <Self as PreTradePolicy<O, R, A, Sync>>::name(self),
+                    <Self as PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>>::name(
+                        self,
+                    ),
                     RejectScope::Order,
                     RejectCode::UnsupportedOrderType,
                     "unsupported order type",
@@ -442,7 +459,9 @@ where
         if requested_notional > self.max_abs_notional {
             // Business validation failures should become explicit rejects.
             return Err(Rejects::from(Reject::new(
-                <Self as PreTradePolicy<O, R, A, Sync>>::name(self),
+                <Self as PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>>::name(
+                    self,
+                ),
                 RejectScope::Order,
                 RejectCode::RiskLimitExceeded,
                 "strategy cap exceeded",
@@ -458,7 +477,7 @@ where
     fn apply_execution_report(
         &self,
         _ctx: &PostTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        _report: &R,
+        _report: &ExecutionReport,
     ) -> Option<openpit::PostTradeResult> {
         None
     }
@@ -1079,11 +1098,11 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
         }
     }
 
-    impl<Order, ExecutionReport, A, Sync, StorageLockingPolicyFactory>
-        PreTradePolicy<Order, ExecutionReport, A, Sync>
+    impl<Order, ExecutionReport, AccountAdjustment, Sync, StorageLockingPolicyFactory>
+        PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
         for BalanceLimitPolicy<StorageLockingPolicyFactory>
     where
-        A: HasAssetDelta,
+        AccountAdjustment: HasAssetDelta,
         Sync: openpit::SyncMode,
         StorageLockingPolicyFactory: LockingPolicyFactory + CreateStorageFor<String>,
         StorageLockingPolicyFactory::Policy: 'static,
@@ -1098,7 +1117,7 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
                 <Sync as openpit::SyncMode>::StorageLockingPolicyFactory,
             >,
             _account_id: AccountId,
-            adjustment: &A,
+            adjustment: &AccountAdjustment,
             mutations: &mut Mutations,
         ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
             let asset_id = adjustment.asset_id().to_owned();
@@ -2678,7 +2697,8 @@ struct MyCountingPolicy {
     count: std::cell::Cell<u64>,
 }
 
-impl<O, R, A, Sync> PreTradePolicy<O, R, A, Sync> for MyCountingPolicy
+impl<Order, ExecutionReport, AccountAdjustment, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for MyCountingPolicy
 where
     Sync: openpit::SyncMode,
 {
@@ -2689,7 +2709,7 @@ where
     fn check_pre_trade_start(
         &self,
         _ctx: &PreTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        _order: &O,
+        _order: &Order,
     ) -> Result<(), Rejects> {
         self.count.set(self.count.get() + 1); // side effect
         Ok(())
@@ -2699,7 +2719,7 @@ where
     fn check_pre_trade_start_dry_run(
         &self,
         _ctx: &PreTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        _order: &O,
+        _order: &Order,
     ) -> Result<(), Rejects> {
         Ok(()) // inspect state without spending budget
     }
@@ -2707,7 +2727,7 @@ where
     fn perform_pre_trade_check(
         &self,
         _ctx: &PreTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        _order: &O,
+        _order: &Order,
         _mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         Ok(None)
@@ -2716,7 +2736,7 @@ where
     fn apply_execution_report(
         &self,
         _ctx: &PostTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-        _report: &R,
+        _report: &ExecutionReport,
     ) -> Option<openpit::PostTradeResult> {
         None
     }

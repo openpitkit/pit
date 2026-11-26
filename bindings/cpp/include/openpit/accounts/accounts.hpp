@@ -540,9 +540,9 @@ class Accounts {
 
   // Shared register/unregister body. `fn` is the matching native runtime
   // symbol; both have an identical signature.
-  template <typename Fn>
+  template <typename Callback>
   [[nodiscard]] std::optional<AccountGroupError> GroupOp(
-      Fn fn, const std::vector<::openpit::param::AccountId>& accounts,
+      Callback fn, const std::vector<::openpit::param::AccountId>& accounts,
       ::openpit::param::AccountGroupId group, const char* fallback) const {
     std::vector<OpenPitParamAccountId> raw;
     raw.reserve(accounts.size());

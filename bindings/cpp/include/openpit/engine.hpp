@@ -95,14 +95,15 @@ inline OpenPitPolicyInstance PolicyInstanceToNative(
 template <typename>
 struct DependentFalse : std::false_type {};
 
-template <typename T, typename = void>
+template <typename Policy, typename = void>
 struct HasAddTo : std::false_type {};
 
-template <typename T>
-struct HasAddTo<T, std::void_t<decltype(std::declval<const T&>().AddTo(
-                       std::declval<EngineBuilder&>(),
-                       std::declval<const PolicyInstance&>()))>>
-    : std::true_type {};
+template <typename Policy>
+struct HasAddTo<Policy,
+                std::void_t<decltype(std::declval<const Policy&>().AddTo(
+                    std::declval<EngineBuilder&>(),
+                    std::declval<const PolicyInstance&>()))>> : std::true_type {
+};
 
 // Rejects a base reference that would otherwise slice a derived payload.
 template <typename BaseType, typename PayloadType,

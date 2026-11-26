@@ -93,15 +93,15 @@ const finalizeBuffer = 8192
 // (each spilled item corresponds to one submitted-but-unconsumed op).
 //
 // It is safe for concurrent producers and consumers.
-type overflow[T any] struct {
+type overflow[Item any] struct {
 	mu    sync.Mutex
-	items []T
+	items []Item
 }
 
 // push appends one item and returns the new length. Never blocks (grows the
 // slice as needed). The length is returned under the same mutex hold so the
 // caller can track the peak depth without an extra lock round-trip.
-func (o *overflow[T]) push(item T) int {
+func (o *overflow[Item]) push(item Item) int {
 	o.mu.Lock()
 	o.items = append(o.items, item)
 	n := len(o.items)
@@ -110,7 +110,7 @@ func (o *overflow[T]) push(item T) int {
 }
 
 // pop removes and returns the oldest item, or ok=false when empty.
-func (o *overflow[T]) pop() (item T, ok bool) {
+func (o *overflow[Item]) pop() (item Item, ok bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if len(o.items) == 0 {

@@ -33,7 +33,7 @@ func newDecimalFromHandle(source native.ParamDecimal) decimal.Decimal {
 // reading under any scenario.
 // The panic is deliberate fail-fast behavior: continuing would hide a broken
 // value invariant.
-func newParamValueOrPanic[T any](value T, err error) T {
+func newParamValueOrPanic[Value any](value Value, err error) Value {
 	if err != nil {
 		panic(err)
 	}

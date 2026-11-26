@@ -239,16 +239,16 @@ class AsyncEngine {
                                                 std::move(cleanup));
   }
 
-  // Enqueues `op(driver)` for `accountId`, returning a `Future<R>` over its
-  // result. `op` is invoked on the worker thread with a reference to the
-  // borrowed driver; its return type `R` is deduced. Use this to express any
-  // single-value engine call without the async layer needing to name it.
-  template <typename Op, typename R = std::invoke_result_t<Op, Driver&>>
-  [[nodiscard]] Future<R> Call(
-      ::openpit::param::AccountId accountId, Op op,
+  // Enqueues `op(driver)` for `accountId` and returns a `Future<ResultValue>`.
+  // The worker passes the borrowed driver by reference and deduces
+  // `ResultValue` from the operation's return type.
+  template <typename Operation,
+            typename ResultValue = std::invoke_result_t<Operation, Driver&>>
+  [[nodiscard]] Future<ResultValue> Call(
+      ::openpit::param::AccountId accountId, Operation op,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    Promise<R> promise;
-    Future<R> future = promise.GetFuture();
+    Promise<ResultValue> promise;
+    Future<ResultValue> future = promise.GetFuture();
     Driver* driver = m_driver;
     // Some operations move captured payloads, so `op` must be mutable.
     auto run = [promise, driver, op = std::move(op)]() mutable noexcept {
@@ -272,17 +272,17 @@ class AsyncEngine {
 
   // Two-value variant of `Call`: `op` returns a `std::pair<A, B>` mirroring the
   // synchronous engine tuples (request-or-rejects, reservation-or-rejects).
-  // Returns a `PairFuture<A, B>`.
-  template <typename A, typename B, typename Op>
-  [[nodiscard]] PairFuture<A, B> Call2(
-      ::openpit::param::AccountId accountId, Op op,
+  // Returns a `PairFuture<FirstValue, SecondValue>`.
+  template <typename FirstValue, typename SecondValue, typename Operation>
+  [[nodiscard]] PairFuture<FirstValue, SecondValue> Call2(
+      ::openpit::param::AccountId accountId, Operation op,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    PairPromise<A, B> promise;
-    PairFuture<A, B> future = promise.GetFuture();
+    PairPromise<FirstValue, SecondValue> promise;
+    PairFuture<FirstValue, SecondValue> future = promise.GetFuture();
     Driver* driver = m_driver;
     auto run = [promise, driver, op = std::move(op)]() mutable noexcept {
       try {
-        std::pair<A, B> result = op(*driver);
+        std::pair<FirstValue, SecondValue> result = op(*driver);
         promise.Resolve(std::move(result.first), std::move(result.second));
       } catch (const std::exception& ex) {
         promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
@@ -425,13 +425,13 @@ class AsyncEngine {
   }
 
  private:
-  template <typename D>
+  template <typename PeerDriver>
   friend class ShardedBuilder;
-  template <typename D>
+  template <typename PeerDriver>
   friend class DynamicBuilder;
-  template <typename D>
+  template <typename PeerDriver>
   friend class AsyncReservation;
-  template <typename D>
+  template <typename PeerDriver>
   friend class AsyncDropCopyOperation;
 
   // The calling thread already owns serialization for this account.
@@ -458,9 +458,10 @@ class AsyncEngine {
   // Submits a single-value task. A submit that fails before the task is queued
   // fails `promise` on the submitting thread, while that thread still holds its
   // producer obligation, so the failure is ordered before any stop completes.
-  template <typename T>
+  template <typename ResultValue>
   void SubmitTask(OpenPitParamAccountId accountId, detail::TaskPtr task,
-                  const Promise<T>& promise, std::chrono::nanoseconds timeout) {
+                  const Promise<ResultValue>& promise,
+                  std::chrono::nanoseconds timeout) {
     m_strategy->Submit(
         accountId, std::move(task), Deadline(timeout),
         [promise](Error error) mutable { promise.Fail(std::move(error)); });
@@ -542,9 +543,9 @@ class Builder {
   }
 
  private:
-  template <typename D>
+  template <typename PeerDriver>
   friend class ShardedBuilder;
-  template <typename D>
+  template <typename PeerDriver>
   friend class DynamicBuilder;
 
   [[nodiscard]] detail::BaseConfig MakeBaseConfig() const {

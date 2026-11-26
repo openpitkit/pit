@@ -203,8 +203,8 @@ fn capacity_hint_does_not_alter_semantics() {
 // implements `FullySynchronized` (both index and values are guarded).
 #[test]
 fn full_locking_storage_is_send_and_sync() {
-    fn assert_send<T: Send>() {}
-    fn assert_sync<T: Sync>() {}
+    fn assert_send<Value: Send>() {}
+    fn assert_sync<Value: Sync>() {}
 
     assert_send::<Storage<u64, u64, <FullLocking as LockingPolicyFactory>::Policy>>();
     assert_sync::<Storage<u64, u64, <FullLocking as LockingPolicyFactory>::Policy>>();
@@ -216,7 +216,7 @@ fn full_locking_storage_is_send_and_sync() {
 // `compile_fail` doctest on `IndexLocking` itself.
 #[test]
 fn index_locking_storage_is_send_only() {
-    fn assert_send<T: Send>() {}
+    fn assert_send<Value: Send>() {}
 
     assert_send::<Storage<u64, u64, <IndexLocking as LockingPolicyFactory>::Policy>>();
 

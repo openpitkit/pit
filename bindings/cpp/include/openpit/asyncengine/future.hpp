@@ -38,8 +38,8 @@
 // from the worker thread in the normal case, or synchronously on the
 // submitting thread if the submit fails before the task is queued.
 //
-// `Result<T>` is the value the future carries: a `T` on success or an
-// `openpit::asyncengine::Error` (status-coded) instead. Expected async
+// `Result<ResultValue>` carries a `ResultValue` on success or a status-coded
+// `openpit::asyncengine::Error` on failure. Expected async
 // outcomes (engine stopped, queue limit, submit cancelled, a `Submit` closure
 // that threw) are encoded here and read at the boundary, never thrown across
 // threads - losing them on a worker thread is not acceptable. `Await`
@@ -55,14 +55,13 @@
 // Copyable `T` may be observed by multiple consumers. Move-only `T` is
 // supported for a single consuming `Await()`.
 //
-// The shared-future payload is conditional on `T` (see `Payload<T>`): a
-// copyable `T` stores the `Result<T>` inline so the hot resolve path allocates
-// nothing extra, while a move-only `T` is uniquely boxed so a single consumer
-// can move the value out of the shared state.
+// `Payload<ResultValue>` stores a copyable result inline so the hot resolve
+// path allocates nothing extra. A move-only result is uniquely boxed so a
+// single consumer can move the value out of the shared state.
 
 namespace openpit::asyncengine {
 
-template <typename T>
+template <typename ResultValue>
 class Future;
 
 // Machine-readable category of an async-dispatch failure carried by a future
@@ -90,14 +89,15 @@ enum class ErrorCode : std::uint8_t {
 
 namespace detail {
 
-template <typename T, bool = std::is_copy_constructible_v<T>>
+template <typename ResultValue,
+          bool = std::is_copy_constructible_v<ResultValue>>
 class ResultConsumption {
  protected:
   [[nodiscard]] bool TryConsumeValue() const noexcept { return true; }
 };
 
-template <typename T>
-class ResultConsumption<T, false> {
+template <typename ResultValue>
+class ResultConsumption<ResultValue, false> {
  protected:
   ResultConsumption() = default;
 
@@ -153,30 +153,37 @@ class Error : public std::exception {
 /// \brief Resolved payload of a future: either a value or an async error.
 //
 // The resolved payload of a single-value future: either the value or the
-// failure. A move-only `T` is supported by the consuming `Future::Await()`;
-// `Get()` is available only when `T` is copyable.
-template <typename T>
-class Result : private detail::ResultConsumption<T> {
+// failure. The consuming `Future::Await()` supports move-only values.
+// `Get()` requires a copyable `ResultValue`.
+template <typename ResultValue>
+class Result : private detail::ResultConsumption<ResultValue> {
  public:
-  Result(T value) : m_value(std::move(value)) {}  // NOLINT: implicit by design.
+  // NOLINTNEXTLINE: implicit by design.
+  Result(ResultValue value) : m_value(std::move(value)) {}
   Result(Error error) : m_value(std::move(error)) {}  // NOLINT: implicit.
   Result(const Result&) = default;
   Result(Result&&) noexcept(
-      std::is_nothrow_move_constructible_v<std::variant<T, Error>>) = default;
+      std::is_nothrow_move_constructible_v<std::variant<ResultValue, Error>>) =
+      default;
   Result& operator=(const Result&) = default;
   Result& operator=(Result&&) noexcept(
-      std::is_nothrow_move_assignable_v<std::variant<T, Error>>) = default;
+      std::is_nothrow_move_assignable_v<std::variant<ResultValue, Error>>) =
+      default;
 
   [[nodiscard]] bool HasValue() const noexcept {
-    return std::holds_alternative<T>(m_value);
+    return std::holds_alternative<ResultValue>(m_value);
   }
   [[nodiscard]] bool HasError() const noexcept {
     return std::holds_alternative<Error>(m_value);
   }
 
   // The value; defined only when `HasValue()`.
-  [[nodiscard]] const T& Value() const& { return std::get<T>(m_value); }
-  [[nodiscard]] T&& Value() && { return std::get<T>(std::move(m_value)); }
+  [[nodiscard]] const ResultValue& Value() const& {
+    return std::get<ResultValue>(m_value);
+  }
+  [[nodiscard]] ResultValue&& Value() && {
+    return std::get<ResultValue>(std::move(m_value));
+  }
 
   // The error; defined only when `HasError()`.
   [[nodiscard]] const Error& GetError() const {
@@ -184,47 +191,46 @@ class Result : private detail::ResultConsumption<T> {
   }
 
  private:
-  friend class Future<T>;
+  friend class Future<ResultValue>;
 
   [[nodiscard]] bool TryConsumeValue() const noexcept {
-    return detail::ResultConsumption<T>::TryConsumeValue();
+    return detail::ResultConsumption<ResultValue>::TryConsumeValue();
   }
 
-  std::variant<T, Error> m_value;
+  std::variant<ResultValue, Error> m_value;
 };
 
-// Shared-state payload carried by the future. A copyable `T` stores the
-// `Result<T>` inline (no per-resolve allocation); a move-only `T` is boxed in a
-// `std::unique_ptr` so the single consuming `Await()` can move out of the
-// shared state.
-template <typename T>
-using Payload = std::conditional_t<std::is_copy_constructible_v<T>, Result<T>,
-                                   std::unique_ptr<Result<T>>>;
+// A copyable result is stored inline without a per-resolve allocation.
+// A move-only result is boxed in a `std::unique_ptr` so the single
+// consuming `Await()` can move it out of the shared state.
+template <typename ResultValue>
+using Payload = std::conditional_t<std::is_copy_constructible_v<ResultValue>,
+                                   Result<ResultValue>,
+                                   std::unique_ptr<Result<ResultValue>>>;
 
 /// \brief Consumer side of an async operation returning one value.
 //
-// Future over a single value `T`. Resolved exactly once via the paired
-// `Promise<T>`. Safe for concurrent observation by multiple threads when `T`
-// is copyable. A move-only value can be consumed once; later `Await()` calls
-// throw `ErrorCode::ValueConsumed`.
-template <typename T>
+// Resolved exactly once via the paired `Promise<ResultValue>`. Multiple
+// threads can observe a copyable result concurrently. A move-only value can
+// be consumed once; later `Await()` calls throw `ErrorCode::ValueConsumed`.
+template <typename ResultValue>
 class Future {
  public:
   Future() = default;
 
-  explicit Future(std::shared_future<Payload<T>> state)
+  explicit Future(std::shared_future<Payload<ResultValue>> state)
       : m_state(std::move(state)) {}
 
   // Blocks until resolved, then returns the value or rethrows the carried
   // `Error` on the caller's thread.
-  [[nodiscard]] T Await() const { return ConsumeResolved(); }
+  [[nodiscard]] ResultValue Await() const { return ConsumeResolved(); }
 
   // Blocks up to `timeout`. Returns the value on resolution, rethrows the
   // carried `Error`, or returns `std::nullopt` if the deadline passes first
   // (the underlying task is unaffected; the caller merely stops waiting).
-  template <typename Rep, typename Period>
-  [[nodiscard]] std::optional<T> Await(
-      std::chrono::duration<Rep, Period> timeout) const {
+  template <typename Representation, typename Period>
+  [[nodiscard]] std::optional<ResultValue> Await(
+      std::chrono::duration<Representation, Period> timeout) const {
     if (m_state.wait_for(timeout) != std::future_status::ready) {
       return std::nullopt;
     }
@@ -237,27 +243,27 @@ class Future {
   }
 
   // Blocks for the resolution without consuming it, then returns the carried
-  // `Result<T>` by copy. Requires a copyable `T`.
-  [[nodiscard]] Result<T> Get() const {
-    if constexpr (std::is_copy_constructible_v<T>) {
+  // `Result<ResultValue>` by copy. Requires a copyable result value.
+  [[nodiscard]] Result<ResultValue> Get() const {
+    if constexpr (std::is_copy_constructible_v<ResultValue>) {
       return m_state.get();
     } else {
-      static_assert(std::is_copy_constructible_v<T>,
-                    "Future<T>::Get() requires a copy-constructible T; use "
-                    "Await() for a move-only T");
+      static_assert(std::is_copy_constructible_v<ResultValue>,
+                    "Future<ResultValue>::Get() requires a copy-constructible "
+                    "result value; use Await() for a move-only result value");
     }
   }
 
  private:
-  [[nodiscard]] T ConsumeResolved() const {
-    if constexpr (std::is_copy_constructible_v<T>) {
-      const Result<T>& result = m_state.get();
+  [[nodiscard]] ResultValue ConsumeResolved() const {
+    if constexpr (std::is_copy_constructible_v<ResultValue>) {
+      const Result<ResultValue>& result = m_state.get();
       if (result.HasError()) {
         throw result.GetError();
       }
       return result.Value();
     } else {
-      const std::unique_ptr<Result<T>>& result = m_state.get();
+      const std::unique_ptr<Result<ResultValue>>& result = m_state.get();
       if (result->HasError()) {
         throw result->GetError();
       }
@@ -268,45 +274,52 @@ class Future {
       return std::move(*result).Value();
     }
   }
-  std::shared_future<Payload<T>> m_state;
+  std::shared_future<Payload<ResultValue>> m_state;
 };
 
-/// \brief Producer side used by the dispatcher to resolve a `Future<T>`.
+/// \brief Producer side used by the dispatcher to resolve a
+/// `Future<ResultValue>`.
 //
-// Producer side of a `Future<T>`. The dispatcher creates one per task and
-// resolves it exactly once; a second resolve is ignored.
-template <typename T>
+// The dispatcher creates one promise per task and resolves it exactly
+// once. A second resolve is ignored.
+template <typename ResultValue>
 class Promise {
  public:
   Promise()
       : m_state(std::make_shared<State>()),
         m_future(m_state->promise.get_future().share()) {}
 
-  [[nodiscard]] Future<T> GetFuture() const { return Future<T>(m_future); }
+  [[nodiscard]] Future<ResultValue> GetFuture() const {
+    return Future<ResultValue>(m_future);
+  }
 
   // Resolves with a value. Idempotent: only the first resolve takes effect.
-  void Resolve(T value) const { ResolveResult(Result<T>(std::move(value))); }
+  void Resolve(ResultValue value) const {
+    ResolveResult(Result<ResultValue>(std::move(value)));
+  }
 
   // Resolves with a failure. Idempotent.
-  void Fail(Error error) const { ResolveResult(Result<T>(std::move(error))); }
+  void Fail(Error error) const {
+    ResolveResult(Result<ResultValue>(std::move(error)));
+  }
 
  private:
   // Past the latch the result can no longer be reported any other way, so a
   // delivery failure terminates instead of leaving the future unresolved.
-  void ResolveResult(Result<T> result) const noexcept {
+  void ResolveResult(Result<ResultValue> result) const noexcept {
     if (m_state->done.exchange(true)) {
       return;
     }
-    if constexpr (std::is_copy_constructible_v<T>) {
+    if constexpr (std::is_copy_constructible_v<ResultValue>) {
       m_state->promise.set_value(std::move(result));
     } else {
       m_state->promise.set_value(
-          std::make_unique<Result<T>>(std::move(result)));
+          std::make_unique<Result<ResultValue>>(std::move(result)));
     }
   }
 
   struct State {
-    std::promise<Payload<T>> promise;
+    std::promise<Payload<ResultValue>> promise;
     // Guards single resolution: std::promise::set_value throws on a second
     // call, and a task's run/abort halves could otherwise both fire under a
     // stop race.
@@ -314,7 +327,7 @@ class Promise {
   };
 
   std::shared_ptr<State> m_state;
-  std::shared_future<Payload<T>> m_future;
+  std::shared_future<Payload<ResultValue>> m_future;
 };
 
 /// \brief Consumer side of an async operation returning two values.
@@ -322,47 +335,50 @@ class Promise {
 // Future over a pair of values. Used by operations whose synchronous
 // counterpart returns two values plus an error, so the async shape lines up
 // with the sync tuple instead of a result struct.
-template <typename A, typename B>
+template <typename FirstValue, typename SecondValue>
 class PairFuture {
  public:
   PairFuture() = default;
 
-  explicit PairFuture(Future<std::pair<A, B>> inner)
+  explicit PairFuture(Future<std::pair<FirstValue, SecondValue>> inner)
       : m_inner(std::move(inner)) {}
 
   // Blocks until resolved, then returns both values or rethrows the error.
-  [[nodiscard]] std::pair<A, B> Await() const { return m_inner.Await(); }
+  [[nodiscard]] std::pair<FirstValue, SecondValue> Await() const {
+    return m_inner.Await();
+  }
 
-  template <typename Rep, typename Period>
-  [[nodiscard]] std::optional<std::pair<A, B>> Await(
-      std::chrono::duration<Rep, Period> timeout) const {
+  template <typename Representation, typename Period>
+  [[nodiscard]] std::optional<std::pair<FirstValue, SecondValue>> Await(
+      std::chrono::duration<Representation, Period> timeout) const {
     return m_inner.Await(timeout);
   }
 
   [[nodiscard]] bool Done() const { return m_inner.Done(); }
 
  private:
-  Future<std::pair<A, B>> m_inner;
+  Future<std::pair<FirstValue, SecondValue>> m_inner;
 };
 
-/// \brief Producer side for `PairFuture<A, B>`.
+/// \brief Producer side for `PairFuture<FirstValue, SecondValue>`.
 //
-// Producer side of a `PairFuture<A, B>`; a thin adapter over `Promise<pair>`.
-template <typename A, typename B>
+// Producer side of a `PairFuture<FirstValue, SecondValue>`; a thin adapter over
+// `Promise<pair>`.
+template <typename FirstValue, typename SecondValue>
 class PairPromise {
  public:
-  [[nodiscard]] PairFuture<A, B> GetFuture() const {
-    return PairFuture<A, B>(m_inner.GetFuture());
+  [[nodiscard]] PairFuture<FirstValue, SecondValue> GetFuture() const {
+    return PairFuture<FirstValue, SecondValue>(m_inner.GetFuture());
   }
 
-  void Resolve(A first, B second) const {
+  void Resolve(FirstValue first, SecondValue second) const {
     m_inner.Resolve(std::make_pair(std::move(first), std::move(second)));
   }
 
   void Fail(Error error) const { m_inner.Fail(std::move(error)); }
 
  private:
-  Promise<std::pair<A, B>> m_inner;
+  Promise<std::pair<FirstValue, SecondValue>> m_inner;
 };
 
 }  // namespace openpit::asyncengine

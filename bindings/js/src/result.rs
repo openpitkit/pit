@@ -1052,9 +1052,9 @@ impl JsPostTradeResult {
 }
 
 /// Clones typed wasm wrappers from an optional JavaScript array.
-fn clone_array<T>(values: Option<Array>, expected: &str) -> Result<Vec<T>, JsValue>
+fn clone_array<Wrapper>(values: Option<Array>, expected: &str) -> Result<Vec<Wrapper>, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let Some(values) = values else {
         return Ok(Vec::new());
@@ -1077,7 +1077,7 @@ where
             )
         })?;
     for value in values.iter() {
-        let value = extract_cloned_wrapper::<T>(&value)?.ok_or_else(|| {
+        let value = extract_cloned_wrapper::<Wrapper>(&value)?.ok_or_else(|| {
             make_error(
                 ErrorKind::Type,
                 &format!("post-trade result array must contain only {expected} values"),

@@ -390,6 +390,16 @@ check-semgrep: _ensure-python-env
     {{ semgrep_path }} --test --config checks/semgrep/fallbacks-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/fallbacks-rust.rs
     {{ semgrep_path }} --test --config checks/semgrep/async-exceptions-cpp.yml --metrics=off --disable-version-check checks/semgrep/tests/async-exceptions-cpp.cpp
     {{ semgrep_path }} --test --config checks/semgrep/resolve-once-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/resolve-once-rust.rs
+    {{ semgrep_path }} --test --config checks/semgrep/naming.yml --metrics=off --disable-version-check checks/semgrep/tests/naming.rs
+    {{ semgrep_path }} --test --config checks/semgrep/naming.yml --metrics=off --disable-version-check checks/semgrep/tests/naming.go
+    {{ semgrep_path }} --test --config checks/semgrep/naming.yml --metrics=off --disable-version-check checks/semgrep/tests/naming.cpp
+    {{ semgrep_path }} --test --config checks/semgrep/naming.yml --metrics=off --disable-version-check checks/semgrep/tests/naming.ts
+    {{ semgrep_path }} --test --config checks/semgrep/text-style.yml --metrics=off --disable-version-check checks/semgrep/tests/comment-width.rs
+    {{ semgrep_path }} --test --config checks/semgrep/text-style.yml --metrics=off --disable-version-check checks/semgrep/tests/comment-width.go
+    {{ semgrep_path }} --test --config checks/semgrep/text-style.yml --metrics=off --disable-version-check checks/semgrep/tests/comment-width.cpp
+    {{ semgrep_path }} --test --config checks/semgrep/text-style.yml --metrics=off --disable-version-check checks/semgrep/tests/comment-width.c
+    {{ semgrep_path }} --test --config checks/semgrep/text-style.yml --metrics=off --disable-version-check checks/semgrep/tests/comment-width.js
+    {{ semgrep_path }} --test --config checks/semgrep/text-style.yml --metrics=off --disable-version-check checks/semgrep/tests/comment-width.ts
 
 # Lint JS (type-check, eslint, prettier --check).
 lint-js: build-js

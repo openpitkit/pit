@@ -37,21 +37,21 @@ import (
 // A Future handed back to a caller is meant to be read-only: producers create
 // it with New and complete it with Resolve, consumers observe it with Await,
 // Done, TryGet, and Wait.
-type Future[T any] struct {
+type Future[Value any] struct {
 	done  chan struct{}
 	once  sync.Once
-	value T
+	value Value
 	err   error
 }
 
 // New creates an unresolved Future.
-func New[T any]() *Future[T] {
-	return &Future[T]{done: make(chan struct{})}
+func New[Value any]() *Future[Value] {
+	return &Future[Value]{done: make(chan struct{})}
 }
 
 // Resolve completes the future with the supplied value and error. Only the
 // first call has an effect.
-func (f *Future[T]) Resolve(value T, err error) {
+func (f *Future[Value]) Resolve(value Value, err error) {
 	f.once.Do(
 		func() {
 			f.value = value
@@ -66,18 +66,18 @@ func (f *Future[T]) Resolve(value T, err error) {
 // gives up waiting and receives the zero value with ctx.Err(). The caller can
 // call Await again or retrieve the eventual value with TryGet. If that value
 // owns resources, cancellation does not transfer or release that ownership.
-func (f *Future[T]) Await(ctx context.Context) (T, error) {
+func (f *Future[Value]) Await(ctx context.Context) (Value, error) {
 	select {
 	case <-f.done:
 		return f.value, f.err
 	case <-ctx.Done():
-		var zero T
+		var zero Value
 		return zero, ctx.Err()
 	}
 }
 
 // Done reports whether the future has been resolved.
-func (f *Future[T]) Done() bool {
+func (f *Future[Value]) Done() bool {
 	select {
 	case <-f.done:
 		return true
@@ -89,27 +89,27 @@ func (f *Future[T]) Done() bool {
 // TryGet returns the resolved value and error without blocking. If the
 // future is not yet resolved, ok is false and value/err are the zero
 // values.
-func (f *Future[T]) TryGet() (value T, ok bool, err error) {
+func (f *Future[Value]) TryGet() (value Value, ok bool, err error) {
 	select {
 	case <-f.done:
 		return f.value, true, f.err
 	default:
-		var zero T
+		var zero Value
 		return zero, false, nil
 	}
 }
 
 // Wait returns a channel that is closed once the future is resolved.
 // Useful for composing futures with other select statements.
-func (f *Future[T]) Wait() <-chan struct{} {
+func (f *Future[Value]) Wait() <-chan struct{} {
 	return f.done
 }
 
 // pair bundles the two values a Future2 carries so the resolution machinery
 // can ride on a plain Future without duplicating it.
-type pair[A, B any] struct {
-	first  A
-	second B
+type pair[FirstValue, SecondValue any] struct {
+	first  FirstValue
+	second SecondValue
 }
 
 // Future2 represents the eventual result of an asynchronous operation that
@@ -123,43 +123,43 @@ type pair[A, B any] struct {
 // future with a two-field value and splits that value back into two results at
 // the read boundary, so all concurrency and once-resolution semantics are
 // inherited rather than reimplemented.
-type Future2[A, B any] struct {
-	inner *Future[pair[A, B]]
+type Future2[FirstValue, SecondValue any] struct {
+	inner *Future[pair[FirstValue, SecondValue]]
 }
 
 // New2 creates an unresolved Future2.
-func New2[A, B any]() *Future2[A, B] {
-	return &Future2[A, B]{inner: New[pair[A, B]]()}
+func New2[FirstValue, SecondValue any]() *Future2[FirstValue, SecondValue] {
+	return &Future2[FirstValue, SecondValue]{inner: New[pair[FirstValue, SecondValue]]()}
 }
 
 // Resolve completes the future with the supplied values and error. Only the
 // first call has an effect.
-func (f *Future2[A, B]) Resolve(first A, second B, err error) {
-	f.inner.Resolve(pair[A, B]{first: first, second: second}, err)
+func (f *Future2[FirstValue, SecondValue]) Resolve(first FirstValue, second SecondValue, err error) {
+	f.inner.Resolve(pair[FirstValue, SecondValue]{first: first, second: second}, err)
 }
 
 // Await blocks until the future is resolved or ctx is cancelled. On ctx
 // cancellation the caller receives zero values with ctx.Err(). The future
 // remains usable through Await or TryGet, and any resource-owning eventual
 // values still belong to the caller.
-func (f *Future2[A, B]) Await(ctx context.Context) (A, B, error) {
+func (f *Future2[FirstValue, SecondValue]) Await(ctx context.Context) (FirstValue, SecondValue, error) {
 	value, err := f.inner.Await(ctx)
 	return value.first, value.second, err
 }
 
 // Done reports whether the future has been resolved.
-func (f *Future2[A, B]) Done() bool {
+func (f *Future2[FirstValue, SecondValue]) Done() bool {
 	return f.inner.Done()
 }
 
 // TryGet returns the resolved values and error without blocking. If the
 // future is not yet resolved, ok is false and the values/err are zero.
-func (f *Future2[A, B]) TryGet() (first A, second B, ok bool, err error) {
+func (f *Future2[FirstValue, SecondValue]) TryGet() (first FirstValue, second SecondValue, ok bool, err error) {
 	value, ok, err := f.inner.TryGet()
 	return value.first, value.second, ok, err
 }
 
 // Wait returns a channel that is closed once the future is resolved.
-func (f *Future2[A, B]) Wait() <-chan struct{} {
+func (f *Future2[FirstValue, SecondValue]) Wait() <-chan struct{} {
 	return f.inner.Wait()
 }

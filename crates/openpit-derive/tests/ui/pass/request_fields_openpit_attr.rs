@@ -62,13 +62,13 @@ impl HasStrategyTag for Base {
 }
 
 #[derive(RequestFields)]
-struct Wrapper<T> {
+struct Wrapper<InnerRequest> {
     #[openpit(
         inner,
         HasPnl(pnl -> Result<param::Pnl, RequestFieldAccessError>),
         HasStrategyTag(-> &'static str)
     )]
-    base: T,
+    base: InnerRequest,
     #[openpit(
         HasInstrument(instrument -> Result<&Instrument, RequestFieldAccessError>),
         HasAccountId(account_id -> Result<param::AccountId, RequestFieldAccessError>)
@@ -76,9 +76,9 @@ struct Wrapper<T> {
     operation: Operation,
 }
 
-fn assert_impls<T>(value: &Wrapper<T>)
+fn assert_impls<InnerRequest>(value: &Wrapper<InnerRequest>)
 where
-    Wrapper<T>: HasInstrument + HasAccountId + HasPnl + HasStrategyTag,
+    Wrapper<InnerRequest>: HasInstrument + HasAccountId + HasPnl + HasStrategyTag,
 {
     let _ = value.instrument();
     let _ = value.account_id();

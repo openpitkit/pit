@@ -186,10 +186,10 @@ mod debug {
         builder.pre_trade(policy).build().unwrap()
     }
 
-    fn during_configuration<T>(
+    fn during_configuration<Output>(
         engine: &FullSyncEngine<OrderOperation, ExecutionReportOperation>,
-        callback: impl FnOnce() -> T,
-    ) -> T {
+        callback: impl FnOnce() -> Output,
+    ) -> Output {
         let mut value = None;
         engine
             .configure()

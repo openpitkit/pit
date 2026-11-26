@@ -225,14 +225,14 @@ pub fn parse_u64_bigint(value: JsValue, label: &str) -> Result<u64, JsValue> {
 /// `from_int`/`from_string` mirror the wrapper's own integer/string factories,
 /// so the primitive path produces an identical identifier without consuming a
 /// wasm handle.
-fn resolve_u64_id<Wrapper, Id>(
+fn resolve_u64_id<Wrapper, Identifier>(
     value: JsValue,
-    from_int: impl Fn(u64) -> Result<Id, JsValue>,
-    from_string: impl Fn(&str) -> Result<Id, JsValue>,
-    extract: impl Fn(&Wrapper) -> Id,
+    from_int: impl Fn(u64) -> Result<Identifier, JsValue>,
+    from_string: impl Fn(&str) -> Result<Identifier, JsValue>,
+    extract: impl Fn(&Wrapper) -> Identifier,
     on_error: impl Fn() -> JsValue + Copy,
     on_unsafe_integer: impl Fn() -> JsValue,
-) -> Result<Id, JsValue>
+) -> Result<Identifier, JsValue>
 where
     Wrapper: TryFromJsValue,
 {
@@ -519,14 +519,14 @@ pub fn clone_wrapper_value(value: &JsValue) -> Result<Option<JsValue>, JsValue> 
 
 /// Attempts to extract a typed wasm wrapper without moving the caller's JS
 /// object. Getter and `clone()` exceptions are propagated unchanged.
-pub fn extract_cloned_wrapper<T>(value: &JsValue) -> Result<Option<T>, JsValue>
+pub fn extract_cloned_wrapper<Wrapper>(value: &JsValue) -> Result<Option<Wrapper>, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let Some(cloned) = clone_wrapper_value(value)? else {
         return Ok(None);
     };
-    Ok(T::try_from_js_value(cloned).ok())
+    Ok(Wrapper::try_from_js_value(cloned).ok())
 }
 
 /// Collects an iterable of exported wasm classes without moving any caller-
@@ -537,16 +537,19 @@ where
 /// Throws `TypeError` when `value` is not iterable or an element is not the
 /// expected wrapper type. Iterator and wrapper `clone()` exceptions propagate
 /// unchanged.
-pub fn collect_cloned_wrappers<T>(value: &JsValue, label: &str) -> Result<Vec<T>, JsValue>
+pub fn collect_cloned_wrappers<Wrapper>(
+    value: &JsValue,
+    label: &str,
+) -> Result<Vec<Wrapper>, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let iterator = js_sys::try_iter(value)?
         .ok_or_else(|| make_error(ErrorKind::Type, &format!("{label} must be iterable"), None))?;
     let mut wrappers = Vec::new();
     for item in iterator {
         let item = item?;
-        let wrapper = extract_cloned_wrapper::<T>(&item)?.ok_or_else(|| {
+        let wrapper = extract_cloned_wrapper::<Wrapper>(&item)?.ok_or_else(|| {
             make_error(
                 ErrorKind::Type,
                 &format!("{label} contains an invalid entry"),

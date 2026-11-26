@@ -21,9 +21,9 @@
 //! path and replaced rarely (only by the engine). Two implementations are
 //! available:
 //!
-//! * [`LocalConfigCell`] - `Rc<RefCell<Rc<T>>>`, for explicitly
+//! * [`LocalConfigCell`] - `Rc<RefCell<Rc<Settings>>>`, for explicitly
 //!   single-threaded consumers. Zero atomics.
-//! * [`ArcSwapConfigCell`] - `Arc`-shared `arc_swap::ArcSwap<T>` for full and
+//! * [`ArcSwapConfigCell`] - shared `arc_swap::ArcSwap<Settings>` for full and
 //!   account locking modes. Lock-free reads and serialized transactional
 //!   updates. No-locking mode uses [`LocalConfigCell`].
 //!
@@ -54,9 +54,9 @@ use std::sync::Arc;
 /// current value and publishes the result only when the closure returns
 /// `Ok`. If the closure returns `Err` or panics, no new value is
 /// published and the previously stored value remains visible to readers.
-pub trait ConfigCell<T: 'static>: Clone + 'static {
+pub trait ConfigCell<Settings: 'static>: Clone + 'static {
     /// Creates a cell holding `value`.
-    fn new(value: T) -> Self;
+    fn new(value: Settings) -> Self;
 
     /// Reads the current value without cloning it, returning whatever the
     /// closure computes from a shared reference.
@@ -65,7 +65,7 @@ pub trait ConfigCell<T: 'static>: Clone + 'static {
     /// closure must not update this cell, directly or through code it calls.
     /// Use [`Self::with_snapshot`] when calling caller-supplied accessors or
     /// other code that may update the cell.
-    fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R;
+    fn with<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output;
 
     /// Reads one stable version while allowing updates during the closure.
     ///
@@ -80,7 +80,7 @@ pub trait ConfigCell<T: 'static>: Clone + 'static {
     /// [`LocalConfigCell`] retains an `Rc` without borrowing the cell during
     /// the closure. [`ArcSwapConfigCell`] uses the same guarded read as
     /// [`Self::with`], without unconditionally cloning the stored `Arc`.
-    fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R;
+    fn with_snapshot<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output;
 
     /// Replaces the current value transactionally.
     ///
@@ -88,39 +88,45 @@ pub trait ConfigCell<T: 'static>: Clone + 'static {
     /// current value. The copy is published as the new value only if the
     /// closure returns `Ok`; on `Err` (or panic) the previously stored
     /// value is left untouched and the error is propagated.
-    fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E>;
+    fn update<UpdateError>(
+        &self,
+        f: impl FnOnce(&mut Settings) -> Result<(), UpdateError>,
+    ) -> Result<(), UpdateError>;
 }
 
-/// Single-threaded [`ConfigCell`] backed by `Rc<RefCell<Rc<T>>>`.
+/// Single-threaded [`ConfigCell`] backed by `Rc<RefCell<Rc<Settings>>>`.
 ///
 /// Performs no atomic operations. Cloning shares the same underlying cell.
-pub struct LocalConfigCell<T>(Rc<RefCell<Rc<T>>>);
+pub struct LocalConfigCell<Settings>(Rc<RefCell<Rc<Settings>>>);
 
-impl<T> Clone for LocalConfigCell<T> {
+impl<Settings> Clone for LocalConfigCell<Settings> {
     /// Clones the handle, not the value: both handles see the same cell.
     fn clone(&self) -> Self {
         Self(Rc::clone(&self.0))
     }
 }
 
-impl<T: Clone + 'static> ConfigCell<T> for LocalConfigCell<T> {
-    fn new(value: T) -> Self {
+impl<Settings: Clone + 'static> ConfigCell<Settings> for LocalConfigCell<Settings> {
+    fn new(value: Settings) -> Self {
         Self(Rc::new(RefCell::new(Rc::new(value))))
     }
 
     #[inline]
-    fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+    fn with<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output {
         let guard = self.0.borrow();
         f(&guard)
     }
 
     #[inline]
-    fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+    fn with_snapshot<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output {
         let snapshot = Rc::clone(&self.0.borrow());
         f(&snapshot)
     }
 
-    fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E> {
+    fn update<UpdateError>(
+        &self,
+        f: impl FnOnce(&mut Settings) -> Result<(), UpdateError>,
+    ) -> Result<(), UpdateError> {
         // Mutate a private clone so a failing closure cannot leave a
         // half-updated value visible. No borrow is held while `f` runs, so
         // `f` may read this cell through `with` or `with_snapshot`.
@@ -147,23 +153,23 @@ impl<T: Clone + 'static> ConfigCell<T> for LocalConfigCell<T> {
 /// transactional updates so two concurrent read-modify-write closures cannot
 /// overwrite each other.
 ///
-/// The cell is `Send + Sync` whenever `T: Send + Sync`.
-pub struct ArcSwapConfigCell<T>(Arc<ArcSwapConfigInner<T>>);
+/// The cell is `Send + Sync` whenever `Settings: Send + Sync`.
+pub struct ArcSwapConfigCell<Settings>(Arc<ArcSwapConfigInner<Settings>>);
 
-struct ArcSwapConfigInner<T> {
-    value: arc_swap::ArcSwap<T>,
+struct ArcSwapConfigInner<Settings> {
+    value: arc_swap::ArcSwap<Settings>,
     writer: parking_lot::Mutex<()>,
 }
 
-impl<T> Clone for ArcSwapConfigCell<T> {
+impl<Settings> Clone for ArcSwapConfigCell<Settings> {
     /// Clones the handle, not the value: both handles see the same cell.
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<T: Clone + 'static> ConfigCell<T> for ArcSwapConfigCell<T> {
-    fn new(value: T) -> Self {
+impl<Settings: Clone + 'static> ConfigCell<Settings> for ArcSwapConfigCell<Settings> {
+    fn new(value: Settings) -> Self {
         Self(Arc::new(ArcSwapConfigInner {
             value: arc_swap::ArcSwap::from_pointee(value),
             writer: parking_lot::Mutex::new(()),
@@ -171,7 +177,7 @@ impl<T: Clone + 'static> ConfigCell<T> for ArcSwapConfigCell<T> {
     }
 
     #[inline]
-    fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+    fn with<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output {
         // `load` (not `load_full`) avoids bumping the inner `Arc`'s
         // refcount on the hot read path; the guard keeps the pointee
         // alive for the duration of the call.
@@ -185,13 +191,16 @@ impl<T: Clone + 'static> ConfigCell<T> for ArcSwapConfigCell<T> {
     }
 
     #[inline]
-    fn with_snapshot<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+    fn with_snapshot<Output>(&self, f: impl FnOnce(&Settings) -> Output) -> Output {
         // Unlike a RefCell borrow, an ArcSwap guard permits publication.
         let guard = self.0.value.load();
         f(&guard)
     }
 
-    fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E> {
+    fn update<UpdateError>(
+        &self,
+        f: impl FnOnce(&mut Settings) -> Result<(), UpdateError>,
+    ) -> Result<(), UpdateError> {
         // The lock covers the entire read-modify-publish transaction. Reads
         // never take it, while concurrent writers cannot clone the same
         // snapshot and silently overwrite one another.

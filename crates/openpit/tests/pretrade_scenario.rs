@@ -773,9 +773,10 @@ fn integration_custom_order_strategy_tag_policy() {
 
     struct StrategyTagPolicy;
 
-    impl<O, R, A, Sync> PreTradePolicy<O, R, A, Sync> for StrategyTagPolicy
+    impl<Order, ExecutionReport, AccountAdjustment, Sync>
+        PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for StrategyTagPolicy
     where
-        O: HasStrategyTag + HasTradeAmount,
+        Order: HasStrategyTag + HasTradeAmount,
         Sync: openpit::SyncMode,
     {
         fn name(&self) -> &str {
@@ -785,7 +786,7 @@ fn integration_custom_order_strategy_tag_policy() {
         fn perform_pre_trade_check(
             &self,
             _ctx: &PreTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-            order: &O,
+            order: &Order,
             _mutations: &mut Mutations,
         ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             if order.strategy_tag() == "blocked" {
@@ -803,7 +804,7 @@ fn integration_custom_order_strategy_tag_policy() {
         fn apply_execution_report(
             &self,
             _ctx: &PostTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
-            _report: &R,
+            _report: &ExecutionReport,
         ) -> Option<openpit::PostTradeResult> {
             None
         }

@@ -30,8 +30,8 @@
 ///     instrument: Instrument,
 /// }
 ///
-/// struct WithOrder<T> {
-///     inner: T,
+/// struct WithOrder<InnerRequest> {
+///     inner: InnerRequest,
 ///     order: BaseOrder,
 /// }
 ///
@@ -145,8 +145,8 @@ macro_rules! impl_request_has_field {
 ///     }
 /// }
 ///
-/// struct Wrapper<T> {
-///     inner: T,
+/// struct Wrapper<InnerRequest> {
+///     inner: InnerRequest,
 /// }
 ///
 /// impl_request_has_field_passthrough!(
@@ -169,7 +169,8 @@ macro_rules! impl_request_has_field {
 /// ```
 ///
 /// Behavior:
-/// - Generates `impl<T> Trait for Wrapper<T> where T: Trait`.
+/// - Implements each trait for `Wrapper<InnerRequest>` when `InnerRequest`
+///   implements that trait.
 /// - Each method delegates to `self.<inner_field>.<method>()`.
 /// - All generated methods return `Result<_, RequestFieldAccessError>`.
 #[macro_export]
@@ -235,9 +236,9 @@ mod tests {
         count: u32,
     }
 
-    struct WithBase<T> {
+    struct WithBase<InnerRequest> {
         #[allow(dead_code)]
-        inner: T,
+        inner: InnerRequest,
         base: Base,
     }
 
@@ -280,8 +281,8 @@ mod tests {
         }
     }
 
-    struct Wrapper<T> {
-        inner: T,
+    struct Wrapper<InnerRequest> {
+        inner: InnerRequest,
     }
 
     crate::impl_request_has_field_passthrough!(

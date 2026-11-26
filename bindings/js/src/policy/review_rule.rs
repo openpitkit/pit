@@ -154,7 +154,11 @@ impl JsReviewRule {
     }
 }
 
-fn check_level<T>(target: Option<T>, has_other_id: bool, level: &str) -> Result<T, String> {
+fn check_level<Identifier>(
+    target: Option<Identifier>,
+    has_other_id: bool,
+    level: &str,
+) -> Result<Identifier, String> {
     target
         .filter(|_| !has_other_id)
         .ok_or_else(|| format!("ReviewRule has incompatible IDs for the {level} level"))

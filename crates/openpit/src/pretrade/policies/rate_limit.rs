@@ -35,8 +35,10 @@ use crate::storage::{ConfigCell, Storage, StorageBuilder};
 use crate::time::Instant;
 use crate::{Mutation, Mutations};
 
-type StoragePolicy<LPF> = <LPF as crate::storage::LockingPolicyFactory>::Policy;
-type TimestampStorage<K, LPF> = Storage<K, VecDeque<Instant>, StoragePolicy<LPF>>;
+type StoragePolicy<LockingPolicyFactory> =
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy;
+type TimestampStorage<Key, LockingPolicyFactory> =
+    Storage<Key, VecDeque<Instant>, StoragePolicy<LockingPolicyFactory>>;
 
 // Single source of truth for the policy name, shared by the associated
 // `RateLimitPolicy::NAME` const and the free reject builder.

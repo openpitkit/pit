@@ -440,18 +440,20 @@ const fn export_rounding_strategy(value: RoundingStrategy) -> OpenPitParamRoundi
     }
 }
 
-trait IntoParamResult<T> {
-    fn into_param_result(self, type_name: &str) -> Result<T, String>;
+trait IntoParamResult<Value> {
+    fn into_param_result(self, type_name: &str) -> Result<Value, String>;
 }
 
-impl<T> IntoParamResult<T> for T {
-    fn into_param_result(self, _type_name: &str) -> Result<T, String> {
+impl<Value> IntoParamResult<Value> for Value {
+    fn into_param_result(self, _type_name: &str) -> Result<Value, String> {
         Ok(self)
     }
 }
 
-impl<T, E: std::fmt::Display> IntoParamResult<T> for Result<T, E> {
-    fn into_param_result(self, type_name: &str) -> Result<T, String> {
+impl<Value, ConversionError: std::fmt::Display> IntoParamResult<Value>
+    for Result<Value, ConversionError>
+{
+    fn into_param_result(self, type_name: &str) -> Result<Value, String> {
         self.map_err(|e| format!("invalid typed param.{} value: {}", type_name, e))
     }
 }
@@ -460,18 +462,18 @@ impl<T, E: std::fmt::Display> IntoParamResult<T> for Result<T, E> {
 /// infallible (signed types return `Self`) and fallible (unsigned types
 /// return `Result<Self, openpit::param::Error>`), preserving the typed SDK
 /// error in the fallible case.
-trait IntoTypedParamResult<T> {
-    fn into_typed_param_result(self) -> Result<T, openpit::param::Error>;
+trait IntoTypedParamResult<Value> {
+    fn into_typed_param_result(self) -> Result<Value, openpit::param::Error>;
 }
 
-impl<T> IntoTypedParamResult<T> for T {
-    fn into_typed_param_result(self) -> Result<T, openpit::param::Error> {
+impl<Value> IntoTypedParamResult<Value> for Value {
+    fn into_typed_param_result(self) -> Result<Value, openpit::param::Error> {
         Ok(self)
     }
 }
 
-impl<T> IntoTypedParamResult<T> for Result<T, openpit::param::Error> {
-    fn into_typed_param_result(self) -> Result<T, openpit::param::Error> {
+impl<Value> IntoTypedParamResult<Value> for Result<Value, openpit::param::Error> {
+    fn into_typed_param_result(self) -> Result<Value, openpit::param::Error> {
         self
     }
 }
@@ -661,7 +663,7 @@ define_decimal_param_wrapper!(
     get_decimal_fn = openpit_param_notional_get_decimal
 );
 
-fn write_out<T: Copy>(out: *mut T, value: T, out_error: OpenPitOutParamError) -> bool {
+fn write_out<Value: Copy>(out: *mut Value, value: Value, out_error: OpenPitOutParamError) -> bool {
     if out.is_null() {
         write_param_error_unspecified(out_error, "result place pointer is null");
         return false;

@@ -453,8 +453,8 @@ fn configure_validation_failure_keeps_prior_value() {
 
 #[test]
 fn configurator_send_sync_per_mode() {
-    fn assert_send<T: Send>() {}
-    fn assert_sync<T: Sync>() {}
+    fn assert_send<Value: Send>() {}
+    fn assert_sync<Value: Sync>() {}
 
     // FullSync: shareable across threads.
     assert_send::<Configurator<EngineTraitOf<OrderOperation, (), (), FullSync>>>();

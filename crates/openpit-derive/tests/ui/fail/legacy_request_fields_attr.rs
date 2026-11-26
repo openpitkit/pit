@@ -24,8 +24,8 @@ impl Operation {
 }
 
 #[derive(RequestFields)]
-struct Wrapper<T> {
-    inner: T,
+struct Wrapper<InnerRequest> {
+    inner: InnerRequest,
     #[request_fields(HasInstrument(instrument -> &Instrument))]
     operation: Operation,
 }

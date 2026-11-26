@@ -62,13 +62,13 @@ where
     /// entry is never transiently visible to other threads. When the slot
     /// already existed and becomes zero, `remove_if_zero` is used for the
     /// follow-up removal.
-    pub(super) fn mutate_slot<F>(
+    pub(super) fn mutate_slot<Mutation>(
         &self,
         key: HoldingsKey,
-        mutation: F,
+        mutation: Mutation,
     ) -> Result<Holdings, AdjustmentOverflowError>
     where
-        F: FnOnce(Holdings) -> Result<Holdings, AdjustmentOverflowError>,
+        Mutation: FnOnce(Holdings) -> Result<Holdings, AdjustmentOverflowError>,
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let key_for_remove = key.clone();

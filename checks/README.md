@@ -74,9 +74,27 @@ a test is the message a user sees.
   exceptions in the C++ async engine without explicit approved containment.
 - `semgrep/ci-versions.yml` - workflows and composite actions load CI pins
   through `load-ci-versions`, which rejects missing or empty required pins.
+- `semgrep/naming.yml` - flags generic parameter declarations with a single
+  capital, an all-caps name (digits permitted), or a two-character name in
+  Rust, Go, C++ and JavaScript/TypeScript. Abbreviations such as `Rep` and
+  `Pred` are checked in review. Known limits of the regexes:
+  - Go: the type matcher anchors on the declared name, including in groups,
+    and treats ambiguous `[Name * Other]` forms as array lengths. The pointer
+    exception looks for a type keyword or `[` as the first token after `*`,
+    so `*<-chan` constraints are missed. A block comment on the same line
+    between `type` or `(` and the declared name hides the declaration. The
+    rule runs in regex mode on `*.go` paths, because the pinned Go parser
+    rejects generic aliases. So it also reads comments and string literals,
+    and files below a directory whose name ends in `.go`.
+  - TypeScript: a call with a short type argument right before a colon is
+    reported as a declaration. Examples are a call in a ternary branch, a
+    `case` label, a constructor call and an angle-bracket assertion
+    (`todook` fixtures in `tests/naming.ts`). An unnamed generic call
+    signature can be reported on the line above it.
 - `semgrep/tests/` - regression fixtures for `financial-types-rust.yml`,
-  `fallbacks-rust.yml` and `async-exceptions-cpp.yml`; `errors-go.yml` has no
-  fixture.
+  `fallbacks-rust.yml`, `async-exceptions-cpp.yml`, `resolve-once-rust.yml` and
+  `naming.yml`, plus comment-width fixtures for `text-style.yml`.
+  `errors-go.yml` has no fixture.
   `just check-semgrep` runs `semgrep --test` over them after the repository
   scan; they hold deliberate violations.
 

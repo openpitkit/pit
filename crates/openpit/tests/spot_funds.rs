@@ -764,7 +764,7 @@ fn drop_copy_market_order_is_rejected_as_missing_required_field() {
     );
 }
 
-fn assert_insufficient_funds<R>(result: Result<R, Rejects>, ctx: &str) {
+fn assert_insufficient_funds<Outcome>(result: Result<Outcome, Rejects>, ctx: &str) {
     let Err(rejects) = result else {
         panic!("{ctx}: expected InsufficientFunds rejection")
     };

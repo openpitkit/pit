@@ -532,16 +532,18 @@ mod tests {
     #[test]
     fn derive_request_fields_impl_generates_passthrough_for_inner_capability() {
         let input: DeriveInput = parse_quote!(
-            struct Wrapper<T> {
+            struct Wrapper<InnerRequest> {
                 #[openpit(inner, HasPnl(-> Result<Pnl, RequestFieldAccessError>))]
-                inner: T,
+                inner: InnerRequest,
             }
         );
 
         let generated = derive_request_fields_impl(input).expect("derive generation must succeed");
         let generated_src = generated.to_string();
-        assert!(generated_src.contains("impl < T > HasPnl for Wrapper < T > where T : HasPnl"));
-        assert!(generated_src.contains("< T as HasPnl > :: pnl"));
+        assert!(generated_src.contains(
+            "impl < InnerRequest > HasPnl for Wrapper < InnerRequest > where InnerRequest : HasPnl"
+        ));
+        assert!(generated_src.contains("< InnerRequest as HasPnl > :: pnl"));
         assert!(generated_src.contains("& self . inner"));
     }
 

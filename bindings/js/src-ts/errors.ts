@@ -183,7 +183,9 @@ export interface OpenpitErrorOptions {
 
 const openpitErrors = new WeakSet<object>();
 
-function markOpenpitError<T extends Error>(error: T): T {
+function markOpenpitError<ErrorInstance extends Error>(
+  error: ErrorInstance,
+): ErrorInstance {
   openpitErrors.add(error);
   return error;
 }

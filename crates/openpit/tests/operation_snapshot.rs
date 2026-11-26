@@ -27,25 +27,25 @@ use openpit::{Engine, HasAccountId, RequestFieldAccessError, SyncMode};
 
 #[test]
 fn operation_contexts_preserve_send_in_full_and_account_sync() {
-    fn send<T: Send>() {}
-    fn contexts<F>()
+    fn send<Value: Send>() {}
+    fn contexts<StorageLockingPolicyFactory>()
     where
-        F: openpit::storage::LockingPolicyFactory
+        StorageLockingPolicyFactory: openpit::storage::LockingPolicyFactory
             + openpit::storage::CreateStorageFor<AccountId>
             + 'static,
-        openpit::OperationSnapshot<F>: Send,
-        openpit::SharedOperationSnapshot<F>: Send,
-        PostTradeContext<F>: Send,
-        openpit::AccountAdjustmentContext<F>: Send,
+        openpit::OperationSnapshot<StorageLockingPolicyFactory>: Send,
+        openpit::SharedOperationSnapshot<StorageLockingPolicyFactory>: Send,
+        PostTradeContext<StorageLockingPolicyFactory>: Send,
+        openpit::AccountAdjustmentContext<StorageLockingPolicyFactory>: Send,
     {
-        send::<openpit::OperationSnapshot<F>>();
-        send::<openpit::SharedOperationSnapshot<F>>();
-        send::<PostTradeContext<F>>();
-        send::<openpit::AccountAdjustmentContext<F>>();
+        send::<openpit::OperationSnapshot<StorageLockingPolicyFactory>>();
+        send::<openpit::SharedOperationSnapshot<StorageLockingPolicyFactory>>();
+        send::<PostTradeContext<StorageLockingPolicyFactory>>();
+        send::<openpit::AccountAdjustmentContext<StorageLockingPolicyFactory>>();
     }
     contexts::<openpit::storage::FullLocking>();
     contexts::<openpit::storage::IndexLocking<openpit::AccountKeyConstraint>>();
-    fn sync<T: Sync>() {}
+    fn sync<Value: Sync>() {}
     sync::<openpit::SharedOperationSnapshot<openpit::storage::FullLocking>>();
 }
 

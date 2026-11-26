@@ -288,15 +288,15 @@ class OwnedTypedAsyncEngine;
 class NoopObserver;
 class Observer;
 
-template <typename T>
+template <typename ResultValue>
 class Future;
-template <typename A, typename B>
+template <typename FirstValue, typename SecondValue>
 class PairFuture;
-template <typename T>
+template <typename ResultValue>
 class Promise;
-template <typename A, typename B>
+template <typename FirstValue, typename SecondValue>
 class PairPromise;
-template <typename T>
+template <typename ResultValue>
 class Result;
 
 template <typename Driver>

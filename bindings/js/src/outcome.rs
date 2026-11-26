@@ -678,9 +678,12 @@ impl JsAccountOutcomeEntry {
 
 /// Resolves an optional exported-class constructor argument without moving the
 /// caller-owned wrapper.
-fn optional_cloned_wrapper<T>(value: Option<JsValue>, field: &str) -> Result<Option<T>, JsValue>
+fn optional_cloned_wrapper<Wrapper>(
+    value: Option<JsValue>,
+    field: &str,
+) -> Result<Option<Wrapper>, JsValue>
 where
-    T: TryFromJsValue,
+    Wrapper: TryFromJsValue,
 {
     let Some(value) = value else {
         return Ok(None);

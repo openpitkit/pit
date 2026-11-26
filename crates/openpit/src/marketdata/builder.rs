@@ -75,21 +75,21 @@ pub mod sealed {
 ///   locks. The service is `Send + Sync` and supports a concurrent feed.
 pub trait MarketDataSync: sealed::Sealed + Clone + 'static {
     /// Shared pointer type used to distribute the service handle.
-    type Shared<T: 'static>: Clone + Deref<Target = T>;
+    type Shared<SharedValue: 'static>: Clone + Deref<Target = SharedValue>;
 
     /// Internal lock primitive used by the service for its registry, slot
     /// vector, and per-slot fields.
-    type Lock<T>: MarketDataLock<T>;
+    type Lock<LockedValue>: MarketDataLock<LockedValue>;
 
     /// Service-level-TTL gate primitive: a non-atomic [`LocalTtlGate`] for the
     /// single-thread modes, an [`AtomicBool`] for the thread-shared modes.
     type Gate: ServiceTtlGate;
 
     /// Wraps `inner` in a new shared handle.
-    fn new_shared<T: 'static>(&self, inner: T) -> Self::Shared<T>;
+    fn new_shared<SharedValue: 'static>(&self, inner: SharedValue) -> Self::Shared<SharedValue>;
 
     /// Wraps `inner` in a new internal lock of this mode.
-    fn new_lock<T>(&self, inner: T) -> Self::Lock<T>;
+    fn new_lock<LockedValue>(&self, inner: LockedValue) -> Self::Lock<LockedValue>;
 
     /// Builds the service-level-TTL gate in the "unset" state.
     fn new_gate(&self) -> Self::Gate {
@@ -101,36 +101,36 @@ impl sealed::Sealed for LocalSync {}
 impl sealed::Sealed for FullSync {}
 
 impl MarketDataSync for LocalSync {
-    type Shared<T: 'static> = Rc<T>;
-    type Lock<T> = NoopLock<T>;
+    type Shared<SharedValue: 'static> = Rc<SharedValue>;
+    type Lock<LockedValue> = NoopLock<LockedValue>;
     // Single-threaded: a plain `Cell`, no concurrency primitive on the read
     // path. Sound because the service is already `!Sync` under `LocalSync`.
     type Gate = LocalTtlGate;
 
     #[inline]
-    fn new_shared<T: 'static>(&self, inner: T) -> Rc<T> {
+    fn new_shared<SharedValue: 'static>(&self, inner: SharedValue) -> Rc<SharedValue> {
         Rc::new(inner)
     }
 
     #[inline]
-    fn new_lock<T>(&self, inner: T) -> NoopLock<T> {
+    fn new_lock<LockedValue>(&self, inner: LockedValue) -> NoopLock<LockedValue> {
         NoopLock::new(inner)
     }
 }
 
 impl MarketDataSync for FullSync {
-    type Shared<T: 'static> = Arc<T>;
-    type Lock<T> = RwLock<T>;
+    type Shared<SharedValue: 'static> = Arc<SharedValue>;
+    type Lock<LockedValue> = RwLock<LockedValue>;
     // Thread-shared: an atomic gate keeps the service `Send + Sync`.
     type Gate = AtomicBool;
 
     #[inline]
-    fn new_shared<T: 'static>(&self, inner: T) -> Arc<T> {
+    fn new_shared<SharedValue: 'static>(&self, inner: SharedValue) -> Arc<SharedValue> {
         Arc::new(inner)
     }
 
     #[inline]
-    fn new_lock<T>(&self, inner: T) -> RwLock<T> {
+    fn new_lock<LockedValue>(&self, inner: LockedValue) -> RwLock<LockedValue> {
         RwLock::new(inner)
     }
 }

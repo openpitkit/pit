@@ -163,17 +163,17 @@ impl Drop for PythonCallbackScope {
     }
 }
 
-struct DetachedFromGil<T>(T);
+struct DetachedFromGil<DetachedValue>(DetachedValue);
 
 // SAFETY: `Python::detach` runs the closure synchronously on the current
 // OS thread and returns before Python-visible objects are constructed. This
 // wrapper is used only for native SDK result handles that do not borrow the
 // Python token but are intentionally `!Send` as public SDK values.
-unsafe impl<T> Send for DetachedFromGil<T> {}
+unsafe impl<DetachedValue> Send for DetachedFromGil<DetachedValue> {}
 
-fn allow_threads_detached<T, F>(py: Python<'_>, f: F) -> T
+fn allow_threads_detached<Output, Callback>(py: Python<'_>, f: Callback) -> Output
 where
-    F: FnOnce() -> T + Send,
+    Callback: FnOnce() -> Output + Send,
 {
     py.detach(|| DetachedFromGil(f())).0
 }

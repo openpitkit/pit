@@ -135,7 +135,7 @@ impl Drop for StartPreTradeNowGuard<'_> {
     }
 }
 
-pub(crate) fn with_start_pre_trade_now<T>(now: Instant, f: impl FnOnce() -> T) -> T {
+pub(crate) fn with_start_pre_trade_now<Output>(now: Instant, f: impl FnOnce() -> Output) -> Output {
     START_PRE_TRADE_NOW.with(|slot| {
         let previous = slot.replace(Some(now));
         let _guard = StartPreTradeNowGuard { slot, previous };

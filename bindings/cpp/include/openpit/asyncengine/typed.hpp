@@ -601,13 +601,13 @@ class AsyncReservation
   // wrapper alive via `shared_from_this`, so dropping the caller's handle while
   // the task is queued does not dangle. Closing tasks transfer submit failures
   // and hard-stop aborts to the account lane before releasing the reservation.
-  template <typename Op>
-  [[nodiscard]] Future<std::monostate> Run(Op op,
+  template <typename Operation>
+  [[nodiscard]] Future<std::monostate> Run(Operation op,
                                            std::chrono::nanoseconds timeout,
                                            bool abortCloses);
 
-  template <typename Op>
-  void Finalize(const Op& op) {
+  template <typename Operation>
+  void Finalize(const Operation& op) {
     m_lifecycle.BeginFinalization();
     try {
       op(m_reservation);
@@ -784,13 +784,13 @@ class AsyncDropCopyOperation
   // wrapper alive via `shared_from_this`, so dropping the caller's handle while
   // the task is queued does not dangle. A closing task transfers a submit
   // failure or hard-stop abort to the same lane before releasing the operation.
-  template <typename Op>
-  [[nodiscard]] Future<std::monostate> Run(Op op,
+  template <typename Operation>
+  [[nodiscard]] Future<std::monostate> Run(Operation op,
                                            std::chrono::nanoseconds timeout,
                                            bool abortCloses);
 
-  template <typename Op>
-  void Finalize(const Op& op) {
+  template <typename Operation>
+  void Finalize(const Operation& op) {
     m_lifecycle.BeginFinalization();
     try {
       op(m_operation);
@@ -1366,17 +1366,17 @@ class TypedAsyncEngine {
   [[nodiscard]] AsyncEngine<Driver>& Generic() noexcept { return *m_engine; }
 
  private:
-  template <typename D>
+  template <typename PeerDriver>
   friend class TypedShardedBuilder;
-  template <typename D>
+  template <typename PeerDriver>
   friend class TypedDynamicBuilder;
-  template <typename D>
+  template <typename PeerDriver>
   friend class AsyncRequest;
-  template <typename D>
+  template <typename PeerDriver>
   friend class AsyncReservation;
-  template <typename D>
+  template <typename PeerDriver>
   friend class AsyncDropCopyOperation;
-  template <typename D>
+  template <typename PeerDriver>
   friend class AsyncAccounts;
 
   explicit TypedAsyncEngine(AsyncEngine<Driver> engine)
@@ -1390,9 +1390,9 @@ class TypedAsyncEngine {
 // out-of-line definitions
 
 template <typename Driver>
-template <typename Op>
+template <typename Operation>
 [[nodiscard]] Future<std::monostate> AsyncReservation<Driver>::Run(
-    Op op, std::chrono::nanoseconds timeout, bool abortCloses) {
+    Operation op, std::chrono::nanoseconds timeout, bool abortCloses) {
   auto self = this->shared_from_this();
   if (!abortCloses) {
     return m_engine->Submit(
@@ -1427,9 +1427,9 @@ template <typename Op>
 }
 
 template <typename Driver>
-template <typename Op>
+template <typename Operation>
 [[nodiscard]] Future<std::monostate> AsyncDropCopyOperation<Driver>::Run(
-    Op op, std::chrono::nanoseconds timeout, bool abortCloses) {
+    Operation op, std::chrono::nanoseconds timeout, bool abortCloses) {
   auto self = this->shared_from_this();
   if (!abortCloses) {
     return m_engine->Submit(
@@ -1651,7 +1651,7 @@ class TypedShardedBuilder {
   }
 
  private:
-  template <typename D>
+  template <typename PeerDriver>
   friend class TypedBuilder;
 
   explicit TypedShardedBuilder(ShardedBuilder<Driver> inner)
@@ -1679,7 +1679,7 @@ class TypedDynamicBuilder {
   }
 
  private:
-  template <typename D>
+  template <typename PeerDriver>
   friend class TypedBuilder;
 
   explicit TypedDynamicBuilder(DynamicBuilder<Driver> inner)

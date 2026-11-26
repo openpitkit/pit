@@ -42,7 +42,7 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 /// The service relies on the lock to uphold the following invariants:
 ///
 /// * While any [`Self::ReadGuard`] is alive, no thread mutates the protected
-///   `T`.
+///   `LockedValue`.
 /// * While any [`Self::WriteGuard`] is alive, no other thread holds any guard
 ///   for the same lock.
 ///
@@ -51,17 +51,17 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 /// implementation honours them vacuously by constraining the owning service
 /// to single-threaded use (the service handle is `!Send`/`!Sync` in that
 /// mode); getting the invariants wrong leads to undefined behaviour.
-pub unsafe trait MarketDataLock<T> {
+pub unsafe trait MarketDataLock<LockedValue> {
     /// Guard returned by [`Self::read`].
-    type ReadGuard<'a>: Deref<Target = T>
+    type ReadGuard<'a>: Deref<Target = LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
     /// Guard returned by [`Self::write`].
-    type WriteGuard<'a>: DerefMut<Target = T>
+    type WriteGuard<'a>: DerefMut<Target = LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
 
     /// Acquires shared (read) access to the protected value.
     fn read(&self) -> Self::ReadGuard<'_>;
@@ -79,13 +79,13 @@ pub unsafe trait MarketDataLock<T> {
 /// service is constrained to single-threaded use (its handle is `Rc`, hence
 /// `!Send`/`!Sync`, in [`LocalSync`](crate::LocalSync) mode; the binding
 /// layer enforces the same constraint at runtime in no-sync mode).
-pub struct NoopLock<T> {
-    value: UnsafeCell<T>,
+pub struct NoopLock<LockedValue> {
+    value: UnsafeCell<LockedValue>,
 }
 
-impl<T> NoopLock<T> {
+impl<LockedValue> NoopLock<LockedValue> {
     /// Wraps `value` in a no-op lock.
-    pub fn new(value: T) -> Self {
+    pub fn new(value: LockedValue) -> Self {
         Self {
             value: UnsafeCell::new(value),
         }
@@ -93,55 +93,56 @@ impl<T> NoopLock<T> {
 }
 
 /// Read guard handed out by [`NoopLock`].
-pub struct NoopReadGuard<'a, T> {
-    value: &'a T,
+pub struct NoopReadGuard<'a, LockedValue> {
+    value: &'a LockedValue,
 }
 
-impl<T> Deref for NoopReadGuard<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<LockedValue> Deref for NoopReadGuard<'_, LockedValue> {
+    type Target = LockedValue;
+    fn deref(&self) -> &LockedValue {
         self.value
     }
 }
 
 /// Write guard handed out by [`NoopLock`].
-pub struct NoopWriteGuard<'a, T> {
-    value: &'a mut T,
+pub struct NoopWriteGuard<'a, LockedValue> {
+    value: &'a mut LockedValue,
 }
 
-impl<T> Deref for NoopWriteGuard<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<LockedValue> Deref for NoopWriteGuard<'_, LockedValue> {
+    type Target = LockedValue;
+    fn deref(&self) -> &LockedValue {
         self.value
     }
 }
 
-impl<T> DerefMut for NoopWriteGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut T {
+impl<LockedValue> DerefMut for NoopWriteGuard<'_, LockedValue> {
+    fn deref_mut(&mut self) -> &mut LockedValue {
         self.value
     }
 }
 
-// SAFETY: every access is a no-op that hands out a `&T`/`&mut T` borrowed
-// from the `UnsafeCell`. The owning service is constrained to a single
-// thread (`Rc` handle is `!Send`/`!Sync` under `LocalSync`; the binding
-// layer constrains to single-threaded use in no-sync mode), so no two
+// SAFETY: every access is a no-op that hands out a
+// `&LockedValue`/`&mut LockedValue` borrowed from the `UnsafeCell`. The owning
+// service is constrained to a single thread (`Rc` handle is `!Send`/`!Sync`
+// under `LocalSync`; the binding layer constrains to single-threaded use in
+// no-sync mode), so no two
 // threads ever observe the same `NoopLock` concurrently. The guard
 // lifetimes confine the borrows to the duration of the access, and the
 // service never holds overlapping `write` guards on the same lock, so the
-// `&mut T` never aliases. This is the same `UnsafeCell` contract that
+// `&mut LockedValue` never aliases. This is the same `UnsafeCell` contract that
 // `NoLocking` relies on for storage.
-unsafe impl<T> MarketDataLock<T> for NoopLock<T> {
+unsafe impl<LockedValue> MarketDataLock<LockedValue> for NoopLock<LockedValue> {
     type ReadGuard<'a>
-        = NoopReadGuard<'a, T>
+        = NoopReadGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
     type WriteGuard<'a>
-        = NoopWriteGuard<'a, T>
+        = NoopWriteGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
 
     #[inline]
     fn read(&self) -> Self::ReadGuard<'_> {
@@ -167,17 +168,17 @@ unsafe impl<T> MarketDataLock<T> for NoopLock<T> {
 
 // SAFETY: `parking_lot::RwLock` upholds the standard reader-writer
 // invariants, which is exactly what the `MarketDataLock` contract requires.
-unsafe impl<T> MarketDataLock<T> for RwLock<T> {
+unsafe impl<LockedValue> MarketDataLock<LockedValue> for RwLock<LockedValue> {
     type ReadGuard<'a>
-        = RwLockReadGuard<'a, T>
+        = RwLockReadGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
     type WriteGuard<'a>
-        = RwLockWriteGuard<'a, T>
+        = RwLockWriteGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
 
     #[inline]
     fn read(&self) -> Self::ReadGuard<'_> {
@@ -198,23 +199,23 @@ unsafe impl<T> MarketDataLock<T> for RwLock<T> {
 /// at construction time selects either a genuine no-op (single-thread no-sync
 /// mode) or a real `parking_lot::RwLock` (`Full`/`Account` modes). The binding
 /// crate selects the variant per service from its runtime sync mode.
-pub enum RuntimeLock<T> {
+pub enum RuntimeLock<LockedValue> {
     /// No synchronization. Sound only because the binding layer constrains the
     /// owning service to single-threaded use in no-sync mode.
-    Noop(UnsafeCell<T>),
+    Noop(UnsafeCell<LockedValue>),
     /// Real reader-writer lock used in the thread-shared modes.
-    Locked(RwLock<T>),
+    Locked(RwLock<LockedValue>),
 }
 
-impl<T> RuntimeLock<T> {
+impl<LockedValue> RuntimeLock<LockedValue> {
     /// Builds a no-op runtime lock (binding no-sync mode).
-    pub fn noop(value: T) -> Self {
+    pub fn noop(value: LockedValue) -> Self {
         Self::Noop(UnsafeCell::new(value))
     }
 
     /// Builds a real reader-writer runtime lock (binding `Full`/`Account`
     /// modes).
-    pub fn locked(value: T) -> Self {
+    pub fn locked(value: LockedValue) -> Self {
         Self::Locked(RwLock::new(value))
     }
 }
@@ -222,27 +223,28 @@ impl<T> RuntimeLock<T> {
 // SAFETY: the binding layer drives the soundness story (mirroring
 // `EngineHandle`/`StorageLockingPolicy`):
 // - `Locked` wraps a `parking_lot::RwLock`, which is `Send + Sync` for
-//   `T: Send + Sync` and synchronizes all access at runtime.
+//   `LockedValue: Send + Sync` and synchronizes all access at runtime.
 // - `Noop` wraps an `UnsafeCell`; it is only constructed in no-sync mode,
 //   where the binding layer constrains the owning service to single-threaded
 //   use, so no two threads ever observe the same `RuntimeLock` concurrently.
-// We require `T: Send` so ownership transfer across threads is sound; `Sync`
-// is claimed under the binding threading contract even without `T: Sync`,
-// exactly as the interop `EngineHandle` does for its `Arc`.
-unsafe impl<T: Send> Send for RuntimeLock<T> {}
-unsafe impl<T: Send> Sync for RuntimeLock<T> {}
+// We require `LockedValue: Send` so ownership transfer across threads is
+// sound; `Sync` is claimed under the binding threading contract even without
+// `LockedValue: Sync`, exactly as the interop `EngineHandle` does for its
+// `Arc`.
+unsafe impl<LockedValue: Send> Send for RuntimeLock<LockedValue> {}
+unsafe impl<LockedValue: Send> Sync for RuntimeLock<LockedValue> {}
 
 /// Read guard handed out by [`RuntimeLock`].
-pub enum RuntimeReadGuard<'a, T> {
+pub enum RuntimeReadGuard<'a, LockedValue> {
     /// Borrow into the no-op cell.
-    Noop(&'a T),
+    Noop(&'a LockedValue),
     /// Real reader guard.
-    Locked(RwLockReadGuard<'a, T>),
+    Locked(RwLockReadGuard<'a, LockedValue>),
 }
 
-impl<T> Deref for RuntimeReadGuard<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<LockedValue> Deref for RuntimeReadGuard<'_, LockedValue> {
+    type Target = LockedValue;
+    fn deref(&self) -> &LockedValue {
         match self {
             Self::Noop(value) => value,
             Self::Locked(guard) => guard,
@@ -251,16 +253,16 @@ impl<T> Deref for RuntimeReadGuard<'_, T> {
 }
 
 /// Write guard handed out by [`RuntimeLock`].
-pub enum RuntimeWriteGuard<'a, T> {
+pub enum RuntimeWriteGuard<'a, LockedValue> {
     /// Mutable borrow into the no-op cell.
-    Noop(&'a mut T),
+    Noop(&'a mut LockedValue),
     /// Real writer guard.
-    Locked(RwLockWriteGuard<'a, T>),
+    Locked(RwLockWriteGuard<'a, LockedValue>),
 }
 
-impl<T> Deref for RuntimeWriteGuard<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<LockedValue> Deref for RuntimeWriteGuard<'_, LockedValue> {
+    type Target = LockedValue;
+    fn deref(&self) -> &LockedValue {
         match self {
             Self::Noop(value) => value,
             Self::Locked(guard) => guard,
@@ -268,8 +270,8 @@ impl<T> Deref for RuntimeWriteGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for RuntimeWriteGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut T {
+impl<LockedValue> DerefMut for RuntimeWriteGuard<'_, LockedValue> {
+    fn deref_mut(&mut self) -> &mut LockedValue {
         match self {
             Self::Noop(value) => value,
             Self::Locked(guard) => guard,
@@ -285,17 +287,17 @@ impl<T> DerefMut for RuntimeWriteGuard<'_, T> {
 //   service to single-threaded use, so no two threads observe the same lock
 //   and the service never holds overlapping `write` guards. Same `UnsafeCell`
 //   contract as `NoopLock` and the storage no-sync policy.
-unsafe impl<T> MarketDataLock<T> for RuntimeLock<T> {
+unsafe impl<LockedValue> MarketDataLock<LockedValue> for RuntimeLock<LockedValue> {
     type ReadGuard<'a>
-        = RuntimeReadGuard<'a, T>
+        = RuntimeReadGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
     type WriteGuard<'a>
-        = RuntimeWriteGuard<'a, T>
+        = RuntimeWriteGuard<'a, LockedValue>
     where
         Self: 'a,
-        T: 'a;
+        LockedValue: 'a;
 
     #[inline]
     fn read(&self) -> Self::ReadGuard<'_> {

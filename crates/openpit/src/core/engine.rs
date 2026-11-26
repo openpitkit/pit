@@ -6783,8 +6783,8 @@ mod tests {
 
     #[test]
     fn synced_engine_with_full_storage_is_send_and_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
+        fn assert_send<Value: Send>() {}
+        fn assert_sync<Value: Sync>() {}
         type SyncedEngineWithFull = FullSyncEngine<OrderOperation>;
         assert_send::<SyncedEngineWithFull>();
         assert_sync::<SyncedEngineWithFull>();
@@ -6807,7 +6807,7 @@ mod tests {
 
     #[test]
     fn account_sync_engine_is_send() {
-        fn assert_send<T: Send>() {}
+        fn assert_send<Value: Send>() {}
         assert_send::<super::AccountSyncEngine<OrderOperation>>();
     }
 

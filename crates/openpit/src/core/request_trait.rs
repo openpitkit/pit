@@ -227,10 +227,10 @@ pub trait HasAccountAdjustmentBalance {
     }
 }
 
-impl<T> HasAccountAdjustmentBalance for T
+impl<Request> HasAccountAdjustmentBalance for Request
 where
-    T: std::ops::Deref,
-    T::Target: HasAccountAdjustmentBalance,
+    Request: std::ops::Deref,
+    Request::Target: HasAccountAdjustmentBalance,
 {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.deref().balance()

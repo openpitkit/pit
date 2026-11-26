@@ -220,8 +220,9 @@ class Gate {
     m_cv.notify_all();
   }
 
-  template <typename Rep, typename Period>
-  [[nodiscard]] bool WaitFor(std::chrono::duration<Rep, Period> timeout) {
+  template <typename Representation, typename Period>
+  [[nodiscard]] bool WaitFor(
+      std::chrono::duration<Representation, Period> timeout) {
     std::unique_lock<std::mutex> lock(m_mutex);
     return m_cv.wait_for(lock, timeout, [this] { return m_open; });
   }

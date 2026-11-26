@@ -48,10 +48,10 @@ fn commit_hold(policy: &TestPolicy, order: &TestOrder) -> PolicyPreTradeResult {
     outcome
 }
 
-pub(super) fn run_rerun_checks<T: std::fmt::Debug + PartialEq>(
+pub(super) fn run_rerun_checks<Snapshot: std::fmt::Debug + PartialEq>(
     policy: &TestPolicy,
     order: &WithOrderReview<TestOrder>,
-    snapshot: impl Fn() -> T,
+    snapshot: impl Fn() -> Snapshot,
 ) -> Result<[Result<Option<PolicyPreTradeResult>, Rejects>; 2], String> {
     let before = snapshot();
     let ctx = PreTradeContext::new_with_order_review(None, order);

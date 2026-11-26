@@ -5173,7 +5173,7 @@ fn hold_rollback_overflow_blocks_account_via_local_engine() {
 
 #[test]
 fn spot_funds_account_sync_is_send() {
-    fn assert_send<T: Send>() {}
+    fn assert_send<Value: Send>() {}
     assert_send::<SpotFundsPolicy<crate::AccountSync, FullSync>>();
 }
 

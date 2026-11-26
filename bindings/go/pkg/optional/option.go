@@ -18,28 +18,28 @@
 package optional
 
 // Option represents a value that may or may not be present.
-type Option[T any] struct {
-	v    T
+type Option[Value any] struct {
+	v    Value
 	some bool
 }
 
 // None returns an empty Option with no value set.
-func None[T any]() Option[T] {
-	return Option[T]{}
+func None[Value any]() Option[Value] {
+	return Option[Value]{}
 }
 
 // Some returns an Option with the given value set.
-func Some[T any](v T) Option[T] {
-	return Option[T]{v: v, some: true}
+func Some[Value any](v Value) Option[Value] {
+	return Option[Value]{v: v, some: true}
 }
 
 // From constructs an Option from a value and a presence flag.
-func From[T any](v T, ok bool) Option[T] {
-	return Option[T]{v: v, some: ok}
+func From[Value any](v Value, ok bool) Option[Value] {
+	return Option[Value]{v: v, some: ok}
 }
 
 // Get returns the stored value and a boolean indicating whether it is set.
-func (o Option[T]) Get() (T, bool) {
+func (o Option[Value]) Get() (Value, bool) {
 	return o.v, o.IsSet()
 }
 
@@ -47,7 +47,7 @@ func (o Option[T]) Get() (T, bool) {
 //
 // The panic is deliberate fail-fast behavior: continuing without a value
 // would hide wrong behavior.
-func (o Option[T]) MustGet() T {
+func (o Option[Value]) MustGet() Value {
 	if !o.IsSet() {
 		panic("optional: no value")
 	}
@@ -55,7 +55,7 @@ func (o Option[T]) MustGet() T {
 }
 
 // Or returns the stored value if set, otherwise returns the provided default.
-func (o Option[T]) Or(def T) T {
+func (o Option[Value]) Or(def Value) Value {
 	if !o.IsSet() {
 		return def
 	}
@@ -63,19 +63,19 @@ func (o Option[T]) Or(def T) T {
 }
 
 // IsSet reports whether the Option contains a value.
-func (o Option[T]) IsSet() bool {
+func (o Option[Value]) IsSet() bool {
 	return o.some
 }
 
 // Set assigns a value and marks the Option as set.
-func (o *Option[T]) Set(v T) {
+func (o *Option[Value]) Set(v Value) {
 	o.v = v
 	o.some = true
 }
 
 // Unset clears the value and marks the Option as not set.
-func (o *Option[T]) Unset() {
-	var zero T
+func (o *Option[Value]) Unset() {
+	var zero Value
 	o.v = zero
 	o.some = false
 }

@@ -146,11 +146,11 @@ pub(super) fn insufficient_funds_reject(
     )
 }
 
-pub(super) fn adj_field<P: PolicyName + ?Sized, T>(
-    policy: &P,
+pub(super) fn adj_field<Policy: PolicyName + ?Sized, Field>(
+    policy: &Policy,
     name: &str,
-    result: Result<T, crate::RequestFieldAccessError>,
-) -> Result<T, Rejects> {
+    result: Result<Field, crate::RequestFieldAccessError>,
+) -> Result<Field, Rejects> {
     result.map_err(|e| {
         Rejects::from(field_access_error_account_adjustment_reject(
             policy, name, &e,

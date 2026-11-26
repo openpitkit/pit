@@ -263,12 +263,12 @@ pub(super) fn policy_storage(
     }
 }
 
-pub(super) unsafe fn try_slice_arg<'a, T>(
-    ptr: *const T,
+pub(super) unsafe fn try_slice_arg<'a, Element>(
+    ptr: *const Element,
     len: usize,
     label: &str,
     out_error: OpenPitOutError,
-) -> Option<&'a [T]> {
+) -> Option<&'a [Element]> {
     if len == 0 {
         return Some(&[]);
     }
@@ -586,10 +586,10 @@ pub extern "C" fn openpit_pretrade_pre_trade_policy_get_name(
 
 //--------------------------------------------------------------------------------------------------
 
-fn get_policy_arc<P: ?Sized>(
+fn get_policy_arc<Policy: ?Sized>(
     builder: *mut crate::engine::OpenPitEngineBuilder,
-    policy: *mut PolicyHandle<P>,
-) -> Result<(*mut crate::engine::OpenPitEngineBuilder, Arc<P>), String> {
+    policy: *mut PolicyHandle<Policy>,
+) -> Result<(*mut crate::engine::OpenPitEngineBuilder, Arc<Policy>), String> {
     if builder.is_null() {
         return Err("engine builder is null".to_string());
     }

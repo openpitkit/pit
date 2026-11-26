@@ -281,8 +281,9 @@ class StartPolicyAdapter {
   }
 
   template <
-      typename P = ClientPolicy,
-      std::enable_if_t<detail::HasStartDryRun<P, ClientOrder>::value, int> = 0>
+      typename CandidatePolicy = ClientPolicy,
+      std::enable_if_t<
+          detail::HasStartDryRun<CandidatePolicy, ClientOrder>::value, int> = 0>
   [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
       const openpit::Order& order) const {
     if constexpr (mode == CastMode::SafeSlow) {
@@ -305,10 +306,11 @@ class StartPolicyAdapter {
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
   template <
-      typename P = ClientPolicy,
-      std::enable_if_t<detail::HasReportFull<P, ClientReport>::value ||
-                           detail::HasReportLegacy<P, ClientReport>::value,
-                       int> = 0>
+      typename CandidatePolicy = ClientPolicy,
+      std::enable_if_t<
+          detail::HasReportFull<CandidatePolicy, ClientReport>::value ||
+              detail::HasReportLegacy<CandidatePolicy, ClientReport>::value,
+          int> = 0>
   [[nodiscard]] std::vector<::openpit::accounts::AccountBlock>
   ApplyExecutionReport(const PostTradeContext& context,
                        const openpit::ExecutionReport& report,
@@ -319,7 +321,8 @@ class StartPolicyAdapter {
       if (concrete_report == nullptr) {
         detail::ThrowTypeMismatch(Name(), typeid(ClientReport), typeid(report));
       }
-      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+      if constexpr (detail::HasReportFull<CandidatePolicy,
+                                          ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, *concrete_report,
                                              adjustments, pnls);
       } else {
@@ -328,7 +331,8 @@ class StartPolicyAdapter {
       }
     } else {
       const auto& concrete_report = static_cast<const ClientReport&>(report);
-      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+      if constexpr (detail::HasReportFull<CandidatePolicy,
+                                          ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, concrete_report,
                                              adjustments, pnls);
       } else {
@@ -338,9 +342,10 @@ class StartPolicyAdapter {
     }
   }
 
-  template <typename P = ClientPolicy,
-            std::enable_if_t<detail::HasReportLegacy<P, ClientReport>::value,
-                             int> = 0>
+  template <typename CandidatePolicy = ClientPolicy,
+            std::enable_if_t<
+                detail::HasReportLegacy<CandidatePolicy, ClientReport>::value,
+                int> = 0>
   [[nodiscard]] bool ApplyExecutionReport(
       const openpit::ExecutionReport& report) const {
     if constexpr (mode == CastMode::SafeSlow) {
@@ -355,8 +360,9 @@ class StartPolicyAdapter {
     }
   }
 
-  template <typename P = ClientPolicy,
-            std::enable_if_t<detail::HasAdjustment<P>::value, int> = 0>
+  template <
+      typename CandidatePolicy = ClientPolicy,
+      std::enable_if_t<detail::HasAdjustment<CandidatePolicy>::value, int> = 0>
   [[nodiscard]] PolicyAccountAdjustmentResult ApplyAccountAdjustment(
       const ::openpit::accountadjustment::Context& context,
       ::openpit::param::AccountId accountId,
@@ -411,8 +417,9 @@ class PolicyAdapter {
   // A main-stage adapter is also the unified adapter for any optional start
   // hooks exposed by the same client policy. This keeps all stages and their
   // policy state behind one native registration.
-  template <typename P = ClientPolicy,
-            std::enable_if_t<detail::HasStart<P, ClientOrder>::value, int> = 0>
+  template <typename CandidatePolicy = ClientPolicy,
+            std::enable_if_t<
+                detail::HasStart<CandidatePolicy, ClientOrder>::value, int> = 0>
   [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
       const openpit::Order& order) const {
     if constexpr (mode == CastMode::SafeSlow) {
@@ -428,8 +435,9 @@ class PolicyAdapter {
   }
 
   template <
-      typename P = ClientPolicy,
-      std::enable_if_t<detail::HasStartDryRun<P, ClientOrder>::value, int> = 0>
+      typename CandidatePolicy = ClientPolicy,
+      std::enable_if_t<
+          detail::HasStartDryRun<CandidatePolicy, ClientOrder>::value, int> = 0>
   [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
       const openpit::Order& order) const {
     if constexpr (mode == CastMode::SafeSlow) {
@@ -493,10 +501,11 @@ class PolicyAdapter {
   }
 
   template <
-      typename P = ClientPolicy,
-      std::enable_if_t<detail::HasMainDryRunFull<P, ClientOrder>::value ||
-                           detail::HasMainDryRunLegacy<P, ClientOrder>::value,
-                       int> = 0>
+      typename CandidatePolicy = ClientPolicy,
+      std::enable_if_t<
+          detail::HasMainDryRunFull<CandidatePolicy, ClientOrder>::value ||
+              detail::HasMainDryRunLegacy<CandidatePolicy, ClientOrder>::value,
+          int> = 0>
   void PerformPreTradeCheckDryRun(const Context& context,
                                   ::openpit::tx::Mutations& mutations,
                                   Result& result,
@@ -507,7 +516,8 @@ class PolicyAdapter {
       if (concrete_order == nullptr) {
         detail::ThrowTypeMismatch(Name(), typeid(ClientOrder), typeid(order));
       }
-      if constexpr (detail::HasMainDryRunFull<P, ClientOrder>::value) {
+      if constexpr (detail::HasMainDryRunFull<CandidatePolicy,
+                                              ClientOrder>::value) {
         m_policy.PerformPreTradeCheckDryRun(*concrete_order, context, mutations,
                                             result, decision);
       } else {
@@ -515,7 +525,8 @@ class PolicyAdapter {
       }
     } else {
       const auto& concrete_order = static_cast<const ClientOrder&>(order);
-      if constexpr (detail::HasMainDryRunFull<P, ClientOrder>::value) {
+      if constexpr (detail::HasMainDryRunFull<CandidatePolicy,
+                                              ClientOrder>::value) {
         m_policy.PerformPreTradeCheckDryRun(concrete_order, context, mutations,
                                             result, decision);
       } else {
@@ -532,10 +543,11 @@ class PolicyAdapter {
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
   template <
-      typename P = ClientPolicy,
-      std::enable_if_t<detail::HasReportFull<P, ClientReport>::value ||
-                           detail::HasReportLegacy<P, ClientReport>::value,
-                       int> = 0>
+      typename CandidatePolicy = ClientPolicy,
+      std::enable_if_t<
+          detail::HasReportFull<CandidatePolicy, ClientReport>::value ||
+              detail::HasReportLegacy<CandidatePolicy, ClientReport>::value,
+          int> = 0>
   [[nodiscard]] std::vector<::openpit::accounts::AccountBlock>
   ApplyExecutionReport(const PostTradeContext& context,
                        const openpit::ExecutionReport& report,
@@ -546,7 +558,8 @@ class PolicyAdapter {
       if (concrete_report == nullptr) {
         detail::ThrowTypeMismatch(Name(), typeid(ClientReport), typeid(report));
       }
-      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+      if constexpr (detail::HasReportFull<CandidatePolicy,
+                                          ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, *concrete_report,
                                              adjustments, pnls);
       } else {
@@ -555,7 +568,8 @@ class PolicyAdapter {
       }
     } else {
       const auto& concrete_report = static_cast<const ClientReport&>(report);
-      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+      if constexpr (detail::HasReportFull<CandidatePolicy,
+                                          ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, concrete_report,
                                              adjustments, pnls);
       } else {
@@ -565,9 +579,10 @@ class PolicyAdapter {
     }
   }
 
-  template <typename P = ClientPolicy,
-            std::enable_if_t<detail::HasReportLegacy<P, ClientReport>::value,
-                             int> = 0>
+  template <typename CandidatePolicy = ClientPolicy,
+            std::enable_if_t<
+                detail::HasReportLegacy<CandidatePolicy, ClientReport>::value,
+                int> = 0>
   [[nodiscard]] bool ApplyExecutionReport(
       const openpit::ExecutionReport& report) const {
     if constexpr (mode == CastMode::SafeSlow) {
@@ -582,8 +597,9 @@ class PolicyAdapter {
     }
   }
 
-  template <typename P = ClientPolicy,
-            std::enable_if_t<detail::HasAdjustment<P>::value, int> = 0>
+  template <
+      typename CandidatePolicy = ClientPolicy,
+      std::enable_if_t<detail::HasAdjustment<CandidatePolicy>::value, int> = 0>
   [[nodiscard]] PolicyAccountAdjustmentResult ApplyAccountAdjustment(
       const ::openpit::accountadjustment::Context& context,
       ::openpit::param::AccountId accountId,

@@ -88,10 +88,10 @@ use std::marker::PhantomData;
 /// the same contract as for direct use of [`std::cell::UnsafeCell`].
 pub unsafe trait LockingPolicy {
     /// First-use value cell matching this policy's observer contract.
-    type OnceValue<T>: OnceValue<T>;
+    type OnceValue<Value>: OnceValue<Value>;
 
     /// Creates an empty first-use cell without acquiring a storage lock.
-    fn new_once_value<T>(&self) -> Self::OnceValue<T>;
+    fn new_once_value<Value>(&self) -> Self::OnceValue<Value>;
 
     /// Guard returned by [`Self::read_index`].
     type IndexSharedGuard<'a>
@@ -137,21 +137,23 @@ pub unsafe trait LockingPolicy {
     fn write_values<Key>(&self, key: &Key) -> Self::ValuesExclusiveGuard<'_>;
 }
 
-/// A value initialized once under its owning storage policy's observer contract.
-/// Local and account policies use `OnceCell`; full synchronization uses `OnceLock`.
-pub trait OnceValue<T> {
-    /// Returns the first initialized value, evaluating `initialize` only if empty.
-    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T;
+/// A value initialized once under its owning storage policy's observer
+/// contract. Local and account policies use `OnceCell`; full synchronization
+/// uses `OnceLock`.
+pub trait OnceValue<Value> {
+    /// Returns the first initialized value, evaluating `initialize` only if
+    /// empty.
+    fn get_or_init(&self, initialize: impl FnOnce() -> Value) -> &Value;
 }
 
-impl<T> OnceValue<T> for std::cell::OnceCell<T> {
-    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T {
+impl<Value> OnceValue<Value> for std::cell::OnceCell<Value> {
+    fn get_or_init(&self, initialize: impl FnOnce() -> Value) -> &Value {
         self.get_or_init(initialize)
     }
 }
 
-impl<T> OnceValue<T> for std::sync::OnceLock<T> {
-    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T {
+impl<Value> OnceValue<Value> for std::sync::OnceLock<Value> {
+    fn get_or_init(&self, initialize: impl FnOnce() -> Value) -> &Value {
         self.get_or_init(initialize)
     }
 }
@@ -203,11 +205,11 @@ pub trait LockingPolicyFactory {
     /// Sync-mode-aware shared handle for values that need to be
     /// shared across clones (e.g. a policy's internal storage).
     ///
-    /// Under `NoLocking` this is `Rc<T>` (single-threaded); under
-    /// `FullLocking` this is `Arc<T>` (fully thread-safe); under
-    /// `IndexLocking` this is `IndexShared<T>` (`Send` but `!Sync`,
+    /// Under `NoLocking` this is `Rc<SharedValue>` (single-threaded); under
+    /// `FullLocking` this is `Arc<SharedValue>` (fully thread-safe); under
+    /// `IndexLocking` this is `IndexShared<SharedValue>` (`Send` but `!Sync`,
     /// matching the `AccountSync` engine contract).
-    type Shared<T: 'static>: Clone + std::ops::Deref<Target = T>;
+    type Shared<SharedValue: 'static>: Clone + std::ops::Deref<Target = SharedValue>;
 
     /// Sync-mode-aware settings cell for a configurable policy.
     ///
@@ -220,7 +222,7 @@ pub trait LockingPolicyFactory {
     fn create_policy(&self) -> Self::Policy;
 
     /// Wraps `value` in the sync-mode-appropriate shared handle.
-    fn new_shared<T: 'static>(value: T) -> Self::Shared<T>;
+    fn new_shared<SharedValue: 'static>(value: SharedValue) -> Self::Shared<SharedValue>;
 
     /// Creates a settings cell holding `value`.
     fn new_config<Settings: Clone + 'static>(value: Settings) -> Self::Config<Settings>;

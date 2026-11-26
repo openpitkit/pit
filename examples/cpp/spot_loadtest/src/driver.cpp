@@ -173,16 +173,16 @@ CheckedDeadline(Clock::time_point start, std::chrono::nanoseconds relativeTime,
 // An unbounded FIFO used as the spill path behind a bounded fast channel so a
 // momentarily-full buffer never blocks the producer. Safe for concurrent
 // producers and consumers.
-template <typename T> class Overflow {
+template <typename Item> class Overflow {
 public:
   // Appends one item and returns the new length.
-  int Push(T item) {
+  int Push(Item item) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_items.push_back(std::move(item));
     return static_cast<int>(m_items.size());
   }
   // Removes and returns the oldest item, or false when empty.
-  bool Pop(T &out) {
+  bool Pop(Item &out) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_items.empty()) {
       return false;
@@ -194,18 +194,18 @@ public:
 
 private:
   std::mutex m_mutex;
-  std::deque<T> m_items;
+  std::deque<Item> m_items;
 };
 
 // A bounded MPMC channel with non-blocking try-send and a blocking receive,
 // plus a close signal for the work handoff.
-template <typename T> class Channel {
+template <typename Item> class Channel {
 public:
   explicit Channel(std::size_t capacity) : m_capacity(capacity) {}
 
   // Non-blocking send; returns false (leaving `item` untouched) when the buffer
   // is full, so the caller can spill the still-intact item to the overflow.
-  bool TrySend(T &item) {
+  bool TrySend(Item &item) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_buffer.size() >= m_capacity) {
       return false;
@@ -216,7 +216,7 @@ public:
   }
 
   // Blocking receive; returns false once the channel is closed and drained.
-  bool Receive(T &out) {
+  bool Receive(Item &out) {
     std::unique_lock<std::mutex> lock(m_mutex);
     m_cv.wait(lock, [this] { return !m_buffer.empty() || m_closed; });
     if (m_buffer.empty()) {
@@ -239,7 +239,7 @@ private:
   std::size_t m_capacity;
   std::mutex m_mutex;
   std::condition_variable m_cv;
-  std::deque<T> m_buffer;
+  std::deque<Item> m_buffer;
   bool m_closed = false;
 };
 

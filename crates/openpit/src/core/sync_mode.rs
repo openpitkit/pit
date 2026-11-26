@@ -50,9 +50,9 @@ use crate::storage::{self, LockingPolicyFactory};
 /// A custom object shape must provide its own `IntoPolicyObject` conversion.
 pub trait SyncMode: 'static {
     /// Strong reference type used by the engine handle.
-    type Strong<T: 'static>: Clone + Deref<Target = T>;
+    type Strong<HandleTarget: 'static>: Clone + Deref<Target = HandleTarget>;
     /// Weak reference type captured by deferred request handles.
-    type Weak<T: 'static>: 'static;
+    type Weak<HandleTarget: 'static>: 'static;
 
     /// Factory used for every storage created by this engine.
     type StorageLockingPolicyFactory: LockingPolicyFactory
@@ -69,11 +69,14 @@ pub trait SyncMode: 'static {
         + 'static;
 
     /// Wraps `inner` in a new strong engine reference.
-    fn new_strong<T: 'static>(inner: T) -> Self::Strong<T>;
+    fn new_strong<HandleTarget: 'static>(inner: HandleTarget) -> Self::Strong<HandleTarget>;
     /// Creates a weak reference from the given strong reference.
-    fn downgrade<T: 'static>(s: &Self::Strong<T>) -> Self::Weak<T>;
+    fn downgrade<HandleTarget: 'static>(s: &Self::Strong<HandleTarget>)
+        -> Self::Weak<HandleTarget>;
     /// Attempts to upgrade a weak reference to a strong reference.
-    fn upgrade<T: 'static>(w: &Self::Weak<T>) -> Option<Self::Strong<T>>;
+    fn upgrade<HandleTarget: 'static>(
+        w: &Self::Weak<HandleTarget>,
+    ) -> Option<Self::Strong<HandleTarget>>;
 
     /// Creates the storage-locking factory used by this mode.
     fn storage_locking_policy_factory(&self) -> Self::StorageLockingPolicyFactory;
@@ -112,7 +115,7 @@ pub trait SyncMode: 'static {
 /// use openpit::{Engine, OrderOperation};
 /// use openpit::pretrade::policies::OrderValidationPolicy;
 ///
-/// fn require_send<T: Send>(_: T) {}
+/// fn require_send<Value: Send>(_: Value) {}
 ///
 /// let engine = Engine::builder()
 ///     .sync(openpit::LocalSync)
@@ -126,8 +129,8 @@ pub trait SyncMode: 'static {
 pub struct LocalSync;
 
 impl SyncMode for LocalSync {
-    type Strong<T: 'static> = std::rc::Rc<T>;
-    type Weak<T: 'static> = std::rc::Weak<T>;
+    type Strong<HandleTarget: 'static> = std::rc::Rc<HandleTarget>;
+    type Weak<HandleTarget: 'static> = std::rc::Weak<HandleTarget>;
     type StorageLockingPolicyFactory = crate::storage::NoLocking;
     type PreTradePolicyObject<
         Order: 'static,
@@ -135,15 +138,19 @@ impl SyncMode for LocalSync {
         AccountAdjustment: 'static,
     > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment, LocalSync>;
 
-    fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
+    fn new_strong<HandleTarget: 'static>(inner: HandleTarget) -> Self::Strong<HandleTarget> {
         std::rc::Rc::new(inner)
     }
 
-    fn downgrade<T: 'static>(s: &Self::Strong<T>) -> Self::Weak<T> {
+    fn downgrade<HandleTarget: 'static>(
+        s: &Self::Strong<HandleTarget>,
+    ) -> Self::Weak<HandleTarget> {
         std::rc::Rc::downgrade(s)
     }
 
-    fn upgrade<T: 'static>(w: &Self::Weak<T>) -> Option<Self::Strong<T>> {
+    fn upgrade<HandleTarget: 'static>(
+        w: &Self::Weak<HandleTarget>,
+    ) -> Option<Self::Strong<HandleTarget>> {
         w.upgrade()
     }
 
@@ -188,8 +195,8 @@ impl SyncMode for LocalSync {
 pub struct FullSync;
 
 impl SyncMode for FullSync {
-    type Strong<T: 'static> = std::sync::Arc<T>;
-    type Weak<T: 'static> = std::sync::Weak<T>;
+    type Strong<HandleTarget: 'static> = std::sync::Arc<HandleTarget>;
+    type Weak<HandleTarget: 'static> = std::sync::Weak<HandleTarget>;
     type StorageLockingPolicyFactory = crate::storage::FullLocking;
     type PreTradePolicyObject<
         Order: 'static,
@@ -197,15 +204,19 @@ impl SyncMode for FullSync {
         AccountAdjustment: 'static,
     > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment, FullSync> + Send + Sync;
 
-    fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
+    fn new_strong<HandleTarget: 'static>(inner: HandleTarget) -> Self::Strong<HandleTarget> {
         std::sync::Arc::new(inner)
     }
 
-    fn downgrade<T: 'static>(s: &Self::Strong<T>) -> Self::Weak<T> {
+    fn downgrade<HandleTarget: 'static>(
+        s: &Self::Strong<HandleTarget>,
+    ) -> Self::Weak<HandleTarget> {
         std::sync::Arc::downgrade(s)
     }
 
-    fn upgrade<T: 'static>(w: &Self::Weak<T>) -> Option<Self::Strong<T>> {
+    fn upgrade<HandleTarget: 'static>(
+        w: &Self::Weak<HandleTarget>,
+    ) -> Option<Self::Strong<HandleTarget>> {
         w.upgrade()
     }
 
@@ -232,49 +243,48 @@ impl SyncMode for FullSync {
 /// `Arc<Mutex<AccountSyncEngine<...>>>` (or equivalent) behind a per-account
 /// lock, or
 /// move handles between threads sequentially with explicit serialisation.
-pub struct AccountSyncHandle<T: ?Sized>(
-    std::sync::Arc<T>,
+pub struct AccountSyncHandle<HandleTarget: ?Sized>(
+    std::sync::Arc<HandleTarget>,
     std::marker::PhantomData<std::cell::Cell<()>>,
 );
 
-impl<T: ?Sized> Clone for AccountSyncHandle<T> {
+impl<HandleTarget: ?Sized> Clone for AccountSyncHandle<HandleTarget> {
     fn clone(&self) -> Self {
         Self(std::sync::Arc::clone(&self.0), std::marker::PhantomData)
     }
 }
 
-impl<T: ?Sized> Deref for AccountSyncHandle<T> {
-    type Target = T;
+impl<HandleTarget: ?Sized> Deref for AccountSyncHandle<HandleTarget> {
+    type Target = HandleTarget;
 
-    fn deref(&self) -> &T {
+    fn deref(&self) -> &HandleTarget {
         &self.0
     }
 }
 
-// SAFETY:
-// Sending an `Arc<T>` between threads requires `T: Send + Sync` for
-// `std::sync::Arc<T>: Send`. We claim `Send` with only `T: Send`
-// because the SDK's account-sync threading contract requires the
-// caller to serialise per-handle invocation: ownership of the handle
-// may move between OS threads sequentially, but only one thread
-// observes `&EngineInner` at any moment. The `Arc` refcount is
-// thread-safe; the inner state is observed by at most one thread at
-// a time per the contract.
+// SAFETY: Sending an `Arc<HandleTarget>` between threads requires
+// `HandleTarget: Send + Sync` for `std::sync::Arc<HandleTarget>: Send`.
+// We claim `Send` with only `HandleTarget: Send` because the SDK's
+// account-sync threading contract requires the caller to serialise
+// per-handle invocation: ownership of the handle may move between OS
+// threads sequentially, but only one thread observes `&EngineInner` at any
+// moment. The `Arc` refcount is thread-safe; the inner state is observed by
+// at most one thread at a time per the contract.
 //
 // The marker field deliberately keeps this handle `!Sync`: concurrent
 // shared access is not supported under account-sharded synchronization,
 // and the type system reflects that. Callers attempting
 // `Arc<AccountSyncEngine<...>>` and concurrent invocation
 // receive a compile error.
-unsafe impl<T: ?Sized + Send> Send for AccountSyncHandle<T> {}
+unsafe impl<HandleTarget: ?Sized + Send> Send for AccountSyncHandle<HandleTarget> {}
 
 /// Weak counterpart of [`AccountSyncHandle`].
-pub struct AccountSyncHandleWeak<T: ?Sized>(
-    std::sync::Weak<T>,
+pub struct AccountSyncHandleWeak<HandleTarget: ?Sized>(
+    std::sync::Weak<HandleTarget>,
     std::marker::PhantomData<std::cell::Cell<()>>,
 );
 
-impl<T: ?Sized> Clone for AccountSyncHandleWeak<T> {
+impl<HandleTarget: ?Sized> Clone for AccountSyncHandleWeak<HandleTarget> {
     fn clone(&self) -> Self {
         Self(std::sync::Weak::clone(&self.0), std::marker::PhantomData)
     }
@@ -283,7 +293,7 @@ impl<T: ?Sized> Clone for AccountSyncHandleWeak<T> {
 // SAFETY: same sequential ownership-transfer contract as
 // `AccountSyncHandle` above. The weak handle owns no engine state;
 // it only carries the thread-safe weak reference count.
-unsafe impl<T: ?Sized + Send> Send for AccountSyncHandleWeak<T> {}
+unsafe impl<HandleTarget: ?Sized + Send> Send for AccountSyncHandleWeak<HandleTarget> {}
 
 /// Account-keyed synchronization mode.
 ///
@@ -304,8 +314,8 @@ unsafe impl<T: ?Sized + Send> Send for AccountSyncHandleWeak<T> {}
 pub struct AccountSync;
 
 impl SyncMode for AccountSync {
-    type Strong<T: 'static> = AccountSyncHandle<T>;
-    type Weak<T: 'static> = AccountSyncHandleWeak<T>;
+    type Strong<HandleTarget: 'static> = AccountSyncHandle<HandleTarget>;
+    type Weak<HandleTarget: 'static> = AccountSyncHandleWeak<HandleTarget>;
     type StorageLockingPolicyFactory = crate::storage::IndexLocking<crate::AccountKeyConstraint>;
     type PreTradePolicyObject<
         Order: 'static,
@@ -313,15 +323,19 @@ impl SyncMode for AccountSync {
         AccountAdjustment: 'static,
     > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment, AccountSync> + Send;
 
-    fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
+    fn new_strong<HandleTarget: 'static>(inner: HandleTarget) -> Self::Strong<HandleTarget> {
         AccountSyncHandle(std::sync::Arc::new(inner), std::marker::PhantomData)
     }
 
-    fn downgrade<T: 'static>(s: &Self::Strong<T>) -> Self::Weak<T> {
+    fn downgrade<HandleTarget: 'static>(
+        s: &Self::Strong<HandleTarget>,
+    ) -> Self::Weak<HandleTarget> {
         AccountSyncHandleWeak(std::sync::Arc::downgrade(&s.0), std::marker::PhantomData)
     }
 
-    fn upgrade<T: 'static>(w: &Self::Weak<T>) -> Option<Self::Strong<T>> {
+    fn upgrade<HandleTarget: 'static>(
+        w: &Self::Weak<HandleTarget>,
+    ) -> Option<Self::Strong<HandleTarget>> {
         w.0.upgrade()
             .map(|inner| AccountSyncHandle(inner, std::marker::PhantomData))
     }

@@ -172,8 +172,8 @@ pub struct AccountAdjustmentAmount {
 
 /// Adds grouped balance/held/incoming adjustment payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithAccountAdjustmentAmount<T> {
-    pub inner: T,
+pub struct WithAccountAdjustmentAmount<InnerAdjustment> {
+    pub inner: InnerAdjustment,
     pub amount: AccountAdjustmentAmount,
 }
 
@@ -189,9 +189,9 @@ impl HasAccountAdjustmentBalance for AccountAdjustmentAmount {
         Ok(self.balance)
     }
 }
-impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentAmount<T>
+impl<InnerAdjustment> HasAccountAdjustmentBalance for WithAccountAdjustmentAmount<InnerAdjustment>
 where
-    T: HasAccountAdjustmentBalance,
+    InnerAdjustment: HasAccountAdjustmentBalance,
 {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         Ok(self.amount.balance)
@@ -234,8 +234,8 @@ pub struct AccountAdjustmentBalanceOperation {
 
 /// Adds physical-balance adjustment operation payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithAccountAdjustmentBalanceOperation<T> {
-    pub inner: T,
+pub struct WithAccountAdjustmentBalanceOperation<InnerAdjustment> {
+    pub inner: InnerAdjustment,
     pub operation: AccountAdjustmentBalanceOperation,
 }
 
@@ -252,7 +252,9 @@ impl HasAccountAdjustmentPnlOperation for AccountAdjustmentBalanceOperation {
         Ok(None)
     }
 }
-impl<T> HasAccountAdjustmentPnlOperation for WithAccountAdjustmentBalanceOperation<T> {
+impl<InnerAdjustment> HasAccountAdjustmentPnlOperation
+    for WithAccountAdjustmentBalanceOperation<InnerAdjustment>
+{
     fn account_adjustment_pnl_operation(
         &self,
     ) -> Result<Option<PnlState>, crate::RequestFieldAccessError> {
@@ -265,9 +267,10 @@ impl_request_has_field!(
     operation,
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>, average_entry_price;
 );
-impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentBalanceOperation<T>
+impl<InnerAdjustment> HasAccountAdjustmentBalance
+    for WithAccountAdjustmentBalanceOperation<InnerAdjustment>
 where
-    T: HasAccountAdjustmentBalance,
+    InnerAdjustment: HasAccountAdjustmentBalance,
 {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.inner.balance()
@@ -300,14 +303,15 @@ impl_request_has_field_passthrough!(
 /// This wrapper preserves the wrapped balance fields and adds only the
 /// realized-PnL correction.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithAccountAdjustmentBalanceRealizedPnl<T> {
-    pub inner: T,
+pub struct WithAccountAdjustmentBalanceRealizedPnl<InnerAdjustment> {
+    pub inner: InnerAdjustment,
     pub realized_pnl: PnlState,
 }
 
-impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentBalanceRealizedPnl<T>
+impl<InnerAdjustment> HasAccountAdjustmentBalance
+    for WithAccountAdjustmentBalanceRealizedPnl<InnerAdjustment>
 where
-    T: HasAccountAdjustmentBalance,
+    InnerAdjustment: HasAccountAdjustmentBalance,
 {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.inner.balance()
@@ -358,8 +362,8 @@ pub struct AccountAdjustmentPositionOperation {
 
 /// Adds derivatives-position adjustment operation payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithAccountAdjustmentPositionOperation<T> {
-    pub inner: T,
+pub struct WithAccountAdjustmentPositionOperation<InnerAdjustment> {
+    pub inner: InnerAdjustment,
     pub operation: AccountAdjustmentPositionOperation,
 }
 
@@ -377,7 +381,9 @@ impl HasAccountAdjustmentPnlOperation for AccountAdjustmentPositionOperation {
         Ok(None)
     }
 }
-impl<T> HasAccountAdjustmentPnlOperation for WithAccountAdjustmentPositionOperation<T> {
+impl<InnerAdjustment> HasAccountAdjustmentPnlOperation
+    for WithAccountAdjustmentPositionOperation<InnerAdjustment>
+{
     fn account_adjustment_pnl_operation(
         &self,
     ) -> Result<Option<PnlState>, crate::RequestFieldAccessError> {
@@ -392,9 +398,10 @@ impl_request_has_field!(
     HasPositionMode, position_mode, PositionMode, mode;
     HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>, leverage;
 );
-impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentPositionOperation<T>
+impl<InnerAdjustment> HasAccountAdjustmentBalance
+    for WithAccountAdjustmentPositionOperation<InnerAdjustment>
 where
-    T: HasAccountAdjustmentBalance,
+    InnerAdjustment: HasAccountAdjustmentBalance,
 {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.inner.balance()
@@ -438,8 +445,8 @@ pub struct AccountAdjustmentBounds {
 
 /// Adds post-adjustment inclusive limits.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithAccountAdjustmentBounds<T> {
-    pub inner: T,
+pub struct WithAccountAdjustmentBounds<InnerAdjustment> {
+    pub inner: InnerAdjustment,
     pub bounds: AccountAdjustmentBounds,
 }
 
@@ -468,9 +475,9 @@ impl_request_has_field_passthrough!(
     HasAccountAdjustmentHeld, held, Option<AdjustmentAmount>;
     HasAccountAdjustmentIncoming, incoming, Option<AdjustmentAmount>;
 );
-impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentBounds<T>
+impl<InnerAdjustment> HasAccountAdjustmentBalance for WithAccountAdjustmentBounds<InnerAdjustment>
 where
-    T: HasAccountAdjustmentBalance,
+    InnerAdjustment: HasAccountAdjustmentBalance,
 {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.inner.balance()

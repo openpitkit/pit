@@ -9,11 +9,11 @@ pub trait HasPnl {
 }
 
 #[derive(RequestFields)]
-struct Wrapper<T, U> {
+struct Wrapper<FirstInner, SecondInner> {
     #[openpit(inner, HasPnl(pnl -> Result<u32, RequestFieldAccessError>))]
-    left: T,
+    left: FirstInner,
     #[openpit(inner, HasPnl(pnl -> Result<u32, RequestFieldAccessError>))]
-    right: U,
+    right: SecondInner,
 }
 
 fn main() {}

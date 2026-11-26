@@ -40,32 +40,32 @@ use openpit::{AccountKey, AccountKeyConstraint, MarketDataSync};
 /// threads is supported for every sync mode. The full-synchronization
 /// modes (e.g. `full_sync()` in any binding) make the underlying
 /// engine fully thread-safe and admit concurrent invocation as well.
-pub struct EngineHandle<T: ?Sized>(pub(crate) Arc<T>);
+pub struct EngineHandle<HandleTarget: ?Sized>(pub(crate) Arc<HandleTarget>);
 
-impl<T: ?Sized> Clone for EngineHandle<T> {
+impl<HandleTarget: ?Sized> Clone for EngineHandle<HandleTarget> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<T: ?Sized> std::ops::Deref for EngineHandle<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<HandleTarget: ?Sized> std::ops::Deref for EngineHandle<HandleTarget> {
+    type Target = HandleTarget;
+    fn deref(&self) -> &HandleTarget {
         &self.0
     }
 }
 
-// SAFETY:
-// `EngineHandle<T>` wraps `Arc<T>`. The standard library's `Arc<T>: Send +
-// Sync` requires `T: Send + Sync`. We claim `Send + Sync` with only `T: Send`
-// (no `Sync`) because the safety story is the language-binding threading
-// contract:
+// SAFETY: `EngineHandle<HandleTarget>` wraps `Arc<HandleTarget>`. The standard
+// library's `Arc<HandleTarget>: Send + Sync` requires
+// `HandleTarget: Send + Sync`. We claim `Send + Sync` with only
+// `HandleTarget: Send` (no `Sync`) because the safety story is the
+// language-binding threading contract:
 //
 // - Under `SyncMode::Full`, the inner storage is fully synchronized at
 //   runtime through `FullLocking`'s rwlocks. Multiple binding threads
 //   observing `&EngineInner` concurrently see data-race-free state at
 //   runtime even though the Rust type system would conservatively reject
-//   `T: !Sync` shared across threads.
+//   `HandleTarget: !Sync` shared across threads.
 // - Under `SyncMode::None`, the binding caller keeps the handle on one
 //   thread, so only one binding thread observes `&EngineInner`.
 // - Under `SyncMode::Account`, binding threads may observe `&EngineInner`
@@ -83,16 +83,16 @@ impl<T: ?Sized> std::ops::Deref for EngineHandle<T> {
 //
 // Violating the per-mode contract from the binding caller is undefined
 // behavior at the contract level.
-unsafe impl<T: ?Sized + Send> Send for EngineHandle<T> {}
-unsafe impl<T: ?Sized + Send> Sync for EngineHandle<T> {}
+unsafe impl<HandleTarget: ?Sized + Send> Send for EngineHandle<HandleTarget> {}
+unsafe impl<HandleTarget: ?Sized + Send> Sync for EngineHandle<HandleTarget> {}
 
 /// Weak counterpart of [`EngineHandle`].
 ///
 /// Used by deferred request and reservation handles to detect engine
 /// destruction without keeping the engine alive.
-pub struct EngineHandleWeak<T: ?Sized>(pub(crate) std::sync::Weak<T>);
+pub struct EngineHandleWeak<HandleTarget: ?Sized>(pub(crate) std::sync::Weak<HandleTarget>);
 
-impl<T: ?Sized> Clone for EngineHandleWeak<T> {
+impl<HandleTarget: ?Sized> Clone for EngineHandleWeak<HandleTarget> {
     fn clone(&self) -> Self {
         Self(std::sync::Weak::clone(&self.0))
     }
@@ -101,8 +101,8 @@ impl<T: ?Sized> Clone for EngineHandleWeak<T> {
 // SAFETY: same reasoning as `EngineHandle` above: the weak half only
 // holds a non-owning reference; its Send/Sync follow from the strong
 // side's contract.
-unsafe impl<T: ?Sized + Send> Send for EngineHandleWeak<T> {}
-unsafe impl<T: ?Sized + Send> Sync for EngineHandleWeak<T> {}
+unsafe impl<HandleTarget: ?Sized + Send> Send for EngineHandleWeak<HandleTarget> {}
+unsafe impl<HandleTarget: ?Sized + Send> Sync for EngineHandleWeak<HandleTarget> {}
 
 // ─── EngineLocking ───────────────────────────────────────────────────────────
 
@@ -126,8 +126,8 @@ impl EngineLocking {
 }
 
 impl openpit::SyncMode for EngineLocking {
-    type Strong<T: 'static> = EngineHandle<T>;
-    type Weak<T: 'static> = EngineHandleWeak<T>;
+    type Strong<HandleTarget: 'static> = EngineHandle<HandleTarget>;
+    type Weak<HandleTarget: 'static> = EngineHandleWeak<HandleTarget>;
     type StorageLockingPolicyFactory = StorageLockingPolicyFactory;
     type PreTradePolicyObject<
         Order: 'static,
@@ -136,15 +136,19 @@ impl openpit::SyncMode for EngineLocking {
     > = dyn openpit::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         + Send;
 
-    fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
+    fn new_strong<HandleTarget: 'static>(inner: HandleTarget) -> Self::Strong<HandleTarget> {
         EngineHandle(Arc::new(inner))
     }
 
-    fn downgrade<T: 'static>(s: &Self::Strong<T>) -> Self::Weak<T> {
+    fn downgrade<HandleTarget: 'static>(
+        s: &Self::Strong<HandleTarget>,
+    ) -> Self::Weak<HandleTarget> {
         EngineHandleWeak(Arc::downgrade(&s.0))
     }
 
-    fn upgrade<T: 'static>(w: &Self::Weak<T>) -> Option<Self::Strong<T>> {
+    fn upgrade<HandleTarget: 'static>(
+        w: &Self::Weak<HandleTarget>,
+    ) -> Option<Self::Strong<HandleTarget>> {
         w.0.upgrade().map(EngineHandle)
     }
 
@@ -165,19 +169,19 @@ impl MarketDataSealed for EngineLocking {}
 // at runtime while the service stays `Send`, so it can be embedded in interop
 // pre-trade policies.
 impl MarketDataSync for EngineLocking {
-    type Shared<T: 'static> = EngineHandle<T>;
-    type Lock<T> = RuntimeLock<T>;
+    type Shared<SharedValue: 'static> = EngineHandle<SharedValue>;
+    type Lock<LockedValue> = RuntimeLock<LockedValue>;
     // Always atomic, even in no-sync mode: the service handle is the
     // `Send + Sync` `EngineHandle`, so the gate must stay thread-safe. A
     // runtime-branched (enum) gate would add a match on the hot read path,
     // costing more than the direct atomic load it would try to avoid.
     type Gate = AtomicBool;
 
-    fn new_shared<T: 'static>(&self, inner: T) -> EngineHandle<T> {
+    fn new_shared<SharedValue: 'static>(&self, inner: SharedValue) -> EngineHandle<SharedValue> {
         EngineHandle(Arc::new(inner))
     }
 
-    fn new_lock<T>(&self, inner: T) -> RuntimeLock<T> {
+    fn new_lock<LockedValue>(&self, inner: LockedValue) -> RuntimeLock<LockedValue> {
         match self.mode {
             // SAFETY note: no-sync (`None`) mode constrains the service to
             // single-threaded use at the binding layer, so the no-op lock is
@@ -267,15 +271,16 @@ pub struct StorageLockingPolicy {
 }
 
 /// First-use storage value using the selected runtime synchronization mode.
-pub enum StorageOnceValue<T> {
-    /// None and account modes rely on their existing serialized observer contract.
-    Local(std::cell::OnceCell<T>),
+pub enum StorageOnceValue<Value> {
+    /// None and account modes rely on their existing serialized observer
+    /// contract.
+    Local(std::cell::OnceCell<Value>),
     /// Full mode permits concurrent initialization and observation.
-    Full(std::sync::OnceLock<T>),
+    Full(std::sync::OnceLock<Value>),
 }
 
-impl<T> openpit::storage::OnceValue<T> for StorageOnceValue<T> {
-    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T {
+impl<Value> openpit::storage::OnceValue<Value> for StorageOnceValue<Value> {
+    fn get_or_init(&self, initialize: impl FnOnce() -> Value) -> &Value {
         match self {
             Self::Local(cell) => cell.get_or_init(initialize),
             Self::Full(cell) => cell.get_or_init(initialize),
@@ -292,9 +297,9 @@ impl<T> openpit::storage::OnceValue<T> for StorageOnceValue<T> {
 //   on the index; values are left to the upstream contract described
 //   on `SyncMode::Account`).
 unsafe impl LockingPolicy for StorageLockingPolicy {
-    type OnceValue<T> = StorageOnceValue<T>;
+    type OnceValue<Value> = StorageOnceValue<Value>;
 
-    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+    fn new_once_value<Value>(&self) -> Self::OnceValue<Value> {
         match &self.inner {
             PolicyImpl::Local | PolicyImpl::Account(_) => {
                 StorageOnceValue::Local(std::cell::OnceCell::new())
@@ -356,10 +361,10 @@ pub struct StorageLockingPolicyFactory {
 impl LockingPolicyFactory for StorageLockingPolicyFactory {
     type Policy = StorageLockingPolicy;
     type IndexFlag = std::sync::atomic::AtomicBool;
-    type Shared<T: 'static> = EngineHandle<T>;
-    type Config<T: Clone + 'static> = ArcSwapConfigCell<T>;
+    type Shared<SharedValue: 'static> = EngineHandle<SharedValue>;
+    type Config<Settings: Clone + 'static> = ArcSwapConfigCell<Settings>;
 
-    fn new_shared<T: 'static>(value: T) -> EngineHandle<T> {
+    fn new_shared<SharedValue: 'static>(value: SharedValue) -> EngineHandle<SharedValue> {
         EngineHandle(Arc::new(value))
     }
 
@@ -374,8 +379,8 @@ impl LockingPolicyFactory for StorageLockingPolicyFactory {
         StorageLockingPolicy { inner }
     }
 
-    fn new_config<T: Clone + 'static>(value: T) -> ArcSwapConfigCell<T> {
-        <ArcSwapConfigCell<T> as openpit::storage::ConfigCell<T>>::new(value)
+    fn new_config<Settings: Clone + 'static>(value: Settings) -> ArcSwapConfigCell<Settings> {
+        <ArcSwapConfigCell<Settings> as openpit::storage::ConfigCell<Settings>>::new(value)
     }
 }
 
@@ -495,7 +500,7 @@ mod tests {
         Instrument, MarketDataBuilder, MarketDataService, Quote, QuoteResolution, QuoteTtl,
     };
 
-    fn assert_send<T: Send>() {}
+    fn assert_send<Value: Send>() {}
 
     fn build_md_service(mode: SyncMode) -> EngineHandle<MarketDataService<EngineLocking>> {
         MarketDataBuilder::with_sync(EngineLocking::new(mode), QuoteTtl::Infinite).build()

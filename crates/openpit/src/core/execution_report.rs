@@ -48,8 +48,8 @@ pub struct ExecutionReportOperation {
 /// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
 /// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithExecutionReportOperation<T> {
-    pub inner: T,
+pub struct WithExecutionReportOperation<InnerExecutionReport> {
+    pub inner: InnerExecutionReport,
     pub operation: ExecutionReportOperation,
 }
 
@@ -139,8 +139,8 @@ pub struct FinancialImpact {
 /// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
 /// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithFinancialImpact<T> {
-    pub inner: T,
+pub struct WithFinancialImpact<InnerExecutionReport> {
+    pub inner: InnerExecutionReport,
     pub financial_impact: FinancialImpact,
 }
 
@@ -209,8 +209,8 @@ pub struct ExecutionReportFillDetails {
 /// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
 /// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithExecutionReportFillDetails<T> {
-    pub inner: T,
+pub struct WithExecutionReportFillDetails<InnerExecutionReport> {
+    pub inner: InnerExecutionReport,
     pub fill: ExecutionReportFillDetails,
 }
 
@@ -230,7 +230,9 @@ impl HasExecutionReportFillFee for ExecutionReportFillDetails {
     }
 }
 
-impl<T> HasExecutionReportFillFee for WithExecutionReportFillDetails<T> {
+impl<InnerExecutionReport> HasExecutionReportFillFee
+    for WithExecutionReportFillDetails<InnerExecutionReport>
+{
     fn fill_fee(&self) -> Result<Option<MonetaryAmount>, crate::RequestFieldAccessError> {
         self.fill.fill_fee()
     }
@@ -282,8 +284,8 @@ pub struct ExecutionReportPositionImpact {
 /// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
 /// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithExecutionReportPositionImpact<T> {
-    pub inner: T,
+pub struct WithExecutionReportPositionImpact<InnerExecutionReport> {
+    pub inner: InnerExecutionReport,
     pub position_impact: ExecutionReportPositionImpact,
 }
 

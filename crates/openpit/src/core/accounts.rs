@@ -726,20 +726,23 @@ mod tests {
     #[test]
     fn exclusive_transition_contract_and_recovery_hold_in_every_mode() {
         use std::panic::{catch_unwind, AssertUnwindSafe};
-        fn check<F>()
+        fn check<StorageLockingPolicyFactory>()
         where
-            F: LockingPolicyFactory + storage::CreateStorageFor<AccountId> + Default + 'static,
+            StorageLockingPolicyFactory:
+                LockingPolicyFactory + storage::CreateStorageFor<AccountId> + Default + 'static,
         {
-            let builder = StorageBuilder::new(F::default());
-            let groups =
-                AccountGroupsHandle::<F>::from_inner(F::new_shared(AccountGroups::new(&builder)));
-            let blocks =
-                AccountBlockHandle::<F>::from_inner(F::new_shared(BlockedAccounts::new(&builder)));
-            let registry = F::new_shared(ConfigRegistry::empty());
+            let builder = StorageBuilder::new(StorageLockingPolicyFactory::default());
+            let groups = AccountGroupsHandle::<StorageLockingPolicyFactory>::from_inner(
+                StorageLockingPolicyFactory::new_shared(AccountGroups::new(&builder)),
+            );
+            let blocks = AccountBlockHandle::<StorageLockingPolicyFactory>::from_inner(
+                StorageLockingPolicyFactory::new_shared(BlockedAccounts::new(&builder)),
+            );
+            let registry = StorageLockingPolicyFactory::new_shared(ConfigRegistry::empty());
             let accounts = Accounts::new(
                 groups,
                 blocks,
-                F::new_shared(AccountCurrencies::new(&builder)),
+                StorageLockingPolicyFactory::new_shared(AccountCurrencies::new(&builder)),
                 registry.clone(),
             );
             let entered = std::sync::Arc::new(std::sync::Barrier::new(2));

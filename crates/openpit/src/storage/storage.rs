@@ -683,20 +683,20 @@ where
     /// This eliminates the window in which a just-inserted entry with an
     /// unwanted value (e.g. all-zero) could be observed by another thread.
     /// For entries that were already present before the call, behaviour is
-    /// identical to [`with_mut_or_insert`](Self::with_mut_or_insert); pruning of existing entries that
-    /// satisfy the predicate after mutation is the caller's responsibility
-    /// (see [`remove_if`](Self::remove_if)).
-    pub fn with_mut_or_insert_prune_new_if<Mutator, Output, Error, Initializer, Pred>(
+    /// identical to [`with_mut_or_insert`](Self::with_mut_or_insert); pruning
+    /// of existing entries that satisfy the predicate after mutation is the
+    /// caller's responsibility (see [`remove_if`](Self::remove_if)).
+    pub fn with_mut_or_insert_prune_new_if<Mutator, Output, Error, Initializer, Predicate>(
         &self,
         key: Key,
         default: Initializer,
-        prune_if: Pred,
+        prune_if: Predicate,
         mutator: Mutator,
     ) -> Result<Output, Error>
     where
         Mutator: FnOnce(&mut Value, bool) -> Result<Output, Error>,
         Initializer: FnOnce() -> Value,
-        Pred: FnOnce(&Value) -> bool,
+        Predicate: FnOnce(&Value) -> bool,
         Key: Clone,
     {
         #[cfg(debug_assertions)]
@@ -797,9 +797,9 @@ where
     ///
     /// Returns `true` when the entry existed and `predicate` approved the
     /// removal; `false` when the entry was absent or `predicate` declined.
-    pub fn remove_if<Pred>(&self, key: &Key, predicate: Pred) -> bool
+    pub fn remove_if<Predicate>(&self, key: &Key, predicate: Predicate) -> bool
     where
-        Pred: FnOnce(&Value) -> bool,
+        Predicate: FnOnce(&Value) -> bool,
     {
         let _index_guard = self.locking_policy.write_index();
         let _values_guard = self.locking_policy.write_values(key);

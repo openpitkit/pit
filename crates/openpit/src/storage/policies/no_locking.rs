@@ -68,7 +68,7 @@ impl LockingPolicyFactory for NoLocking {
     /// Single-thread regime; `Cell<bool>` needs no synchronization.
     type IndexFlag = std::cell::Cell<bool>;
 
-    type Shared<T: 'static> = std::rc::Rc<T>;
+    type Shared<SharedValue: 'static> = std::rc::Rc<SharedValue>;
 
     type Config<Settings: Clone + 'static> = LocalConfigCell<Settings>;
 
@@ -78,7 +78,7 @@ impl LockingPolicyFactory for NoLocking {
         }
     }
 
-    fn new_shared<T: 'static>(value: T) -> std::rc::Rc<T> {
+    fn new_shared<SharedValue: 'static>(value: SharedValue) -> std::rc::Rc<SharedValue> {
         std::rc::Rc::new(value)
     }
 
@@ -103,9 +103,9 @@ pub struct NoLockingPolicy {
 // same storage through this policy. Each method returns a no-op guard,
 // matching the no-synchronization contract.
 unsafe impl LockingPolicy for NoLockingPolicy {
-    type OnceValue<T> = std::cell::OnceCell<T>;
+    type OnceValue<Value> = std::cell::OnceCell<Value>;
 
-    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+    fn new_once_value<Value>(&self) -> Self::OnceValue<Value> {
         std::cell::OnceCell::new()
     }
 

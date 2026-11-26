@@ -19,6 +19,6 @@
 package ptr
 
 // New allocates a copy of t and returns a pointer to it.
-func New[T any](t T) *T {
+func New[Value any](t Value) *Value {
 	return &t
 }

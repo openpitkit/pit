@@ -27,35 +27,35 @@ use crate::storage::{ArcSwapConfigCell, ConfigCell};
 
 /// Sync-mode-aware shared handle for [`IndexLocking`]-based engines.
 ///
-/// Mirrors `AccountSyncHandle`: wraps `Arc<T>` for thread-safe
+/// Mirrors `AccountSyncHandle`: wraps `Arc<SharedValue>` for thread-safe
 /// reference-counting while being deliberately `!Sync` (via
 /// `PhantomData<Cell<()>>`) to match the `AccountSync` engine contract
 /// that guarantees sequential per-handle invocation.
-pub struct IndexShared<T>(
-    std::sync::Arc<T>,
+pub struct IndexShared<SharedValue>(
+    std::sync::Arc<SharedValue>,
     std::marker::PhantomData<std::cell::Cell<()>>,
 );
 
-impl<T> Clone for IndexShared<T> {
+impl<SharedValue> Clone for IndexShared<SharedValue> {
     fn clone(&self) -> Self {
         Self(std::sync::Arc::clone(&self.0), std::marker::PhantomData)
     }
 }
 
-impl<T> std::ops::Deref for IndexShared<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<SharedValue> std::ops::Deref for IndexShared<SharedValue> {
+    type Target = SharedValue;
+    fn deref(&self) -> &SharedValue {
         &self.0
     }
 }
 
 // SAFETY: `IndexLocking` engines guarantee sequential per-handle
 // invocation: only one logical thread holds a reference at a time, so
-// shared `&T` never races with mutation. The `Arc` refcount is
+// shared `&SharedValue` never races with mutation. The `Arc` refcount is
 // thread-safe. `!Sync` (enforced by `PhantomData<Cell<()>>`) prevents
-// sharing `&IndexShared<T>` across threads, matching the `AccountSync`
-// engine contract.
-unsafe impl<T: Send> Send for IndexShared<T> {}
+// sharing `&IndexShared<SharedValue>` across threads, as required by the
+// `AccountSync` engine contract.
+unsafe impl<SharedValue: Send> Send for IndexShared<SharedValue> {}
 
 /// Locking policy factory that synchronizes the **index** but leaves
 /// values unsynchronized.
@@ -153,7 +153,7 @@ impl<KeyBound: 'static> LockingPolicyFactory for IndexLocking<KeyBound> {
     /// Multi-thread regime; `AtomicBool` provides lock-free synchronization.
     type IndexFlag = std::sync::atomic::AtomicBool;
 
-    type Shared<T: 'static> = IndexShared<T>;
+    type Shared<SharedValue: 'static> = IndexShared<SharedValue>;
 
     type Config<Settings: Clone + 'static> = ArcSwapConfigCell<Settings>;
 
@@ -163,7 +163,7 @@ impl<KeyBound: 'static> LockingPolicyFactory for IndexLocking<KeyBound> {
         }
     }
 
-    fn new_shared<T: 'static>(value: T) -> IndexShared<T> {
+    fn new_shared<SharedValue: 'static>(value: SharedValue) -> IndexShared<SharedValue> {
         IndexShared(std::sync::Arc::new(value), std::marker::PhantomData)
     }
 
@@ -188,9 +188,9 @@ pub struct IndexLockingPolicy {
 // Values guards are no-ops because this policy deliberately leaves the
 // values domain unsynchronized.
 unsafe impl LockingPolicy for IndexLockingPolicy {
-    type OnceValue<T> = std::cell::OnceCell<T>;
+    type OnceValue<Value> = std::cell::OnceCell<Value>;
 
-    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+    fn new_once_value<Value>(&self) -> Self::OnceValue<Value> {
         std::cell::OnceCell::new()
     }
 
