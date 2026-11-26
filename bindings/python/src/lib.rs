@@ -1383,12 +1383,12 @@ impl PyEngine {
     ///         a non-iterable value other than `None`.
     ///     ValueError: If a policy return value has an invalid reject field.
     ///     AttributeError: If a policy return value lacks a required reject
-    ///     field. OverflowError: If a policy return value has a `user_data`
-    ///     token that
-    ///         fits in 64 bits but exceeds the platform's word size.
+    ///         field.
+    ///     OverflowError: If a policy return value has a `user_data` token
+    ///         that fits in 64 bits but exceeds the platform's word size.
     ///     Exception: Exceptions from policy callbacks or from Python code
-    ///     invoked
-    ///         while reading their return values keep their original type.
+    ///         invoked while reading their return values keep their original
+    ///         type.
     #[pyo3(signature = (order))]
     fn start_pre_trade_dry_run(
         &self,
@@ -1408,20 +1408,19 @@ impl PyEngine {
     ///
     /// Raises:
     ///     TypeError: If `order` is not an order object, a start-stage policy
-    ///     returns
-    ///         a non-iterable value other than `None`, or a main-stage policy
-    ///         return value has a non-iterable collection or an incompatible
-    ///         field type.
+    ///         returns a non-iterable value other than `None`, or a main-stage
+    ///         policy return value has a non-iterable collection or an
+    ///         incompatible field type.
     ///     ValueError: If a policy return value has an invalid field.
     ///     openpit.param.ParamError: If a numeric field in a policy return
-    ///     value fails
-    ///         domain parsing or exceeds the supported decimal range.
+    ///         value fails domain parsing or exceeds the supported decimal
+    ///         range.
     ///     AttributeError: If a policy return value lacks a required attribute.
-    ///     OverflowError: If a policy return value has a `user_data` token that
-    ///         fits in 64 bits but exceeds the platform's word size.
+    ///     OverflowError: If a policy return value has a `user_data` token
+    ///         that fits in 64 bits but exceeds the platform's word size.
     ///     Exception: Exceptions from policy callbacks or from Python code
-    ///     invoked
-    ///         while reading their return values keep their original type.
+    ///         invoked while reading their return values keep their original
+    ///         type.
     #[pyo3(signature = (order))]
     fn execute_pre_trade_dry_run(
         &self,
@@ -4620,12 +4619,13 @@ impl PySyncedEngineBuilder {
     /// A policy that keeps its own state - Spot Funds, the rate limit, the
     /// P&L bounds kill switch, or a custom policy that holds funds or counts -
     /// is registered in "Reject" mode; a custom one that needs review sets a
-    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
-    /// records it returns. Registered in a review mode, the changes it
+    /// review mode in :attr:`openpit.pretrade.policy.PolicyReject.mode` on the
+    /// reject records it returns. Registered in a review mode, the changes it
     /// records as main-stage
-    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
-    /// marks in pre-trade are rolled back, also after the reviewer confirms
-    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// :attr:`openpit.pretrade.policy.PolicyPreTradeResult.mutations` for an
+    /// order it marks in pre-trade are rolled back, also after the reviewer
+    /// confirms that order; changes it makes at once, such as rate-limit
+    /// counters, stay.
     /// For Spot Funds this means nothing is held, no lock price is recorded,
     /// balances and positions are not updated, and a later fill or cancel of
     /// that order can block the account for a missing lock price. The rejects
@@ -4654,12 +4654,13 @@ impl PySyncedEngineBuilder {
     /// A policy that keeps its own state - Spot Funds, the rate limit, the
     /// P&L bounds kill switch, or a custom policy that holds funds or counts -
     /// is registered in "Reject" mode; a custom one that needs review sets a
-    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
-    /// records it returns. Registered in a review mode, the changes it
+    /// review mode in :attr:`openpit.pretrade.policy.PolicyReject.mode` on the
+    /// reject records it returns. Registered in a review mode, the changes it
     /// records as main-stage
-    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
-    /// marks in pre-trade are rolled back, also after the reviewer confirms
-    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// :attr:`openpit.pretrade.policy.PolicyPreTradeResult.mutations` for an
+    /// order it marks in pre-trade are rolled back, also after the reviewer
+    /// confirms that order; changes it makes at once, such as rate-limit
+    /// counters, stay.
     /// For Spot Funds this means nothing is held, no lock price is recorded,
     /// balances and positions are not updated, and a later fill or cancel of
     /// that order can block the account for a missing lock price. The rejects
@@ -4821,12 +4822,13 @@ impl PyReadyEngineBuilder {
     /// A policy that keeps its own state - Spot Funds, the rate limit, the
     /// P&L bounds kill switch, or a custom policy that holds funds or counts -
     /// is registered in "Reject" mode; a custom one that needs review sets a
-    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
-    /// records it returns. Registered in a review mode, the changes it
+    /// review mode in :attr:`openpit.pretrade.policy.PolicyReject.mode` on the
+    /// reject records it returns. Registered in a review mode, the changes it
     /// records as main-stage
-    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
-    /// marks in pre-trade are rolled back, also after the reviewer confirms
-    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// :attr:`openpit.pretrade.policy.PolicyPreTradeResult.mutations` for an
+    /// order it marks in pre-trade are rolled back, also after the reviewer
+    /// confirms that order; changes it makes at once, such as rate-limit
+    /// counters, stay.
     /// For Spot Funds this means nothing is held, no lock price is recorded,
     /// balances and positions are not updated, and a later fill or cancel of
     /// that order can block the account for a missing lock price. The rejects
@@ -5060,12 +5062,13 @@ impl PyReadyEngineBuilder {
     /// A policy that keeps its own state - Spot Funds, the rate limit, the
     /// P&L bounds kill switch, or a custom policy that holds funds or counts -
     /// is registered in "Reject" mode; a custom one that needs review sets a
-    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
-    /// records it returns. Registered in a review mode, the changes it
+    /// review mode in :attr:`openpit.pretrade.policy.PolicyReject.mode` on the
+    /// reject records it returns. Registered in a review mode, the changes it
     /// records as main-stage
-    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
-    /// marks in pre-trade are rolled back, also after the reviewer confirms
-    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// :attr:`openpit.pretrade.policy.PolicyPreTradeResult.mutations` for an
+    /// order it marks in pre-trade are rolled back, also after the reviewer
+    /// confirms that order; changes it makes at once, such as rate-limit
+    /// counters, stay.
     /// For Spot Funds this means nothing is held, no lock price is recorded,
     /// balances and positions are not updated, and a later fill or cancel of
     /// that order can block the account for a missing lock price. The rejects
@@ -8259,11 +8262,11 @@ impl PyRequest {
     ///         or an incompatible field type.
     ///     ValueError: If a policy return value has an invalid field.
     ///     openpit.param.ParamError: If a numeric field in a policy return
-    ///     value fails
-    ///         domain parsing or exceeds the supported decimal range.
+    ///         value fails domain parsing or exceeds the supported decimal
+    ///         range.
     ///     AttributeError: If a policy return value lacks a required attribute.
-    ///     OverflowError: If a policy return value has a `user_data` token that
-    ///         fits in 64 bits but exceeds the platform's word size.
+    ///     OverflowError: If a policy return value has a `user_data` token
+    ///         that fits in 64 bits but exceeds the platform's word size.
     ///     Exception: Policy callback errors, other mutation rollback errors,
     ///         and errors while reading policy return values keep their
     ///         original type, subject to the reserved report above.

@@ -1189,7 +1189,7 @@ def test_spot_funds_pnl_runtime_global_barriers_rejects_scalar() -> None:
         openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
     )
 
-    with pytest.raises(TypeError, match="global_barriers"):
+    with pytest.raises(TypeError, match="Sequence"):
         engine.configure().spot_funds_pnl_bounds_killswitch(
             policies.SpotFundsBuilder.NAME,
             global_barriers=policies.SpotFundsPnlBoundsBarrier(

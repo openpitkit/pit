@@ -121,7 +121,7 @@ def _normalize_python_docstrings(_app, _what, _name, _obj, _options, lines) -> N
             normalized.append(f"    {line}")
             continue
 
-        if stripped in {"Args:", "Attributes:", "Returns:"}:
+        if stripped in {"Args:", "Attributes:", "Returns:", "Raises:"}:
             in_bullet_item = False
             in_google_section = True
             normalized.extend([stripped, ""])

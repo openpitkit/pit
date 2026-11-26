@@ -1333,7 +1333,7 @@ openpit::pretrade::ExecuteResult ExecuteReviewOrder(
 }
 
 TEST(CustomPolicy, ReviewInstanceRollbackFailure) {
-  for (const auto [rollbackAll, viaRequest] :
+  for (const auto& [rollbackAll, viaRequest] :
        {std::pair{false, false}, std::pair{false, true}, std::pair{true, false},
         std::pair{true, true}}) {
     SCOPED_TRACE(testing::Message() << "rollbackAll=" << rollbackAll

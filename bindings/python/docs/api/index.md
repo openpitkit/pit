@@ -91,6 +91,9 @@ reservation that must be committed or rolled back.
 .. autoclass:: openpit.pretrade.RejectScope
    :members:
 
+.. autoclass:: openpit.pretrade.RuleMode
+   :members:
+
 .. autoclass:: openpit.pretrade.StartResult
    :members:
 

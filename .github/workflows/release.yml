@@ -572,7 +572,13 @@ jobs:
       - name: Dry-run npm publication
         shell: bash
         working-directory: bindings/js/dist
-        run: npm publish --dry-run --access public --provenance
+        env:
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
+        run: |
+          if [[ "$RELEASE_MODE" == "dry-run" ]]; then
+            export npm_config_tag=alpha
+          fi
+          npm publish --dry-run --access public --provenance
 
       - name: Publish npm package
         shell: bash
