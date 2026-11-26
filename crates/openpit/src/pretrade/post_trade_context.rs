@@ -17,7 +17,9 @@
 
 #[cfg(test)]
 use crate::core::{AccountBlockHandle, AccountCurrencies, BlockedAccounts};
-use crate::core::{AccountGroups, AccountGroupsHandle, Accounts, GroupLookup};
+use crate::core::{
+    AccountGroups, AccountGroupsHandle, Accounts, OperationSnapshot, RequestFieldAccessError,
+};
 use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
 
@@ -30,16 +32,13 @@ use crate::storage::{self, StorageBuilder};
 /// `account_control`: post-trade processing reports account blocks through the
 /// [`PostTradeResult`](crate::pretrade::PostTradeResult) return value instead.
 ///
-/// The bound account is the report's account; it is `None` when the report
-/// carries no recognizable account identifier, in which case
-/// [`account_group`](Self::account_group) returns `None`.
+/// The report account is read exactly once at engine entry, including its
+/// error. Group and currency are resolved lazily once for this operation.
 pub struct PostTradeContext<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
-    accounts: Option<Accounts<StorageFactory>>,
-    account: Option<AccountId>,
-    group_lookup: GroupLookup<StorageFactory>,
+    group_lookup: OperationSnapshot<StorageFactory>,
 }
 
 impl<StorageFactory> PostTradeContext<StorageFactory>
@@ -48,24 +47,20 @@ where
 {
     pub(crate) fn with_groups(
         account_groups: AccountGroupsHandle<StorageFactory>,
-        account: Option<AccountId>,
+        account: Result<AccountId, RequestFieldAccessError>,
     ) -> Self {
         Self {
-            accounts: None,
-            account,
-            group_lookup: GroupLookup::new(account_groups, account),
+            group_lookup: OperationSnapshot::new(account_groups, account, None),
         }
     }
 
     pub(crate) fn with_accounts(
         accounts: Accounts<StorageFactory>,
         account_groups: AccountGroupsHandle<StorageFactory>,
-        account: Option<AccountId>,
+        account: Result<AccountId, RequestFieldAccessError>,
     ) -> Self {
         Self {
-            accounts: Some(accounts),
-            account,
-            group_lookup: GroupLookup::new(account_groups, account),
+            group_lookup: OperationSnapshot::new(account_groups, account, Some(accounts)),
         }
     }
 
@@ -73,13 +68,15 @@ where
     /// post-trade hook outside an engine.
     ///
     /// The context is backed by an empty, private account-group registry and no
-    /// bound account, so [`account_group`](Self::account_group) returns `None`.
+    /// currency registry, so [`account_group`](Self::account_group) returns `None`.
+    /// The report's routing account, including an accessor error, is captured
+    /// exactly once here. Pass this same report to the policy hook.
     /// Inside the engine the registry is the engine's shared one; this
     /// constructor exists so policy authors can drive a policy's hook directly
     /// in unit tests.
     ///
     /// [`PreTradePolicy`]: crate::pretrade::PreTradePolicy
-    pub fn new() -> Self
+    pub fn new<Report: crate::HasAccountId>(report: &Report) -> Self
     where
         StorageFactory: Default,
     {
@@ -87,7 +84,7 @@ where
         let handle = AccountGroupsHandle::from_inner(StorageFactory::new_shared(
             AccountGroups::new(&builder),
         ));
-        Self::with_groups(handle, None)
+        Self::with_groups(handle, report.account_id())
     }
 
     #[cfg(test)]
@@ -111,61 +108,51 @@ where
             config_registry,
         );
         accounts.set_currency(account, currency);
-        Self::with_accounts(accounts, account_groups, Some(account))
+        Self::with_accounts(accounts, account_groups, Ok(account))
     }
 
     /// Returns the group of the report's account, or `None` when the account is
     /// absent or unregistered.
     ///
-    /// The lookup is performed once and cached for the lifetime of this
-    /// context, so repeated calls during one evaluation return the same group.
+    /// Resolved on first use and retained for this operation.
     pub fn account_group(&self) -> Option<AccountGroupId> {
-        self.group_lookup.group()
+        self.group_lookup.account_group()
     }
 
-    /// Returns the report account's group in the current state-writer scope.
-    /// With an account registry, reads it directly instead of the
-    /// context-lifetime cache behind `account_group()`: that cache may have
-    /// been filled before the shared lease was taken, with a membership
-    /// transition since. The shared lease pins the group for the scope, so
-    /// callers resolve it once at scope entry and pass it down instead of
-    /// calling this again.
-    pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
-        match (self.accounts.as_ref(), self.account) {
-            (Some(accounts), Some(account)) => accounts.group_of(account),
-            _ => self.group_lookup.group(),
-        }
+    /// Returns the operation account read once from the report at engine entry.
+    ///
+    /// # Errors
+    /// Returns the original accessor error when the report account is unreadable.
+    pub fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+        self.group_lookup.account_id()
     }
 
     /// Returns the effective currency for the report's account.
     ///
-    /// The caller supplies `account_group`; this method resolves only the
-    /// account -> group -> default currency cascade. Standalone test contexts
-    /// have no account registry, so they return `None`.
-    /// Callers resolve it once per state-writer scope and pass the value down.
-    pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
-        self.account.and_then(|account| {
-            self.accounts
-                .as_ref()?
-                .currency_of_in_group(account, account_group)
-        })
+    /// Resolved once from the operation's snapshotted group.
+    pub(crate) fn account_currency(&self) -> Option<Asset> {
+        self.group_lookup.account_currency()
     }
 
-    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
-        match (self.accounts.as_ref(), self.account) {
-            (Some(accounts), Some(_)) => accounts.with_state_writer(operation),
-            _ => operation(),
-        }
+    /// Returns an owned read-only reader sharing this operation's first-use snapshot.
+    pub fn operation_snapshot(&self) -> OperationSnapshot<StorageFactory> {
+        self.group_lookup.clone()
     }
 }
 
+/// An unbound context whose account accessor returns an explicit error.
+/// Use [`PostTradeContext::new`] with the report for report-aware policy hooks.
 impl<StorageFactory> Default for PostTradeContext<StorageFactory>
 where
     StorageFactory:
         storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + Default + 'static,
 {
     fn default() -> Self {
-        Self::new()
+        let builder = StorageBuilder::new(StorageFactory::default());
+        let handle = AccountGroupsHandle::from_inner(StorageFactory::new_shared(
+            AccountGroups::new(&builder),
+        ));
+        Self::with_groups(handle, Err(RequestFieldAccessError::new("account_id")))
     }
 }
 

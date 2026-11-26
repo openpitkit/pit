@@ -282,10 +282,9 @@ where
     ///
     /// Retirement is an exclusive operation (see the threading section on
     /// [`Engine`](crate::Engine)): while this hook and its registered callbacks
-    /// run, no account-state write of a built-in policy is in flight. Under
-    /// `FullSync` the engine's transition lease provides that and does not
-    /// pause a custom policy that takes no lease; under `LocalSync` and
-    /// `AccountSync` the caller does, with no other engine call in flight.
+    /// run, the caller guarantees no other engine call is in flight in every
+    /// mode, including `FullSync`. Debug builds detect overlap; release builds
+    /// do not lock or wait for transitions.
     /// Keep both quick. Neither may call engine state-changing operations
     /// (pre-trade, execution reports, account adjustments, account
     /// administration, or configuration): that would deadlock.
@@ -459,7 +458,7 @@ mod tests {
         assert!(
             <MainPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
                 &MainPolicyNoop,
-                &PostTradeContext::new(),
+                &PostTradeContext::new(&report),
                 &report,
             )
             .is_none()
@@ -489,7 +488,7 @@ mod tests {
         assert!(
             <StartPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
                 &StartPolicyNoop,
-                &PostTradeContext::new(),
+                &PostTradeContext::new(&report),
                 &report,
             )
             .is_none()

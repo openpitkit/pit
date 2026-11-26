@@ -127,14 +127,6 @@ where
         ))
     }
 
-    /// Reports whether the engine serializes its rare account-state
-    /// transitions itself; see
-    /// [`LockingPolicyFactory::serializes_state_transitions`](super::LockingPolicyFactory::serializes_state_transitions).
-    #[inline]
-    pub(crate) fn serializes_state_transitions(&self) -> bool {
-        self.locking_policy_factory.serializes_state_transitions()
-    }
-
     /// Creates a fresh standalone [`LockingPolicy`](super::LockingPolicy)
     /// instance from this builder's factory, independent of any storage.
     ///

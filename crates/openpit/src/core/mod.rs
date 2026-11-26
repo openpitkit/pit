@@ -46,11 +46,10 @@ pub use account_adjustment::{
     WithAccountAdjustmentPositionOperation,
 };
 pub use account_adjustment_context::AccountAdjustmentContext;
-pub(crate) use account_adjustment_context::AccountStateSnapshot;
 pub(crate) use account_control::BlockedAccounts;
 pub use account_control::{AccountBlockError, AccountBlockHandle, AccountControl};
-pub use account_groups::AccountGroupError;
-pub(crate) use account_groups::{AccountGroups, AccountGroupsHandle, GroupLookup};
+pub use account_groups::{AccountGroupError, OperationSnapshot, SharedOperationSnapshot};
+pub(crate) use account_groups::{AccountGroups, AccountGroupsHandle};
 pub use account_key::{AccountKey, AccountKeyConstraint};
 pub use account_outcome::{
     AccountAdjustmentBatchResult, AccountAdjustmentOutcome, AccountOutcomeEntry, AccountPnlOutcome,

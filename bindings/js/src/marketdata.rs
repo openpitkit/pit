@@ -1204,6 +1204,8 @@ impl JsMarketDataService {
     /// `accountInfo` is any object exposing an `accountGroup` getter; the group
     /// is consulted only when the read needs it. `resolution` is a
     /// `QuoteResolution` or its wire string.
+    /// Policy callbacks pass their context's cheaper snapshotted account/group;
+    /// repeated pair/resolution queries share one result for the engine call.
     ///
     /// # Errors
     ///

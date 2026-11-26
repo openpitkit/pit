@@ -34,7 +34,7 @@ use crate::param::AccountGroupId;
 /// The mode controls only quote *selection*. The freshness check that follows
 /// is governed by the TTL cascade for the requested `(account, group)` and is
 /// independent of which bucket the quote was found in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum QuoteResolution {
     /// Consult only the per-account bucket for the reading account.
     AccountOnly,

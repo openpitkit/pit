@@ -63,12 +63,6 @@ impl LockingPolicyFactory for FullLocking {
         }
     }
 
-    /// Calls may run concurrently with no caller guarantee, so the engine
-    /// serializes transitions itself.
-    fn serializes_state_transitions(&self) -> bool {
-        true
-    }
-
     fn new_shared<T: 'static>(value: T) -> std::sync::Arc<T> {
         std::sync::Arc::new(value)
     }
@@ -95,6 +89,12 @@ pub struct FullLockingPolicy {
 // support the storage-level read-from-read re-entry contract even when a
 // writer is queued.
 unsafe impl LockingPolicy for FullLockingPolicy {
+    type OnceValue<T> = std::sync::OnceLock<T>;
+
+    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+        std::sync::OnceLock::new()
+    }
+
     type IndexSharedGuard<'a> = RwLockReadGuard<'a, ()>;
     type IndexExclusiveGuard<'a> = RwLockWriteGuard<'a, ()>;
     type ValuesSharedGuard<'a> = RwLockReadGuard<'a, ()>;

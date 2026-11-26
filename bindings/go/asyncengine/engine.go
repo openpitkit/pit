@@ -42,9 +42,11 @@ import (
 // an account-group key and does not join member-account lanes. Engine-wide
 // operations use a third key kind. Follow-up calls on AsyncRequest,
 // AsyncReservation, and AsyncDropCopyOperation re-enter their original account
-// queue. The engine's exclusive operations - group membership, group currency,
-// the SpotFunds retune, and account retirement - run through Exclusive, which
-// stops every lane while they run. Callers need no locking of their own on top.
+// queue. Exclusive stops every lane for group membership, all currency setters
+// and clearers, the SpotFunds retune, and account retirement. Ordinary queued
+// work needs no caller locking. Currency steps in ChainBuilder instead require
+// a caller-owned whole-engine quiet window for the entire chain; see
+// ChainBuilder.SetAccountCurrency. The account lane alone is insufficient.
 type AsyncEngine struct {
 	driver         Driver
 	strategy       strategy

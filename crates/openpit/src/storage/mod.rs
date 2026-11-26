@@ -115,5 +115,5 @@ pub(crate) use engine_wide::EngineWideStorage;
 pub use index_flag::IndexFlag;
 pub use key_bound::{AnyKey, CreateStorageFor, IndexKeyBound};
 pub use policies::{FullLocking, IndexLocking, NoLocking};
-pub use policy::{FullySynchronized, LockingPolicy, LockingPolicyFactory};
+pub use policy::{FullySynchronized, LockingPolicy, LockingPolicyFactory, OnceValue};
 pub use storage::Storage;

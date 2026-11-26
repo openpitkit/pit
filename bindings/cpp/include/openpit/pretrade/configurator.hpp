@@ -28,10 +28,9 @@ namespace openpit {
 // The SpotFunds retune methods - `SpotFunds`, `SpotFundsPnlBoundsKillSwitch`,
 // `SpotFundsGlobalLimitMode`, `SpotFundsAccountLimitMode`,
 // `SpotFundsPositionLimit`, and `SpotFundsAccountGroupLimitMode` - are
-// exclusive operations. Under `SyncPolicy::None` and `SyncPolicy::Account` the
-// engine takes no lock for them: run each with no other call on the engine in
-// flight on any thread, as `asyncengine::AsyncEngine::Exclusive` does. Under
-// `SyncPolicy::Full` the engine orders them itself.
+// exclusive operations in every mode, including `SyncPolicy::Full`: run each
+// with no other engine call in flight, as `asyncengine::AsyncEngine::Exclusive`
+// does.
 class Configurator {
  public:
   explicit Configurator(const ::openpit::Engine& engine) noexcept

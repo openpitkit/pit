@@ -21,8 +21,8 @@ use std::rc::Rc;
 use super::reject::AccountBlock;
 use crate::core::account_control::DeferredAccountOperations;
 use crate::core::{
-    AccountControl, AccountGroups, AccountGroupsHandle, Accounts, BlockedAccounts, GroupLookup,
-    HasAccountId,
+    AccountControl, AccountGroups, AccountGroupsHandle, Accounts, BlockedAccounts, HasAccountId,
+    OperationSnapshot,
 };
 use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
@@ -126,9 +126,7 @@ where
     /// Per-account control bound to the operation's account, or `None` when the
     /// account identifier could not be read from the order.
     pub account_control: Option<AccountControl<StorageFactory>>,
-    accounts: Option<Accounts<StorageFactory>>,
-    account: Result<AccountId, RequestFieldAccessError>,
-    group_lookup: GroupLookup<StorageFactory>,
+    group_lookup: OperationSnapshot<StorageFactory>,
     drop_copy: Option<Box<DropCopyState<StorageFactory>>>,
 }
 
@@ -141,12 +139,9 @@ where
         account_groups: AccountGroupsHandle<StorageFactory>,
         account: Result<AccountId, RequestFieldAccessError>,
     ) -> Self {
-        let lookup_account = account.as_ref().ok().copied();
         Self {
             account_control,
-            accounts: None,
-            account,
-            group_lookup: GroupLookup::new(account_groups, lookup_account),
+            group_lookup: OperationSnapshot::new(account_groups, account, None),
             drop_copy: None,
         }
     }
@@ -157,12 +152,9 @@ where
         account_groups: AccountGroupsHandle<StorageFactory>,
         account: Result<AccountId, RequestFieldAccessError>,
     ) -> Self {
-        let lookup_account = account.as_ref().ok().copied();
         Self {
             account_control,
-            accounts: Some(accounts),
-            account,
-            group_lookup: GroupLookup::new(account_groups, lookup_account),
+            group_lookup: OperationSnapshot::new(account_groups, account, Some(accounts)),
             drop_copy: None,
         }
     }
@@ -182,9 +174,7 @@ where
         let account_control = account_control.with_deferred_operations(account_operations.clone());
         Self {
             account_control: Some(account_control.clone()),
-            accounts: Some(accounts),
-            account: Ok(account),
-            group_lookup: GroupLookup::new(account_groups, Some(account)),
+            group_lookup: OperationSnapshot::new(account_groups, Ok(account), Some(accounts)),
             drop_copy: Some(Box::new(DropCopyState {
                 account_control,
                 account_operations,
@@ -246,61 +236,36 @@ where
     /// any policy runs. Past that point the operation continues, and an account
     /// is required only by the policies that need one.
     pub fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
-        self.account.clone()
+        self.group_lookup.account_id()
     }
 
     /// Returns the group of the order's account, or `None` when the account is
     /// absent or unregistered.
     ///
-    /// The lookup is performed once and cached for the lifetime of this
-    /// context, so repeated calls during one evaluation return the same group.
+    /// Resolved on first use and retained through `execute`, including across
+    /// administrative changes between calls. Unrequested values remain lazy.
     pub fn account_group(&self) -> Option<AccountGroupId> {
-        self.group_lookup.group()
-    }
-
-    /// Returns the order account's group in the current state-writer scope.
-    /// With an account registry, reads it directly instead of the
-    /// context-lifetime cache behind `account_group()`: that cache may have
-    /// been filled before the shared lease was taken, with a membership
-    /// transition since. The shared lease pins the group for the scope, so
-    /// callers resolve it once at scope entry and pass it down instead of
-    /// calling this again.
-    pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
-        match (self.accounts.as_ref(), self.known_account()) {
-            (Some(accounts), Some(account)) => accounts.group_of(account),
-            _ => self.group_lookup.group(),
-        }
+        self.group_lookup.account_group()
     }
 
     /// The operation's account when it was readable, for the engine's own
     /// internal paths that treat an unreadable account as simply absent.
     fn known_account(&self) -> Option<AccountId> {
-        self.account.as_ref().ok().copied()
+        self.account_id().ok()
     }
 
     /// Returns the effective currency for the order's account.
     ///
-    /// The caller supplies `account_group`; this method resolves only the
-    /// account -> group -> default currency cascade. Standalone contexts have
-    /// no account registry, so they return `None`.
-    /// Callers resolve it once per state-writer scope and pass the value down.
-    pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
-        self.known_account().and_then(|account| {
-            self.accounts
-                .as_ref()?
-                .currency_of_in_group(account, account_group)
-        })
+    /// Resolved once from the snapshotted group, then retained through execute.
+    pub(crate) fn account_currency(&self) -> Option<Asset> {
+        self.group_lookup.account_currency()
     }
 
-    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
-        match self.accounts.as_ref() {
-            Some(accounts) => accounts.with_state_writer(operation),
-            None => operation(),
-        }
-    }
-
-    pub(crate) fn state_accounts(&self) -> Option<Accounts<StorageFactory>> {
-        self.accounts.clone()
+    /// Returns an owned read-only reader of this operation's account snapshot.
+    /// Cloning does not resolve optional values. All readers share first-use
+    /// resolution, with synchronization-free subsequent reads in each reader.
+    pub fn operation_snapshot(&self) -> OperationSnapshot<StorageFactory> {
+        self.group_lookup.clone()
     }
 
     /// Returns whether policy rejects are non-blocking for this operation.

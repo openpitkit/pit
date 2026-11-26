@@ -220,6 +220,24 @@ func AccountRetirementErrorGetRefusalKind(err AccountRetirementError, index int)
 //------------------------------------------------------------------------------
 // Context group accessors
 
+func PretradeContextGetAccountID(ctx PretradeContext) (ParamAccountID, error) {
+	var out ParamAccountID
+	var outError SharedString
+	if !C.openpit_pretrade_context_get_account_id(ctx, &out, C.OpenPitOutError(&outError)) { //nolint:gocritic // CGo out-parameter requires address-of operator
+		return 0, consumeSharedStringAsError(outError, "operation account is unreadable")
+	}
+	return out, nil
+}
+
+func PostTradeContextGetAccountID(ctx PostTradeContext) (ParamAccountID, error) {
+	var out ParamAccountID
+	var outError SharedString
+	if !C.openpit_post_trade_context_get_account_id(ctx, &out, C.OpenPitOutError(&outError)) { //nolint:gocritic // CGo out-parameter requires address-of operator
+		return 0, consumeSharedStringAsError(outError, "operation account is unreadable")
+	}
+	return out, nil
+}
+
 func PretradeContextGetAccountGroup(ctx PretradeContext) (ParamAccountGroupID, bool) {
 	var out ParamAccountGroupID
 	ok := bool(C.openpit_pretrade_context_get_account_group(ctx, &out))

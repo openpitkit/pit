@@ -184,7 +184,9 @@ func TestCustomPolicyNativeE2E_InvalidPostTradeResultReturnsCallbackBlock(t *tes
 }
 
 type postTradeResultPolicy struct {
-	result pretrade.PostTradeResult
+	result      pretrade.PostTradeResult
+	preAccount  func(param.AccountID, error)
+	postAccount func(param.AccountID, error)
 }
 
 func (*postTradeResultPolicy) Close() {}
@@ -193,10 +195,13 @@ func (*postTradeResultPolicy) Name() string { return "post-trade-result" }
 
 func (*postTradeResultPolicy) PolicyGroupID() model.PolicyGroupID { return 17 }
 
-func (*postTradeResultPolicy) CheckPreTradeStart(
-	pretrade.Context,
-	model.Order,
+func (p *postTradeResultPolicy) CheckPreTradeStart(
+	ctx pretrade.Context,
+	_ model.Order,
 ) []reject.Reject {
+	if p.preAccount != nil {
+		p.preAccount(ctx.AccountID())
+	}
 	return nil
 }
 
@@ -210,11 +215,14 @@ func (*postTradeResultPolicy) PerformPreTradeCheck(
 }
 
 func (p *postTradeResultPolicy) ApplyExecutionReport(
-	_ pretrade.PostTradeContext,
+	ctx pretrade.PostTradeContext,
 	_ model.ExecutionReport,
 	adjustments pretrade.PostTradeAdjustments,
 	pnls pretrade.PostTradePnls,
 ) []reject.AccountBlock {
+	if p.postAccount != nil {
+		p.postAccount(ctx.AccountID())
+	}
 	blocks := append([]reject.AccountBlock(nil), p.result.AccountBlocks...)
 	for _, pnl := range p.result.AccountPnls {
 		if err := pnls.Push(pnl); err != nil {
@@ -237,6 +245,58 @@ func (p *postTradeResultPolicy) ApplyExecutionReport(
 		}
 	}
 	return blocks
+}
+
+func TestCustomPolicyNativeE2E_OperationAccountContexts(t *testing.T) {
+	account := param.NewAccountIDFromUint64(42)
+	preReads, postReads := 0, 0
+	missing := false
+	check := func(got param.AccountID, err error) {
+		if missing {
+			if err == nil {
+				t.Error("unreadable operation account must return an explicit error")
+			}
+			return
+		}
+		if err != nil || got != account {
+			t.Errorf("operation account = %v, %v; want %v", got, err, account)
+		}
+	}
+	policy := &postTradeResultPolicy{
+		preAccount:  func(got param.AccountID, err error) { preReads++; check(got, err) },
+		postAccount: func(got param.AccountID, err error) { postReads++; check(got, err) },
+	}
+	engine, err := NewEngineBuilder().FullSync().PreTrade(policy).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Stop()
+	for _, absent := range []bool{false, true} {
+		missing = absent
+		order := model.NewOrder()
+		report := model.NewExecutionReport()
+		if !absent {
+			op := model.NewOrderOperation()
+			op.SetAccountID(account)
+			order.SetOperation(op)
+			reportOp := model.NewExecutionReportOperation()
+			reportOp.SetAccountID(account)
+			report.SetOperation(reportOp)
+		}
+		request, rejects, err := engine.StartPreTrade(order)
+		if err != nil || len(rejects) != 0 {
+			t.Fatalf("start = %v, %v", rejects, err)
+		}
+		if request != nil {
+			request.Close()
+		}
+		if _, err := engine.ApplyExecutionReport(report); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if preReads != 2 || postReads != 2 {
+		t.Fatalf("callback reads = %d, %d; want 2, 2", preReads, postReads)
+	}
 }
 
 func (*postTradeResultPolicy) ApplyAccountAdjustment(

@@ -680,26 +680,23 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .expect("policy config must be valid"),
         misc_builder.storage_builder(),
     );
-    assert!(
-        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
-            &pnl_policy,
-            &PostTradeContext::<NoLocking>::new(),
-            &execution_report_spx_usd("-10")
-        )
-        .is_none_or(|r| r.is_empty())
-    );
+    let pnl_engine = misc_builder
+        .pre_trade(pnl_policy)
+        .build()
+        .expect("PnL engine must build");
+    assert!(pnl_engine
+        .apply_execution_report(&execution_report_spx_usd("-10"))
+        .is_empty());
     // EUR-only policy has no barrier for USD: order passes.
     let usd_order = order_aapl_usd("100", "1");
-    <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::check_pre_trade_start(
-        &pnl_policy,
-        &PreTradeContext::new(None, &usd_order),
-        &usd_order,
-    )
-    .expect("no barrier configured for USD: order must pass");
+    pnl_engine
+        .start_pre_trade(usd_order)
+        .expect("no barrier configured for USD: order must pass");
 
     // Arithmetic overflow inside apply_execution_report returns true (kill switch).
     // Two MAX applications: first stores MAX, second overflows → true.
     let overflow_account = AccountId::from_u64(1);
+    let overflow_builder = Engine::builder::<TestOrder, TestReport, ()>().no_sync();
     let overflow_policy: TestPnlPolicy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [pnl_bounds_barrier(
@@ -710,7 +707,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
             vec![],
         )
         .expect("policy config must be valid"),
-        misc_builder.storage_builder(),
+        overflow_builder.storage_builder(),
     );
     let report_max = TestReport {
         instrument: Instrument::new(
@@ -721,21 +718,16 @@ fn integration_engine_builder_defaults_and_guardrails() {
         pnl: Pnl::new(Decimal::MAX),
         fee: Fee::ZERO,
     };
-    assert!(
-        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
-            &overflow_policy,
-            &PostTradeContext::<NoLocking>::new(),
-            &report_max,
-        )
-        .is_none_or(|r| r.is_empty())
-    );
-    let triggered =
-        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
-            &overflow_policy,
-            &PostTradeContext::<NoLocking>::new(),
-            &report_max,
-        );
-    assert!(!triggered.is_none_or(|r| r.is_empty()));
+    let overflow_engine = overflow_builder
+        .pre_trade(overflow_policy)
+        .build()
+        .expect("overflow PnL engine must build");
+    assert!(overflow_engine
+        .apply_execution_report(&report_max)
+        .is_empty());
+    assert!(!overflow_engine
+        .apply_execution_report(&report_max)
+        .is_empty());
 }
 
 #[test]

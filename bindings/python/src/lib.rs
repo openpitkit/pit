@@ -1875,8 +1875,14 @@ impl PyConfigurator {
 ///
 /// Obtained from ``Engine.accounts()``. The handle shares the engine's single
 /// account control state, so changes made through it are visible to every other
-/// handle and to running policies. It inherits the engine's synchronization
+/// handle and to new operations. It inherits the engine's synchronization
 /// mode.
+/// Membership, retirement, Spot Funds retunes and all currency setters/clearers
+/// are caller-guaranteed exclusive in every mode, including ``full_sync``.
+/// Before effective currency changes, explicitly clear and zero the account,
+/// including group moves, group currency, global/default currency and retirement
+/// clearing an account override. The SDK does not validate activity, reset,
+/// convert or recalculate state. In-flight operations keep resolved values.
 ///
 /// For an example of good practice in building a control plane on this SDK,
 /// see `Pit Officer <http://officer.openpit.dev/>`_.
@@ -1937,6 +1943,7 @@ impl PyAccounts {
             .map_err(convert_account_group_error)
     }
 
+    /// Policy callbacks use ``ctx.account_group`` for the cheaper operation snapshot.
     #[pyo3(signature = (account))]
     fn group_of(
         &self,
@@ -1960,8 +1967,8 @@ impl PyAccounts {
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new effective currency;
+    /// in-flight operations keep values already resolved in their snapshot.
     #[pyo3(signature = (account, asset))]
     fn set_currency(
         &self,
@@ -1984,8 +1991,8 @@ impl PyAccounts {
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new effective currency;
+    /// in-flight operations keep values already resolved in their snapshot.
     #[pyo3(signature = (account))]
     fn clear_currency(&self, py: Python<'_>, account: &Bound<'_, PyAny>) -> PyResult<()> {
         let account_id = parse_account_id_input(account)?;
@@ -2001,8 +2008,8 @@ impl PyAccounts {
     /// nothing. Stored PnL and cost basis accumulated under a different
     /// effective currency lose their meaning; the SDK guarantees nothing about
     /// them and does not convert, detect, or report the change. Barrier
-    /// selection itself stays deterministic: the next policy access re-resolves
-    /// the cascade with the new effective currency.
+    /// selection remains deterministic: new operations resolve the new currency;
+    /// in-flight operations retain their already resolved snapshot values.
     #[pyo3(signature = (group, asset))]
     fn set_group_currency(
         &self,
@@ -2024,8 +2031,8 @@ impl PyAccounts {
     /// nothing. Stored PnL and cost basis accumulated under a different
     /// effective currency lose their meaning; the SDK guarantees nothing about
     /// them and does not convert, detect, or report the change. Barrier
-    /// selection itself stays deterministic: the next policy access re-resolves
-    /// the cascade with the new effective currency.
+    /// selection remains deterministic: new operations resolve the new currency;
+    /// in-flight operations retain their already resolved snapshot values.
     #[pyo3(signature = (group))]
     fn clear_group_currency(&self, py: Python<'_>, group: &Bound<'_, PyAny>) -> PyResult<()> {
         let group_id = parse_account_group_id_input_allow_default(group)?;
@@ -2774,23 +2781,32 @@ impl PyAccountControl {
 struct PyPreTradeContext {
     account_control: Option<openpit::AccountControl<PyStorageFactory>>,
     drop_copy_start_mutations: Option<DropCopyStartMutationRecorder>,
-    group: Option<AccountGroupId>,
+    snapshot: openpit::OperationSnapshot<PyStorageFactory>,
     is_drop_copy: bool,
 }
 
 #[pyclass(name = "AccountAdjustmentContext", module = "openpit", frozen)]
 struct PyAccountAdjustmentContext {
     account_control: openpit::AccountControl<PyStorageFactory>,
-    group: Option<AccountGroupId>,
+    snapshot: openpit::SharedOperationSnapshot<PyStorageFactory>,
 }
 
 #[pyclass(name = "PostTradeContext", module = "openpit.pretrade", frozen)]
 struct PyPostTradeContext {
-    group: Option<AccountGroupId>,
+    snapshot: openpit::SharedOperationSnapshot<PyStorageFactory>,
 }
 
 #[pymethods]
 impl PyPreTradeContext {
+    /// The operation account read exactly once from the order.
+    #[getter]
+    fn account_id(&self) -> PyResult<PyAccountId> {
+        self.snapshot
+            .account_id()
+            .map(|inner| PyAccountId { inner })
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     #[getter]
     fn is_drop_copy(&self) -> bool {
         self.is_drop_copy
@@ -2832,7 +2848,7 @@ impl PyPreTradeContext {
 
     #[getter]
     fn account_group(&self, py: Python<'_>) -> PyResult<Option<Py<PyAccountGroupId>>> {
-        match self.group {
+        match self.snapshot.account_group() {
             Some(g) => Py::new(py, PyAccountGroupId { inner: g }).map(Some),
             None => Ok(None),
         }
@@ -2853,7 +2869,7 @@ impl PyAccountAdjustmentContext {
 
     #[getter]
     fn account_group(&self, py: Python<'_>) -> PyResult<Option<Py<PyAccountGroupId>>> {
-        match self.group {
+        match self.snapshot.account_group() {
             Some(g) => Py::new(py, PyAccountGroupId { inner: g }).map(Some),
             None => Ok(None),
         }
@@ -2862,9 +2878,18 @@ impl PyAccountAdjustmentContext {
 
 #[pymethods]
 impl PyPostTradeContext {
+    /// The operation account read exactly once from the execution report.
+    #[getter]
+    fn account_id(&self) -> PyResult<PyAccountId> {
+        self.snapshot
+            .account_id()
+            .map(|inner| PyAccountId { inner })
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     #[getter]
     fn account_group(&self, py: Python<'_>) -> PyResult<Option<Py<PyAccountGroupId>>> {
-        match self.group {
+        match self.snapshot.account_group() {
             Some(g) => Py::new(py, PyAccountGroupId { inner: g }).map(Some),
             None => Ok(None),
         }
@@ -2879,7 +2904,7 @@ impl From<&PreTradeContext<PyStorageFactory>> for PyPreTradeContext {
         Self {
             account_control: context.account_control.clone(),
             drop_copy_start_mutations: context.drop_copy_start_mutation_recorder(),
-            group: context.account_group(),
+            snapshot: context.operation_snapshot(),
             is_drop_copy: context.is_drop_copy(),
         }
     }
@@ -2889,7 +2914,7 @@ impl From<&AccountAdjustmentContext<PyStorageFactory>> for PyAccountAdjustmentCo
     fn from(context: &AccountAdjustmentContext<PyStorageFactory>) -> Self {
         Self {
             account_control: context.account_control.clone(),
-            group: context.account_group(),
+            snapshot: context.operation_snapshot().shared_reader(),
         }
     }
 }
@@ -2897,7 +2922,7 @@ impl From<&AccountAdjustmentContext<PyStorageFactory>> for PyAccountAdjustmentCo
 impl From<&PostTradeContext<PyStorageFactory>> for PyPostTradeContext {
     fn from(context: &PostTradeContext<PyStorageFactory>) -> Self {
         Self {
-            group: context.account_group(),
+            snapshot: context.operation_snapshot().shared_reader(),
         }
     }
 }

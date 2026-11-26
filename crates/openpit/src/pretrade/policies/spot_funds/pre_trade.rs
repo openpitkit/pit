@@ -65,7 +65,7 @@ where
         {
             return Ok(());
         }
-        let account_currency = ctx.account_currency(account_group_id);
+        let account_currency = ctx.account_currency();
         let barrier =
             settings.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref());
         if let Some(barrier) = barrier {
@@ -391,10 +391,8 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let request = self.read_order_request(ctx, order)?;
-        ctx.with_state_writer(|| {
-            self.settings.with_snapshot(|settings| {
-                self.perform_pre_trade_request_impl(ctx, settings, request, mutations)
-            })
+        self.settings.with_snapshot(|settings| {
+            self.perform_pre_trade_request_impl(ctx, settings, request, mutations)
         })
     }
 
@@ -408,7 +406,7 @@ where
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
-        let account_group = ctx.state_account_group();
+        let account_group = ctx.account_group();
         if ctx.is_drop_copy() && request.price.is_none() {
             return Err(Reject::new(
                 Self::NAME,
@@ -473,7 +471,6 @@ where
                 limit_mode,
                 position_limit,
                 ctx.account_control.clone(),
-                ctx.state_accounts(),
                 mutations,
                 &mut outcome,
             )?;
@@ -504,10 +501,8 @@ where
         Order: HasInstrument + HasSide + HasTradeAmount + HasOrderPrice,
     {
         let request = self.read_order_request(ctx, order)?;
-        ctx.with_state_writer(|| {
-            self.settings.with_snapshot(|settings| {
-                self.perform_pre_trade_request_dry_run_impl(ctx, settings, request)
-            })
+        self.settings.with_snapshot(|settings| {
+            self.perform_pre_trade_request_dry_run_impl(ctx, settings, request)
         })
     }
 
@@ -517,7 +512,7 @@ where
         settings: &SpotFundsSettings,
         request: OrderRequestView<'_>,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
-        let account_group = ctx.state_account_group();
+        let account_group = ctx.account_group();
         self.reject_halted_account_pnl(ctx, settings, request.account_id, account_group)?;
 
         let legs = self
@@ -689,9 +684,6 @@ where
         limit_mode: SpotFundsLimitMode,
         position_limit: Option<super::position_limit::Check>,
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
-        state_accounts: Option<
-            crate::core::Accounts<<Sync as SyncMode>::StorageLockingPolicyFactory>,
-        >,
         mutations: &mut Mutations,
         outcome: &mut PolicyPreTradeResult,
     ) -> Result<(), Rejects>
@@ -761,7 +753,6 @@ where
         self.register_hold_rollback(
             mutations,
             account_control,
-            state_accounts,
             key,
             (held_amount, incoming_amount),
             active_mutation,

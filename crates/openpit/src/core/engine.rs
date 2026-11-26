@@ -129,21 +129,13 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 /// A few rare operations change state that calls for every account read:
 /// [`Accounts::register_group`], [`Accounts::unregister_group`],
 /// [`Accounts::set_group_currency`], [`Accounts::clear_group_currency`],
+/// [`Accounts::set_currency`], [`Accounts::clear_currency`],
 /// [`Configurator::spot_funds`] and [`Engine::retire_account`].
 ///
-/// - Under [`FullSync`] the engine orders each of them after the
-///   account-state writes already in flight and holds new ones until it
-///   returns. The lease covers the state-write scope of a built-in policy,
-///   not a whole engine call: an exclusive operation may land between two
-///   such scopes of one call, and a custom policy that takes no lease is not
-///   paused by it.
-/// - Under [`LocalSync`] and [`AccountSync`] the engine takes no lock for
-///   them, so ordinary calls pay nothing for them. The caller must run each
-///   one with no other call on this engine in flight on any thread,
-///   including policy hooks and callbacks of the operation itself. Breaking
-///   that rule is undefined behavior, like concurrent calls for one account
-///   under [`AccountSync`]; debug builds detect an overlap with an
-///   account-state write and panic.
+/// In every mode, including [`FullSync`], the caller runs each transition
+/// with no other engine call in flight, custom callbacks included. Debug
+/// builds detect overlap with an entire call and panic. Release builds have
+/// no coordinator lock or transition wait.
 ///
 /// # Examples
 ///
@@ -297,6 +289,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         // The operation's clock is taken before any caller code runs: an order
         // accessor may be arbitrarily slow, and a policy measuring a window
         // must not have its timestamp moved by how long the caller took.
@@ -426,6 +419,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         let now = Instant::now();
         let account = order
             .account_id()
@@ -546,6 +540,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         // One read and one clock reading, as in `start_pre_trade`: a dry-run
         // reports the verdict the real pipeline would produce, so it must
         // resolve both the same way.
@@ -605,6 +600,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         // One read and one clock reading, as in `start_pre_trade`: a dry-run
         // reports the verdict the real pipeline would produce, so it must
         // resolve both the same way.
@@ -689,6 +685,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         let inner: &EngineInner<Trait> = &self.inner;
         let mut blocks: Vec<AccountBlock> = Vec::new();
         let mut account_pnls = Vec::new();
@@ -696,8 +693,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
 
         let account_groups = AccountGroupsHandle::from_inner(inner.account_groups.clone());
         let accounts = self.accounts();
-        let ctx =
-            PostTradeContext::with_accounts(accounts, account_groups, report.account_id().ok());
+        let account = report.account_id();
+        let ctx = PostTradeContext::with_accounts(accounts, account_groups, account.clone());
 
         for policy in &inner.pre_trade_policies {
             let Some(result) = policy.apply_execution_report(&ctx, report) else {
@@ -711,7 +708,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
         if let Some(first) = blocks.first() {
             inner
                 .blocked_accounts
-                .record_execution_report(report, first.clone());
+                .record_execution_report(account, first.clone());
         }
 
         PostTradeResult {
@@ -765,6 +762,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     ) -> Result<AccountAdjustmentBatchResult, AccountAdjustmentBatchError> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         if adjustments.is_empty() {
             return Ok(AccountAdjustmentBatchResult::default());
         }
@@ -878,9 +876,10 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// and currency, membership, and the account block remain.
     pub fn retire_account(&self, account_id: AccountId) -> Result<(), AccountRetirementError> {
         #[cfg(debug_assertions)]
-        let _call = self.inner.config_registry.engine_calls.enter();
+        let _call = self.inner.config_registry.engine_calls.enter_exclusive();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         let inner = &self.inner;
-        inner.account_currencies.with_state_transition(|| {
+        {
             let mut mutations = Mutations::new();
             let mut refusals = Vec::new();
             for policy in &inner.pre_trade_policies {
@@ -908,7 +907,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
             inner.blocked_accounts.unblock_account(account_id);
             // Retired looks new; sweeps skip; each request checks its barrier.
             Ok(())
-        })
+        }
     }
 }
 
@@ -1163,6 +1162,7 @@ fn execute_pre_trade_request<Trait: EngineTrait>(
     let inner: &EngineInner<Trait> = &engine_ref;
     #[cfg(debug_assertions)]
     let _call = inner.config_registry.engine_calls.enter();
+    let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
 
     // The account comes from the context: it is the value `start_pre_trade`
     // read from the order, and the whole point of re-checking here is that the

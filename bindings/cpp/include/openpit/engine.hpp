@@ -100,11 +100,14 @@ template <typename BaseType, typename PayloadType,
 enum class SyncPolicy : std::uint8_t {
   // Single-threaded: the engine must stay on its creating thread.
   None = 0,
-  // Fully synchronized: concurrent calls on one handle are safe.
+  // Fully synchronized: ordinary calls may overlap. Membership,
+  // SpotFunds retunes and all currency setters/clearers remain
+  // caller-exclusive.
   Full = 1,
   // Account-sharded: calls for distinct accounts may run concurrently, calls
   // for one account never overlap. The exclusive operations - account-group
-  // membership, group currency, and the SpotFunds retune - run with no other
+  // membership, all account/group currency setters and clearers, and the
+  // SpotFunds retune - run with no other
   // call on the engine in flight; the engine takes no lock for them.
   // `asyncengine::AsyncEngine` provides both, the latter through `Exclusive`.
   // Custom policy hooks for distinct accounts may run concurrently, so a custom

@@ -740,7 +740,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
             ctx.drop_copy_start_mutation_recorder(),
-            ctx.account_group(),
+            ctx.operation_snapshot(),
             order.payload.lifecycle(),
             ctx.is_drop_copy(),
         );
@@ -775,7 +775,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
             ctx.drop_copy_start_mutation_recorder(),
-            ctx.account_group(),
+            ctx.operation_snapshot(),
             order.payload.lifecycle(),
             ctx.is_drop_copy(),
         );
@@ -806,7 +806,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
             ctx.drop_copy_start_mutation_recorder(),
-            ctx.account_group(),
+            ctx.operation_snapshot(),
             order.payload.lifecycle(),
             ctx.is_drop_copy(),
         );
@@ -851,7 +851,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
             ctx.drop_copy_start_mutation_recorder(),
-            ctx.account_group(),
+            ctx.operation_snapshot(),
             order.payload.lifecycle(),
             ctx.is_drop_copy(),
         );
@@ -884,7 +884,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         report: &ExecutionReport,
     ) -> Option<PostTradeResult> {
         let hook = self.apply_execution_report.as_ref()?;
-        let context = JsValue::from(JsPostTradeContext::from_group(ctx.account_group()));
+        let context = JsValue::from(JsPostTradeContext::from_snapshot(ctx.operation_snapshot()));
         let payload = match report.payload.fresh_js() {
             Ok(payload) => payload,
             Err(error) => {
@@ -929,7 +929,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         };
         let context = JsValue::from(JsAccountAdjustmentContext::from_parts(
             ctx.account_control.clone(),
-            ctx.account_group(),
+            ctx.operation_snapshot(),
             adjustment.payload.lifecycle(),
         ));
         let account = JsValue::from(JsAccountId::from_inner(account_id));

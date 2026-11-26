@@ -794,7 +794,6 @@ impl<Order, ExecutionReport, AccountAdjustment, Sync, MarketDataSyncMode>
 where
     Order: HasInstrument + HasAccountId + HasSide + HasTradeAmount + HasOrderPrice,
     ExecutionReport: HasInstrument
-        + HasAccountId
         + HasSide
         + HasExecutionReportLastTrade
         + HasExecutionReportFillFee
@@ -947,11 +946,11 @@ where
         >,
         report: &ExecutionReport,
     ) -> Option<PostTradeResult> {
-        let request = match self.read_execution_request(report) {
+        let request = match self.read_execution_request(ctx, report) {
             Ok(request) => request,
             Err(block) => return Some(PostTradeResult::blocks_only(vec![block])),
         };
-        ctx.with_state_writer(|| self.apply_execution_request_impl(ctx, request))
+        self.apply_execution_request_impl(ctx, request)
     }
 
     fn perform_pre_trade_check(

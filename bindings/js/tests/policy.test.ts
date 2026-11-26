@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 // through real pre-trade calls.
 import {
   Engine,
+  AccountIdError,
   LifecycleError,
   OpenpitError,
   PolicyCallbackError,
@@ -127,6 +128,57 @@ const sellGate: Policy = {
 };
 
 describe("runtime custom policy", () => {
+  it("reports an unreadable pre-trade operation account explicitly", () => {
+    const policy: Policy = {
+      name: "missing-operation-account",
+      checkPreTradeStart(ctx) {
+        expect(() => ctx.accountId).toThrow(AccountIdError);
+        return [];
+      },
+      performPreTradeCheck: () => ({}),
+    };
+    expect(Engine.builder().preTrade(policy).build().startPreTrade({}).ok).toBe(
+      true,
+    );
+  });
+
+  it("retains a lazy group snapshot across owned contexts and execute", () => {
+    let retained: Context | undefined;
+    const seen: bigint[] = [];
+    const policy: Policy = {
+      name: "snapshot-reader",
+      checkPreTradeStart(ctx) {
+        retained = ctx;
+        expect(ctx.accountId.value).toBe(BigInt(ACCOUNT));
+        return [];
+      },
+      performPreTradeCheck(ctx) {
+        expect(ctx.accountId.value).toBe(BigInt(ACCOUNT));
+        seen.push(BigInt(ctx.accountGroup!.value));
+        return {};
+      },
+      applyExecutionReport(ctx) {
+        expect(() => ctx.accountId).toThrow();
+        return null;
+      },
+    };
+    const engine = Engine.builder().preTrade(policy).build();
+    const before = AccountGroupId.fromInt(3);
+    const after = AccountGroupId.fromInt(4);
+    const accounts = engine.accounts();
+    accounts.registerGroup([ACCOUNT], before);
+    const started = engine.startPreTrade(order("BUY"));
+    accounts.unregisterGroup([ACCOUNT], before);
+    accounts.registerGroup([ACCOUNT], after);
+    expect(retained!.accountGroup!.value).toBe(after.value);
+    accounts.unregisterGroup([ACCOUNT], after);
+    accounts.registerGroup([ACCOUNT], before);
+    const executed = started.request!.execute();
+    executed.reservation!.rollback();
+    expect(seen).toEqual([BigInt(after.value)]);
+    engine.applyExecutionReport({});
+  });
+
   it("accepts an order its callback passes", () => {
     const engine = Engine.builder().preTrade(sellGate).build();
 
@@ -1879,7 +1931,8 @@ describe("runtime custom policy", () => {
       name: "custom-report",
       checkPreTradeStart: () => [],
       performPreTradeCheck: () => ({}),
-      applyExecutionReport(_ctx, report) {
+      applyExecutionReport(ctx, report) {
+        expect(ctx.accountId.value).toBe(BigInt(ACCOUNT));
         expect(report.operation?.accountId?.value).toBe(BigInt(ACCOUNT));
         expect(report.executionId).toBe("exec-7");
         expect(report.source()).toBe("venue-adapter");

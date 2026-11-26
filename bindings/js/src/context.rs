@@ -36,7 +36,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::engine::StorageFactory;
 use crate::error::{make_error, ErrorKind};
-use crate::param::ids::JsAccountGroupId;
+use crate::param::ids::{JsAccountGroupId, JsAccountId};
 use crate::policy::CallbackErrorScope;
 use crate::reject::JsAccountBlock;
 
@@ -143,17 +143,33 @@ fn group_getter(group: Option<AccountGroupId>) -> Option<JsAccountGroupId> {
 ///
 /// `accountControl` is present only when the request carries an account id;
 /// `accountGroup` is present only when that account is registered to a group.
+/// `accountId` is read once at engine entry and throws `AccountIdError` when
+/// unreadable. Group and effective currency resolve lazily on first use; all
+/// policies and retained contexts share that first resolution. Resolved values
+/// survive start through execute, while unrequested values remain lazy.
+/// Quotes are shared per pair and resolution for one engine call, with a fresh
+/// cache at execute. Block checks remain live and use current membership.
 #[wasm_bindgen(js_name = Context)]
 pub struct JsContext {
     account_control: Option<openpit::AccountControl<StorageFactory>>,
     drop_copy_start_mutations: Option<DropCopyStartMutationRecorder>,
-    group: Option<AccountGroupId>,
+    snapshot: openpit::OperationSnapshot<StorageFactory>,
     lifecycle: LifecycleToken,
     is_drop_copy: bool,
 }
 
 #[wasm_bindgen(js_class = Context)]
 impl JsContext {
+    /// The operation account read once from the order. Throws AccountIdError
+    /// when the original accessor failed.
+    #[wasm_bindgen(getter, js_name = accountId)]
+    pub fn account_id(&self) -> Result<JsAccountId, JsValue> {
+        self.snapshot
+            .account_id()
+            .map(JsAccountId::from_inner)
+            .map_err(|error| make_error(ErrorKind::AccountId, &error.to_string(), None))
+    }
+
     /// Whether ordinary rejects are non-enforcing for this operation.
     #[wasm_bindgen(getter, js_name = isDropCopy)]
     pub fn is_drop_copy(&self) -> bool {
@@ -213,7 +229,7 @@ impl JsContext {
     /// `accountInfo`.
     #[wasm_bindgen(getter, js_name = accountGroup)]
     pub fn account_group(&self) -> Option<JsAccountGroupId> {
-        group_getter(self.group)
+        group_getter(self.snapshot.account_group())
     }
 }
 
@@ -222,14 +238,14 @@ impl JsContext {
     pub(crate) fn from_parts(
         account_control: Option<openpit::AccountControl<StorageFactory>>,
         drop_copy_start_mutations: Option<DropCopyStartMutationRecorder>,
-        group: Option<AccountGroupId>,
+        snapshot: openpit::OperationSnapshot<StorageFactory>,
         lifecycle: LifecycleToken,
         is_drop_copy: bool,
     ) -> Self {
         Self {
             account_control,
             drop_copy_start_mutations,
-            group,
+            snapshot,
             lifecycle,
             is_drop_copy,
         }
@@ -241,7 +257,7 @@ impl JsContext {
 #[wasm_bindgen(js_name = AccountAdjustmentContext)]
 pub struct JsAccountAdjustmentContext {
     account_control: openpit::AccountControl<StorageFactory>,
-    group: Option<AccountGroupId>,
+    snapshot: openpit::OperationSnapshot<StorageFactory>,
     lifecycle: LifecycleToken,
 }
 
@@ -257,7 +273,7 @@ impl JsAccountAdjustmentContext {
     /// `accountInfo`.
     #[wasm_bindgen(getter, js_name = accountGroup)]
     pub fn account_group(&self) -> Option<JsAccountGroupId> {
-        group_getter(self.group)
+        group_getter(self.snapshot.account_group())
     }
 }
 
@@ -265,36 +281,46 @@ impl JsAccountAdjustmentContext {
     /// Builds an account-adjustment context from its parts.
     pub(crate) fn from_parts(
         account_control: openpit::AccountControl<StorageFactory>,
-        group: Option<AccountGroupId>,
+        snapshot: openpit::OperationSnapshot<StorageFactory>,
         lifecycle: LifecycleToken,
     ) -> Self {
         Self {
             account_control,
-            group,
+            snapshot,
             lifecycle,
         }
     }
 }
 
-/// Post-trade policy context: an optional account group only.
+/// Post-trade operation account and first-use account-group snapshot.
 #[wasm_bindgen(js_name = PostTradeContext)]
 pub struct JsPostTradeContext {
-    group: Option<AccountGroupId>,
+    snapshot: openpit::OperationSnapshot<StorageFactory>,
 }
 
 #[wasm_bindgen(js_class = PostTradeContext)]
 impl JsPostTradeContext {
+    /// The operation account read once from the report. Throws AccountIdError
+    /// when the original accessor failed.
+    #[wasm_bindgen(getter, js_name = accountId)]
+    pub fn account_id(&self) -> Result<JsAccountId, JsValue> {
+        self.snapshot
+            .account_id()
+            .map(JsAccountId::from_inner)
+            .map_err(|error| make_error(ErrorKind::AccountId, &error.to_string(), None))
+    }
+
     /// The account group, or `undefined`. Also serves as the market-data
     /// `accountInfo`.
     #[wasm_bindgen(getter, js_name = accountGroup)]
     pub fn account_group(&self) -> Option<JsAccountGroupId> {
-        group_getter(self.group)
+        group_getter(self.snapshot.account_group())
     }
 }
 
 impl JsPostTradeContext {
-    /// Builds a post-trade context from its account group.
-    pub(crate) fn from_group(group: Option<AccountGroupId>) -> Self {
-        Self { group }
+    /// Builds a post-trade context sharing the operation snapshot.
+    pub(crate) fn from_snapshot(snapshot: openpit::OperationSnapshot<StorageFactory>) -> Self {
+        Self { snapshot }
     }
 }

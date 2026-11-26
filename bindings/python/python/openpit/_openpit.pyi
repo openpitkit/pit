@@ -2209,6 +2209,10 @@ class Context:
     """Context of the current pre-trade operation."""
 
     @property
+    def account_id(self) -> AccountId:
+        """Account read once at engine entry; raises ValueError if unreadable."""
+
+    @property
     def is_drop_copy(self) -> bool: ...
     def record_drop_copy_start_mutation(self, mutation: _Mutation) -> None: ...
     @property
@@ -2226,6 +2230,10 @@ class AccountAdjustmentContext:
 
 class PostTradeContext:
     """Context of the current post-trade operation."""
+
+    @property
+    def account_id(self) -> AccountId:
+        """Account read once at engine entry; raises ValueError if unreadable."""
 
     @property
     def account_group(self) -> AccountGroupId | None: ...
@@ -2410,8 +2418,8 @@ class Accounts:
         basis accumulated under a different effective currency lose their
         meaning; the SDK guarantees nothing about them and does not convert,
         detect, or report the change. Barrier selection itself stays
-        deterministic: the next policy access re-resolves the cascade with the
-        new effective currency.
+        deterministic: new operations resolve the new effective currency;
+        in-flight operations keep values already resolved in their snapshot.
         """
 
     def clear_currency(self, account: AccountId) -> None:
@@ -2424,8 +2432,8 @@ class Accounts:
         basis accumulated under a different effective currency lose their
         meaning; the SDK guarantees nothing about them and does not convert,
         detect, or report the change. Barrier selection itself stays
-        deterministic: the next policy access re-resolves the cascade with the
-        new effective currency.
+        deterministic: new operations resolve the new effective currency;
+        in-flight operations keep values already resolved in their snapshot.
         """
 
     def set_group_currency(
@@ -2439,8 +2447,8 @@ class Accounts:
         re-evaluates nothing. Stored PnL and cost basis accumulated under a
         different effective currency lose their meaning; the SDK guarantees
         nothing about them and does not convert, detect, or report the change.
-        Barrier selection itself stays deterministic: the next policy access
-        re-resolves the cascade with the new effective currency.
+        New operations resolve the new effective currency; in-flight operations
+        retain values already resolved in their operation snapshot.
         """
 
     def clear_group_currency(self, group: AccountGroupId | int) -> None:
@@ -2452,8 +2460,8 @@ class Accounts:
         re-evaluates nothing. Stored PnL and cost basis accumulated under a
         different effective currency lose their meaning; the SDK guarantees
         nothing about them and does not convert, detect, or report the change.
-        Barrier selection itself stays deterministic: the next policy access
-        re-resolves the cascade with the new effective currency.
+        New operations resolve the new effective currency; in-flight operations
+        retain values already resolved in their operation snapshot.
         """
 
     def block(self, account: AccountId, reason: str) -> None: ...

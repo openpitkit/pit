@@ -56,8 +56,8 @@ use std::marker::PhantomData;
 /// entry being accessed. The built-in implementations ignore this argument;
 /// it is reserved for custom implementations that want to apply per-key
 /// granularity. The argument is generic so that no `Key` type-parameter
-/// propagates into the trait itself, keeping the trait object-capable in
-/// principle and straightforward to implement for all key types at once.
+/// propagates into the trait itself, keeping implementations independent of
+/// the storage's key type.
 ///
 /// # Safety
 ///
@@ -71,6 +71,9 @@ use std::marker::PhantomData;
 ///   value in the owning storage.
 /// * While any [`Self::ValuesExclusiveGuard`] is alive, no other thread
 ///   holds any values guard for the same storage.
+/// * [`Self::OnceValue`] supports the same observers as the policy: full
+///   synchronization permits concurrent first initialization; local and
+///   account modes rely on their existing serialization contract.
 ///
 /// The built-in implementations supplied with this crate
 /// ([`NoLocking`](super::NoLocking), [`IndexLocking`](super::IndexLocking)
@@ -84,6 +87,12 @@ use std::marker::PhantomData;
 /// for not creating overlapping mutable borrows within that single thread,
 /// the same contract as for direct use of [`std::cell::UnsafeCell`].
 pub unsafe trait LockingPolicy {
+    /// First-use value cell matching this policy's observer contract.
+    type OnceValue<T>: OnceValue<T>;
+
+    /// Creates an empty first-use cell without acquiring a storage lock.
+    fn new_once_value<T>(&self) -> Self::OnceValue<T>;
+
     /// Guard returned by [`Self::read_index`].
     type IndexSharedGuard<'a>
     where
@@ -126,6 +135,25 @@ pub unsafe trait LockingPolicy {
     /// built-in policies ignore it. The call blocks until every active
     /// values holder releases.
     fn write_values<Key>(&self, key: &Key) -> Self::ValuesExclusiveGuard<'_>;
+}
+
+/// A value initialized once under its owning storage policy's observer contract.
+/// Local and account policies use `OnceCell`; full synchronization uses `OnceLock`.
+pub trait OnceValue<T> {
+    /// Returns the first initialized value, evaluating `initialize` only if empty.
+    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T;
+}
+
+impl<T> OnceValue<T> for std::cell::OnceCell<T> {
+    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T {
+        self.get_or_init(initialize)
+    }
+}
+
+impl<T> OnceValue<T> for std::sync::OnceLock<T> {
+    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T {
+        self.get_or_init(initialize)
+    }
 }
 
 /// Marker that asserts a [`LockingPolicy`] synchronizes BOTH the index
@@ -190,21 +218,6 @@ pub trait LockingPolicyFactory {
 
     /// Builds a fresh policy for a new storage instance.
     fn create_policy(&self) -> Self::Policy;
-
-    /// Reports whether the engine itself serializes its rare account-state
-    /// transitions (group membership, group currency, barrier retunes,
-    /// account retirement) against account-state writers.
-    ///
-    /// `true` when public calls may run concurrently with no caller-side
-    /// guarantee, as under [`FullLocking`](super::FullLocking): the engine
-    /// then takes its own transition lease around every state write.
-    ///
-    /// `false` when the threading contract makes the caller run each such
-    /// transition with no other call on the engine in flight, as under
-    /// [`NoLocking`](super::NoLocking) and
-    /// [`IndexLocking`](super::IndexLocking): the engine takes no lease, and
-    /// state writes pay nothing for the transitions.
-    fn serializes_state_transitions(&self) -> bool;
 
     /// Wraps `value` in the sync-mode-appropriate shared handle.
     fn new_shared<T: 'static>(value: T) -> Self::Shared<T>;

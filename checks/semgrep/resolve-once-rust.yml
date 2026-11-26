@@ -1,0 +1,99 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Source: the operation snapshot contract. Policies read operation data from
+# their context. Administrative registry implementations and the live blocking
+# predicate remain registry readers. No policy file is exempted.
+rules:
+  - id: operation-cache-keyed-lookup
+    message: Per-call instrument, quote and service caches require keyed lookup, not unbounded scans.
+    severity: ERROR
+    languages: [rust]
+    patterns:
+      - pattern-either:
+          - pattern: $ENTRIES.iter().find(...)
+          - pattern: $ENTRIES.iter().find_map(...)
+          - pattern: $ENTRIES.iter().position(...)
+      # This module owns the per-call caches. Naming the module rather than
+      # receivers also catches a scan through a local alias of either map.
+      - pattern-not-inside: |
+          mod tests { ... }
+    paths:
+      include: [/crates/openpit/src/pretrade/start_pre_trade_time.rs]
+
+  - id: operation-account-data-from-context
+    message: Read operation group and currency through the context snapshot.
+    severity: ERROR
+    languages: [rust]
+    patterns:
+      - pattern-either:
+          - pattern: $REGISTRY.group_of(...)
+          - pattern: $REGISTRY.currency_of(...)
+          - pattern: $REGISTRY.currency_of_in_group(...)
+      - pattern-not-inside: |
+          mod tests { ... }
+      # These implementations are the public administrative/getter surface,
+      # not policy evaluation. Snapshot initialization is the only policy-side
+      # registry reader. Each exception names its concrete owning type.
+      - pattern-not-inside: |
+          impl<$F> Accounts<$F> { ... }
+      - pattern-not-inside: |
+          impl<$F> AccountGroupsHandle<$F> { ... }
+      - pattern-not-inside: |
+          impl<$F> SharedOperationSnapshot<$F> { ... }
+      - pattern-not-inside: |
+          impl<$T> Configurator<$T> { ... }
+      # Group blocks intentionally consult current membership at check time.
+      - pattern-not-inside: |
+          fn with_blocking_cause<Output>(...) -> $R { ... }
+    paths:
+      include: [/crates/openpit/src/**]
+      exclude: ["**/tests.rs", "**/tests/**"]
+
+  - id: operation-account-read-once
+    message: Read the operation account from its context, never the payload again.
+    severity: ERROR
+    languages: [rust]
+    patterns:
+      - pattern: $PAYLOAD.account_id()
+      - pattern-not-inside: |
+          mod tests { ... }
+      # Binding the same receiver metavariable to a typed context parameter
+      # keeps an unrelated payload read in that function forbidden.
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &PreTradeContext<$F>, ...) -> $R { ... }
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &PreTradeContext<$F>, ...) { ... }
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &PostTradeContext<$F>, ...) -> $R { ... }
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &PostTradeContext<$F>, ...) { ... }
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &crate::pretrade::PostTradeContext<$F>, ...) -> $R { ... }
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: PreTradeContext<$F>, ...) -> $R { ... }
+      - pattern-not-inside: |
+          fn $FN(..., $PAYLOAD: &OperationSnapshot<$F>, ...) -> $R { ... }
+      # Only engine entry points and standalone context constructors extract
+      # the routing account. Public accessor forwarding is not policy work.
+      - pattern-not-inside: |
+          fn start_pre_trade(&self, order: Trait::Order) -> $R { ... }
+      - pattern-not-inside: |
+          fn apply_drop_copy(&self, order: Trait::Order) -> $R { ... }
+      - pattern-not-inside: |
+          fn check_pre_trade_start(&self, order: Trait::Order) -> $R { ... }
+      - pattern-not-inside: |
+          fn start_pre_trade_dry_run(&self, order: Trait::Order) -> PreTradeDryRunReport { ... }
+      - pattern-not-inside: |
+          fn execute_pre_trade_dry_run(&self, order: Trait::Order) -> PreTradeDryRunReport { ... }
+      - pattern-not-inside: |
+          fn apply_execution_report(&self, report: &Trait::ExecutionReport) -> PostTradeResult { ... }
+      - pattern-not-inside: |
+          impl<$F> PreTradeContext<$F> { ... }
+      - pattern-not-inside: |
+          impl<$F> PostTradeContext<$F> { ... }
+      - pattern-not-inside: |
+          impl<$F> OperationSnapshot<$F> { ... }
+    paths:
+      include: [/crates/openpit/src/**]
+      exclude: ["**/tests.rs", "**/tests/**"]

@@ -162,6 +162,9 @@ impl SyncMode for LocalSync {
 /// therefore interleave, and rollback paths must preserve accepted concurrent
 /// deltas rather than restoring mutable snapshots. Operations that require a
 /// stronger invariant provide their own narrowly scoped synchronization.
+/// Membership, retirement, Spot Funds retunes and all currency setters and
+/// clearers are caller-guaranteed exclusive in this mode too: no other engine
+/// call may be in flight. Debug builds detect overlap; release builds do not wait.
 ///
 /// # Examples
 ///

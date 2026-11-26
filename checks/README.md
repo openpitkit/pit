@@ -125,6 +125,23 @@ When the scanner misreports one specific construct, that narrowing can be a
 signature-level `pattern-not` inside the rule. It records the exception beside
 the rule itself, where the diff shows it, without widening the exemption.
 
+## Operation snapshots
+
+`resolve-once-rust.yml` requires policy paths to read the operation account,
+group and currency through their context. Registry reads are limited to the
+shared snapshot resolver, public administrative/accessor implementations and
+the live group-block predicate. Payload account reads are limited to engine
+entry points and standalone context construction. Inline and dedicated tests
+remain test sites. The rule has no baseline; its positive and negative fixtures
+run in `check-semgrep`.
+
+The per-call cache rule matches `.iter().find(...)`, `.iter().find_map(...)`
+and `.iter().position(...)`, including collection aliases. Its scope is the
+cache module, excluding test code. Instrument, quote and service lookups use
+keyed maps; an unbounded scan there makes retune sweeps quadratic. Keyed lookup
+complexity also remains a source-review invariant: this targeted rule is not
+an exhaustive complexity check.
+
 ## The baseline
 
 Bringing the whole repository to zero is not the goal, and never was. Existing

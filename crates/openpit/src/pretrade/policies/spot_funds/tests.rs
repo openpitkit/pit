@@ -59,6 +59,48 @@ struct BlockingFirstAdjustmentPolicy {
     blocked: std::sync::atomic::AtomicBool,
 }
 
+#[cfg(debug_assertions)]
+#[test]
+fn administrative_transition_rejects_an_active_custom_callback_before_state_write() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let engine = Arc::new(
+        builder
+            .pre_trade(BlockingFirstAdjustmentPolicy {
+                entered: entered.clone(),
+                release: release.clone(),
+                blocked: std::sync::atomic::AtomicBool::new(false),
+            })
+            .build()
+            .expect("engine must build"),
+    );
+    let worker = {
+        let engine = engine.clone();
+        std::thread::spawn(move || {
+            engine.apply_account_adjustment(account(7), &[adj(asset("USD"), None)])
+        })
+    };
+    entered.wait();
+    let overlap = catch_unwind(AssertUnwindSafe(|| {
+        engine.accounts().set_currency(account(7), asset("USD"))
+    }));
+    release.wait();
+    worker
+        .join()
+        .expect("callback worker must finish")
+        .expect("adjustment must succeed");
+    assert!(
+        overlap.is_err(),
+        "transition must reject an active custom callback before a built-in write"
+    );
+    engine.accounts().set_currency(account(7), asset("USD"));
+    engine
+        .apply_account_adjustment(account(7), &[adj(asset("USD"), None)])
+        .expect("call tracker must recover after rejection");
+}
+
 struct RejectFirstAdjustmentPolicy {
     entered: Arc<std::sync::Barrier>,
     release: Arc<std::sync::Barrier>,
@@ -482,9 +524,9 @@ fn build_policy_with_pnl_global_barrier(barrier: SpotFundsPnlBoundsBarrier) -> T
 /// Standalone snapshot for driving an account-PnL rollback outside an engine:
 /// it carries no account registry, so the rollback resolves no group and no
 /// effective currency.
-fn test_state_snapshot() -> crate::core::AccountStateSnapshot<crate::storage::FullLocking> {
+fn test_state_snapshot() -> crate::OperationSnapshot<crate::storage::FullLocking> {
     let ctx = AccountAdjustmentContext::new_test(dummy_control(account(0)));
-    ctx.state_snapshot(ctx.state_account_group())
+    ctx.operation_snapshot()
 }
 
 fn build_account_pnl_test_engine(settings: SpotFundsSettings) -> AccountPnlTestEngine {
@@ -861,11 +903,7 @@ fn post_trade_ctx_with_currency_and_group(
         config_registry,
     );
     accounts.set_currency(report.account_id, currency);
-    crate::pretrade::PostTradeContext::with_accounts(
-        accounts,
-        group_handle,
-        Some(report.account_id),
-    )
+    crate::pretrade::PostTradeContext::with_accounts(accounts, group_handle, Ok(report.account_id))
 }
 
 // ── trait call wrappers ───────────────────────────────────────────────────
@@ -2716,6 +2754,63 @@ fn adjustment_rollback_restores_previous_state() {
 }
 
 #[test]
+fn plain_balance_rollback_does_not_resolve_optional_account_metadata() {
+    use crate::core::{
+        AccountBlockHandle, AccountControl, AccountCurrencies, AccountGroups, AccountGroupsHandle,
+        Accounts, BlockedAccounts, ConfigRegistry,
+    };
+    use crate::storage::{FullLocking, LockingPolicyFactory};
+    let builder = engine_builder();
+    let storage = builder.storage_builder();
+    let groups =
+        AccountGroupsHandle::from_inner(FullLocking::new_shared(AccountGroups::new(storage)));
+    let blocks =
+        AccountBlockHandle::from_inner(FullLocking::new_shared(BlockedAccounts::new(storage)));
+    let accounts = Accounts::new(
+        groups.clone(),
+        blocks.clone(),
+        FullLocking::new_shared(AccountCurrencies::new(storage)),
+        FullLocking::new_shared(ConfigRegistry::empty()),
+    );
+    let acc = account(7);
+    let before = crate::param::AccountGroupId::from_u32(3).unwrap();
+    let after = crate::param::AccountGroupId::from_u32(4).unwrap();
+    accounts.register_group(&[acc], before).unwrap();
+    accounts.set_group_currency(before, asset("USD"));
+    accounts.set_group_currency(after, asset("EUR"));
+    let ctx = AccountAdjustmentContext::with_accounts(
+        AccountControl::new(blocks, acc),
+        accounts.clone(),
+        groups,
+        acc,
+    );
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10000");
+    let adjustment = adj(asset("USD"), Some(AdjustmentAmount::Delta(ps("5"))));
+    let mut mutations = Mutations::new();
+    <TestPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment, crate::FullSync>>::apply_account_adjustment(&policy, &ctx, acc, &adjustment, &mut mutations).unwrap();
+    assert!(!mutations.rollback_all().callback_failed());
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("USD"))
+            .unwrap()
+            .available(),
+        ps("10000")
+    );
+    accounts.unregister_group(&[acc], before).unwrap();
+    accounts.register_group(&[acc], after).unwrap();
+    assert_eq!(
+        ctx.account_group(),
+        Some(after),
+        "plain rollback must leave group unresolved"
+    );
+    assert_eq!(
+        ctx.account_currency(),
+        Some(asset("EUR")),
+        "plain rollback must leave currency unresolved"
+    );
+}
+
+#[test]
 fn adjustment_rollback_removes_newly_created_entry() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
@@ -3545,7 +3640,7 @@ fn run_report_without_account_currency(
 ) -> crate::pretrade::PostTradeResult {
     <TestPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment, crate::core::FullSync>>::apply_execution_report(
         policy,
-        &crate::pretrade::PostTradeContext::new(),
+        &crate::pretrade::PostTradeContext::new(report),
         report,
     )
     .expect("apply_execution_report must produce a result")
@@ -7295,7 +7390,9 @@ fn non_position_touching_fill_without_account_currency_preserves_tracking() {
         TestAdjustment,
         crate::core::FullSync,
     >>::apply_execution_report(
-        &policy, &crate::pretrade::PostTradeContext::new(), &fill
+        &policy,
+        &crate::pretrade::PostTradeContext::new(&fill),
+        &fill,
     );
 
     assert!(
@@ -7438,6 +7535,196 @@ fn fresh_fx_tracks_average_and_realized_pnl_in_account_currency() {
             absolute: pnl_value("72"),
         }),
     );
+}
+
+#[test]
+fn execution_and_settlement_fee_share_the_first_fx_quote_of_the_engine_call() {
+    struct RepriceAfterRead {
+        service: Arc<crate::marketdata::MarketDataService<FullSync>>,
+        pair: Instrument,
+    }
+    impl PreTradePolicy<TestOrder, TestReport, TestAdjustment, FullSync> for RepriceAfterRead {
+        fn name(&self) -> &str {
+            "reprice-after-read"
+        }
+        fn apply_execution_report(
+            &self,
+            ctx: &crate::pretrade::PostTradeContext<crate::storage::FullLocking>,
+            _: &TestReport,
+        ) -> Option<crate::pretrade::PostTradeResult> {
+            let id = self
+                .service
+                .resolve(&self.pair)
+                .expect("FX pair must resolve");
+            let selected = self
+                .service
+                .get(
+                    id,
+                    ctx.account_id().expect("account must be readable"),
+                    ctx,
+                    crate::marketdata::QuoteResolution::AccountThenGroupThenDefault,
+                )
+                .expect("FX quote must exist");
+            assert_eq!(selected.mark, Some(px("0.9")));
+            self.service
+                .push(id, Quote::new().with_mark(px("1.8")), Duration::ZERO)
+                .expect("replacement quote must publish");
+            None
+        }
+    }
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let service = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let pair = instr("USD", "EUR");
+    let id = service
+        .register(pair.clone())
+        .expect("FX pair must register");
+    service
+        .push(id, Quote::new().with_mark(px("0.9")), Duration::ZERO)
+        .expect("FX quote must publish");
+    let mut configured = settings(0);
+    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let policy = TestPolicy::new(
+        configured,
+        Some(SpotFundsMarketData::new(service.clone())),
+        builder.storage_builder(),
+    );
+    let acc = account(7);
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("90"));
+    seed(&policy, acc, asset("USD"), "10000");
+    let engine = builder
+        .pre_trade(RepriceAfterRead {
+            service: service.clone(),
+            pair,
+        })
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    engine.accounts().set_currency(acc, asset("EUR"));
+    let result = engine.apply_execution_report(&fill_with_fee(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        "100",
+        "1",
+        money_fee("1", "USD"),
+    ));
+    assert!(
+        result.account_blocks.is_empty(),
+        "cached FX must remain usable"
+    );
+    assert_eq!(
+        result.account_pnls[0]
+            .result
+            .as_ref()
+            .expect("P&L must be available")
+            .delta,
+        pnl_value("-0.9"),
+        "fill and settlement fee must share the first FX quote"
+    );
+    assert_eq!(
+        service
+            .get(
+                id,
+                acc,
+                &None,
+                crate::marketdata::QuoteResolution::AccountThenGroupThenDefault
+            )
+            .expect("published quote must remain available")
+            .mark,
+        Some(px("1.8")),
+        "engine quote cache must end with the call"
+    );
+}
+
+#[test]
+fn custom_policy_and_spot_funds_share_snapshot_but_group_blocks_stay_live() {
+    type SeenScope = Arc<std::sync::Mutex<Vec<(Option<AccountGroupId>, Option<Asset>)>>>;
+    struct CaptureScope(SeenScope);
+    impl PreTradePolicy<TestOrder, TestReport, TestAdjustment, FullSync> for CaptureScope {
+        fn name(&self) -> &str {
+            "capture-scope"
+        }
+        fn check_pre_trade_start(
+            &self,
+            ctx: &PreTradeContext<crate::storage::FullLocking>,
+            _: &TestOrder,
+        ) -> Result<(), Rejects> {
+            let reader = ctx.operation_snapshot();
+            self.0
+                .lock()
+                .unwrap()
+                .push((reader.account_group(), reader.account_currency()));
+            Ok(())
+        }
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &PreTradeContext<crate::storage::FullLocking>,
+            _: &TestOrder,
+            _: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((ctx.account_group(), ctx.account_currency()));
+            Ok(None)
+        }
+    }
+    for block_current_group in [false, true] {
+        let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+        let before = group(3);
+        let after = group(4);
+        let mut configured = settings(0);
+        configured.set_account_group_limit_mode(before, Some(SpotFundsLimitMode::TrackOnly));
+        let policy = TestPolicy::new(configured, None, builder.storage_builder());
+        let seen: SeenScope = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let engine = builder
+            .pre_trade(CaptureScope(seen.clone()))
+            .pre_trade(policy)
+            .build()
+            .unwrap();
+        let accounts = engine.accounts();
+        let acc = account(7);
+        accounts.register_group(&[acc], before).unwrap();
+        accounts.set_group_currency(before, asset("USD"));
+        accounts.set_group_currency(after, asset("EUR"));
+        let request = engine
+            .start_pre_trade(make_order(
+                acc,
+                instr("AAPL", "USD"),
+                Side::Sell,
+                TradeAmount::Quantity(qty("1")),
+                Some(px("100")),
+            ))
+            .unwrap();
+        accounts.unregister_group(&[acc], before).unwrap();
+        accounts.register_group(&[acc], after).unwrap();
+        accounts.set_group_currency(before, asset("CAD"));
+        if block_current_group {
+            accounts
+                .block_group(after, "live group block".to_owned())
+                .unwrap();
+        }
+        let executed = request.execute();
+        if block_current_group {
+            assert!(
+                executed.is_err(),
+                "live current-group block must override an operation's old snapshot"
+            );
+            assert_eq!(seen.lock().unwrap().len(), 1);
+        } else {
+            executed
+                .expect("Spot Funds must use the snapshotted track-only group")
+                .rollback();
+            assert_eq!(
+                *seen.lock().unwrap(),
+                vec![
+                    (Some(before), Some(asset("USD"))),
+                    (Some(before), Some(asset("USD")))
+                ],
+                "custom and built-in policies must retain the same resolved scope"
+            );
+        }
+    }
 }
 
 // The FX quote lives only in the account group's bucket, so converting the
@@ -9122,7 +9409,7 @@ fn zero_fee_only_report_is_an_economic_noop() {
     seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
     let before = holdings_of(&policy, acc, &asset("AAPL"));
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("0", "USD"));
-    let ctx = crate::pretrade::PostTradeContext::new();
+    let ctx = crate::pretrade::PostTradeContext::new(&report);
 
     let result = policy.apply_execution_report_impl(&ctx, &report);
 
@@ -12437,7 +12724,7 @@ fn zero_quantity_fill_with_zero_fee_keeps_both_realized_pnl_ledgers_unset() {
         "0",
         money_fee("0", "USD"),
     );
-    let ctx = crate::pretrade::PostTradeContext::new();
+    let ctx = crate::pretrade::PostTradeContext::new(&report);
 
     let result = policy.apply_execution_report_impl(&ctx, &report);
 
@@ -15111,349 +15398,6 @@ fn nonzero_fee_at_zero_fx_preserves_both_authoritative_zero_pnl_lines() {
 }
 
 #[test]
-fn rejected_account_pnl_assertion_rechecks_a_concurrent_barrier_retune() {
-    let mut configured = settings(0);
-    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
-            currency: asset("USD"),
-            lower_bound: Some(pnl_value("-100")),
-            upper_bound: None,
-        }))
-        .expect("initial barrier must set");
-    let builder =
-        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
-    let pnl = policy.pnl.clone();
-    let entered = Arc::new(std::sync::Barrier::new(2));
-    let release = Arc::new(std::sync::Barrier::new(2));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .pre_trade(BlockingAdjustmentRejectPolicy {
-                entered: Arc::clone(&entered),
-                release: Arc::clone(&release),
-            })
-            .build()
-            .expect("engine must build"),
-    );
-    let account_id = account(99300018);
-    engine.accounts().set_currency(account_id, asset("USD"));
-    engine
-        .configure()
-        .set_spot_funds_account_pnl(
-            SpotFundsPolicy::<FullSync, FullSync>::NAME,
-            account_id,
-            crate::PnlState::Value(pnl_value("-10")),
-        )
-        .expect("initial account PnL must set");
-
-    let adjustment = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            engine.apply_account_adjustment(
-                account_id,
-                &[account_pnl_adjustment(crate::PnlState::Value(Pnl::ZERO))],
-            )
-        })
-    };
-    entered.wait();
-    assert_eq!(
-        pnl.with(&account_id, |entry| entry.state),
-        Some(crate::PnlState::Value(Pnl::ZERO))
-    );
-
-    let retuned = engine
-        .configure()
-        .spot_funds::<SpotFundsConfigError>(
-            SpotFundsPolicy::<FullSync, FullSync>::NAME,
-            |settings| {
-                settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
-                    currency: asset("USD"),
-                    lower_bound: Some(pnl_value("-5")),
-                    upper_bound: None,
-                }))
-            },
-        )
-        .expect("barrier retune must publish");
-    assert!(retuned.account_blocks.is_empty());
-
-    release.wait();
-    adjustment
-        .join()
-        .expect("adjustment thread must finish")
-        .expect_err("blocking policy must reject");
-    assert_eq!(
-        pnl.with(&account_id, |entry| entry.state),
-        Some(crate::PnlState::Value(pnl_value("-10")))
-    );
-    assert!(engine
-        .inner
-        .blocked_accounts
-        .is_blocked(&engine.inner.account_groups, account_id));
-}
-
-#[test]
-fn rejected_account_pnl_assertion_invalidates_a_provisional_retune_block() {
-    let mut configured = settings(0);
-    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    configured
-        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
-            currency: asset("USD"),
-            lower_bound: Some(pnl_value("-100")),
-            upper_bound: None,
-        }))
-        .expect("initial barrier must set");
-    let builder =
-        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
-    let pnl = policy.pnl.clone();
-    let entered = Arc::new(std::sync::Barrier::new(2));
-    let release = Arc::new(std::sync::Barrier::new(2));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .pre_trade(BlockingAdjustmentRejectPolicy {
-                entered: Arc::clone(&entered),
-                release: Arc::clone(&release),
-            })
-            .build()
-            .expect("engine must build"),
-    );
-    let account_id = account(99300019);
-    engine.accounts().set_currency(account_id, asset("USD"));
-    engine
-        .configure()
-        .set_spot_funds_account_pnl(
-            SpotFundsPolicy::<FullSync, FullSync>::NAME,
-            account_id,
-            crate::PnlState::Value(Pnl::ZERO),
-        )
-        .expect("initial account PnL must set");
-
-    let adjustment = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            engine.apply_account_adjustment(
-                account_id,
-                &[account_pnl_adjustment(crate::PnlState::Value(pnl_value(
-                    "-10",
-                )))],
-            )
-        })
-    };
-    entered.wait();
-    let assertion_token = pnl
-        .with(&account_id, |entry| entry.assertion_token)
-        .flatten()
-        .expect("provisional assertion must carry provenance");
-
-    let retuned = engine
-        .configure()
-        .spot_funds::<SpotFundsConfigError>(
-            SpotFundsPolicy::<FullSync, FullSync>::NAME,
-            |settings| {
-                settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
-                    currency: asset("USD"),
-                    lower_bound: Some(pnl_value("-5")),
-                    upper_bound: None,
-                }))
-            },
-        )
-        .expect("barrier retune must publish");
-    assert_eq!(retuned.account_blocks.len(), 1);
-    assert_eq!(
-        retuned.account_blocks[0].block.provenance(),
-        Some(assertion_token)
-    );
-    assert!(engine
-        .inner
-        .blocked_accounts
-        .is_blocked(&engine.inner.account_groups, account_id));
-
-    release.wait();
-    adjustment
-        .join()
-        .expect("adjustment thread must finish")
-        .expect_err("blocking policy must reject");
-    assert_eq!(
-        pnl.with(&account_id, |entry| entry.state),
-        Some(crate::PnlState::Value(Pnl::ZERO))
-    );
-    assert!(!engine
-        .inner
-        .blocked_accounts
-        .is_blocked(&engine.inner.account_groups, account_id));
-}
-
-#[test]
-fn rejected_account_pnl_assertion_invalidates_a_membership_transition_block() {
-    let group_id = group(95);
-    let mut configured = settings(0);
-    configured
-        .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
-            account_group_id: group_id,
-            barrier: SpotFundsPnlBoundsBarrier {
-                currency: asset("USD"),
-                lower_bound: Some(pnl_value("-5")),
-                upper_bound: None,
-            },
-        }])
-        .expect("group barrier must set");
-    let builder =
-        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
-    let pnl = policy.pnl.clone();
-    let entered = Arc::new(std::sync::Barrier::new(2));
-    let release = Arc::new(std::sync::Barrier::new(2));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .pre_trade(BlockingAdjustmentRejectPolicy {
-                entered: Arc::clone(&entered),
-                release: Arc::clone(&release),
-            })
-            .build()
-            .expect("engine must build"),
-    );
-    let account_id = account(99300025);
-
-    let adjustment = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            engine.apply_account_adjustment(
-                account_id,
-                &[account_pnl_adjustment(crate::PnlState::Value(pnl_value(
-                    "-10",
-                )))],
-            )
-        })
-    };
-    entered.wait();
-    let assertion_token = pnl
-        .with(&account_id, |entry| entry.assertion_token)
-        .flatten()
-        .expect("provisional assertion must carry provenance");
-
-    engine
-        .accounts()
-        .register_group(&[account_id], group_id)
-        .expect("group registration must succeed");
-    let block = engine
-        .inner
-        .blocked_accounts
-        .account_block(account_id)
-        .expect("membership transition must block the assertion");
-    assert_eq!(block.provenance(), Some(assertion_token));
-
-    release.wait();
-    adjustment
-        .join()
-        .expect("adjustment thread must finish")
-        .expect_err("blocking policy must reject");
-    assert_eq!(
-        pnl.with(&account_id, |entry| entry.state),
-        Some(crate::PnlState::Value(Pnl::ZERO))
-    );
-    assert!(!engine
-        .inner
-        .blocked_accounts
-        .is_blocked(&engine.inner.account_groups, account_id));
-}
-
-#[test]
-fn membership_mismatch_outlives_a_provisional_assertion_rollback() {
-    let account_id = account(99300026);
-    let group_id = group(96);
-    let mut configured = settings(0);
-    configured
-        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
-            account_id,
-            barrier: SpotFundsPnlBoundsBarrier {
-                currency: asset("EUR"),
-                lower_bound: Some(pnl_value("-1000")),
-                upper_bound: None,
-            },
-        }])
-        .expect("account barrier must set");
-    let builder =
-        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
-    let pnl = policy.pnl.clone();
-    let entered = Arc::new(std::sync::Barrier::new(2));
-    let release = Arc::new(std::sync::Barrier::new(2));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .pre_trade(BlockingAdjustmentRejectPolicy {
-                entered: Arc::clone(&entered),
-                release: Arc::clone(&release),
-            })
-            .build()
-            .expect("engine must build"),
-    );
-    engine.accounts().set_group_currency(group_id, asset("USD"));
-
-    let adjustment = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            engine.apply_account_adjustment(
-                account_id,
-                &[account_pnl_adjustment(crate::PnlState::Value(pnl_value(
-                    "-10",
-                )))],
-            )
-        })
-    };
-    entered.wait();
-    assert!(pnl
-        .with(&account_id, |entry| entry.assertion_token)
-        .flatten()
-        .is_some());
-
-    engine
-        .accounts()
-        .register_group(&[account_id], group_id)
-        .expect("group registration must succeed");
-    let mismatch = engine
-        .inner
-        .blocked_accounts
-        .account_block(account_id)
-        .expect("membership mismatch must block the account");
-    assert_eq!(mismatch.provenance(), None);
-    assert_eq!(mismatch.reason, "pnl barrier currency mismatch");
-    assert_eq!(
-        mismatch.details,
-        "account currency USD, barrier currency EUR"
-    );
-
-    release.wait();
-    adjustment
-        .join()
-        .expect("adjustment thread must finish")
-        .expect_err("blocking policy must reject");
-    assert_eq!(
-        pnl.with(&account_id, |entry| (entry.state, entry.assertion_token)),
-        Some((crate::PnlState::Value(Pnl::ZERO), None))
-    );
-    let survivor = engine
-        .inner
-        .blocked_accounts
-        .account_block(account_id)
-        .expect("the untagged mismatch must survive rollback");
-    assert_eq!(survivor.provenance(), None);
-    assert_eq!(survivor.reason, "pnl barrier currency mismatch");
-    assert_eq!(
-        survivor.details,
-        "account currency USD, barrier currency EUR"
-    );
-}
-
-#[test]
 fn fill_mismatch_outlives_a_provisional_assertion_rollback() {
     let account_id = account(99300027);
     let mut configured = settings(0);
@@ -15477,6 +15421,20 @@ fn fill_mismatch_outlives_a_provisional_assertion_rollback() {
     );
     engine.accounts().set_currency(account_id, asset("USD"));
 
+    let retuned = set_account_barrier_in_currency(
+        &engine,
+        account_id,
+        asset("EUR"),
+        Some(pnl_value("-1000")),
+    );
+    assert_eq!(retuned.account_blocks.len(), 1);
+    assert_eq!(retuned.account_blocks[0].block.provenance(), None);
+    assert_eq!(
+        retuned.account_blocks[0].block.reason,
+        "pnl barrier currency mismatch"
+    );
+    engine.accounts().unblock(account_id);
+
     let adjustment = {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
@@ -15493,20 +15451,6 @@ fn fill_mismatch_outlives_a_provisional_assertion_rollback() {
         .with(&account_id, |entry| entry.assertion_token)
         .flatten()
         .is_some());
-
-    let retuned = set_account_barrier_in_currency(
-        &engine,
-        account_id,
-        asset("EUR"),
-        Some(pnl_value("-1000")),
-    );
-    assert_eq!(retuned.account_blocks.len(), 1);
-    assert_eq!(retuned.account_blocks[0].block.provenance(), None);
-    assert_eq!(
-        retuned.account_blocks[0].block.reason,
-        "pnl barrier currency mismatch"
-    );
-    engine.accounts().unblock(account_id);
 
     let fill = engine.apply_execution_report(&fill_with_fee(
         account_id,
@@ -15547,156 +15491,6 @@ fn fill_mismatch_outlives_a_provisional_assertion_rollback() {
         survivor.details,
         "account currency USD, barrier currency EUR"
     );
-}
-
-#[test]
-fn barrier_retune_sweeps_an_unknown_account_after_its_inflight_reservation() {
-    let mut configured = settings(0);
-    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
-    let policy: TestPolicy = SpotFundsPolicy::new(configured, None, builder.storage_builder());
-    let account_id = account(99300020);
-    let reservation_entered = Arc::new(std::sync::Barrier::new(2));
-    let reservation_release = Arc::new(std::sync::Barrier::new(2));
-    policy.set_pre_trade_reservation_hook(
-        account_id,
-        Arc::clone(&reservation_entered),
-        Arc::clone(&reservation_release),
-    );
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .build()
-            .expect("engine must build"),
-    );
-    let transition_queued = Arc::new(std::sync::Barrier::new(2));
-    engine
-        .accounts()
-        .set_state_transition_wait_hook(Arc::clone(&transition_queued));
-
-    let order = make_order(
-        account_id,
-        instr("AAPL", "USD"),
-        Side::Buy,
-        TradeAmount::Quantity(qty("1")),
-        Some(px("1")),
-    );
-    let (reservation_done_tx, reservation_done_rx) = std::sync::mpsc::sync_channel(1);
-    let reservation = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let mut reservation = engine
-                .execute_pre_trade(order)
-                .expect("old barrier view may accept the reservation");
-            reservation.commit();
-            reservation_done_tx
-                .send(())
-                .expect("reservation completion must be observed");
-        })
-    };
-    reservation_entered.wait();
-
-    let (retune_done_tx, retune_done_rx) = std::sync::mpsc::sync_channel(1);
-    let retune = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let result = engine.configure().spot_funds::<SpotFundsConfigError>(
-                SpotFundsPolicy::<FullSync, FullSync>::NAME,
-                |settings| {
-                    settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
-                        currency: asset("USD"),
-                        lower_bound: Some(pnl_value("1")),
-                        upper_bound: None,
-                    }))
-                },
-            );
-            retune_done_tx
-                .send(())
-                .expect("retune completion must be observed");
-            result
-        })
-    };
-    transition_queued.wait();
-    reservation_release.wait();
-
-    let timeout = std::time::Duration::from_secs(5);
-    reservation_done_rx
-        .recv_timeout(timeout)
-        .expect("reservation must finish before the transition sweep");
-    retune_done_rx
-        .recv_timeout(timeout)
-        .expect("retune must finish after the reservation writer");
-    reservation.join().expect("reservation thread must finish");
-    let retuned = retune
-        .join()
-        .expect("retune thread must finish")
-        .expect("barrier retune must publish");
-    assert_eq!(retuned.account_blocks.len(), 1);
-    assert!(engine
-        .inner
-        .blocked_accounts
-        .is_blocked(&engine.inner.account_groups, account_id));
-}
-
-#[test]
-fn barrier_retune_sweeps_a_pruned_account_with_pending_holdings_rollback() {
-    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
-    let policy: TestPolicy = SpotFundsPolicy::new(settings(0), None, builder.storage_builder());
-    let holdings = policy.holdings.clone();
-    let account_id = account(99300021);
-    let aapl = asset("AAPL");
-    holdings.with_mut((account_id, aapl.clone()), Holdings::zero, |slot, _| {
-        *slot = Holdings::new(ps("2"), PositionSize::ZERO);
-    });
-    let entered = Arc::new(std::sync::Barrier::new(2));
-    let release = Arc::new(std::sync::Barrier::new(2));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .pre_trade(BlockingAdjustmentRejectPolicy {
-                entered: Arc::clone(&entered),
-                release: Arc::clone(&release),
-            })
-            .build()
-            .expect("engine must build"),
-    );
-    let force_flat = adj_with_avg(
-        aapl.clone(),
-        Some(AdjustmentAmount::Absolute(PositionSize::ZERO)),
-        None,
-    );
-    let adjustment = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || engine.apply_account_adjustment(account_id, &[force_flat]))
-    };
-    entered.wait();
-    assert_eq!(holdings.get(&(account_id, aapl.clone())), None);
-
-    let retuned = engine
-        .configure()
-        .spot_funds::<SpotFundsConfigError>(
-            SpotFundsPolicy::<FullSync, FullSync>::NAME,
-            |settings| {
-                settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
-                    currency: asset("USD"),
-                    lower_bound: Some(pnl_value("1")),
-                    upper_bound: None,
-                }))
-            },
-        )
-        .expect("barrier retune must publish");
-    assert_eq!(retuned.account_blocks.len(), 1);
-    assert!(engine
-        .inner
-        .blocked_accounts
-        .is_blocked(&engine.inner.account_groups, account_id));
-
-    release.wait();
-    adjustment
-        .join()
-        .expect("adjustment thread must finish")
-        .expect_err("blocking policy must reject");
-    assert!(holdings.get(&(account_id, aapl)).is_some());
 }
 
 #[test]
@@ -15992,309 +15786,4 @@ fn retire_spot_funds_check_and_remove_reports_intervening_nonzero_state() {
         "changed holdings must fail finalization"
     );
     assert!(holdings.get(&(account_id, usd)).is_some());
-}
-
-#[test]
-fn account_pnl_rollback_bypasses_a_queued_state_transition() {
-    let mut configured = settings(0);
-    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    let builder =
-        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
-    let pnl = policy.pnl.clone();
-    let account_id = account(99300013);
-    let adjustment_entered = Arc::new(std::sync::Barrier::new(2));
-    let adjustment_release = Arc::new(std::sync::Barrier::new(2));
-    let execution_waiting_for_pnl = Arc::new(std::sync::Barrier::new(2));
-    let transition_queued = Arc::new(std::sync::Barrier::new(2));
-    policy.set_account_pnl_lease_wait_hook(account_id, Arc::clone(&execution_waiting_for_pnl));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .pre_trade(BlockingAdjustmentRejectPolicy {
-                entered: Arc::clone(&adjustment_entered),
-                release: Arc::clone(&adjustment_release),
-            })
-            .build()
-            .expect("engine must build"),
-    );
-    let accounts = engine.accounts();
-    accounts.set_currency(account_id, asset("USD"));
-    engine
-        .configure()
-        .set_spot_funds_account_pnl(
-            SpotFundsPolicy::<FullSync, FullSync>::NAME,
-            account_id,
-            crate::PnlState::Value(pnl_value("25")),
-        )
-        .expect("PnL seed must succeed");
-    accounts.set_state_transition_wait_hook(Arc::clone(&transition_queued));
-
-    let (adjustment_done_tx, adjustment_done_rx) = std::sync::mpsc::sync_channel(1);
-    let adjustment = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let result = engine.apply_account_adjustment(
-                account_id,
-                &[account_pnl_adjustment(crate::PnlState::Value(Pnl::ZERO))],
-            );
-            adjustment_done_tx
-                .send(())
-                .expect("adjustment completion must be observed");
-            result
-        })
-    };
-    adjustment_entered.wait();
-
-    let report = fee_only_report(
-        account_id,
-        instr("AAPL", "USD"),
-        Side::Buy,
-        "1",
-        false,
-        money_fee("2", "EUR"),
-    );
-    let (execution_done_tx, execution_done_rx) = std::sync::mpsc::sync_channel(1);
-    let execution = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let result = engine.apply_execution_report(&report);
-            execution_done_tx
-                .send(())
-                .expect("execution completion must be observed");
-            result
-        })
-    };
-    execution_waiting_for_pnl.wait();
-
-    let (transition_done_tx, transition_done_rx) = std::sync::mpsc::sync_channel(1);
-    let transition = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let result = engine.configure().spot_funds::<SpotFundsConfigError>(
-                SpotFundsPolicy::<FullSync, FullSync>::NAME,
-                |_| Ok(()),
-            );
-            transition_done_tx
-                .send(())
-                .expect("transition completion must be observed");
-            result
-        })
-    };
-    transition_queued.wait();
-    adjustment_release.wait();
-
-    let timeout = std::time::Duration::from_secs(5);
-    adjustment_done_rx
-        .recv_timeout(timeout)
-        .expect("adjustment rollback must bypass the queued state transition");
-    execution_done_rx
-        .recv_timeout(timeout)
-        .expect("execution must finish after the PnL lease is released");
-    transition_done_rx
-        .recv_timeout(timeout)
-        .expect("state transition must finish after the execution reader");
-
-    adjustment
-        .join()
-        .expect("adjustment thread must finish")
-        .expect_err("blocking policy must reject");
-    let report_result = execution.join().expect("execution thread must finish");
-    assert_eq!(
-        report_result.account_pnls[0].result,
-        Err(crate::PnlHaltReason::MissingFx)
-    );
-    transition
-        .join()
-        .expect("state transition thread must finish")
-        .expect("state transition must publish");
-    assert_eq!(
-        pnl.with(&account_id, |entry| entry.state),
-        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
-    );
-}
-
-#[test]
-fn retune_runs_its_closure_first_and_publishes_inside_the_state_transition() {
-    let builder =
-        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(settings(0), None, builder.storage_builder());
-    let cell = policy.settings.clone();
-    let writer_entered = Arc::new(std::sync::Barrier::new(2));
-    let writer_release = Arc::new(std::sync::Barrier::new(2));
-    let transition_queued = Arc::new(std::sync::Barrier::new(2));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .build()
-            .expect("engine must build"),
-    );
-    engine
-        .accounts()
-        .set_state_transition_wait_hook(Arc::clone(&transition_queued));
-    let before = format!("{:?}", cell.with(Clone::clone));
-
-    // An account-state writer holds the state lease.
-    let writer = {
-        let engine = Arc::clone(&engine);
-        let writer_entered = Arc::clone(&writer_entered);
-        let writer_release = Arc::clone(&writer_release);
-        std::thread::spawn(move || {
-            engine.accounts().with_state_writer(|| {
-                writer_entered.wait();
-                writer_release.wait();
-            });
-        })
-    };
-    writer_entered.wait();
-
-    let (closure_ran_tx, closure_ran_rx) = std::sync::mpsc::sync_channel(1);
-    let transition = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            engine.configure().spot_funds::<SpotFundsConfigError>(
-                SpotFundsPolicy::<FullSync, FullSync>::NAME,
-                |retuned| {
-                    closure_ran_tx
-                        .send(())
-                        .expect("the closure run must be observed");
-                    retuned.set_global_slippage_bps(77)
-                },
-            )
-        })
-    };
-    transition_queued.wait();
-    // The retune now waits for the writer. Its closure has already run, so it
-    // held no writer back, and the new settings are not visible yet.
-    closure_ran_rx
-        .try_recv()
-        .expect("the closure must run before the state transition");
-    assert_eq!(format!("{:?}", cell.with(Clone::clone)), before);
-
-    writer_release.wait();
-    writer.join().expect("writer thread must finish");
-    transition
-        .join()
-        .expect("retune thread must finish")
-        .expect("retune must publish");
-    assert_ne!(format!("{:?}", cell.with(Clone::clone)), before);
-}
-
-#[test]
-fn account_pnl_batch_continues_past_a_queued_state_transition() {
-    let mut configured = settings(0);
-    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    let builder =
-        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
-    let pnl = policy.pnl.clone();
-    let account_id = account(99300014);
-    let first_adjustment_entered = Arc::new(std::sync::Barrier::new(2));
-    let first_adjustment_release = Arc::new(std::sync::Barrier::new(2));
-    let execution_waiting_for_pnl = Arc::new(std::sync::Barrier::new(2));
-    let transition_queued = Arc::new(std::sync::Barrier::new(2));
-    policy.set_account_pnl_lease_wait_hook(account_id, Arc::clone(&execution_waiting_for_pnl));
-    let engine = Arc::new(
-        builder
-            .pre_trade(policy)
-            .pre_trade(BlockingFirstAdjustmentPolicy {
-                entered: Arc::clone(&first_adjustment_entered),
-                release: Arc::clone(&first_adjustment_release),
-                blocked: std::sync::atomic::AtomicBool::new(false),
-            })
-            .build()
-            .expect("engine must build"),
-    );
-    let accounts = engine.accounts();
-    accounts.set_currency(account_id, asset("USD"));
-    accounts.set_state_transition_wait_hook(Arc::clone(&transition_queued));
-
-    let (adjustment_done_tx, adjustment_done_rx) = std::sync::mpsc::sync_channel(1);
-    let adjustment = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let result = engine.apply_account_adjustment(
-                account_id,
-                &[
-                    account_pnl_adjustment(crate::PnlState::Value(Pnl::ZERO)),
-                    account_pnl_adjustment(crate::PnlState::Value(pnl_value("10"))),
-                ],
-            );
-            adjustment_done_tx
-                .send(())
-                .expect("adjustment completion must be observed");
-            result
-        })
-    };
-    first_adjustment_entered.wait();
-
-    let report = fee_only_report(
-        account_id,
-        instr("AAPL", "USD"),
-        Side::Buy,
-        "1",
-        false,
-        money_fee("2", "EUR"),
-    );
-    let (execution_done_tx, execution_done_rx) = std::sync::mpsc::sync_channel(1);
-    let execution = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let result = engine.apply_execution_report(&report);
-            execution_done_tx
-                .send(())
-                .expect("execution completion must be observed");
-            result
-        })
-    };
-    execution_waiting_for_pnl.wait();
-
-    let (transition_done_tx, transition_done_rx) = std::sync::mpsc::sync_channel(1);
-    let transition = {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let result = engine.configure().spot_funds::<SpotFundsConfigError>(
-                SpotFundsPolicy::<FullSync, FullSync>::NAME,
-                |_| Ok(()),
-            );
-            transition_done_tx
-                .send(())
-                .expect("transition completion must be observed");
-            result
-        })
-    };
-    transition_queued.wait();
-    first_adjustment_release.wait();
-
-    let timeout = std::time::Duration::from_secs(5);
-    adjustment_done_rx
-        .recv_timeout(timeout)
-        .expect("the batch must finish while the transition is queued");
-    execution_done_rx
-        .recv_timeout(timeout)
-        .expect("execution must finish after the batch releases the PnL lease");
-    transition_done_rx
-        .recv_timeout(timeout)
-        .expect("the transition must finish after account-state readers drain");
-
-    adjustment
-        .join()
-        .expect("adjustment thread must finish")
-        .expect("both adjustment elements must succeed");
-    let report_result = execution.join().expect("execution thread must finish");
-    assert_eq!(
-        report_result.account_pnls[0].result,
-        Err(crate::PnlHaltReason::MissingFx)
-    );
-    transition
-        .join()
-        .expect("transition thread must finish")
-        .expect("state transition must publish");
-    assert_eq!(
-        pnl.with(&account_id, |entry| entry.state),
-        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
-    );
 }

@@ -848,6 +848,12 @@ fn collect_adjustments(
 /// control state, so changes made through it are visible to every other handle
 /// and to later policy calls. Calling it from a callback of the same engine
 /// throws `LifecycleError`.
+/// Membership, Spot Funds retunes and all currency setters/clearers require
+/// no other engine call in flight. Before effective currency changes, the
+/// caller explicitly clears and zeros the account. This includes group moves,
+/// group currency, global/default currency and retirement clearing an account
+/// override. The SDK does not validate activity, reset, convert or recalculate
+/// stored state. In-flight operations keep resolved account data.
 ///
 /// For an example of good practice in building a control plane on this SDK,
 /// see [Pit Officer](http://officer.openpit.dev/).
@@ -920,6 +926,7 @@ impl JsAccounts {
     }
 
     /// Returns the group of `account`, or `undefined` when it is unregistered.
+    /// Policy callbacks use `ctx.accountGroup` for the cheaper operation snapshot.
     ///
     /// `account` accepts an `AccountId` or a numeric/string identifier.
     ///
@@ -945,8 +952,8 @@ impl JsAccounts {
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new effective currency;
+    /// in-flight operations keep values already resolved in their snapshot.
     ///
     /// `account` accepts an `AccountId` or a numeric/string identifier. `asset`
     /// must be a valid asset identifier.
@@ -973,8 +980,8 @@ impl JsAccounts {
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new effective currency;
+    /// in-flight operations keep values already resolved in their snapshot.
     ///
     /// `account` accepts an `AccountId` or a numeric/string identifier.
     ///
@@ -997,8 +1004,8 @@ impl JsAccounts {
     /// and cost basis accumulated under a different effective currency lose
     /// their meaning; the SDK guarantees nothing about them and does not
     /// convert, detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new effective currency;
+    /// in-flight operations keep values already resolved in their snapshot.
     ///
     /// `group` accepts an `AccountGroupId` or a numeric/string identifier.
     /// `asset` must be a valid asset identifier.
@@ -1028,8 +1035,8 @@ impl JsAccounts {
     /// and cost basis accumulated under a different effective currency lose
     /// their meaning; the SDK guarantees nothing about them and does not
     /// convert, detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new effective currency;
+    /// in-flight operations keep values already resolved in their snapshot.
     ///
     /// `group` accepts an `AccountGroupId` or a numeric/string identifier.
     ///

@@ -35,6 +35,74 @@ use crate::reject::OpenPitPretradeAccountBlock;
 
 type StorageFactory = openpit_interop::StorageLockingPolicyFactory;
 
+#[no_mangle]
+/// Returns the operation account read exactly once when pre-trade starts.
+/// The same value is retained through execute. An unreadable account is an
+/// explicit error, never an absent optional field.
+/// Group and effective currency are shared operation values, resolved lazily
+/// on first use. Already resolved values survive start through execute;
+/// unrequested values resolve when first requested. Quotes are shared per pair
+/// and resolution for one engine call, with a fresh cache at execute. Block
+/// checks remain live and use current group membership.
+///
+/// # Safety
+/// `ctx` is callback-scoped. `out_account` must be valid and non-null.
+pub unsafe extern "C" fn openpit_pretrade_context_get_account_id(
+    ctx: *const OpenPitPretradeContext,
+    out_account: *mut crate::param::OpenPitParamAccountId,
+    out_error: OpenPitOutError,
+) -> bool {
+    if ctx.is_null() || out_account.is_null() {
+        write_error(
+            out_error,
+            "pre-trade context and account output are required",
+        );
+        return false;
+    }
+    let ctx = unsafe { &*ctx.cast::<PreTradeContext<StorageFactory>>() };
+    match ctx.account_id() {
+        Ok(account) => {
+            unsafe { *out_account = account.as_u64() };
+            true
+        }
+        Err(error) => {
+            write_error(out_error, &error.to_string());
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Returns the operation account read exactly once from the execution report.
+/// An unreadable account returns false and an explicit caller-owned error.
+///
+/// # Safety
+/// `ctx` is callback-scoped. `out_account` must be valid and non-null.
+pub unsafe extern "C" fn openpit_post_trade_context_get_account_id(
+    ctx: *const crate::policy::custom::OpenPitPostTradeContext,
+    out_account: *mut crate::param::OpenPitParamAccountId,
+    out_error: OpenPitOutError,
+) -> bool {
+    if ctx.is_null() || out_account.is_null() {
+        write_error(
+            out_error,
+            "post-trade context and account output are required",
+        );
+        return false;
+    }
+    let ctx = unsafe { &*ctx.cast::<openpit::pretrade::PostTradeContext<StorageFactory>>() };
+    match ctx.account_id() {
+        Ok(account) => {
+            unsafe { *out_account = account.as_u64() };
+            true
+        }
+        Err(error) => {
+            write_error(out_error, &error.to_string());
+            false
+        }
+    }
+}
+
 /// Opaque handle to the per-account blocking facility bound to one account.
 ///
 /// What it is:
@@ -298,8 +366,8 @@ pub unsafe extern "C" fn openpit_account_adjustment_context_get_account_control(
 /// Returns the account-group for a main-stage pre-trade context.
 ///
 /// Looks up the group registered for the bound order account. The result is
-/// cached on first call and reused for subsequent calls within the same
-/// context lifetime.
+/// pinned on first use and retained from pre-trade start through execute,
+/// including across administrative changes between calls.
 ///
 /// Contract:
 /// - `ctx` must be the callback-scoped context pointer passed to a custom
@@ -339,8 +407,7 @@ pub unsafe extern "C" fn openpit_pretrade_context_get_account_group(
 /// Returns the account-group for an account-adjustment context.
 ///
 /// Looks up the group registered for the adjusted account. The result is
-/// cached on first call and reused for subsequent calls within the same
-/// context lifetime.
+/// pinned on first use and shared by every policy of this operation.
 ///
 /// Contract:
 /// - `ctx` must be the callback-scoped context pointer passed to a custom
@@ -380,8 +447,7 @@ pub unsafe extern "C" fn openpit_account_adjustment_context_get_account_group(
 /// Returns the account-group for a post-trade context.
 ///
 /// Looks up the group registered for the report's account. The result is
-/// cached on first call and reused for subsequent calls within the same
-/// context lifetime.
+/// pinned on first use and shared by every policy of this operation.
 ///
 /// Contract:
 /// - `ctx` must be the callback-scoped context pointer passed to a custom

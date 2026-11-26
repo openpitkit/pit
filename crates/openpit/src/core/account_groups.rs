@@ -25,8 +25,9 @@
 use std::cell::OnceCell;
 use std::fmt::{Display, Formatter};
 
-use crate::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
-use crate::storage::{self, LockingPolicy, Storage, StorageBuilder};
+use crate::core::{Accounts, RequestFieldAccessError};
+use crate::param::{AccountGroupId, AccountId, Asset, DEFAULT_ACCOUNT_GROUP};
+use crate::storage::{self, LockingPolicy, OnceValue, Storage, StorageBuilder};
 
 // ─── AccountGroupError ───────────────────────────────────────────────────────
 
@@ -328,37 +329,129 @@ where
     }
 }
 
-// ─── GroupLookup ─────────────────────────────────────────────────────────────
+// Operation snapshot
 
-/// Lazy, per-context account-group lookup shared by the engine contexts.
-///
-/// Holds a cloned [`AccountGroupsHandle`], the bound account (or `None` when the
-/// request carried no recognizable account identifier), and a single-thread
-/// cache for the bound account's group. A context is created and consumed
-/// within one engine call and is never shared across threads, so a non-`Sync`
-/// [`OnceCell`] cache is sound; it keeps the embedding context `Send` (the cell
-/// is `Send` when its value is) while making it `!Sync`.
-pub(crate) struct GroupLookup<StorageFactory>
+/// Account data shared by every policy of an operation. Optional values are
+/// pinned on first use; pre-trade keeps them from start through execution.
+/// Repeated reads in this reader use a local cache without synchronization.
+pub struct OperationSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    source: SharedOperationSnapshot<StorageFactory>,
+    cached_group: OnceCell<Option<AccountGroupId>>,
+    cached_currency: OnceCell<Option<Asset>>,
+}
+
+struct SnapshotSource<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
     handle: AccountGroupsHandle<StorageFactory>,
-    account: Option<AccountId>,
-    cached_group: OnceCell<Option<AccountGroupId>>,
+    accounts: Option<Accounts<StorageFactory>>,
+    account: Result<AccountId, RequestFieldAccessError>,
+    group: <StorageFactory::Policy as LockingPolicy>::OnceValue<Option<AccountGroupId>>,
+    currency: <StorageFactory::Policy as LockingPolicy>::OnceValue<Option<Asset>>,
 }
 
-impl<StorageFactory> GroupLookup<StorageFactory>
+/// Read-only access to an operation's canonical first-use account data.
+///
+/// Readers follow the engine's selected synchronization contract. Full mode
+/// checks synchronized readiness on each optional getter; local and account
+/// modes rely on their existing serialization contract without readiness
+/// synchronization. Use [`OperationSnapshot`] for a per-reader local fast cache.
+pub struct SharedOperationSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    source: StorageFactory::Shared<SnapshotSource<StorageFactory>>,
+}
+
+impl<StorageFactory> Clone for SharedOperationSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+        }
+    }
+}
+
+impl<StorageFactory> SharedOperationSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    /// Returns the account fixed at operation entry, including its original error.
+    ///
+    /// # Errors
+    /// Returns the original accessor error when the account was unreadable.
+    pub fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+        self.source.account.clone()
+    }
+
+    /// Resolves the operation's group once, shared by all of its readers.
+    pub fn account_group(&self) -> Option<AccountGroupId> {
+        *self.source.group.get_or_init(|| {
+            self.source
+                .account
+                .as_ref()
+                .ok()
+                .copied()
+                .and_then(|account| self.source.handle.group_of(account))
+        })
+    }
+
+    fn account_currency(&self) -> Option<Asset> {
+        self.source
+            .currency
+            .get_or_init(|| {
+                let account = self.source.account.as_ref().ok().copied()?;
+                self.source
+                    .accounts
+                    .as_ref()?
+                    .currency_of_in_group(account, self.account_group())
+            })
+            .clone()
+    }
+}
+
+impl<StorageFactory> Clone for OperationSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+            cached_group: self.cached_group.clone(),
+            cached_currency: self.cached_currency.clone(),
+        }
+    }
+}
+
+impl<StorageFactory> OperationSnapshot<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
     pub(crate) fn new(
         handle: AccountGroupsHandle<StorageFactory>,
-        account: Option<AccountId>,
+        account: Result<AccountId, RequestFieldAccessError>,
+        accounts: Option<Accounts<StorageFactory>>,
     ) -> Self {
+        let group = handle.inner.guard.new_once_value();
+        let currency = handle.inner.guard.new_once_value();
         Self {
-            handle,
-            account,
+            source: SharedOperationSnapshot {
+                source: StorageFactory::new_shared(SnapshotSource {
+                    handle,
+                    account,
+                    accounts,
+                    group,
+                    currency,
+                }),
+            },
             cached_group: OnceCell::new(),
+            cached_currency: OnceCell::new(),
         }
     }
 
@@ -367,22 +460,43 @@ where
     /// Computed once on first call; subsequent calls return the cached value
     /// even if the registry changes afterwards. Returns `None` when no account
     /// is bound.
-    pub(crate) fn group(&self) -> Option<AccountGroupId> {
-        *self.cached_group.get_or_init(|| {
-            self.account
-                .and_then(|account| self.handle.group_of(account))
-        })
+    pub fn account_group(&self) -> Option<AccountGroupId> {
+        *self
+            .cached_group
+            .get_or_init(|| self.source.account_group())
+    }
+
+    /// Returns the routing account read once when the operation started.
+    ///
+    /// # Errors
+    /// Returns the original error when the payload account was unreadable.
+    pub fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+        self.source.account_id()
+    }
+
+    /// Resolves effective currency once from the snapshotted group. Every
+    /// reader shares that first value; subsequent reads in this reader use
+    /// its local cache without synchronization.
+    pub(crate) fn account_currency(&self) -> Option<Asset> {
+        self.cached_currency
+            .get_or_init(|| self.source.account_currency())
+            .clone()
+    }
+
+    /// Returns a reader sharing canonical first resolution without resolving data.
+    /// Its optional getters follow the selected core synchronization policy.
+    pub fn shared_reader(&self) -> SharedOperationSnapshot<StorageFactory> {
+        self.source.clone()
     }
 }
 
-impl<StorageFactory> crate::marketdata::AccountInfo for GroupLookup<StorageFactory>
+impl<StorageFactory> crate::marketdata::AccountInfo for OperationSnapshot<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
-    /// Delegates to [`GroupLookup::group`], preserving its OnceCell laziness so
-    /// the membership lookup runs at most once per context.
+    /// Uses the operation's first-use group snapshot.
     fn group(&self) -> Option<AccountGroupId> {
-        self.group()
+        self.account_group()
     }
 }
 
@@ -745,7 +859,7 @@ mod tests {
         let pre_trade =
             PreTradeContext::with_accounts(None, accounts.clone(), handle.clone(), Ok(account(1)));
         let post_trade =
-            PostTradeContext::with_accounts(accounts.clone(), handle.clone(), Some(account(1)));
+            PostTradeContext::with_accounts(accounts.clone(), handle.clone(), Ok(account(1)));
         let adjustment = AccountAdjustmentContext::with_accounts(
             AccountControl::new(block_handle, account(1)),
             accounts.clone(),
@@ -783,9 +897,58 @@ mod tests {
             crate::marketdata::AccountInfo::group(&post_trade),
             Some(group(7))
         );
-        assert_eq!(pre_trade.state_account_group(), Some(group(9)));
-        assert_eq!(post_trade.state_account_group(), Some(group(9)));
-        assert_eq!(adjustment.state_account_group(), Some(group(9)));
+        assert_eq!(pre_trade.account_group(), Some(group(7)));
+        assert_eq!(post_trade.account_group(), Some(group(7)));
+        assert_eq!(adjustment.account_group(), Some(group(7)));
+    }
+
+    #[test]
+    fn shared_readers_stay_lazy_and_pin_the_same_group_and_currency() {
+        use crate::core::{AccountBlockHandle, AccountCurrencies, BlockedAccounts, ConfigRegistry};
+        use crate::pretrade::PreTradeContext;
+        let usd = crate::param::Asset::new("USD").unwrap();
+        let eur = crate::param::Asset::new("EUR").unwrap();
+        let cad = crate::param::Asset::new("CAD").unwrap();
+        let builder = StorageBuilder::new(NoLocking);
+        let handle = new_handle();
+        let blocks =
+            AccountBlockHandle::from_inner(NoLocking::new_shared(BlockedAccounts::new(&builder)));
+        let accounts = crate::Accounts::new(
+            handle.clone(),
+            blocks,
+            NoLocking::new_shared(AccountCurrencies::new(&builder)),
+            NoLocking::new_shared(ConfigRegistry::empty()),
+        );
+        accounts.register_group(&[account(1)], group(3)).unwrap();
+        accounts.set_group_currency(group(3), usd);
+        accounts.set_group_currency(group(4), eur.clone());
+        let ctx = PreTradeContext::with_accounts(None, accounts.clone(), handle, Ok(account(1)));
+        let native = ctx.operation_snapshot();
+        let first = native.shared_reader();
+        let native_copy = native.clone();
+        accounts.unregister_group(&[account(1)], group(3)).unwrap();
+        accounts.register_group(&[account(1)], group(4)).unwrap();
+        assert_eq!(
+            first.account_currency(),
+            Some(eur.clone()),
+            "constructing and cloning readers must leave group and currency lazy"
+        );
+        accounts.set_group_currency(group(4), cad);
+        accounts.unregister_group(&[account(1)], group(4)).unwrap();
+        accounts.register_group(&[account(1)], group(5)).unwrap();
+        let later = first.clone();
+        assert_eq!(
+            later.account_group(),
+            Some(group(4)),
+            "a later reader must use the canonical first group"
+        );
+        assert_eq!(native_copy.account_group(), Some(group(4)));
+        assert_eq!(
+            native_copy.account_currency(),
+            Some(eur.clone()),
+            "native and shared readers must use the canonical first currency"
+        );
+        assert_eq!(later.account_currency(), Some(eur));
     }
 
     #[test]
@@ -798,7 +961,7 @@ mod tests {
             .register_group(&[account(5)], group(3))
             .expect("registration must succeed");
 
-        let ctx = PostTradeContext::with_groups(handle, Some(account(5)));
+        let ctx = PostTradeContext::with_groups(handle, Ok(account(5)));
         assert_eq!(ctx.account_group(), Some(group(3)));
     }
 

@@ -45,6 +45,10 @@
 // that produced it: the referenced order and its context both outlive it only
 // within that callback. It is neither copyable nor movable, to
 // discourage retaining it past the callback.
+// AccountId preserves the operation's single account read. Optional group and
+// effective currency resolve once on first use and survive start to execute.
+// Values not yet requested remain lazy. Quotes are shared per pair for one
+// engine call, and execute starts a fresh cache. Block checks remain live.
 //
 // This header also defines the two free functions the existing adapter header
 // (`openpit/pretrade/adapters.hpp`) forward-declares and calls:
@@ -129,6 +133,18 @@ class Context {
     }
     return ::openpit::detail::FromNative<::openpit::accounts::AccountControl>(
         control);
+  }
+
+  // The account read once from the order and retained from start to execute.
+  // Throws openpit::Error when the account could not be read.
+  [[nodiscard]] ::openpit::param::AccountId AccountId() const {
+    OpenPitParamAccountId account = 0;
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_pretrade_context_get_account_id(m_native, &account, &error)) {
+      ::openpit::detail::ThrowFromSharedString(
+          error, "operation account is unreadable");
+    }
+    return ::openpit::detail::FromNative<::openpit::param::AccountId>(account);
   }
 
   // The account-group id for the order's bound account, or `std::nullopt` when

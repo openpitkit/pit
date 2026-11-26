@@ -39,10 +39,9 @@ import (
 // The SpotFunds retune methods - SpotFunds, SpotFundsPnlBoundsKillSwitch,
 // SpotFundsPnlBoundsAxis, SpotFundsGlobalLimitMode, SpotFundsAccountLimitMode,
 // SpotFundsPositionLimit, and SpotFundsAccountGroupLimitMode - are exclusive
-// operations. Under NoSync and AccountSync the engine takes no lock for them:
+// operations in every mode, including FullSync:
 // run each with no other call on the engine in flight, as
 // asyncengine.AsyncEngine.Exclusive does.
-// Under FullSync the engine orders them itself.
 type Configurator struct {
 	engine native.Engine
 }

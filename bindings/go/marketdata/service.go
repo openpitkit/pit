@@ -602,6 +602,8 @@ func (s *Service) PushByInstrument(
 
 // GetOptional reads the latest quote for instrumentID with account-aware
 // resolution.
+// Policy callbacks pass their context's cheaper snapshotted account/group;
+// identical pair/resolution queries share one result for the engine call.
 // accountID is the requesting account; accountInfo supplies the account's group
 // on demand - the core invokes it lazily, only when the fallback chain reaches
 // the per-group bucket. resolution controls the fallback chain.
@@ -656,6 +658,8 @@ func (s *Service) get(
 // registered, ErrQuoteUnavailable when it is registered but holds no usable
 // quote under the given resolution, and ErrQuoteExpired when the selected quote
 // aged past TTL.
+// Policy callbacks use their context's snapshotted account/group instead of
+// resolving public registries again; repeated quote queries share the call cache.
 //
 // When accountInfo cannot answer AccountGroup - it panics or answers with an
 // uninitialized group - the read fails with ErrAccountGroupResolution (an

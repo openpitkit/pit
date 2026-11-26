@@ -25,10 +25,11 @@ import (
 
 // Exclusive runs fn on the calling goroutine while no lane of this engine runs
 // a task and no off-lane handle release is in progress, then lets the lanes
-// continue. It is the way to run the engine's exclusive operations - account
-// group membership, group currency, the SpotFunds retune, and account
-// retirement - through driver: under AccountSync the engine takes no lock for
-// them, so nothing else may be in flight while they run.
+// continue. It is the way to run the engine's exclusive operations through
+// driver: account-group membership, all account/group currency setters and
+// clearers (including default/global currency), SpotFunds retunes, and account
+// retirement. These operations are caller-exclusive in every mode, including
+// FullSync: no other engine call may be in flight for the entire operation.
 //
 // Ordinary tasks pay nothing for this method. Each lane is stopped by a
 // barrier behind every task whose Submit returned before the section began;

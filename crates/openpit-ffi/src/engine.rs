@@ -1995,11 +1995,9 @@ pub extern "C" fn openpit_account_retirement_error_get_refusal_kind(
 /// - `engine` must be a valid non-null engine pointer;
 /// - before this call, finalize or destroy every pre-trade request,
 ///   reservation, and drop-copy handle for `account_id`;
-/// - this is an exclusive operation: under `OpenPitSyncPolicy_None` and
-///   `OpenPitSyncPolicy_Account` the engine takes no lock for it, so no other
-///   call on `engine` may be in flight on any thread; under
-///   `OpenPitSyncPolicy_Full` submit no new work for `account_id` during this
-///   call;
+/// - this is caller-guaranteed exclusive in every mode, including
+///   `OpenPitSyncPolicy_Full`: no other call on `engine` may be in flight on
+///   any thread for the entire operation;
 /// - a pending request that has not been executed and holds no policy state is
 ///   invisible to retirement. Executing it later acts on the account as new
 ///   and, after id reuse, may act on someone else's account;
@@ -2189,11 +2187,9 @@ pub extern "C" fn openpit_account_group_error_get_current_group(
 /// breach, and latches any resulting account block before returning. An
 /// unchanged effective barrier is not checked again.
 ///
-/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
-/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
-/// runs it with no other call on `engine` in flight on any thread, policy
-/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
-/// after the account-state writes already in flight.
+/// Concurrency: caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
+/// custom callbacks. Debug builds detect overlap; release builds do not wait.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer;
@@ -2286,11 +2282,9 @@ pub extern "C" fn openpit_engine_register_account_group(
 /// breach, and latches any resulting account block before returning. An
 /// unchanged effective barrier is not checked again.
 ///
-/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
-/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
-/// runs it with no other call on `engine` in flight on any thread, policy
-/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
-/// after the account-state writes already in flight.
+/// Concurrency: caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
+/// custom callbacks. Debug builds detect overlap; release builds do not wait.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer;
@@ -2421,11 +2415,12 @@ fn import_account_group_id_allow_default(group: u32) -> Result<AccountGroupId, (
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
-/// accumulated under a different effective currency lose their meaning; the
-/// SDK guarantees nothing about them and does not convert, detect, or report
-/// the change. Barrier selection itself stays deterministic: the next policy
-/// access re-resolves the cascade with the new effective currency.
+/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
+/// Before changing an active account's effective currency, explicitly clear
+/// and zero the account. This includes group moves, group currency, global/default
+/// currency and retirement clearing an explicit account override. The SDK does
+/// not validate activity, reset, convert or recalculate stored state. In-flight
+/// operations retain resolved values; new operations resolve the new currency.
 ///
 /// For an example of good practice in building a control plane on this SDK,
 /// see Pit Officer at <http://officer.openpit.dev/>.
@@ -2467,11 +2462,12 @@ pub extern "C" fn openpit_engine_set_account_currency(
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
-/// accumulated under a different effective currency lose their meaning; the
-/// SDK guarantees nothing about them and does not convert, detect, or report
-/// the change. Barrier selection itself stays deterministic: the next policy
-/// access re-resolves the cascade with the new effective currency.
+/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
+/// Before changing an active account's effective currency, explicitly clear
+/// and zero the account. This includes group moves, group currency, global/default
+/// currency and retirement clearing an explicit account override. The SDK does
+/// not validate activity, reset, convert or recalculate stored state. In-flight
+/// operations retain resolved values; new operations resolve the new currency.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
@@ -2494,17 +2490,16 @@ pub extern "C" fn openpit_engine_clear_account_currency(
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
-/// accumulated under a different effective currency lose their meaning; the
-/// SDK guarantees nothing about them and does not convert, detect, or report
-/// the change. Barrier selection itself stays deterministic: the next policy
-/// access re-resolves the cascade with the new effective currency.
+/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
+/// Before changing an active account's effective currency, explicitly clear
+/// and zero the account. This includes group moves, group currency, global/default
+/// currency and retirement clearing an explicit account override. The SDK does
+/// not validate activity, reset, convert or recalculate stored state. In-flight
+/// operations retain resolved values; new operations resolve the new currency.
 ///
-/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
-/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
-/// runs it with no other call on `engine` in flight on any thread, policy
-/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
-/// after the account-state writes already in flight.
+/// Concurrency: caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
+/// custom callbacks. Debug builds detect overlap; release builds do not wait.
 ///
 /// Contract:
 /// - passing null for `engine` returns `false` and writes `out_error`;
@@ -2555,17 +2550,16 @@ pub extern "C" fn openpit_engine_set_account_group_currency(
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
-/// accumulated under a different effective currency lose their meaning; the
-/// SDK guarantees nothing about them and does not convert, detect, or report
-/// the change. Barrier selection itself stays deterministic: the next policy
-/// access re-resolves the cascade with the new effective currency.
+/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
+/// Before changing an active account's effective currency, explicitly clear
+/// and zero the account. This includes group moves, group currency, global/default
+/// currency and retirement clearing an explicit account override. The SDK does
+/// not validate activity, reset, convert or recalculate stored state. In-flight
+/// operations retain resolved values; new operations resolve the new currency.
 ///
-/// Concurrency: an exclusive operation. Under `OpenPitSyncPolicy_None` and
-/// `OpenPitSyncPolicy_Account` the engine takes no lock for it, so the caller
-/// runs it with no other call on `engine` in flight on any thread, policy
-/// callbacks included; under `OpenPitSyncPolicy_Full` the engine orders it
-/// after the account-state writes already in flight.
+/// Concurrency: caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
+/// custom callbacks. Debug builds detect overlap; release builds do not wait.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer;

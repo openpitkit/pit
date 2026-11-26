@@ -391,6 +391,8 @@ static bool (*_fn_openpit_engine_configure_spot_funds_position_limit)(OpenPitEng
 static bool (*_fn_openpit_engine_configure_spot_funds_account_group_limit_mode)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountGroupId, OpenPitPretradePoliciesSpotFundsLimitMode, bool, OpenPitConfigureError **) = NULL;
 static OpenPitStringView (*_fn_openpit_get_runtime_version)(void) = NULL;
 static OpenPitStringView (*_fn_openpit_get_runtime_build_profile)(void) = NULL;
+static bool (*_fn_openpit_pretrade_context_get_account_id)(const OpenPitPretradeContext *, OpenPitParamAccountId *, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_post_trade_context_get_account_id)(const OpenPitPostTradeContext *, OpenPitParamAccountId *, OpenPitOutError) = NULL;
 static void (*_fn_openpit_account_control_block)(const OpenPitAccountControl *, OpenPitPretradeAccountBlock) = NULL;
 static OpenPitAccountControl * (*_fn_openpit_account_control_clone)(const OpenPitAccountControl *) = NULL;
 static void (*_fn_openpit_destroy_account_control)(OpenPitAccountControl *) = NULL;
@@ -1198,6 +1200,10 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_get_runtime_version == NULL) return "openpit_get_runtime_version";
     _fn_openpit_get_runtime_build_profile = (OpenPitStringView (*)(void))openpit_dlsym(handle, "openpit_get_runtime_build_profile");
     if (_fn_openpit_get_runtime_build_profile == NULL) return "openpit_get_runtime_build_profile";
+    _fn_openpit_pretrade_context_get_account_id = (bool (*)(const OpenPitPretradeContext *, OpenPitParamAccountId *, OpenPitOutError))openpit_dlsym(handle, "openpit_pretrade_context_get_account_id");
+    if (_fn_openpit_pretrade_context_get_account_id == NULL) return "openpit_pretrade_context_get_account_id";
+    _fn_openpit_post_trade_context_get_account_id = (bool (*)(const OpenPitPostTradeContext *, OpenPitParamAccountId *, OpenPitOutError))openpit_dlsym(handle, "openpit_post_trade_context_get_account_id");
+    if (_fn_openpit_post_trade_context_get_account_id == NULL) return "openpit_post_trade_context_get_account_id";
     _fn_openpit_account_control_block = (void (*)(const OpenPitAccountControl *, OpenPitPretradeAccountBlock))openpit_dlsym(handle, "openpit_account_control_block");
     if (_fn_openpit_account_control_block == NULL) return "openpit_account_control_block";
     _fn_openpit_account_control_clone = (OpenPitAccountControl * (*)(const OpenPitAccountControl *))openpit_dlsym(handle, "openpit_account_control_clone");
@@ -2797,6 +2803,14 @@ OpenPitStringView openpit_get_runtime_version(void) {
 
 OpenPitStringView openpit_get_runtime_build_profile(void) {
     return _fn_openpit_get_runtime_build_profile();
+}
+
+bool openpit_pretrade_context_get_account_id(const OpenPitPretradeContext * ctx, OpenPitParamAccountId * out_account, OpenPitOutError out_error) {
+    return _fn_openpit_pretrade_context_get_account_id(ctx, out_account, out_error);
+}
+
+bool openpit_post_trade_context_get_account_id(const OpenPitPostTradeContext * ctx, OpenPitParamAccountId * out_account, OpenPitOutError out_error) {
+    return _fn_openpit_post_trade_context_get_account_id(ctx, out_account, out_error);
 }
 
 void openpit_account_control_block(const OpenPitAccountControl * control, OpenPitPretradeAccountBlock block) {

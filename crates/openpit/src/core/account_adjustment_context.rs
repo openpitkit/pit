@@ -18,48 +18,7 @@
 use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
 
-use super::{AccountControl, AccountGroups, AccountGroupsHandle, Accounts, GroupLookup};
-
-pub(crate) struct AccountStateSnapshot<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    accounts: Option<Accounts<StorageFactory>>,
-    account: AccountId,
-    group: Option<AccountGroupId>,
-}
-
-impl<StorageFactory> Clone for AccountStateSnapshot<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            accounts: self.accounts.clone(),
-            account: self.account,
-            group: self.group,
-        }
-    }
-}
-
-impl<StorageFactory> AccountStateSnapshot<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    pub(crate) fn with_rollback<R>(
-        &self,
-        operation: impl FnOnce(Option<AccountGroupId>, Option<Asset>) -> R,
-    ) -> R {
-        let Some(accounts) = self.accounts.as_ref() else {
-            return operation(self.group, None);
-        };
-        accounts.with_state_rollback(|| {
-            let account_group = accounts.group_of(self.account);
-            let account_currency = accounts.currency_of_in_group(self.account, account_group);
-            operation(account_group, account_currency)
-        })
-    }
-}
+use super::{AccountControl, AccountGroups, AccountGroupsHandle, Accounts, OperationSnapshot};
 
 /// Context of the current account-adjustment operation.
 ///
@@ -76,9 +35,7 @@ where
 {
     /// Per-account control bound to the account being adjusted.
     pub account_control: AccountControl<StorageFactory>,
-    accounts: Option<Accounts<StorageFactory>>,
-    account: AccountId,
-    group_lookup: GroupLookup<StorageFactory>,
+    group_lookup: OperationSnapshot<StorageFactory>,
 }
 
 impl<StorageFactory> AccountAdjustmentContext<StorageFactory>
@@ -92,9 +49,7 @@ where
     ) -> Self {
         Self {
             account_control,
-            accounts: None,
-            account,
-            group_lookup: GroupLookup::new(account_groups, Some(account)),
+            group_lookup: OperationSnapshot::new(account_groups, Ok(account), None),
         }
     }
 
@@ -106,9 +61,7 @@ where
     ) -> Self {
         Self {
             account_control,
-            accounts: Some(accounts),
-            account,
-            group_lookup: GroupLookup::new(account_groups, Some(account)),
+            group_lookup: OperationSnapshot::new(account_groups, Ok(account), Some(accounts)),
         }
     }
 
@@ -136,64 +89,21 @@ where
     /// Returns the group of the adjusted account, or `None` when it is not
     /// registered.
     ///
-    /// The lookup is performed once and cached for the lifetime of this
-    /// context, so repeated calls during one evaluation return the same group.
+    /// Resolved on first use and retained for this operation.
     pub fn account_group(&self) -> Option<AccountGroupId> {
-        self.group_lookup.group()
-    }
-
-    /// Returns the adjusted account's group in the current state-writer scope.
-    /// With an account registry, reads it directly instead of the
-    /// context-lifetime cache behind `account_group()`: that cache may have
-    /// been filled before the shared lease was taken, with a membership
-    /// transition since. The shared lease pins the group for the scope, so
-    /// callers resolve it once at scope entry and pass it down instead of
-    /// calling this again.
-    pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
-        self.accounts.as_ref().map_or_else(
-            || self.group_lookup.group(),
-            |accounts| accounts.group_of(self.account),
-        )
+        self.group_lookup.account_group()
     }
 
     /// Returns the effective currency for the adjusted account.
     ///
-    /// The caller supplies `account_group`; this method resolves only the
-    /// account -> group -> default currency cascade. Standalone contexts have
-    /// no account registry, so they return `None`.
-    /// Callers resolve it once per state-writer scope and pass the value down.
-    pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
-        self.accounts
-            .as_ref()
-            .and_then(|accounts| accounts.currency_of_in_group(self.account, account_group))
+    /// Resolved once from the operation's snapshotted group.
+    pub(crate) fn account_currency(&self) -> Option<Asset> {
+        self.group_lookup.account_currency()
     }
 
-    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
-        match self.accounts.as_ref() {
-            Some(accounts) => accounts.with_state_writer(operation),
-            None => operation(),
-        }
-    }
-
-    pub(crate) fn with_state_writer_bypassing_transition<R>(
-        &self,
-        operation: impl FnOnce() -> R,
-    ) -> R {
-        match self.accounts.as_ref() {
-            Some(accounts) => accounts.with_state_rollback(operation),
-            None => operation(),
-        }
-    }
-
-    pub(crate) fn state_snapshot(
-        &self,
-        account_group: Option<AccountGroupId>,
-    ) -> AccountStateSnapshot<StorageFactory> {
-        AccountStateSnapshot {
-            accounts: self.accounts.clone(),
-            account: self.account,
-            group: account_group,
-        }
+    /// Returns an owned read-only reader sharing this operation's first-use snapshot.
+    pub fn operation_snapshot(&self) -> OperationSnapshot<StorageFactory> {
+        self.group_lookup.clone()
     }
 
     /// Test-only constructor with a placeholder bound account.

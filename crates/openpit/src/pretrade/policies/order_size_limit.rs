@@ -1726,7 +1726,7 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::apply_execution_report(
-            &p, &crate::pretrade::PostTradeContext::new(), &()
+            &p, &crate::pretrade::PostTradeContext::default(), &()
         )
         .is_none());
     }

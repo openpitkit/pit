@@ -399,6 +399,7 @@ TEST(Context, AccountGroupIsAbsentWithoutNativeContext) {
   const Context context(order);
   EXPECT_FALSE(context.AccountGroup().has_value());
   EXPECT_FALSE(context.AccountControl().has_value());
+  EXPECT_THROW(static_cast<void>(context.AccountId()), openpit::Error);
 }
 
 //------------------------------------------------------------------------------
@@ -680,12 +681,26 @@ static_assert(
 
 class SplitPostTradePolicy {
  public:
+  bool unreadableAccount = false;
+  void PerformPreTradeCheck(const openpit::Order&, const Context& context,
+                            PolicyDecision&) const {
+    if (unreadableAccount) {
+      EXPECT_THROW(static_cast<void>(context.AccountId()), openpit::Error);
+    } else {
+      EXPECT_EQ(context.AccountId(), openpit::param::AccountId::FromUint64(42));
+    }
+  }
+
   [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
   ApplyExecutionReport(const openpit::pretrade::PostTradeContext& context,
                        const openpit::ExecutionReport& report,
                        openpit::pretrade::PostTradeAdjustments& adjustments,
                        openpit::pretrade::PostTradePnls& pnls) const {
-    static_cast<void>(context);
+    if (unreadableAccount) {
+      EXPECT_THROW(static_cast<void>(context.AccountId()), openpit::Error);
+    } else {
+      EXPECT_EQ(context.AccountId(), openpit::param::AccountId::FromUint64(42));
+    }
     static_cast<void>(report);
     pnls.Push(openpit::accountadjustment::AccountPnlOutcome{
         openpit::accountadjustment::PnlOutcomeAmount(
@@ -719,7 +734,9 @@ TEST(CustomPolicy, ProducesSplitPostTradeOutputs) {
   builder.Add(policy);
   const openpit::Engine engine = builder.Build();
 
-  const openpit::model::ExecutionReport report;
+  openpit::model::ExecutionReport report;
+  report.operation = openpit::model::ExecutionReportOperation{};
+  report.operation->accountId = openpit::param::AccountId::FromUint64(42);
   const openpit::PostTradeResult result = engine.ApplyExecutionReport(report);
 
   ASSERT_EQ(result.accountBlocks.size(), 1u);
@@ -744,6 +761,26 @@ TEST(CustomPolicy, ProducesSplitPostTradeOutputs) {
             openpit::param::PositionSize::FromString("-5"));
   EXPECT_EQ(adjustment.entry.balance->absolute,
             openpit::param::PositionSize::FromString("95"));
+}
+
+TEST(CustomPolicy, OperationAccountContextAccessorsReportUnreadableAccounts) {
+  for (const bool unreadable : {false, true}) {
+    openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+    CustomPolicy<SplitPostTradePolicy> policy("operation-account",
+                                              SplitPostTradePolicy{unreadable});
+    builder.Add(policy);
+    const openpit::Engine engine = builder.Build();
+    openpit::model::Order order;
+    openpit::model::ExecutionReport report;
+    if (!unreadable) {
+      order.operation = openpit::model::OrderOperation{};
+      order.operation->accountId = openpit::param::AccountId::FromUint64(42);
+      report.operation = openpit::model::ExecutionReportOperation{};
+      report.operation->accountId = openpit::param::AccountId::FromUint64(42);
+    }
+    EXPECT_TRUE(engine.ExecutePreTrade(order).rejects.empty());
+    EXPECT_EQ(engine.ApplyExecutionReport(report).accountPnls.size(), 1u);
+  }
 }
 
 struct DryRunHookCounters {

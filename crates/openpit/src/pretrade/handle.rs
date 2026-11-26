@@ -83,6 +83,7 @@ impl ReservationHandle for ReservationHandleImpl {
         } = *self;
         #[cfg(debug_assertions)]
         let _call = engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         kill_switch.arm(&mutations.commit_all());
     }
 
@@ -95,6 +96,7 @@ impl ReservationHandle for ReservationHandleImpl {
         } = *self;
         #[cfg(debug_assertions)]
         let _call = engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         kill_switch.arm(mutations.rollback_all().failure());
     }
 }

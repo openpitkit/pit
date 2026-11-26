@@ -34,12 +34,15 @@ import (
 // it is valid for as long as that engine is.
 //
 // RegisterGroup, UnregisterGroup, SetGroupCurrency, and ClearGroupCurrency are
-// exclusive operations. Under NoSync and AccountSync the engine takes no lock
-// for them: run each with no other call on the engine in flight, as
-// asyncengine.AsyncEngine.Exclusive does. Under FullSync the engine orders
-// them itself. Moving an account between groups is UnregisterGroup followed by
+// exclusive operations in every mode, including FullSync: run each with no
+// other engine call in flight, as asyncengine.AsyncEngine.Exclusive does.
+// This also applies to SetCurrency and ClearCurrency. Moving an account between groups is UnregisterGroup followed by
 // RegisterGroup; run both in one exclusive stretch so no other call observes
 // the account in the default group between them.
+// Before effective currency changes, the caller explicitly clears and zeros
+// the account, including changes through group movement, group currency,
+// global/default currency and retirement clearing an account override. The SDK
+// does not validate activity, reset, convert or recalculate stored state.
 //
 // For an example of good practice in building a control plane on this SDK, see
 // Pit Officer at http://officer.openpit.dev/.
@@ -116,6 +119,7 @@ func (a Accounts) UnregisterGroup(accounts []param.AccountID, group param.Accoun
 
 // GroupOf returns the account-group identifier of account. The option is empty
 // when the account is not assigned to any group.
+// Policy callbacks use Context.AccountGroup for the cheaper operation snapshot.
 func (a Accounts) GroupOf(account param.AccountID) optional.Option[param.AccountGroupID] {
 	id, ok := native.EngineAccountGroup(a.engine, account.Handle())
 	return optional.From(param.NewAccountGroupIDFromHandle(id), ok)
@@ -129,8 +133,8 @@ func (a Accounts) GroupOf(account param.AccountID) optional.Option[param.Account
 // This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
 // accumulated under a different effective currency lose their meaning; the SDK
 // guarantees nothing about them and does not convert, detect, or report the
-// change. Barrier selection itself stays deterministic: the next policy access
-// re-resolves the cascade with the new effective currency.
+// change. New operations resolve the new effective currency; in-flight
+// operations retain values already resolved in their operation snapshot.
 func (a Accounts) SetCurrency(account param.AccountID, asset param.Asset) error {
 	err := native.EngineSetAccountCurrency(
 		a.engine,
@@ -149,8 +153,8 @@ func (a Accounts) SetCurrency(account param.AccountID, asset param.Asset) error 
 // This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
 // accumulated under a different effective currency lose their meaning; the SDK
 // guarantees nothing about them and does not convert, detect, or report the
-// change. Barrier selection itself stays deterministic: the next policy access
-// re-resolves the cascade with the new effective currency.
+// change. New operations resolve the new effective currency; in-flight
+// operations retain values already resolved in their operation snapshot.
 func (a Accounts) ClearCurrency(account param.AccountID) {
 	native.EngineClearAccountCurrency(a.engine, account.Handle())
 }
@@ -167,8 +171,8 @@ func (a Accounts) ClearCurrency(account param.AccountID) {
 // This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
 // accumulated under a different effective currency lose their meaning; the SDK
 // guarantees nothing about them and does not convert, detect, or report the
-// change. Barrier selection itself stays deterministic: the next policy access
-// re-resolves the cascade with the new effective currency.
+// change. New operations resolve the new effective currency; in-flight
+// operations retain values already resolved in their operation snapshot.
 func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset) error {
 	if !group.IsInitialized() {
 		return param.ErrUninitializedAccountGroupID
@@ -194,8 +198,8 @@ func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset
 // This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
 // accumulated under a different effective currency lose their meaning; the SDK
 // guarantees nothing about them and does not convert, detect, or report the
-// change. Barrier selection itself stays deterministic: the next policy access
-// re-resolves the cascade with the new effective currency.
+// change. New operations resolve the new effective currency; in-flight
+// operations retain values already resolved in their operation snapshot.
 func (a Accounts) ClearGroupCurrency(group param.AccountGroupID) error {
 	if !group.IsInitialized() {
 		return param.ErrUninitializedAccountGroupID

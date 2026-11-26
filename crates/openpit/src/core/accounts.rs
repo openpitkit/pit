@@ -16,6 +16,14 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 //! Public account administration handle for [`Engine`](crate::Engine).
+//!
+//! All membership, retirement and currency setters/clearers are caller-guaranteed
+//! exclusive operations in every mode, including FullSync. Before changing an
+//! active account's effective currency, the caller explicitly clears and zeros
+//! the account. This includes group movement, group currency, the global/default
+//! currency and retirement clearing an explicit account currency. The SDK does
+//! not validate activity, reset, convert or recalculate stored state. In-flight
+//! operations retain resolved values; unrequested optional values remain lazy.
 
 use crate::core::account_control::{AccountBlockError, AccountBlockHandle};
 use crate::core::account_groups::{AccountGroupError, AccountGroupsHandle};
@@ -24,184 +32,11 @@ use crate::param::{AccountGroupId, AccountId, Asset, DEFAULT_ACCOUNT_GROUP};
 use crate::pretrade::{AccountBlock, RejectCode};
 use crate::storage::{self, EngineWideStorage, Storage, StorageBuilder};
 
-#[derive(Default)]
-struct StateTransitionAccess {
-    readers: usize,
-    waiting_writers: usize,
-    writer: bool,
-}
-
-#[derive(Clone, Copy)]
-enum StateTransitionAccessKind {
-    Shared,
-    Exclusive,
-}
-
-struct StateTransitionAccessGuard<'a> {
-    access: &'a parking_lot::Mutex<StateTransitionAccess>,
-    kind: StateTransitionAccessKind,
-}
-
-impl Drop for StateTransitionAccessGuard<'_> {
-    fn drop(&mut self) {
-        let mut access = self.access.lock();
-        match self.kind {
-            StateTransitionAccessKind::Shared => {
-                access.readers = access.readers.saturating_sub(1);
-            }
-            StateTransitionAccessKind::Exclusive => {
-                access.writer = false;
-            }
-        }
-    }
-}
-
-/// Serializes account-state writes against the engine's rare transitions:
-/// group membership, group currency, barrier retunes and account retirement.
-///
-/// Whether the engine takes the lease at all is the storage factory's answer
-/// to [`serializes_state_transitions`].
-///
-/// - Serialized (`FullSync`): all ordinary state writers share one global
-///   lease, so they remain parallel with each other, and a transition takes
-///   it exclusively. A queued transition is preferred over later writers;
-///   while it runs, account-state writes for every account pause, including
-///   the spin-and-sleep wait while it is queued behind writers. The counters
-///   sit under a mutex held only for their update, never across the
-///   operation or a wait.
-/// - Not serialized (`LocalSync`, `AccountSync`): the threading contract
-///   makes the caller run every transition with no other call on the engine
-///   in flight, so the operation runs directly. Debug builds check that
-///   contract with `ContractCheck`.
-///
-/// [`serializes_state_transitions`]: crate::storage::LockingPolicyFactory::serializes_state_transitions
-struct StateTransitionCoordinator {
-    access: parking_lot::Mutex<StateTransitionAccess>,
-    #[cfg(test)]
-    exclusive_wait_hook: parking_lot::Mutex<Option<std::sync::Arc<std::sync::Barrier>>>,
-    #[cfg(debug_assertions)]
-    contract: ContractCheck,
-    serialized: bool,
-}
-
-impl StateTransitionCoordinator {
-    fn new(serialized: bool) -> Self {
-        Self {
-            access: parking_lot::Mutex::new(StateTransitionAccess::default()),
-            #[cfg(test)]
-            exclusive_wait_hook: parking_lot::Mutex::new(None),
-            #[cfg(debug_assertions)]
-            contract: ContractCheck::new(),
-            serialized,
-        }
-    }
-
-    fn with_shared<R>(&self, operation: impl FnOnce() -> R) -> R {
-        if !self.serialized {
-            #[cfg(debug_assertions)]
-            let _mark = self.contract.enter_shared();
-            return operation();
-        }
-        let _access = self.acquire_shared(false);
-        operation()
-    }
-
-    fn with_rollback_shared<R>(&self, operation: impl FnOnce() -> R) -> R {
-        if !self.serialized {
-            #[cfg(debug_assertions)]
-            let _mark = self.contract.enter_shared();
-            return operation();
-        }
-        // Rollback can already own the account-PnL assertion lease. It must be
-        // allowed to finish even when a transition is queued behind another
-        // state reader that is waiting for that lease.
-        let _access = self.acquire_shared(true);
-        operation()
-    }
-
-    fn with_exclusive<R>(&self, operation: impl FnOnce() -> R) -> R {
-        if !self.serialized {
-            #[cfg(debug_assertions)]
-            let _mark = self.contract.enter_exclusive();
-            return operation();
-        }
-        let _access = self.acquire_exclusive();
-        operation()
-    }
-
-    #[cfg(test)]
-    fn set_exclusive_wait_hook(&self, hook: std::sync::Arc<std::sync::Barrier>) {
-        *self.exclusive_wait_hook.lock() = Some(hook);
-    }
-
-    fn acquire_shared(&self, bypass_waiting_writer: bool) -> StateTransitionAccessGuard<'_> {
-        let mut attempts = 0_u32;
-        loop {
-            {
-                let mut access = self.access.lock();
-                if !access.writer && (bypass_waiting_writer || access.waiting_writers == 0) {
-                    if let Some(readers) = access.readers.checked_add(1) {
-                        access.readers = readers;
-                        return StateTransitionAccessGuard {
-                            access: &self.access,
-                            kind: StateTransitionAccessKind::Shared,
-                        };
-                    }
-                }
-            }
-            Self::back_off(&mut attempts);
-        }
-    }
-
-    fn acquire_exclusive(&self) -> StateTransitionAccessGuard<'_> {
-        {
-            let mut access = self.access.lock();
-            access.waiting_writers = access.waiting_writers.saturating_add(1);
-        }
-        #[cfg(test)]
-        {
-            let hook = self.exclusive_wait_hook.lock().take();
-            if let Some(hook) = hook {
-                hook.wait();
-            }
-        }
-        let mut attempts = 0_u32;
-        loop {
-            {
-                let mut access = self.access.lock();
-                if !access.writer && access.readers == 0 {
-                    access.waiting_writers = access.waiting_writers.saturating_sub(1);
-                    access.writer = true;
-                    return StateTransitionAccessGuard {
-                        access: &self.access,
-                        kind: StateTransitionAccessKind::Exclusive,
-                    };
-                }
-            }
-            Self::back_off(&mut attempts);
-        }
-    }
-
-    fn back_off(attempts: &mut u32) {
-        if *attempts < 8 {
-            std::thread::yield_now();
-        } else {
-            std::thread::sleep(std::time::Duration::from_micros(50));
-        }
-        *attempts = attempts.saturating_add(1);
-    }
-}
-
-/// Debug-only check of the caller's half of the transition contract when the
-/// engine takes no lease.
-///
-/// One word per coordinator: the low bits count state writers in flight, the
-/// top bit marks an exclusive transition. Each side changes the word with a
-/// single read-modify-write, so an overlap is caught under any interleaving.
-/// Only calls under the lease are seen: a read at the entry of a call, before
-/// its first state write, is not.
+/// Debug-only check of caller-guaranteed exclusive transitions against entire
+/// engine calls, including custom callbacks before any built-in state write.
 #[cfg(debug_assertions)]
-struct ContractCheck {
+#[derive(Default)]
+pub(crate) struct ContractCheck {
     state: std::sync::atomic::AtomicUsize,
 }
 
@@ -210,13 +45,7 @@ const CONTRACT_EXCLUSIVE: usize = !(usize::MAX >> 1);
 
 #[cfg(debug_assertions)]
 impl ContractCheck {
-    fn new() -> Self {
-        Self {
-            state: std::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-
-    fn enter_shared(&self) -> ContractSharedMark<'_> {
+    pub(crate) fn enter_shared(&self) -> ContractSharedMark<'_> {
         let previous = self.state.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         // The mark exists before the assert so that unwinding takes the count
         // back and leaves the word clean for later calls.
@@ -224,14 +53,14 @@ impl ContractCheck {
         assert!(
             previous & CONTRACT_EXCLUSIVE == 0,
             "openpit: an account-state write ran during an exclusive engine \
-             operation; without the engine-side transition lease the caller \
-             must run group membership, group currency, Spot Funds retune and \
+             operation; the caller \
+             must run group membership, all currency setters/clearers, Spot Funds retune and \
              account retirement with no other engine call in flight"
         );
         mark
     }
 
-    fn enter_exclusive(&self) -> ContractExclusiveMark<'_> {
+    pub(crate) fn enter_exclusive(&self) -> ContractExclusiveMark<'_> {
         let entered = self.state.compare_exchange(
             0,
             CONTRACT_EXCLUSIVE,
@@ -241,8 +70,8 @@ impl ContractCheck {
         assert!(
             entered.is_ok(),
             "openpit: an exclusive engine operation overlapped another engine \
-             call; without the engine-side transition lease the caller must \
-             run group membership, group currency, Spot Funds retune and \
+             call; the caller must \
+             run group membership, all currency setters/clearers, Spot Funds retune and \
              account retirement with no other engine call in flight"
         );
         ContractExclusiveMark { check: self }
@@ -250,7 +79,7 @@ impl ContractCheck {
 }
 
 #[cfg(debug_assertions)]
-struct ContractSharedMark<'a> {
+pub(crate) struct ContractSharedMark<'a> {
     check: &'a ContractCheck,
 }
 
@@ -264,7 +93,7 @@ impl Drop for ContractSharedMark<'_> {
 }
 
 #[cfg(debug_assertions)]
-struct ContractExclusiveMark<'a> {
+pub(crate) struct ContractExclusiveMark<'a> {
     check: &'a ContractCheck,
 }
 
@@ -285,7 +114,6 @@ where
 {
     accounts: Storage<AccountId, Asset, StorageFactory::Policy>,
     groups: EngineWideStorage<AccountGroupId, Asset, StorageFactory::Policy>,
-    state_transition: StateTransitionCoordinator,
 }
 
 impl<StorageFactory> AccountCurrencies<StorageFactory>
@@ -298,31 +126,7 @@ where
         Self {
             accounts: builder.create_for_bound_key(),
             groups: builder.create_engine_wide(),
-            state_transition: StateTransitionCoordinator::new(
-                builder.serializes_state_transitions(),
-            ),
         }
-    }
-
-    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
-        self.state_transition.with_shared(operation)
-    }
-
-    pub(crate) fn with_state_rollback<R>(&self, operation: impl FnOnce() -> R) -> R {
-        self.state_transition.with_rollback_shared(operation)
-    }
-
-    #[cfg(test)]
-    fn set_state_transition_wait_hook(&self, hook: std::sync::Arc<std::sync::Barrier>) {
-        self.state_transition.set_exclusive_wait_hook(hook);
-    }
-
-    fn with_membership_transition<R>(&self, operation: impl FnOnce() -> R) -> R {
-        self.state_transition.with_exclusive(operation)
-    }
-
-    pub(crate) fn with_state_transition<R>(&self, operation: impl FnOnce() -> R) -> R {
-        self.state_transition.with_exclusive(operation)
     }
 
     fn set_account_currency(&self, account: AccountId, currency: Asset) {
@@ -343,17 +147,13 @@ where
     /// changes as an exclusive transition: no member's state write sees two
     /// currencies within one lease.
     fn set_group_currency(&self, group: AccountGroupId, currency: Asset) {
-        self.state_transition.with_exclusive(|| {
-            let initial_currency = currency.clone();
-            self.groups
-                .upsert(group, || initial_currency, |slot, _| *slot = currency);
-        });
+        let initial_currency = currency.clone();
+        self.groups
+            .upsert(group, || initial_currency, |slot, _| *slot = currency);
     }
 
     fn clear_group_currency(&self, group: AccountGroupId) {
-        self.state_transition.with_exclusive(|| {
-            self.groups.remove(&group);
-        });
+        self.groups.remove(&group);
     }
 
     fn group_currency(&self, group: AccountGroupId) -> Option<Asset> {
@@ -410,9 +210,11 @@ where
 ///
 /// `Accounts` inherits the engine's synchronization mode through its inner
 /// handles; see [`Engine`](crate::Engine)'s threading section for the contract.
-/// Group membership and group currency are exclusive operations there: under
-/// [`LocalSync`](crate::LocalSync) and [`AccountSync`](crate::AccountSync) the
-/// caller runs them with no other engine call in flight.
+/// Group membership (`register_group`, `unregister_group`) and all account/group
+/// currency setters and clearers (`set_currency`, `clear_currency`,
+/// `set_group_currency`, `clear_group_currency`), including default/global currency,
+/// are caller-exclusive in every mode, including [`FullSync`](crate::FullSync).
+/// The caller keeps every other engine call out of flight for the entire operation.
 ///
 /// # Examples
 ///
@@ -522,8 +324,8 @@ where
         group: AccountGroupId,
     ) -> Result<(), AccountGroupError> {
         #[cfg(debug_assertions)]
-        let _call = self.config_registry.engine_calls.enter();
-        self.currencies.with_membership_transition(|| {
+        let _call = self.config_registry.engine_calls.enter_exclusive();
+        {
             let previous_groups = accounts
                 .iter()
                 .map(|account| (*account, self.group_of(*account)))
@@ -531,7 +333,7 @@ where
             self.handle.register_group(accounts, group)?;
             self.block_effective_barrier_changes(previous_groups);
             Ok(())
-        })
+        }
     }
 
     /// Atomically removes every account in `accounts` from `group`.
@@ -571,8 +373,8 @@ where
         group: AccountGroupId,
     ) -> Result<(), AccountGroupError> {
         #[cfg(debug_assertions)]
-        let _call = self.config_registry.engine_calls.enter();
-        self.currencies.with_membership_transition(|| {
+        let _call = self.config_registry.engine_calls.enter_exclusive();
+        {
             let previous_groups = accounts
                 .iter()
                 .map(|account| (*account, self.group_of(*account)))
@@ -580,10 +382,11 @@ where
             self.handle.unregister_group(accounts, group)?;
             self.block_effective_barrier_changes(previous_groups);
             Ok(())
-        })
+        }
     }
 
     /// Returns the group of `account`, or `None` when it is not registered.
+    /// Policy callbacks use their context's cheaper operation snapshot instead.
     pub fn group_of(&self, account: AccountId) -> Option<AccountGroupId> {
         self.handle.group_of(account)
     }
@@ -602,11 +405,15 @@ where
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new currency, while an
+    /// in-flight operation retains its already resolved value.
+    ///
+    /// # Concurrency
+    /// Caller-guaranteed exclusive in every mode, including full synchronization:
+    /// no other engine call may be in flight for the entire write.
     pub fn set_currency(&self, account: AccountId, currency: Asset) {
         #[cfg(debug_assertions)]
-        let _call = self.config_registry.engine_calls.enter();
+        let _call = self.config_registry.engine_calls.enter_exclusive();
         self.currencies.set_account_currency(account, currency);
     }
 
@@ -621,11 +428,15 @@ where
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new currency, while an
+    /// in-flight operation retains its already resolved value.
+    ///
+    /// # Concurrency
+    /// Caller-guaranteed exclusive in every mode, including full synchronization:
+    /// no other engine call may be in flight for the entire write.
     pub fn clear_currency(&self, account: AccountId) {
         #[cfg(debug_assertions)]
-        let _call = self.config_registry.engine_calls.enter();
+        let _call = self.config_registry.engine_calls.enter_exclusive();
         self.currencies.clear_account_currency(account);
     }
 
@@ -643,17 +454,16 @@ where
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new currency, while an
+    /// in-flight operation retains its already resolved value.
     ///
     /// # Concurrency
     ///
     /// An exclusive operation; see [`Engine`](crate::Engine)'s threading
-    /// section. The group's currency is part of the effective currency of
-    /// every member, so no member's call may run beside it.
+    /// section. No other engine call may run beside it in any mode.
     pub fn set_group_currency(&self, group: AccountGroupId, currency: Asset) {
         #[cfg(debug_assertions)]
-        let _call = self.config_registry.engine_calls.enter();
+        let _call = self.config_registry.engine_calls.enter_exclusive();
         self.currencies.set_group_currency(group, currency);
     }
 
@@ -671,8 +481,8 @@ where
     /// basis accumulated under a different effective currency lose their
     /// meaning; the SDK guarantees nothing about them and does not convert,
     /// detect, or report the change. Barrier selection itself stays
-    /// deterministic: the next policy access re-resolves the cascade with the
-    /// new effective currency.
+    /// deterministic: new operations resolve the new currency, while an
+    /// in-flight operation retains its already resolved value.
     ///
     /// # Concurrency
     ///
@@ -680,21 +490,8 @@ where
     /// section.
     pub fn clear_group_currency(&self, group: AccountGroupId) {
         #[cfg(debug_assertions)]
-        let _call = self.config_registry.engine_calls.enter();
+        let _call = self.config_registry.engine_calls.enter_exclusive();
         self.currencies.clear_group_currency(group);
-    }
-
-    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
-        self.currencies.with_state_writer(operation)
-    }
-
-    pub(crate) fn with_state_rollback<R>(&self, operation: impl FnOnce() -> R) -> R {
-        self.currencies.with_state_rollback(operation)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_state_transition_wait_hook(&self, hook: std::sync::Arc<std::sync::Barrier>) {
-        self.currencies.set_state_transition_wait_hook(hook);
     }
 
     #[cfg(test)]
@@ -739,6 +536,8 @@ where
     /// is a no-op and does **not** overwrite the stored reason. Use
     /// [`replace_block_reason`](Self::replace_block_reason) to change it.
     pub fn block(&self, account: AccountId, reason: String) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle
             .block_account(account, engine_block(reason));
     }
@@ -762,6 +561,8 @@ where
     /// without replacing it; rollback may then remove that cause and leave the
     /// account unblocked.
     pub fn block_with_cause(&self, account: AccountId, cause: AccountBlock) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle
             .block_account(account, cause.with_provenance(None));
     }
@@ -772,6 +573,8 @@ where
     /// regardless of its origin - an admin block or a kill-switch block are both
     /// removed.
     pub fn unblock(&self, account: AccountId) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle.unblock_account(account);
     }
 
@@ -789,6 +592,8 @@ where
     /// blocked individually stay blocked; clear those with
     /// [`unblock`](Self::unblock) and [`unblock_group`](Self::unblock_group).
     pub fn unblock_all(&self) {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle.unblock_all();
     }
 
@@ -809,6 +614,8 @@ where
         account: AccountId,
         reason: String,
     ) -> Result<(), AccountBlockError> {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle
             .replace_reason(account, engine_block(reason))
     }
@@ -840,6 +647,8 @@ where
         group: AccountGroupId,
         reason: String,
     ) -> Result<(), AccountBlockError> {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle.block_group(group, engine_block(reason))
     }
 
@@ -857,6 +666,8 @@ where
     /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the reserved
     /// default group.
     pub fn unblock_group(&self, group: AccountGroupId) -> Result<(), AccountBlockError> {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle.unblock_group(group)
     }
 
@@ -880,6 +691,8 @@ where
         group: AccountGroupId,
         reason: String,
     ) -> Result<(), AccountBlockError> {
+        #[cfg(debug_assertions)]
+        let _call = self.config_registry.engine_calls.enter_free();
         self.block_handle
             .replace_group_reason(group, engine_block(reason))
     }
@@ -903,12 +716,133 @@ mod tests {
     use crate::core::account_control::BlockedAccounts;
     use crate::core::account_groups::AccountGroups;
     use crate::pretrade::RejectScope;
-    use crate::storage::{
-        FullLocking, IndexLocking, LockingPolicyFactory, NoLocking, StorageBuilder,
-    };
+    use crate::storage::{LockingPolicyFactory, NoLocking, StorageBuilder};
 
     fn account(id: u64) -> AccountId {
         AccountId::from_u64(id)
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn exclusive_transition_contract_and_recovery_hold_in_every_mode() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        fn check<F>()
+        where
+            F: LockingPolicyFactory + storage::CreateStorageFor<AccountId> + Default + 'static,
+        {
+            let builder = StorageBuilder::new(F::default());
+            let groups =
+                AccountGroupsHandle::<F>::from_inner(F::new_shared(AccountGroups::new(&builder)));
+            let blocks =
+                AccountBlockHandle::<F>::from_inner(F::new_shared(BlockedAccounts::new(&builder)));
+            let registry = F::new_shared(ConfigRegistry::empty());
+            let accounts = Accounts::new(
+                groups,
+                blocks,
+                F::new_shared(AccountCurrencies::new(&builder)),
+                registry.clone(),
+            );
+            let entered = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let worker = {
+                let tracker = registry.engine_calls.clone();
+                let entered = entered.clone();
+                let release = release.clone();
+                std::thread::spawn(move || {
+                    let _call = tracker.enter();
+                    entered.wait();
+                    release.wait();
+                })
+            };
+            entered.wait();
+            let rejected = catch_unwind(AssertUnwindSafe(|| {
+                accounts.set_currency(account(1), asset("USD"))
+            }));
+            release.wait();
+            worker.join().expect("active call must finish");
+            assert!(
+                rejected.is_err(),
+                "every mode must reject a transition during an engine call"
+            );
+            accounts.set_currency(account(1), asset("USD"));
+            let worker = {
+                let tracker = registry.engine_calls.clone();
+                let entered = entered.clone();
+                let release = release.clone();
+                std::thread::spawn(move || {
+                    let _transition = tracker.enter_exclusive();
+                    entered.wait();
+                    release.wait();
+                })
+            };
+            entered.wait();
+            let rejected = catch_unwind(AssertUnwindSafe(|| {
+                let _call = registry.engine_calls.enter();
+            }));
+            release.wait();
+            worker.join().expect("active transition must finish");
+            assert!(
+                rejected.is_err(),
+                "every mode must reject an engine call during a transition"
+            );
+            let _recovered = registry.engine_calls.enter();
+        }
+        check::<NoLocking>();
+        check::<crate::storage::IndexLocking<crate::AccountKeyConstraint>>();
+        check::<crate::storage::FullLocking>();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn free_writes_obey_exclusion_without_reentry_and_recover() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let (accounts, blocked, groups) = new_accounts();
+        {
+            let _ordinary = accounts.config_registry.engine_calls.enter();
+            accounts.block(account(1), "ordinary callback".to_owned());
+            accounts.unblock(account(1));
+        }
+        let entered = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+        for exclusive in [true, false] {
+            let worker = {
+                let tracker = accounts.config_registry.engine_calls.clone();
+                let entered = entered.clone();
+                let release = release.clone();
+                std::thread::spawn(move || {
+                    if exclusive {
+                        let _mark = tracker.enter_exclusive();
+                        entered.wait();
+                        release.wait();
+                    } else {
+                        let _mark = tracker.enter_free();
+                        entered.wait();
+                        release.wait();
+                    }
+                })
+            };
+            entered.wait();
+            let rejected = catch_unwind(AssertUnwindSafe(|| {
+                if exclusive {
+                    accounts.block(account(1), "forbidden".to_owned());
+                } else {
+                    accounts.set_currency(account(1), asset("USD"));
+                }
+            }));
+            let no_write = blocked
+                .check(&groups, Some(account(1)), RejectScope::Order)
+                .is_none();
+            release.wait();
+            worker.join().unwrap();
+            assert!(
+                rejected.is_err(),
+                "free writes and exclusive calls must reject either overlap direction"
+            );
+            assert!(no_write, "a rejected free write must not insert its cause");
+        }
+        accounts.block(account(1), "recovered".to_owned());
+        accounts.unblock(account(1));
+        accounts.set_currency(account(1), asset("USD"));
     }
 
     fn group(id: u32) -> AccountGroupId {
@@ -941,216 +875,6 @@ mod tests {
             config_registry,
         );
         (accounts, blocked, registry)
-    }
-
-    #[test]
-    fn state_transition_is_preferred_but_rollback_reader_bypasses_its_queue() {
-        use std::sync::{mpsc, Arc, Barrier};
-        use std::thread;
-        use std::time::Duration;
-
-        let coordinator = Arc::new(StateTransitionCoordinator::new(
-            StorageBuilder::new(FullLocking).serializes_state_transitions(),
-        ));
-        let timeout = Duration::from_secs(1);
-        let blocked_timeout = Duration::from_millis(50);
-
-        let (release_first_tx, release_first_rx) = mpsc::sync_channel(1);
-        let (first_entered_tx, first_entered_rx) = mpsc::sync_channel(1);
-        let first_reader = {
-            let coordinator = Arc::clone(&coordinator);
-            thread::spawn(move || {
-                coordinator.with_shared(|| {
-                    first_entered_tx
-                        .send(())
-                        .expect("first reader entry must be observed");
-                    release_first_rx
-                        .recv()
-                        .expect("first reader must be released");
-                });
-            })
-        };
-        first_entered_rx
-            .recv_timeout(timeout)
-            .expect("first reader must enter");
-
-        let writer_queued = Arc::new(Barrier::new(2));
-        coordinator.set_exclusive_wait_hook(Arc::clone(&writer_queued));
-        let (release_writer_tx, release_writer_rx) = mpsc::sync_channel(1);
-        let (writer_entered_tx, writer_entered_rx) = mpsc::sync_channel(1);
-        let writer = {
-            let coordinator = Arc::clone(&coordinator);
-            thread::spawn(move || {
-                coordinator.with_exclusive(|| {
-                    writer_entered_tx
-                        .send(())
-                        .expect("global writer entry must be observed");
-                    release_writer_rx
-                        .recv()
-                        .expect("global writer must be released");
-                });
-            })
-        };
-        writer_queued.wait();
-
-        let (ordinary_entered_tx, ordinary_entered_rx) = mpsc::sync_channel(1);
-        let ordinary_reader = {
-            let coordinator = Arc::clone(&coordinator);
-            thread::spawn(move || {
-                coordinator.with_shared(|| {
-                    ordinary_entered_tx
-                        .send(())
-                        .expect("ordinary reader entry must be observed");
-                });
-            })
-        };
-        assert!(ordinary_entered_rx.recv_timeout(blocked_timeout).is_err());
-
-        let (rollback_entered_tx, rollback_entered_rx) = mpsc::sync_channel(1);
-        let rollback_reader = {
-            let coordinator = Arc::clone(&coordinator);
-            thread::spawn(move || {
-                coordinator.with_rollback_shared(|| {
-                    rollback_entered_tx
-                        .send(())
-                        .expect("rollback reader entry must be observed");
-                });
-            })
-        };
-        rollback_entered_rx
-            .recv_timeout(timeout)
-            .expect("rollback reader must bypass the queued transition");
-
-        release_first_tx
-            .send(())
-            .expect("first reader must still be waiting");
-        writer_entered_rx
-            .recv_timeout(timeout)
-            .expect("queued transition must enter after readers drain");
-        assert!(ordinary_entered_rx.recv_timeout(blocked_timeout).is_err());
-        release_writer_tx
-            .send(())
-            .expect("transition must still be waiting");
-        ordinary_entered_rx
-            .recv_timeout(timeout)
-            .expect("ordinary reader must enter after the global writer");
-
-        first_reader.join().expect("first reader must finish");
-        rollback_reader.join().expect("rollback reader must finish");
-        writer.join().expect("transition must finish");
-        ordinary_reader.join().expect("ordinary reader must finish");
-    }
-
-    #[test]
-    fn serialized_state_transition_excludes_concurrent_writers() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        use std::thread;
-
-        const WRITERS: usize = 4;
-        const LEASES_PER_WRITER: usize = 2_000;
-        const TRANSITIONS: usize = 500;
-
-        let coordinator = StateTransitionCoordinator::new(
-            StorageBuilder::new(FullLocking).serializes_state_transitions(),
-        );
-        let live_writers = AtomicUsize::new(0);
-        let transition_active = AtomicBool::new(false);
-        let overlapped = AtomicBool::new(false);
-        let write_section = || {
-            live_writers.fetch_add(1, Ordering::SeqCst);
-            // Stay inside the lease a while, so that a transition admitted
-            // beside it overlaps this section instead of slipping past it.
-            thread::yield_now();
-            if transition_active.load(Ordering::SeqCst) {
-                overlapped.store(true, Ordering::SeqCst);
-            }
-            live_writers.fetch_sub(1, Ordering::SeqCst);
-        };
-        thread::scope(|scope| {
-            for writer in 0..WRITERS {
-                let coordinator = &coordinator;
-                scope.spawn(move || {
-                    for _ in 0..LEASES_PER_WRITER {
-                        if writer % 2 == 0 {
-                            coordinator.with_shared(write_section);
-                        } else {
-                            coordinator.with_rollback_shared(write_section);
-                        }
-                    }
-                });
-            }
-            scope.spawn(|| {
-                for _ in 0..TRANSITIONS {
-                    coordinator.with_exclusive(|| {
-                        transition_active.store(true, Ordering::SeqCst);
-                        if live_writers.load(Ordering::SeqCst) != 0 {
-                            overlapped.store(true, Ordering::SeqCst);
-                        }
-                        thread::yield_now();
-                        transition_active.store(false, Ordering::SeqCst);
-                    });
-                }
-            });
-        });
-        assert!(
-            !overlapped.load(Ordering::SeqCst),
-            "a serialized transition ran beside a live state write"
-        );
-    }
-
-    #[test]
-    fn only_full_locking_serializes_state_transitions() {
-        assert!(StorageBuilder::new(FullLocking).serializes_state_transitions());
-        assert!(!StorageBuilder::new(NoLocking).serializes_state_transitions());
-        assert!(
-            !StorageBuilder::new(IndexLocking::<crate::AccountKeyConstraint>::default())
-                .serializes_state_transitions()
-        );
-    }
-
-    #[test]
-    fn unserialized_leases_run_the_operation_and_nest() {
-        let coordinator = StateTransitionCoordinator::new(false);
-        assert_eq!(coordinator.with_shared(|| 1), 1);
-        assert_eq!(
-            coordinator.with_shared(|| coordinator.with_rollback_shared(|| 2)),
-            2
-        );
-        assert_eq!(coordinator.with_exclusive(|| 3), 3);
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic(expected = "an exclusive engine operation overlapped another engine call")]
-    fn unserialized_exclusive_during_state_write_is_reported_in_debug() {
-        let coordinator = StateTransitionCoordinator::new(false);
-        coordinator.with_shared(|| coordinator.with_exclusive(|| ()));
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic(expected = "an account-state write ran during an exclusive engine operation")]
-    fn unserialized_state_write_during_exclusive_is_reported_in_debug() {
-        let coordinator = StateTransitionCoordinator::new(false);
-        coordinator.with_exclusive(|| coordinator.with_rollback_shared(|| ()));
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn unserialized_contract_check_is_clean_after_a_reported_overlap() {
-        use std::panic::{catch_unwind, AssertUnwindSafe};
-
-        let coordinator = StateTransitionCoordinator::new(false);
-        let reported = catch_unwind(AssertUnwindSafe(|| {
-            coordinator.with_shared(|| coordinator.with_exclusive(|| ()))
-        }));
-        assert!(reported.is_err());
-        let reported = catch_unwind(AssertUnwindSafe(|| {
-            coordinator.with_exclusive(|| coordinator.with_shared(|| ()))
-        }));
-        assert!(reported.is_err());
-        coordinator.with_exclusive(|| ());
-        coordinator.with_shared(|| ());
     }
 
     #[test]
@@ -1482,5 +1206,50 @@ mod tests {
 
         accounts.clear_group_currency(DEFAULT_ACCOUNT_GROUP);
         assert_eq!(accounts.currency_of(account(1)), None);
+    }
+
+    #[test]
+    fn owned_rollback_reader_keeps_optional_scope_lazy_until_first_use() {
+        let (accounts, _, _) = new_accounts();
+        let account = account(1);
+        let before = group(3);
+        let after = group(4);
+        accounts.register_group(&[account], before).unwrap();
+        accounts.set_group_currency(before, asset("USD"));
+        accounts.set_group_currency(after, asset("EUR"));
+        let ctx = crate::AccountAdjustmentContext::with_accounts(
+            crate::core::AccountControl::new(accounts.block_handle.clone(), account),
+            accounts.clone(),
+            accounts.handle.clone(),
+            account,
+        );
+        let rollback = ctx.operation_snapshot();
+        accounts.unregister_group(&[account], before).unwrap();
+        accounts.register_group(&[account], after).unwrap();
+        {
+            let group = rollback.account_group();
+            let currency = rollback.account_currency();
+            assert_eq!(
+                group,
+                Some(after),
+                "capturing rollback metadata must not resolve group eagerly"
+            );
+            assert_eq!(
+                currency,
+                Some(asset("EUR")),
+                "capturing rollback metadata must not resolve currency eagerly"
+            );
+        }
+        accounts.set_group_currency(after, asset("CAD"));
+        {
+            let group = rollback.account_group();
+            let currency = rollback.account_currency();
+            assert_eq!(group, Some(after));
+            assert_eq!(
+                currency,
+                Some(asset("EUR")),
+                "rollback readers must retain resolved currency"
+            );
+        }
     }
 }

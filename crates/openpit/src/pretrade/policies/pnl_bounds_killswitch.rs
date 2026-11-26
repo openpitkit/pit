@@ -419,7 +419,7 @@ impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory, Sync>
     for PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
     Order: HasInstrument + HasAccountId,
-    ExecutionReport: HasInstrument + HasPnl + HasFee + HasAccountId,
+    ExecutionReport: HasInstrument + HasPnl + HasFee,
     LockingPolicyFactory: crate::storage::LockingPolicyFactory
         + crate::storage::CreateStorageFor<AccountId>
         + 'static,
@@ -607,7 +607,7 @@ where
                 ]))
             }
         };
-        let account_id = match report.account_id() {
+        let account_id = match ctx.account_id() {
             Ok(id) => id,
             Err(e) => {
                 return Some(PostTradeResult::blocks_only(vec![
@@ -650,7 +650,7 @@ where
             }
         };
 
-        let block: Option<AccountBlock> = ctx.with_state_writer(|| {
+        let block: Option<AccountBlock> = {
             self.realized.with_mut(
                 (account_id, settlement.clone()),
                 || Pnl::ZERO,
@@ -694,7 +694,7 @@ where
                     }
                 },
             )
-        });
+        };
 
         block.map(|b| PostTradeResult::blocks_only(vec![b]))
     }
@@ -740,8 +740,7 @@ fn validate_bounds(
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::sync::{mpsc, Arc, Barrier};
-    use std::time::Duration;
+    use std::sync::{Arc, Barrier};
 
     use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
     use crate::param::TradeAmount;
@@ -901,131 +900,97 @@ mod tests {
         );
     }
 
+    #[cfg(debug_assertions)]
     #[test]
-    fn retire_exclusive_lease_pauses_kill_switch_report_and_configuration_writers() {
+    fn retirement_rejects_concurrent_report_and_configuration_in_debug() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
         struct ParkedRetirementPolicy {
             entered: Arc<Barrier>,
             release: Arc<Barrier>,
         }
-
-        impl<Order, ExecutionReport, AccountAdjustment, Sync: crate::SyncMode>
-            PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
-            for ParkedRetirementPolicy
+        impl<Order, Report, Adjustment, Sync: crate::SyncMode>
+            PreTradePolicy<Order, Report, Adjustment, Sync> for ParkedRetirementPolicy
         {
             fn name(&self) -> &str {
                 "parked_retirement"
             }
-
             fn retire_account(
                 &self,
-                _account: AccountId,
-                _mutations: &mut crate::Mutations,
+                _: AccountId,
+                _: &mut crate::Mutations,
             ) -> Result<(), crate::AccountRetirementRefusal> {
                 self.entered.wait();
                 self.release.wait();
                 Ok(())
             }
         }
-
         let builder = crate::Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
         let kill = PnlBoundsKillSwitchPolicy::<FullLocking>::new(
             PnlBoundsKillSwitchSettings::new([barrier("USD", Some(pnl("-100")), None)], [])
                 .expect("valid barrier"),
             builder.storage_builder(),
         );
-        let realized = kill.realized.clone();
         let entered = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let engine = Arc::new(
             builder
                 .pre_trade(kill)
                 .pre_trade(ParkedRetirementPolicy {
-                    entered: Arc::clone(&entered),
-                    release: Arc::clone(&release),
+                    entered: entered.clone(),
+                    release: release.clone(),
                 })
                 .build()
                 .expect("engine builds"),
         );
         let target = account(1);
         let retirement = {
-            let engine = Arc::clone(&engine);
+            let engine = engine.clone();
             std::thread::spawn(move || engine.retire_account(target))
         };
         entered.wait();
-
-        let (report_started_tx, report_started_rx) = mpsc::sync_channel(0);
-        let (report_done_tx, report_done_rx) = mpsc::sync_channel(1);
-        let execution = {
-            let engine = Arc::clone(&engine);
-            std::thread::spawn(move || {
-                report_started_tx.send(()).expect("report starts");
-                let result = engine.apply_execution_report(&report("USD", target, pnl("5")));
-                report_done_tx.send(()).expect("report completion observed");
-                result
-            })
-        };
-        report_started_rx.recv().expect("report thread starts");
-
-        let (config_started_tx, config_started_rx) = mpsc::sync_channel(0);
-        let (config_done_tx, config_done_rx) = mpsc::sync_channel(1);
-        let configuration = {
-            let engine = Arc::clone(&engine);
-            std::thread::spawn(move || {
-                config_started_tx.send(()).expect("configuration starts");
-                let result = engine.configure().set_account_pnl(
-                    PnlBoundsKillSwitchPolicy::<FullLocking>::NAME,
-                    target,
-                    Asset::new("EUR").expect("valid asset"),
-                    pnl("7"),
-                );
-                config_done_tx
-                    .send(())
-                    .expect("configuration completion observed");
-                result
-            })
-        };
-        config_started_rx
-            .recv()
-            .expect("configuration thread starts");
-
-        let timeout = Duration::from_millis(50);
-        let report_wait = report_done_rx.recv_timeout(timeout);
-        let config_wait = config_done_rx.recv_timeout(timeout);
+        let report_rejected = catch_unwind(AssertUnwindSafe(|| {
+            engine.apply_execution_report(&report("USD", target, pnl("5")))
+        }));
+        let free_write_rejected = catch_unwind(AssertUnwindSafe(|| {
+            engine
+                .accounts()
+                .block(target, "must not be inserted".to_owned());
+        }));
+        let configuration_rejected = catch_unwind(AssertUnwindSafe(|| {
+            engine.configure().set_account_pnl(
+                PnlBoundsKillSwitchPolicy::<FullLocking>::NAME,
+                target,
+                Asset::new("EUR").expect("valid asset"),
+                pnl("7"),
+            )
+        }));
         release.wait();
         assert_eq!(retirement.join().expect("retirement thread joins"), Ok(()));
-        assert!(execution
-            .join()
-            .expect("report thread joins")
+        assert!(
+            free_write_rejected.is_err(),
+            "public block must reject retirement before writing"
+        );
+        assert!(
+            report_rejected.is_err(),
+            "report must reject an active retirement"
+        );
+        assert!(
+            configuration_rejected.is_err(),
+            "configuration must reject an active retirement"
+        );
+        assert!(engine
+            .apply_execution_report(&report("USD", target, pnl("5")))
             .account_blocks
             .is_empty());
-        assert_eq!(
-            configuration.join().expect("configuration thread joins"),
-            Ok(())
-        );
-        assert_eq!(
-            report_wait,
-            Err(mpsc::RecvTimeoutError::Timeout),
-            "execution report must wait for retirement's exclusive lease"
-        );
-        assert_eq!(
-            config_wait,
-            Err(mpsc::RecvTimeoutError::Timeout),
-            "configuration write must wait for retirement's exclusive lease"
-        );
-        assert_eq!(
-            realized.with(
-                &(target, Asset::new("USD").expect("valid asset")),
-                |entry| *entry
-            ),
-            Some(pnl("5"))
-        );
-        assert_eq!(
-            realized.with(
-                &(target, Asset::new("EUR").expect("valid asset")),
-                |entry| *entry
-            ),
-            Some(pnl("7"))
-        );
+        engine
+            .configure()
+            .set_account_pnl(
+                PnlBoundsKillSwitchPolicy::<FullLocking>::NAME,
+                target,
+                Asset::new("EUR").expect("valid asset"),
+                pnl("7"),
+            )
+            .expect("tracker must recover after rejected overlap");
     }
 
     // ── global bound breaches ───────────────────────────────────────────────
@@ -2029,7 +1994,7 @@ mod tests {
     ) -> Vec<crate::pretrade::AccountBlock> {
         <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::core::LocalSync>>::apply_execution_report(
             policy,
-            &crate::pretrade::PostTradeContext::new(),
+            &crate::pretrade::PostTradeContext::new(report),
             report,
         )
         .map(|r| r.account_blocks)
@@ -2153,7 +2118,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::apply_execution_report(
-            &policy, &crate::pretrade::PostTradeContext::new(), &report
+            &policy,
+            &crate::pretrade::PostTradeContext::new(&report),
+            &report,
         )
         .map(|r| r.account_blocks)
         .unwrap_or_default();
@@ -2209,7 +2176,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::apply_execution_report(
-            &policy, &crate::pretrade::PostTradeContext::new(), &report
+            &policy,
+            &crate::pretrade::PostTradeContext::new(&report),
+            &report,
         )
         .map(|r| r.account_blocks)
         .unwrap_or_default();
@@ -2265,7 +2234,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::apply_execution_report(
-            &policy, &crate::pretrade::PostTradeContext::new(), &report
+            &policy,
+            &crate::pretrade::PostTradeContext::new(&report),
+            &report,
         )
         .map(|r| r.account_blocks)
         .unwrap_or_default();
@@ -2318,7 +2289,9 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::apply_execution_report(
-            &policy, &crate::pretrade::PostTradeContext::new(), &report
+            &policy,
+            &crate::pretrade::PostTradeContext::new(&report),
+            &report,
         )
         .map(|r| r.account_blocks)
         .unwrap_or_default();

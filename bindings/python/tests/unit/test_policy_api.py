@@ -1335,6 +1335,144 @@ def test_post_trade_context_group_is_none_when_account_not_registered() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("missing", [False, True])
+def test_pre_and_post_contexts_expose_operation_account_or_explicit_error(
+    missing: bool,
+) -> None:
+    account = openpit.param.AccountId.from_int(99224416)
+    seen: list[str] = []
+
+    def read(ctx: openpit.pretrade.Context | openpit.pretrade.PostTradeContext) -> None:
+        if missing:
+            with pytest.raises(ValueError):
+                _ = ctx.account_id
+        else:
+            assert ctx.account_id == account
+            assert ctx.account_id == account
+
+    class CaptureAccount(openpit.pretrade.Policy):
+        @property
+        def name(self) -> str:
+            return "CaptureAccount"
+
+        def check_pre_trade_start(
+            self, ctx: openpit.pretrade.Context, order: openpit.Order
+        ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+            read(ctx)
+            seen.append("pre")
+            return ()
+
+        def apply_execution_report(
+            self,
+            ctx: openpit.pretrade.PostTradeContext,
+            report: openpit.ExecutionReport,
+        ) -> openpit.pretrade.PostTradeResult | None:
+            read(ctx)
+            seen.append("post")
+            return None
+
+    engine = (
+        openpit.Engine.builder().full_sync().pre_trade(policy=CaptureAccount()).build()
+    )
+    engine.start_pre_trade(order=openpit.Order() if missing else conftest.make_order())
+    engine.apply_execution_report(
+        report=(
+            openpit.ExecutionReport()
+            if missing
+            else conftest.make_report(pnl=openpit.param.Pnl("0"))
+        )
+    )
+    assert seen == ["pre", "post"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["no_sync", "account_sync", "full_sync"])
+@pytest.mark.parametrize("hook", ["post", "adjustment"])
+@pytest.mark.parametrize("pin_in_callback", [False, True])
+def test_post_and_adjustment_readers_share_lazy_first_group(
+    mode: str, hook: str, pin_in_callback: bool
+) -> None:
+    account = openpit.param.AccountId.from_int(99224416)
+    before = openpit.param.AccountGroupId.from_int(3)
+    after = openpit.param.AccountGroupId.from_int(4)
+    captured: list[
+        openpit.pretrade.PostTradeContext | openpit.AccountAdjustmentContext
+    ] = []
+
+    class Capture(openpit.pretrade.Policy):
+        @property
+        def name(self) -> str:
+            return "CaptureLazyGroup"
+
+        def apply_execution_report(
+            self,
+            ctx: openpit.pretrade.PostTradeContext,
+            report: openpit.ExecutionReport,
+        ) -> None:
+            captured.append(ctx)
+            return None
+
+        def apply_account_adjustment(
+            self,
+            ctx: openpit.AccountAdjustmentContext,
+            account_id: openpit.param.AccountId,
+            adjustment: openpit.AccountAdjustment,
+        ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
+            captured.append(ctx)
+            return openpit.pretrade.PolicyAccountAdjustmentResult()
+
+    class Pin(openpit.pretrade.Policy):
+        @property
+        def name(self) -> str:
+            return "PinLazyGroup"
+
+        def apply_execution_report(
+            self,
+            ctx: openpit.pretrade.PostTradeContext,
+            report: openpit.ExecutionReport,
+        ) -> None:
+            if pin_in_callback:
+                assert ctx.account_group == before
+            return None
+
+        def apply_account_adjustment(
+            self,
+            ctx: openpit.AccountAdjustmentContext,
+            account_id: openpit.param.AccountId,
+            adjustment: openpit.AccountAdjustment,
+        ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
+            if pin_in_callback:
+                assert ctx.account_group == before
+            return openpit.pretrade.PolicyAccountAdjustmentResult()
+
+    builder = getattr(openpit.Engine.builder(), mode)()
+    engine = builder.pre_trade(policy=Capture()).pre_trade(policy=Pin()).build()
+    accounts = engine.accounts()
+    accounts.register_group([account], before)
+    if hook == "post":
+        engine.apply_execution_report(
+            report=conftest.make_report(pnl=openpit.param.Pnl("0"))
+        )
+    else:
+        engine.apply_account_adjustment(
+            account_id=account,
+            adjustments=[
+                openpit.AccountAdjustment(
+                    operation=openpit.AccountAdjustmentBalanceOperation(asset="USD")
+                )
+            ],
+        )
+    assert len(captured) == 1
+    accounts.unregister_group([account], before)
+    accounts.register_group([account], after)
+    expected = before if pin_in_callback else after
+    assert (
+        captured[0].account_group == expected
+    ), "adapters must stay lazy and share first resolution"
+    assert captured[0].account_group == expected
+
+
+@pytest.mark.unit
 def test_post_trade_context_group_returns_registered_group() -> None:
     captured: list[openpit.param.AccountGroupId | None] = []
 

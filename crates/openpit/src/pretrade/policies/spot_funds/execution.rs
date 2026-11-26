@@ -24,7 +24,7 @@ use rust_decimal::Decimal;
 
 use crate::core::sync_mode::SyncMode;
 use crate::core::{
-    AccountOutcomeEntry, HasAccountId, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    AccountOutcomeEntry, HasExecutionReportFillFee, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity,
     HasSide, Instrument,
 };
@@ -716,11 +716,11 @@ where
 
     pub(super) fn read_execution_request<'i, ExecutionReport>(
         &self,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         report: &'i ExecutionReport,
     ) -> Result<ExecutionRequestView<'i>, AccountBlock>
     where
         ExecutionReport: HasInstrument
-            + HasAccountId
             + HasSide
             + HasExecutionReportLastTrade
             + HasExecutionReportFillFee
@@ -728,7 +728,7 @@ where
             + HasExecutionReportIsFinal
             + HasPreTradeLock,
     {
-        let account_id = report
+        let account_id = ctx
             .account_id()
             .map_err(|e| missing_required_field_account_block(self, "account ID", &e))?;
         let instrument = report
@@ -1528,7 +1528,6 @@ where
     ) -> Option<PostTradeResult>
     where
         ExecutionReport: HasInstrument
-            + HasAccountId
             + HasSide
             + HasExecutionReportLastTrade
             + HasExecutionReportFillFee
@@ -1537,7 +1536,7 @@ where
             + HasPreTradeLock,
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
-        let request = match self.read_execution_request(report) {
+        let request = match self.read_execution_request(ctx, report) {
             Ok(v) => v,
             Err(block) => return Some(PostTradeResult::blocks_only(vec![block])),
         };
@@ -1562,8 +1561,8 @@ where
 
         let mut apply = |settings: Option<&super::SpotFundsSettings>| {
             let scope = settings.map(|settings| {
-                let account_group = ctx.state_account_group();
-                let account_currency = ctx.account_currency(account_group);
+                let account_group = ctx.account_group();
+                let account_currency = ctx.account_currency();
                 (account_group, account_currency, settings)
             });
             if let Some((account_group, ref account_currency, settings)) = scope {

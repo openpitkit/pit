@@ -377,7 +377,9 @@ class Policy(abc.ABC):
         Apply post-trade feedback to policy state.
 
         Args:
-            ctx: Post-trade context. ``ctx.account_group`` is the
+            ctx: Post-trade context. ``ctx.account_id`` is the operation account
+                read once at engine entry and raises ValueError if unreadable.
+                ``ctx.account_group`` is the lazily snapshotted
                 :class:`openpit.param.AccountGroupId` of the report's account,
                 or ``None`` when the account is absent or unregistered.
             report: Execution report produced after fill/close.

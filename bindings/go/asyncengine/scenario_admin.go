@@ -190,6 +190,14 @@ func (c *ChainBuilder[State]) UnblockAccountGroup(
 }
 
 // SetAccountCurrency sets the source account's explicit currency.
+// Before starting this chain, the caller must exclude other new engine calls,
+// then wait for accepted work to finish. Submit and run this chain while
+// keeping other calls excluded until completion, then reopen admission.
+// Its account queue alone
+// does not supply whole-engine exclusion; an idle check is insufficient.
+// Never call Chain.Run inside Exclusive: it waits on the stopped lanes.
+// Direct Driver setters inside Exclusive are an alternative to this externally
+// controlled quiet window.
 func (c *ChainBuilder[State]) SetAccountCurrency(
 	hooks CurrencyHooks[State],
 ) *ChainBuilder[State] {
@@ -218,6 +226,11 @@ func (c *ChainBuilder[State]) SetAccountCurrency(
 }
 
 // ClearAccountCurrency clears the source account's explicit currency.
+// The caller first excludes other new engine calls, then waits for accepted
+// work to finish. Submit and run this chain while keeping other calls excluded
+// until completion, then reopen admission. An idle check alone
+// does not suffice. Never call Chain.Run inside Exclusive; use the supplied
+// Driver directly there or own the chain's quiet window externally.
 func (c *ChainBuilder[State]) ClearAccountCurrency(
 	hooks ClearCurrencyHooks[State],
 ) *ChainBuilder[State] {

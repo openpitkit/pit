@@ -31,6 +31,11 @@ import (
 // The context is non-owning and callback-scoped: it borrows engine state that
 // is valid only for the duration of the hook that received it. Retaining the
 // context or using it after that hook has returned is undefined.
+// AccountID preserves the account read once at operation entry. Optional group
+// and effective currency resolve once on first use; pre-trade retains resolved
+// values through execute, while unrequested values remain lazy. Quotes are
+// shared per pair for one engine call and execute starts a fresh quote cache.
+// In-flight operations keep resolved values; block checks remain live.
 type Context struct {
 	handle native.PretradeContext
 }
@@ -72,9 +77,19 @@ func (c Context) AccountControl() (*reject.AccountControl, bool) {
 	return control, control != nil
 }
 
+// AccountID returns the operation account, read exactly once from the order.
+// An unreadable account returns an explicit error.
+func (c Context) AccountID() (param.AccountID, error) {
+	id, err := native.PretradeContextGetAccountID(c.handle)
+	if err != nil {
+		return param.AccountID{}, err
+	}
+	return param.NewAccountIDFromHandle(id), nil
+}
+
 // AccountGroup returns the account-group identifier for the account bound to
-// this pre-trade context. The option is empty when the account is not assigned
-// to any group.
+// this operation, lazily resolved once and retained through execute. The option
+// is empty when the account is not assigned to any group.
 func (c Context) AccountGroup() optional.Option[param.AccountGroupID] {
 	id, ok := native.PretradeContextGetAccountGroup(c.handle)
 	return optional.From(param.NewAccountGroupIDFromHandle(id), ok)

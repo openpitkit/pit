@@ -78,12 +78,6 @@ impl LockingPolicyFactory for NoLocking {
         }
     }
 
-    /// One thread runs every call, so a transition can only overlap another
-    /// call through re-entry, which the threading contract forbids.
-    fn serializes_state_transitions(&self) -> bool {
-        false
-    }
-
     fn new_shared<T: 'static>(value: T) -> std::rc::Rc<T> {
         std::rc::Rc::new(value)
     }
@@ -109,6 +103,12 @@ pub struct NoLockingPolicy {
 // same storage through this policy. Each method returns a no-op guard,
 // matching the no-synchronization contract.
 unsafe impl LockingPolicy for NoLockingPolicy {
+    type OnceValue<T> = std::cell::OnceCell<T>;
+
+    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+        std::cell::OnceCell::new()
+    }
+
     type IndexSharedGuard<'a> = ();
     type IndexExclusiveGuard<'a> = ();
     type ValuesSharedGuard<'a> = ();

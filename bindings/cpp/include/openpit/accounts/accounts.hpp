@@ -283,14 +283,17 @@ struct AccountGroupError {
 // long as that engine is. Non-owning; copyable.
 //
 // `RegisterGroup`, `UnregisterGroup`, `SetGroupCurrency`, and
-// `ClearGroupCurrency` are exclusive operations. Under `SyncPolicy::None` and
-// `SyncPolicy::Account` the engine takes no lock for them: run each with no
+// `ClearGroupCurrency`, `SetCurrency` and `ClearCurrency` are exclusive
+// operations in every mode, including `SyncPolicy::Full`: run each with no
 // other call on the engine in flight on any thread, as
-// `asyncengine::AsyncEngine::Exclusive` does. Under `SyncPolicy::Full` the
-// engine orders them itself. Moving an account between groups is
-// `UnregisterGroup` followed by `RegisterGroup`; run both in one exclusive
+// `asyncengine::AsyncEngine::Exclusive` does. Moving an account between groups
+// is `UnregisterGroup` followed by `RegisterGroup`; run both in one exclusive
 // stretch so no other call observes the account in the default group between
 // them.
+// Before changing effective currency, the caller explicitly clears and zeros
+// the account, including group moves, group currency, global/default currency
+// and retirement clearing an account override. The SDK does not validate
+// activity, reset, convert or recalculate stored state.
 //
 // For an example of good practice in building a control plane on this SDK,
 // see Pit Officer at <http://officer.openpit.dev/>.
@@ -333,6 +336,8 @@ class Accounts {
   }
 
   // The account-group of `account`, or `std::nullopt` when it belongs to none.
+  // Policy callbacks use Context::AccountGroup for the cheaper operation
+  // snapshot.
   [[nodiscard]] std::optional<::openpit::param::AccountGroupId> GroupOf(
       ::openpit::param::AccountId account) const {
     OpenPitParamAccountGroupId group = 0;
@@ -350,8 +355,8 @@ class Accounts {
   // nothing. Stored PnL and cost basis accumulated under a different effective
   // currency lose their meaning; the SDK guarantees nothing about them and does
   // not convert, detect, or report the change. Barrier selection itself stays
-  // deterministic: the next policy access re-resolves the cascade with the new
-  // effective currency.
+  // deterministic: new operations resolve the new currency; in-flight
+  // operations retain values already resolved in their operation snapshot.
   void SetCurrency(::openpit::param::AccountId account,
                    const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
@@ -368,8 +373,8 @@ class Accounts {
   // unchecked and re-evaluates nothing. Stored PnL and cost basis accumulated
   // under a different effective currency lose their meaning; the SDK guarantees
   // nothing about them and does not convert, detect, or report the change.
-  // Barrier selection itself stays deterministic: the next policy access
-  // re-resolves the cascade with the new effective currency.
+  // New operations resolve the new effective currency; in-flight operations
+  // retain values already resolved in their operation snapshot.
   void ClearCurrency(::openpit::param::AccountId account) const noexcept {
     openpit_engine_clear_account_currency(m_engine,
                                           ::openpit::detail::Native(account));
@@ -380,8 +385,8 @@ class Accounts {
   // unchecked and re-evaluates nothing. Stored PnL and cost basis accumulated
   // under a different effective currency lose their meaning; the SDK guarantees
   // nothing about them and does not convert, detect, or report the change.
-  // Barrier selection itself stays deterministic: the next policy access
-  // re-resolves the cascade with the new effective currency.
+  // New operations resolve the new effective currency; in-flight operations
+  // retain values already resolved in their operation snapshot.
   void SetGroupCurrency(::openpit::param::AccountGroupId group,
                         const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
@@ -398,8 +403,8 @@ class Accounts {
   // and re-evaluates nothing. Stored PnL and cost basis accumulated under a
   // different effective currency lose their meaning; the SDK guarantees nothing
   // about them and does not convert, detect, or report the change. Barrier
-  // selection itself stays deterministic: the next policy access re-resolves
-  // the cascade with the new effective currency.
+  // selection remains deterministic: new operations resolve the new currency;
+  // in-flight operations retain their already resolved snapshot values.
   void ClearGroupCurrency(
       ::openpit::param::AccountGroupId group) const noexcept {
     openpit_engine_clear_account_group_currency(

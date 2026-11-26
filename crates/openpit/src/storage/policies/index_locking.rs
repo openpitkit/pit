@@ -163,12 +163,6 @@ impl<KeyBound: 'static> LockingPolicyFactory for IndexLocking<KeyBound> {
         }
     }
 
-    /// The account-sync contract makes the caller run each transition with no
-    /// other call on the engine in flight.
-    fn serializes_state_transitions(&self) -> bool {
-        false
-    }
-
     fn new_shared<T: 'static>(value: T) -> IndexShared<T> {
         IndexShared(std::sync::Arc::new(value), std::marker::PhantomData)
     }
@@ -194,6 +188,12 @@ pub struct IndexLockingPolicy {
 // Values guards are no-ops because this policy deliberately leaves the
 // values domain unsynchronized.
 unsafe impl LockingPolicy for IndexLockingPolicy {
+    type OnceValue<T> = std::cell::OnceCell<T>;
+
+    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+        std::cell::OnceCell::new()
+    }
+
     type IndexSharedGuard<'a> = RwLockReadGuard<'a, ()>;
     type IndexExclusiveGuard<'a> = RwLockWriteGuard<'a, ()>;
     type ValuesSharedGuard<'a> = ();

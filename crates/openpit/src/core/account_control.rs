@@ -37,7 +37,6 @@ use parking_lot::Mutex;
 
 use crate::core::account_groups::AccountGroups;
 use crate::core::mutation::MutationFailureScope;
-use crate::core::HasAccountId;
 use crate::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 use crate::storage::{self, EngineWideStorage, IndexFlag, LockingPolicy, StorageBuilder};
@@ -623,17 +622,17 @@ where
 
     /// Records a kill-switch event from an execution report.
     ///
-    /// Extracts the account from `report` and blocks it, storing `cause` as
+    /// Uses the operation's single account read and blocks it, storing `cause` as
     /// the reason returned for all future pre-trade requests on that account.
     /// If the report carries no account identifier, activates a global block
     /// instead. The first cause recorded for an account wins; subsequent calls
     /// for the same account are no-ops.
-    pub(crate) fn record_execution_report<Report: HasAccountId>(
+    pub(crate) fn record_execution_report(
         &self,
-        report: &Report,
+        account: Result<AccountId, crate::core::RequestFieldAccessError>,
         cause: AccountBlock,
     ) {
-        match report.account_id() {
+        match account {
             Ok(id) => {
                 self.block_account(id, cause);
             }
@@ -992,7 +991,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &AccountOrder(account(1)),
+            AccountOrder(account(1)).account_id(),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set
@@ -1005,7 +1004,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &AccountOrder(account(1)),
+            AccountOrder(account(1)).account_id(),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set
@@ -1018,7 +1017,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &NoAccountOrder,
+            NoAccountOrder.account_id(),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set
@@ -1047,7 +1046,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &NoAccountOrder,
+            NoAccountOrder.account_id(),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set.check(&groups, None, RejectScope::Order).is_some());
@@ -1058,7 +1057,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &AccountOrder(account(1)),
+            AccountOrder(account(1)).account_id(),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         assert!(set.check(&groups, None, RejectScope::Order).is_some());
@@ -1076,7 +1075,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &AccountOrder(account(1)),
+            AccountOrder(account(1)).account_id(),
             cause("KillSwitch", RejectCode::PnlKillSwitchTriggered),
         );
         let rejects = set
@@ -1093,11 +1092,11 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &AccountOrder(account(1)),
+            AccountOrder(account(1)).account_id(),
             cause("First", RejectCode::PnlKillSwitchTriggered),
         );
         set.record_execution_report(
-            &AccountOrder(account(1)),
+            AccountOrder(account(1)).account_id(),
             cause("Second", RejectCode::Other),
         );
         let rejects = set
@@ -1227,7 +1226,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &NoAccountOrder,
+            NoAccountOrder.account_id(),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
 
@@ -1387,7 +1386,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         set.record_execution_report(
-            &AccountOrder(account(1)),
+            AccountOrder(account(1)).account_id(),
             cause("KillSwitch", RejectCode::PnlKillSwitchTriggered),
         );
         set.unblock_account(account(1));
@@ -1708,7 +1707,7 @@ mod tests {
         let groups = empty_groups();
         // A report without an account id activates a global block.
         set.record_execution_report(
-            &NoAccountOrder,
+            NoAccountOrder.account_id(),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
         // Unblocking an (unrelated, never-blocked) account empties the

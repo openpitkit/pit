@@ -36,7 +36,17 @@ func NewPostTradeContextFromHandle(handle native.PostTradeContext) PostTradeCont
 	return PostTradeContext{handle: handle}
 }
 
-// AccountGroup returns the account-group identifier for the account that
+// AccountID returns the account read once from the report at engine entry.
+// An unreadable account returns an explicit error.
+func (c PostTradeContext) AccountID() (param.AccountID, error) {
+	id, err := native.PostTradeContextGetAccountID(c.handle)
+	if err != nil {
+		return param.AccountID{}, err
+	}
+	return param.NewAccountIDFromHandle(id), nil
+}
+
+// AccountGroup returns the lazily snapshotted group for the account that
 // triggered the execution report. The option is empty when the account is not
 // assigned to any group.
 func (c PostTradeContext) AccountGroup() optional.Option[param.AccountGroupID] {

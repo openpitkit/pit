@@ -193,6 +193,7 @@ impl<Sync: MarketDataSync> MarketDataBuilder<Sync> {
         let slots: Sync::Lock<Vec<Slot<Sync>>> = self.sync.new_lock(Vec::new());
         let has_service_level_ttl = self.sync.new_gate();
         let service = MarketDataService {
+            cache_identity: self.sync.new_shared(0_u8),
             default_ttl: self.default_ttl.as_duration(),
             account_ttl,
             group_ttl,

@@ -60,32 +60,6 @@ where
     Sync::StorageLockingPolicyFactory: crate::storage::LockingPolicyFactory,
     MarketDataSyncMode: MarketDataSync,
 {
-    fn with_adjustment_state_writer<R>(
-        &self,
-        ctx: &AccountAdjustmentContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
-        account_id: AccountId,
-        owner_id: u64,
-        operation: impl FnOnce() -> R,
-    ) -> R {
-        let owns_pnl_lease = self
-            .pnl_leases
-            .with(&account_id, |lease| {
-                lease
-                    .as_ref()
-                    .is_some_and(|lease| lease.owner_id == owner_id)
-            })
-            .unwrap_or(false);
-        if owns_pnl_lease {
-            // A prior batch element can retain this account's PnL lease until
-            // finalization. If a transition queues while an execution reader
-            // waits for that lease, the batch must finish through the same
-            // bypass as rollback or all three operations deadlock.
-            ctx.with_state_writer_bypassing_transition(operation)
-        } else {
-            ctx.with_state_writer(operation)
-        }
-    }
-
     pub(super) fn read_adjustment_request<AccountAdjustment>(
         &self,
         adjustment: &AccountAdjustment,
@@ -172,7 +146,6 @@ where
             + HasAccountAdjustmentPnlOperation,
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
-        let owner_id = mutations.owner_id();
         let account_pnl = adj_field(
             self,
             "account pnl operation",
@@ -199,7 +172,6 @@ where
         }
 
         let operation = || {
-            let state_snapshot = ctx.state_snapshot(ctx.state_account_group());
             let active_mutation = self.begin_holdings_mutation(account_id);
 
             let key = (account_id, request.asset.clone());
@@ -408,7 +380,6 @@ where
                 account_control,
                 key,
                 rollback,
-                state_snapshot,
                 active_mutation,
             );
 
@@ -468,7 +439,7 @@ where
                 account_blocks: Vec::new(),
             })
         };
-        self.with_adjustment_state_writer(ctx, account_id, owner_id, operation)
+        operation()
     }
 
     fn apply_account_pnl_adjustment(
@@ -483,11 +454,11 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let owner_id = mutations.owner_id();
-        self.with_adjustment_state_writer(ctx, account_id, owner_id, || {
+        {
             let lease = self.acquire_account_pnl_lease(account_id, owner_id);
-            let account_group = ctx.state_account_group();
-            let state_snapshot = ctx.state_snapshot(account_group);
-            let account_currency = ctx.account_currency(account_group);
+            let account_group = ctx.account_group();
+            let state_snapshot = ctx.operation_snapshot();
+            let account_currency = ctx.account_currency();
             self.settings.with_snapshot(|settings| {
                 let barrier = settings
                     .pnl_barrier_for(account_id, account_group, account_currency.as_ref())
@@ -540,6 +511,6 @@ where
                     account_blocks,
                 })
             })
-        })
+        }
     }
 }

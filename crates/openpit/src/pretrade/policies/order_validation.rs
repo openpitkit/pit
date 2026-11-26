@@ -304,7 +304,7 @@ mod tests {
             (),
             crate::core::LocalSync,
         >>::apply_execution_report(
-            &policy, &crate::pretrade::PostTradeContext::new(), &()
+            &policy, &crate::pretrade::PostTradeContext::default(), &()
         )
         .is_none());
         assert!(<OrderValidationPolicy as PreTradePolicy<

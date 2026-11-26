@@ -37,11 +37,10 @@ use openpit::pretrade::policies::{
     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
     PnlBoundsKillSwitchSettings,
 };
-use openpit::pretrade::{PostTradeContext, PreTradeContext, PreTradePolicy, RejectCode};
-use openpit::storage::FullLocking;
-use openpit::{Engine, FullSync, Instrument, OrderOperation, RequestFieldAccessError};
+use openpit::pretrade::RejectCode;
+use openpit::{Engine, Instrument, OrderOperation, RequestFieldAccessError};
 
-type TestPolicy = PnlBoundsKillSwitchPolicy<FullLocking>;
+type TestEngine = openpit::FullSyncEngine<OrderOperation, TestReport, ()>;
 
 const TOTAL_THREADS: usize = 8;
 const PER_THREAD_REPORTS: usize = 5;
@@ -112,23 +111,14 @@ fn build_report(account_id: AccountId, pnl_val: Pnl) -> TestReport {
 }
 
 fn check_start(
-    policy: &TestPolicy,
+    policy: &TestEngine,
     order: &OrderOperation,
 ) -> Result<(), openpit::pretrade::Rejects> {
-    <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), FullSync>>::check_pre_trade_start(
-        policy,
-        &PreTradeContext::new(None, order),
-        order,
-    )
+    policy.start_pre_trade(order.clone()).map(|_| ())
 }
 
-fn apply_report(policy: &TestPolicy, report: &TestReport) -> bool {
-    !<TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), FullSync>>::apply_execution_report(
-        policy,
-        &PostTradeContext::<FullLocking>::new(),
-        report,
-    )
-    .is_none_or(|r| r.is_empty())
+fn apply_report(policy: &TestEngine, report: &TestReport) -> bool {
+    !policy.apply_execution_report(report).is_empty()
 }
 
 // Verifies that apply_execution_report does not lose or duplicate updates when
@@ -155,7 +145,7 @@ fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
     let upper_bound_str = expected_total.to_string();
 
     let builder = Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
-    let policy: Arc<TestPolicy> = Arc::new(PnlBoundsKillSwitchPolicy::new(
+    let native_policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
                 settlement_asset: usd(),
@@ -176,7 +166,13 @@ fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
         )
         .expect("policy settings must be valid"),
         builder.storage_builder(),
-    ));
+    );
+    let policy = Arc::new(
+        builder
+            .pre_trade(native_policy)
+            .build()
+            .expect("engine must build"),
+    );
 
     let pnl_delta = Pnl::from_str(&PNL_PER_REPORT.to_string()).expect("pnl delta must be valid");
 
@@ -212,7 +208,7 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
     // Tight upper bound: guaranteed to be exceeded during concurrent execution.
     // TOTAL_THREADS * PER_THREAD_REPORTS * PNL_PER_REPORT = 400 >> 50.
     let builder = Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
-    let policy: Arc<TestPolicy> = Arc::new(PnlBoundsKillSwitchPolicy::new(
+    let native_policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
                 settlement_asset: usd(),
@@ -231,7 +227,13 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
         )
         .expect("policy settings must be valid"),
         builder.storage_builder(),
-    ));
+    );
+    let policy = Arc::new(
+        builder
+            .pre_trade(native_policy)
+            .build()
+            .expect("engine must build"),
+    );
 
     let pnl_delta = Pnl::from_str(&PNL_PER_REPORT.to_string()).expect("pnl delta must be valid");
 
@@ -255,7 +257,7 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
     assert_eq!(
         reject[0].code,
         RejectCode::PnlKillSwitchTriggered,
-        "reject code must be PnlKillSwitchTriggered"
+        "the engine must preserve the cause of its latched account block"
     );
 
     // Account 2 has no account+asset barrier and its PnL is 0 (no reports applied);

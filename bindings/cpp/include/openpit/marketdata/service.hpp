@@ -304,6 +304,8 @@ class Service {
   // `accountInfo` supplies the reading account's group lazily - the core
   // invokes its `AccountGroup()` only when the fallback chain reaches the
   // per-group bucket. `resolution` selects the fallback chain.
+  // Policy callbacks pass their context's snapshotted account/group; identical
+  // pair/resolution queries share one result for the engine call.
   //
   // A throwing `AccountGroup()` fails the read as a whole: the exception is
   // rethrown with its original type, and no quote is produced. The group is

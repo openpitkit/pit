@@ -325,11 +325,23 @@ mod engine_calls {
 
     #[derive(Clone, Default)]
     pub(crate) struct EngineCallTracker {
-        identity: Arc<()>,
+        identity: Arc<super::super::accounts::ContractCheck>,
     }
 
     impl EngineCallTracker {
+        pub(crate) fn enter_free(&self) -> super::super::accounts::ContractSharedMark<'_> {
+            self.identity.enter_shared()
+        }
+
         pub(crate) fn enter(&self) -> EngineCallGuard<'_> {
+            self.enter_call(false)
+        }
+
+        pub(crate) fn enter_exclusive(&self) -> EngineCallGuard<'_> {
+            self.enter_call(true)
+        }
+
+        fn enter_call(&self, exclusive: bool) -> EngineCallGuard<'_> {
             let identity = Arc::as_ptr(&self.identity) as usize;
             ACTIVE_ENGINE_CALLS.with(|calls| {
                 let mut active = calls.borrow_mut();
@@ -338,13 +350,24 @@ mod engine_calls {
                     "openpit: callback re-entry contract violated: a policy or \
                      mutation callback must not re-enter the same engine"
                 );
+                let (shared, exclusive) = if exclusive {
+                    (None, Some(self.identity.enter_exclusive()))
+                } else {
+                    (Some(self.identity.enter_shared()), None)
+                };
                 active.push(identity);
-            });
-            EngineCallGuard { tracker: self }
+                EngineCallGuard {
+                    tracker: self,
+                    _shared: shared,
+                    _exclusive: exclusive,
+                }
+            })
         }
     }
 
     pub(crate) struct EngineCallGuard<'a> {
+        _shared: Option<super::super::accounts::ContractSharedMark<'a>>,
+        _exclusive: Option<super::super::accounts::ContractExclusiveMark<'a>>,
         tracker: &'a EngineCallTracker,
     }
 
@@ -421,6 +444,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ) -> Result<(), ConfigureError> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         match self.registry().entry(name)? {
             ConfigEntry::RateLimit(cell) => cell
                 .update(f)
@@ -445,6 +469,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ) -> Result<(), ConfigureError> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         match self.registry().entry(name)? {
             ConfigEntry::PnlBoundsKillSwitch { settings, .. } => settings
                 .update(f)
@@ -485,15 +510,16 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ) -> Result<(), ConfigureError> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         match self.registry().entry(name)? {
             ConfigEntry::PnlBoundsKillSwitch { realized, .. } => {
-                self.inner.account_currencies.with_state_writer(|| {
+                {
                     realized.with_mut(
                         (account, settlement_asset),
                         || Pnl::ZERO,
                         |entry, _is_new| *entry = pnl,
                     );
-                });
+                }
                 Ok(())
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<
@@ -534,10 +560,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// section. The exclusive section reads the stored P&L and positions of
     /// every known account for the realized barrier, and holdings and market
     /// data of each account evaluated on a changed axis. The new settings
-    /// become visible only together with those sweeps. Under
-    /// [`FullSync`](crate::FullSync) the engine orders publication and the
-    /// sweeps after account-state writes in flight;
-    /// `f` runs before that, without holding writers back.
+    /// become visible only together with those sweeps. In every mode,
+    /// including [`FullSync`](crate::FullSync), the caller guarantees no other
+    /// engine call is in flight throughout this method, including `f`.
     ///
     /// # Errors
     ///
@@ -548,7 +573,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         f: impl FnOnce(&mut SpotFundsSettings) -> Result<(), Error>,
     ) -> Result<AccountBlockOutcomes, ConfigureError> {
         #[cfg(debug_assertions)]
-        let _call = self.inner.config_registry.engine_calls.enter();
+        let _call = self.inner.config_registry.engine_calls.enter_exclusive();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         match self.registry().entry(name)? {
             ConfigEntry::SpotFunds {
                 settings,
@@ -564,14 +590,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                 >::from_inner(
                     self.inner.account_groups.clone()
                 );
-                // `f` runs before the state transition and holds no writer
-                // back. State writers must not see the new settings before the
-                // barrier sweep has run, so publication and the sweep share
-                // the transition. Lock order: the settings mutex, then the
-                // state transition. Under the transition, the realized sweep
-                // reads stored P&L and positions of every known account;
-                // changed axes read evaluated accounts' holdings and market
-                // data.
+                // The caller keeps this entire call exclusive, including
+                // preparation, publication and both account sweeps.
                 let prepared =
                     prepare_serialized_transition(transition, settings, f).map_err(|error| {
                         ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
@@ -649,12 +669,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                         }
                     }
                 };
-                self.inner
-                    .account_currencies
-                    .with_state_transition(|| prepared.publish::<Error>(observe))
-                    .map_err(|error| {
-                        ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
-                    })?;
+                prepared.publish::<Error>(observe).map_err(|error| {
+                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
+                })?;
                 Ok(AccountBlockOutcomes { account_blocks })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
@@ -712,10 +729,11 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ) -> Result<PolicyConfigurationResult, ConfigureError> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         match self.registry().entry(name)? {
             ConfigEntry::SpotFunds { .. } => {
                 let policy = self.pre_trade_policy(name)?;
-                self.inner.account_currencies.with_state_writer(|| {
+                {
                     let account_groups = AccountGroupsHandle::<
                         <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,
                     >::from_inner(
@@ -738,7 +756,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                             .block_account(account, block.clone());
                     }
                     Ok(result)
-                })
+                }
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
                 name, entry,
@@ -760,6 +778,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ) -> Result<(), ConfigureError> {
         #[cfg(debug_assertions)]
         let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
         match self.registry().entry(name)? {
             ConfigEntry::OrderSizeLimit(cell) => cell
                 .update(f)

@@ -191,23 +191,26 @@ impl MarketDataSync for EngineLocking {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Runtime selector for the engine's storage synchronization policy.
+///
+/// In every mode, including Full, account-group membership, all account/group
+/// currency setters and clearers (including default/global currency), Spot Funds
+/// retunes and account retirement are caller-exclusive. The caller ensures no
+/// other engine call is in flight for the entire operation; the engine adds no
+/// synchronization for these transitions.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SyncMode {
     /// The handle stays on the OS thread that created it. Use this for
     /// single-threaded embeddings where synchronization overhead must be zero.
     None = 0,
-    /// Concurrent invocation of public methods on the same handle is safe.
+    /// Concurrent invocation of ordinary public methods on the same handle is safe.
     /// Sequential cross-thread access is also safe. Use this when the engine
     /// is shared across threads.
     Full = 1,
-    /// Calls for distinct accounts may run concurrently on the same handle;
+    /// Ordinary calls for distinct accounts may run concurrently on the same handle;
     /// the caller pins each account to a single processing chain (one queue
     /// or one worker at a time), so calls for one account never overlap.
-    /// Exclusive operations - account-group membership, group currency, the
-    /// Spot Funds retune and account retirement - run with no other call on
-    /// the handle in flight; the engine takes no lock for them, so ordinary
-    /// calls pay nothing.
+    /// The all-mode caller-exclusive preconditions above still apply.
     Account = 2,
 }
 
@@ -263,6 +266,23 @@ pub struct StorageLockingPolicy {
     inner: PolicyImpl,
 }
 
+/// First-use storage value using the selected runtime synchronization mode.
+pub enum StorageOnceValue<T> {
+    /// None and account modes rely on their existing serialized observer contract.
+    Local(std::cell::OnceCell<T>),
+    /// Full mode permits concurrent initialization and observation.
+    Full(std::sync::OnceLock<T>),
+}
+
+impl<T> openpit::storage::OnceValue<T> for StorageOnceValue<T> {
+    fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T {
+        match self {
+            Self::Local(cell) => cell.get_or_init(initialize),
+            Self::Full(cell) => cell.get_or_init(initialize),
+        }
+    }
+}
+
 // SAFETY: every variant delegates to a primitive that itself upholds
 // `LockingPolicy`'s invariants:
 // - Full: built-in `FullLockingPolicy` (two `parking_lot::RwLock`s).
@@ -272,6 +292,17 @@ pub struct StorageLockingPolicy {
 //   on the index; values are left to the upstream contract described
 //   on `SyncMode::Account`).
 unsafe impl LockingPolicy for StorageLockingPolicy {
+    type OnceValue<T> = StorageOnceValue<T>;
+
+    fn new_once_value<T>(&self) -> Self::OnceValue<T> {
+        match &self.inner {
+            PolicyImpl::Local | PolicyImpl::Account(_) => {
+                StorageOnceValue::Local(std::cell::OnceCell::new())
+            }
+            PolicyImpl::Full(_) => StorageOnceValue::Full(std::sync::OnceLock::new()),
+        }
+    }
+
     type IndexSharedGuard<'a> = IndexSharedGuard<'a>;
     type IndexExclusiveGuard<'a> = IndexExclusiveGuard<'a>;
     type ValuesSharedGuard<'a> = ValuesSharedGuard<'a>;
@@ -343,10 +374,6 @@ impl LockingPolicyFactory for StorageLockingPolicyFactory {
         StorageLockingPolicy { inner }
     }
 
-    fn serializes_state_transitions(&self) -> bool {
-        self.mode == SyncMode::Full
-    }
-
     fn new_config<T: Clone + 'static>(value: T) -> ArcSwapConfigCell<T> {
         <ArcSwapConfigCell<T> as openpit::storage::ConfigCell<T>>::new(value)
     }
@@ -389,6 +416,31 @@ mod tests {
             .sync(EngineLocking::new(mode))
             .pre_trade(OrderValidationPolicy::new())
             .build()
+    }
+
+    #[test]
+    fn once_values_follow_the_runtime_policy_without_local_readiness_sync() {
+        use openpit::storage::{LockingPolicy, LockingPolicyFactory, OnceValue};
+        for mode in [SyncMode::None, SyncMode::Account, SyncMode::Full] {
+            let policy = super::StorageLockingPolicyFactory { mode }.create_policy();
+            let cell = policy.new_once_value::<usize>();
+            assert_eq!(
+                matches!(cell, super::StorageOnceValue::Full(_)),
+                matches!(mode, SyncMode::Full),
+                "only Full may select a synchronized readiness cell"
+            );
+            let calls = std::cell::Cell::new(0);
+            for _ in 0..2 {
+                assert_eq!(
+                    *cell.get_or_init(|| {
+                        calls.set(calls.get() + 1);
+                        42
+                    }),
+                    42
+                );
+            }
+            assert_eq!(calls.get(), 1);
+        }
     }
 
     #[test]

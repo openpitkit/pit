@@ -21,7 +21,7 @@
 use crate::core::mutation::AccountPnlReconciliation;
 use crate::core::mutation::MutationRollbackResult;
 use crate::core::sync_mode::SyncMode;
-use crate::core::{AccountControl, AccountStateSnapshot, Accounts};
+use crate::core::{AccountControl, OperationSnapshot};
 use crate::marketdata::MarketDataSync;
 use crate::param::{AccountId, PositionSize, Price};
 use crate::pretrade::holdings::{Holdings, PositionPnlState};
@@ -150,9 +150,7 @@ where
         rollback: AccountPnlAssertionRollback<
             <Sync as SyncMode>::StorageLockingPolicyFactory,
         >,
-        state_snapshot: AccountStateSnapshot<
-            <Sync as SyncMode>::StorageLockingPolicyFactory,
-        >,
+        state_snapshot: OperationSnapshot<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     ) where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
@@ -166,118 +164,115 @@ where
         } = rollback;
         let commit_pnl = self.pnl.clone();
         let rollback_pnl = self.pnl.clone();
-        let commit_state_snapshot = state_snapshot.clone();
         let settings = self.settings.clone();
         mutations.push(Mutation::new_reporting_with_guard(
             move || {
-                commit_state_snapshot.with_rollback(|_, _| {
-                    commit_pnl.with_mut_if_present(&account_id, |entry| {
-                        if entry.assertion_token == Some(token) {
-                            entry.assertion_token = None;
-                        }
-                    });
+                commit_pnl.with_mut_if_present(&account_id, |entry| {
+                    if entry.assertion_token == Some(token) {
+                        entry.assertion_token = None;
+                    }
                 });
                 true
             },
             move || {
-                state_snapshot.with_rollback(|current_group, current_currency| {
-                    #[cfg(test)]
-                    let mut reconciliation = None;
-                    let (final_state, final_provenance) =
-                        rollback_pnl.with_mut(account_id, AccountPnlEntry::zero, |entry, _| {
-                            if entry.assertion_token != Some(token) {
-                                return (entry.state, entry.assertion_token);
-                            }
-
-                            let restored = match (previous.state, asserted, entry.state) {
-                                (
-                                    PnlState::Value(previous_value),
-                                    PnlState::Value(asserted_value),
-                                    PnlState::Value(current_value),
-                                ) => current_value
-                                    .checked_sub(asserted_value)
-                                    .and_then(|delta| delta.checked_add(previous_value))
-                                    .map(PnlState::Value)
-                                    .unwrap_or(PnlState::Halted(
-                                        crate::PnlHaltReason::ArithmeticOverflow,
-                                    )),
-                                (
-                                    PnlState::Halted(_),
-                                    PnlState::Value(asserted_value),
-                                    PnlState::Value(current_value),
-                                ) => {
-                                    #[cfg(test)]
-                                    {
-                                        reconciliation = Some(AccountPnlReconciliation {
-                                            account_id,
-                                            discarded_delta: current_value
-                                                .checked_sub(asserted_value)
-                                                .ok(),
-                                        });
-                                    }
-                                    #[cfg(not(test))]
-                                    let _ = (asserted_value, current_value);
-                                    previous.state
-                                }
-                                // A rejected halt assertion cannot accept numeric
-                                // deltas. Restoring the prior entry is exact.
-                                (_, PnlState::Halted(_), _)
-                                | (_, PnlState::Value(_), PnlState::Halted(_)) => previous.state,
-                            };
-                            *entry = AccountPnlEntry {
-                                state: restored,
-                                assertion_token: previous.assertion_token,
-                            };
-                            (restored, previous.assertion_token)
-                        });
-
-                    #[cfg(test)]
-                    let mut result = MutationRollbackResult::default();
-                    #[cfg(not(test))]
-                    let result = MutationRollbackResult::default();
-                    if let Some(control) = &account_control {
-                        let invalidated = control.invalidate_provenance(token);
-                        #[cfg(test)]
-                        if let Some(block) = invalidated {
-                            result.report.invalidated_account_blocks.push(block);
+                #[cfg(test)]
+                let mut reconciliation = None;
+                let (final_state, final_provenance) =
+                    rollback_pnl.with_mut(account_id, AccountPnlEntry::zero, |entry, _| {
+                        if entry.assertion_token != Some(token) {
+                            return (entry.state, entry.assertion_token);
                         }
-                        #[cfg(not(test))]
-                        drop(invalidated);
-                    }
-                    let current_barrier = settings.with(|settings| {
-                        settings
-                            .pnl_barrier_for(account_id, current_group, current_currency.as_ref())
-                            .cloned()
-                    });
-                    if let Some(barrier) = current_barrier.as_ref() {
-                        if let Some(block) = account_pnl_block_for_state(
-                            current_currency.as_ref(),
-                            final_state,
-                            barrier,
-                            final_provenance,
-                        ) {
-                            #[cfg(test)]
-                            match &account_control {
-                                Some(control) => {
-                                    result.report.account_blocks.push(block.clone());
-                                    control.block(block);
+
+                        let restored = match (previous.state, asserted, entry.state) {
+                            (
+                                PnlState::Value(previous_value),
+                                PnlState::Value(asserted_value),
+                                PnlState::Value(current_value),
+                            ) => current_value
+                                .checked_sub(asserted_value)
+                                .and_then(|delta| delta.checked_add(previous_value))
+                                .map(PnlState::Value)
+                                .unwrap_or(PnlState::Halted(
+                                    crate::PnlHaltReason::ArithmeticOverflow,
+                                )),
+                            (
+                                PnlState::Halted(_),
+                                PnlState::Value(asserted_value),
+                                PnlState::Value(current_value),
+                            ) => {
+                                #[cfg(test)]
+                                {
+                                    reconciliation = Some(AccountPnlReconciliation {
+                                        account_id,
+                                        discarded_delta: current_value
+                                            .checked_sub(asserted_value)
+                                            .ok(),
+                                    });
                                 }
-                                None => {
-                                    result.report.account_blocks.push(block);
-                                }
+                                #[cfg(not(test))]
+                                let _ = (asserted_value, current_value);
+                                previous.state
                             }
-                            #[cfg(not(test))]
-                            if let Some(control) = &account_control {
+                            // A rejected halt assertion cannot accept numeric
+                            // deltas. Restoring the prior entry is exact.
+                            (_, PnlState::Halted(_), _)
+                            | (_, PnlState::Value(_), PnlState::Halted(_)) => previous.state,
+                        };
+                        *entry = AccountPnlEntry {
+                            state: restored,
+                            assertion_token: previous.assertion_token,
+                        };
+                        (restored, previous.assertion_token)
+                    });
+
+                #[cfg(test)]
+                let mut result = MutationRollbackResult::default();
+                #[cfg(not(test))]
+                let result = MutationRollbackResult::default();
+                if let Some(control) = &account_control {
+                    let invalidated = control.invalidate_provenance(token);
+                    #[cfg(test)]
+                    if let Some(block) = invalidated {
+                        result.report.invalidated_account_blocks.push(block);
+                    }
+                    #[cfg(not(test))]
+                    drop(invalidated);
+                }
+                let current_group = state_snapshot.account_group();
+                let current_currency = state_snapshot.account_currency();
+                let current_barrier = settings.with(|settings| {
+                    settings
+                        .pnl_barrier_for(account_id, current_group, current_currency.as_ref())
+                        .cloned()
+                });
+                if let Some(barrier) = current_barrier.as_ref() {
+                    if let Some(block) = account_pnl_block_for_state(
+                        current_currency.as_ref(),
+                        final_state,
+                        barrier,
+                        final_provenance,
+                    ) {
+                        #[cfg(test)]
+                        match &account_control {
+                            Some(control) => {
+                                result.report.account_blocks.push(block.clone());
                                 control.block(block);
                             }
+                            None => {
+                                result.report.account_blocks.push(block);
+                            }
+                        }
+                        #[cfg(not(test))]
+                        if let Some(control) = &account_control {
+                            control.block(block);
                         }
                     }
-                    #[cfg(test)]
-                    if let Some(reconciliation) = reconciliation {
-                        result.report.reconciliations.push(reconciliation);
-                    }
-                    result
-                })
+                }
+                #[cfg(test)]
+                if let Some(reconciliation) = reconciliation {
+                    result.report.reconciliations.push(reconciliation);
+                }
+                result
             },
             lease,
         ));
@@ -299,9 +294,6 @@ where
         &self,
         mutations: &mut Mutations,
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
-        state_accounts: Option<
-            Accounts<<Sync as SyncMode>::StorageLockingPolicyFactory>,
-        >,
         key: HoldingsKey,
         amounts: (PositionSize, PositionSize),
         active_mutation: ActiveHoldingsMutationGuard<
@@ -356,12 +348,7 @@ where
                         holdings_arc.remove_if_zero(&key_for_remove);
                     }
                 };
-                match state_accounts.as_ref() {
-                    Some(accounts) => {
-                        accounts.with_state_rollback(rollback);
-                    }
-                    None => rollback(),
-                }
+                rollback();
             },
             active_mutation,
         ));
@@ -373,9 +360,6 @@ where
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
         key: HoldingsKey,
         rollback: AdjustmentRollback,
-        state_snapshot: AccountStateSnapshot<
-            <Sync as SyncMode>::StorageLockingPolicyFactory,
-        >,
         active_mutation: ActiveHoldingsMutationGuard<
             <Sync as SyncMode>::StorageLockingPolicyFactory,
         >,
@@ -398,51 +382,48 @@ where
             // hold-rollback comment for the underlying reason.
             || {},
             move || {
-                state_snapshot.with_rollback(|_, _| {
-                    // Apply the inverse of the forward delta to whatever the
-                    // slot holds right now, so concurrent changes by other
-                    // threads are not overwritten. `with_mut` (not
-                    // `with_mut_if_present`) is used here because the
-                    // adjustment may have produced a zero result and pruned
-                    // the entry.
-                    let key_for_remove = key.clone();
-                    let asset_for_diagnostic = key.1.clone();
-                    let became_zero = holdings_arc.with_mut(key, Holdings::zero, |slot, _| {
-                        let current_before_rollback = *slot;
-                        match slot.apply_delta_rollback(available_delta, held_delta, incoming_delta)
-                        {
-                            Ok(rolled_back) => {
-                                let restored = restore_adjusted_snapshots(
-                                    current_before_rollback,
-                                    asserted,
-                                    rolled_back,
-                                    prior_avg,
-                                    prior_realized,
-                                );
-                                *slot = restored;
-                                restored.is_zero()
-                            }
-                            // Overflow during rollback is practically
-                            // unreachable for real balances. The slot is left
-                            // unchanged and the account is blocked so the
-                            // failure is visible end to end.
-                            Err(_) => {
-                                record_rollback_overflow(&account_control, || {
-                                    format!(
-                                        "adjustment rollback overflow: asset \
+                // Apply the inverse of the forward delta to whatever the
+                // slot holds right now, so concurrent changes by other
+                // threads are not overwritten. `with_mut` (not
+                // `with_mut_if_present`) is used here because the
+                // adjustment may have produced a zero result and pruned
+                // the entry.
+                let key_for_remove = key.clone();
+                let asset_for_diagnostic = key.1.clone();
+                let became_zero = holdings_arc.with_mut(key, Holdings::zero, |slot, _| {
+                    let current_before_rollback = *slot;
+                    match slot.apply_delta_rollback(available_delta, held_delta, incoming_delta) {
+                        Ok(rolled_back) => {
+                            let restored = restore_adjusted_snapshots(
+                                current_before_rollback,
+                                asserted,
+                                rolled_back,
+                                prior_avg,
+                                prior_realized,
+                            );
+                            *slot = restored;
+                            restored.is_zero()
+                        }
+                        // Overflow during rollback is practically
+                        // unreachable for real balances. The slot is left
+                        // unchanged and the account is blocked so the
+                        // failure is visible end to end.
+                        Err(_) => {
+                            record_rollback_overflow(&account_control, || {
+                                format!(
+                                    "adjustment rollback overflow: asset \
                                          {asset_for_diagnostic}, available_delta \
                                          {available_delta}, held_delta {held_delta}, \
                                          incoming_delta {incoming_delta}, slot {slot:?}",
-                                    )
-                                });
-                                slot.is_zero()
-                            }
+                                )
+                            });
+                            slot.is_zero()
                         }
-                    });
-                    if became_zero {
-                        holdings_arc.remove_if_zero(&key_for_remove);
                     }
                 });
+                if became_zero {
+                    holdings_arc.remove_if_zero(&key_for_remove);
+                }
             },
             active_mutation,
         ));

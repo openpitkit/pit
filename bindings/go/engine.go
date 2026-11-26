@@ -22,13 +22,14 @@
 // that invoked it. The engine handle's threading capability depends on the sync
 // policy selected at builder time:
 //
-//   - FullSync - concurrent invocation of public methods on the same handle is
+//   - FullSync - concurrent invocation of ordinary methods on the same handle is
 //     safe. Sequential cross-thread invocation is also safe.
 //   - NoSync - the handle must stay on the OS thread that created the engine.
-//   - AccountSync - concurrent invocation on the same handle is safe when the
+//   - AccountSync - concurrent ordinary invocation on the same handle is safe when the
 //     caller pins each account to a single chain (one queue or one worker at a
 //     time), so calls for the same account are never concurrent. The
-//     exclusive operations - account-group membership, group currency, the
+//     exclusive operations - account-group membership, every account/group
+//     currency setter and clearer, the
 //     SpotFunds retune, and account retirement - run with no other call on
 //     the handle in flight; the engine takes no lock for them. Custom policy
 //     hooks for distinct accounts may run concurrently, so a custom policy
@@ -37,8 +38,9 @@
 //     AsyncEngine.Exclusive for the exclusive operations; see
 //     AccountSyncReadyEngineBuilder.BuildAsync.
 //
-// Under NoSync the exclusive operations need nothing extra; under FullSync
-// the engine orders them after the account-state writes already in flight.
+// In every mode, including FullSync, the caller runs membership, retirement,
+// SpotFunds retunes and all currency setters/clearers with no other engine
+// call in flight. Debug builds detect overlap; release builds do not wait.
 //
 // Goroutine migration between OS threads during one SDK call is supported.
 // Callbacks invoked by the SDK back into Go may run on a different OS thread
@@ -343,7 +345,7 @@ func (e *Engine) ApplyAccountAdjustment(
 //
 // Finalize or close every request, reservation, and drop-copy operation for
 // this account first, and submit no new work for it. This is an exclusive
-// operation: under NoSync and AccountSync no other call on the engine may be
+// operation: in every mode, including FullSync, no other engine call may be
 // in flight, as asyncengine.AsyncEngine.Exclusive ensures; retire several
 // accounts in one exclusive stretch. A pending unexecuted request can be
 // invisible to this call; executing it later acts on the account as new and,

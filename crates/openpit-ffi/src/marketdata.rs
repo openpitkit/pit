@@ -1184,6 +1184,9 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
 
 /// Reads the latest quote for `(instrument_id, account_id)` under the given
 /// resolution.
+/// Policy callbacks supply their context's snapshotted account/group instead
+/// of reading public registries again; repeated pair/resolution queries share
+/// one result for this engine call.
 ///
 /// `resolve_account_group` is a **required** callback that supplies the reading
 /// account's group **lazily** - it is invoked only when the resolution mode

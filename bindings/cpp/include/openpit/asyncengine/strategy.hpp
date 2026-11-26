@@ -79,9 +79,11 @@
 // every registered producer has left, which is a separate concern from waking
 // them: closing earlier would race a queue one of those producers is creating.
 //
-// EXCLUSIVE SECTIONS. A few engine operations change state that every account
-// reads, and under AccountSync the engine takes no lock for them: they must run
-// with nothing else in flight. `Strategy::Exclusive` provides that. It stops
+// EXCLUSIVE SECTIONS. Account-group membership, all account/group currency
+// setters and clearers (including default/global currency), and SpotFunds
+// retunes are caller-exclusive in every mode, including FullSync: no other
+// engine call may be in flight for the entire operation. `Strategy::Exclusive`
+// provides that. It stops
 // each lane with a barrier task queued behind the work the lane already
 // accepted, keeps off-lane handle releases out of the way, runs the caller's
 // callback on the calling thread, and then lets the lanes continue. Ordinary

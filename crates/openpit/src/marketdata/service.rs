@@ -170,6 +170,9 @@ impl InstrumentRegistry {
 /// read guard, so a read cannot combine state from opposite sides of a
 /// concurrent publication or TTL update.
 pub struct MarketDataService<Sync: MarketDataSync> {
+    /// Non-ZST allocation identifying this service across moves. A call cache
+    /// retains its mode-aware owner until all entries for the call are dropped.
+    pub(crate) cache_identity: Sync::Shared<u8>,
     /// Service-wide default quote lifetime (cascade tier 8); `None` means
     /// infinite.
     pub(crate) default_ttl: Option<Duration>,
@@ -651,6 +654,9 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     /// Returns the latest quote for `(instrument_id, account_id)` under
     /// `resolution`, distinguishing unknown instruments, unavailable quotes,
     /// and expired selected quotes.
+    /// Policy callbacks use the context's snapshotted account/group; quotes are
+    /// shared per pair, account and resolution in this service for one engine
+    /// call, and refreshed at execute entry.
     ///
     /// Quote selection walks the buckets the `resolution` permits (per-account,
     /// then the account's group, then the default group), stopping at the first
@@ -673,42 +679,50 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         account_info: &impl AccountInfo,
         resolution: QuoteResolution,
     ) -> Result<Quote, MarketDataError> {
-        let slot_idx = {
-            let guard = self.registry.read();
-            match guard.by_id.get(&instrument_id).copied() {
-                Some(idx) => idx,
-                None => return Err(MarketDataError::UnknownInstrument),
-            }
-        };
-        let guard = self.slots.read();
-        let slot = guard
-            .get(slot_idx as usize)
-            .ok_or(MarketDataError::QuoteUnavailable)?;
-
-        // A single memoized group resolution shared by quote selection and the
-        // TTL cascade, so `account_info.group()` runs at most once per read.
-        let mut group_cell: Option<Option<AccountGroupId>> = None;
-
-        let state = slot.state.read();
-        let selected = select_quote(
-            &state.quotes,
+        crate::pretrade::start_pre_trade_time::cached_quote(
+            &self.cache_identity,
+            instrument_id,
             account_id,
-            account_info,
             resolution,
-            &mut group_cell,
+            || {
+                let slot_idx = {
+                    let guard = self.registry.read();
+                    match guard.by_id.get(&instrument_id).copied() {
+                        Some(idx) => idx,
+                        None => return Err(MarketDataError::UnknownInstrument),
+                    }
+                };
+                let guard = self.slots.read();
+                let slot = guard
+                    .get(slot_idx as usize)
+                    .ok_or(MarketDataError::QuoteUnavailable)?;
+
+                // A single memoized group resolution shared by quote selection and the
+                // TTL cascade, so `account_info.group()` runs at most once per read.
+                let mut group_cell: Option<Option<AccountGroupId>> = None;
+
+                let state = slot.state.read();
+                let selected = select_quote(
+                    &state.quotes,
+                    account_id,
+                    account_info,
+                    resolution,
+                    &mut group_cell,
+                )
+                .ok_or(MarketDataError::QuoteUnavailable)?;
+                let effective_ttl =
+                    self.effective_ttl(&state.ttls, account_id, account_info, &mut group_cell);
+                if let Some(ttl) = effective_ttl {
+                    let effective_age = Instant::now()
+                        .saturating_duration_since(selected.pushed_at)
+                        .saturating_add(selected.source_age);
+                    if effective_age >= ttl {
+                        return Err(MarketDataError::QuoteExpired(selected.quote));
+                    }
+                }
+                Ok(selected.quote)
+            },
         )
-        .ok_or(MarketDataError::QuoteUnavailable)?;
-        let effective_ttl =
-            self.effective_ttl(&state.ttls, account_id, account_info, &mut group_cell);
-        if let Some(ttl) = effective_ttl {
-            let effective_age = Instant::now()
-                .saturating_duration_since(selected.pushed_at)
-                .saturating_add(selected.source_age);
-            if effective_age >= ttl {
-                return Err(MarketDataError::QuoteExpired(selected.quote));
-            }
-        }
-        Ok(selected.quote)
     }
 
     /// Walks the TTL cascade for `(slot, account_id, group)` and returns the
@@ -768,7 +782,11 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
 
     /// Resolves an `Instrument` to its `InstrumentId`, if registered by name.
     pub fn resolve(&self, instrument: &Instrument) -> Option<InstrumentId> {
-        self.registry.read().by_instrument.get(instrument).copied()
+        crate::pretrade::start_pre_trade_time::cached_instrument(
+            &self.cache_identity,
+            instrument,
+            || self.registry.read().by_instrument.get(instrument).copied(),
+        )
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────

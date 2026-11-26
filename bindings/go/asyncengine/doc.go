@@ -37,13 +37,22 @@
 //
 // # Exclusive Operations
 //
-// Account-group membership, group currency, the SpotFunds retune, and account
+// Account-group membership, every account/group currency setter and clearer,
+// the SpotFunds retune, and account
 // retirement change state that every account reads, and under AccountSync the
-// engine takes no lock for them. They have no lane of their own: run them
+// engine takes no lock for them. An account lane does not make them exclusive: run them
 // through the Driver that Exclusive hands its callback, while every lane is
 // stopped. Ordinary tasks pay nothing for this; a section stops each lane with
 // a barrier behind every task whose Submit returned before the section began;
 // a Submit still in flight may land on either side.
+//
+// ChainBuilder.SetAccountCurrency and ClearAccountCurrency retain their account
+// queue API. The caller first excludes other new engine calls, then waits for
+// already accepted work to finish. Submit and run the currency chain while
+// keeping other calls excluded until completion, then reopen admission. A
+// point-in-time idle check is insufficient. Never run Chain.Run inside an
+// Exclusive callback: the chain waits on lanes stopped by that callback. Use
+// the supplied Driver's setters directly there, or own a quiet window externally.
 //
 // All public methods accept a context. The context controls how long the
 // caller is willing to wait for the task to be queued. Once a task is

@@ -33,6 +33,60 @@ where
     StorageBuilder::new(Factory::default()).create_for_bound_key::<u32, String>()
 }
 
+#[test]
+fn once_values_use_the_native_policy_primitive() {
+    use super::LockingPolicy;
+    use std::any::{type_name, type_name_of_val};
+
+    let local = NoLocking.create_policy().new_once_value::<u8>();
+    let account = IndexLocking::<AnyKey>::default()
+        .create_policy()
+        .new_once_value::<u8>();
+    let full = FullLocking.create_policy().new_once_value::<u8>();
+    assert_eq!(
+        type_name_of_val(&local),
+        type_name::<std::cell::OnceCell<u8>>(),
+        "NoLock must not add readiness synchronization"
+    );
+    assert_eq!(
+        type_name_of_val(&account),
+        type_name::<std::cell::OnceCell<u8>>(),
+        "Account must retain its serialized-observer local cell"
+    );
+    assert_eq!(
+        type_name_of_val(&full),
+        type_name::<std::sync::OnceLock<u8>>(),
+        "Full must support concurrent first initialization"
+    );
+}
+
+#[test]
+fn full_once_value_initializes_exactly_once_under_concurrent_reads() {
+    use super::{LockingPolicy, OnceValue};
+    let cell = FullLocking.create_policy().new_once_value::<usize>();
+    let calls = AtomicUsize::new(0);
+    let ready = std::sync::Barrier::new(8);
+    thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| {
+                ready.wait();
+                assert_eq!(
+                    *OnceValue::get_or_init(&cell, || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        42
+                    }),
+                    42
+                );
+            });
+        }
+    });
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "all concurrent readers must share one initializer"
+    );
+}
+
 fn smoke_with_with_mut_remove<LockingPolicy>(storage: Storage<u32, String, LockingPolicy>)
 where
     LockingPolicy: super::LockingPolicy,

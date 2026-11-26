@@ -124,6 +124,19 @@ class Result {
 
 class PostTradeContext {
  public:
+  // The account read once from the report at engine entry.
+  // Throws openpit::Error when the account could not be read.
+  [[nodiscard]] ::openpit::param::AccountId AccountId() const {
+    OpenPitParamAccountId account = 0;
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_post_trade_context_get_account_id(m_native, &account,
+                                                   &error)) {
+      ::openpit::detail::ThrowFromSharedString(
+          error, "operation account is unreadable");
+    }
+    return ::openpit::detail::FromNative<::openpit::param::AccountId>(account);
+  }
+
   PostTradeContext(const PostTradeContext&) = delete;
   PostTradeContext& operator=(const PostTradeContext&) = delete;
   PostTradeContext(PostTradeContext&&) = delete;

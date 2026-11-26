@@ -69,13 +69,15 @@
 // AccountSync invariant across the start->execute->finalize boundary.
 //
 // EXCLUSIVE OPERATIONS. Account-group membership (`RegisterGroup`,
-// `UnregisterGroup`), group currency (`SetGroupCurrency`,
-// `ClearGroupCurrency`), and the SpotFunds retune (the `Configurator` methods
-// `SpotFunds`, `SpotFundsPnlBoundsKillSwitch`, `SpotFundsGlobalLimitMode`,
-// `SpotFundsAccountLimitMode`, `SpotFundsPositionLimit`, and
-// `SpotFundsAccountGroupLimitMode`) change state that every account reads.
-// They have no queue of their own: run them through the driver that
-// `Exclusive` hands its callback, while every lane is stopped.
+// `UnregisterGroup`), all account/group currency setters and clearers
+// (including default/global currency), and the SpotFunds retune (the
+// `Configurator` methods `SpotFunds`, `SpotFundsPnlBoundsKillSwitch`,
+// `SpotFundsGlobalLimitMode`, `SpotFundsAccountLimitMode`,
+// `SpotFundsPositionLimit`, and `SpotFundsAccountGroupLimitMode`) are
+// caller-exclusive in every mode, including FullSync. No other engine call may
+// be in flight for the entire operation. They have no queue of their own: run
+// them through the driver that `Exclusive` hands its callback, while every lane
+// is stopped.
 //
 // RESULT SHAPES. The futures carry the same values the synchronous engine
 // returns. Because `pretrade::Request`, `pretrade::Reservation`,
