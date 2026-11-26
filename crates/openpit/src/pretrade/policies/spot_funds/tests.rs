@@ -57,6 +57,7 @@ struct BlockingAdjustmentRejectPolicy {
     release: Arc<std::sync::Barrier>,
 }
 
+#[cfg(debug_assertions)]
 struct BlockingFirstAdjustmentPolicy {
     entered: Arc<std::sync::Barrier>,
     release: Arc<std::sync::Barrier>,
@@ -115,6 +116,7 @@ struct RejectSecondAdjustmentPolicy {
     calls: std::sync::atomic::AtomicUsize,
 }
 
+#[cfg(debug_assertions)]
 impl<AccountAdjustment> PreTradePolicy<TestOrder, TestReport, AccountAdjustment, FullSync>
     for BlockingFirstAdjustmentPolicy
 where

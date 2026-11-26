@@ -857,7 +857,6 @@ fn validate_bounds(
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::sync::{Arc, Barrier};
 
     use crate::core::{
         HasAccountId, HasAlreadyHeld, HasConfirmed, HasFee, HasInstrument, HasPnl, Instrument,
@@ -866,7 +865,7 @@ mod tests {
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
     use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope, RuleMode};
-    use crate::storage::{ConfigCell, FullLocking, NoLocking};
+    use crate::storage::{ConfigCell, NoLocking};
     use crate::RequestFieldAccessError;
 
     use super::{
@@ -1290,6 +1289,10 @@ mod tests {
     #[test]
     fn retirement_rejects_concurrent_report_and_configuration_in_debug() {
         use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::sync::{Arc, Barrier};
+
+        use crate::storage::FullLocking;
+
         struct ParkedRetirementPolicy {
             entered: Arc<Barrier>,
             release: Arc<Barrier>,
