@@ -14,6 +14,8 @@ For the Python API guide and reference, see [openpit.readthedocs.io](https://ope
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 
+Contact: [info@openpit.dev](mailto:info@openpit.dev).
+
 ## Versioning Policy (Pre‑1.0)
 
 Before the `1.0` release OpenPit follows a relaxed Semantic Versioning:

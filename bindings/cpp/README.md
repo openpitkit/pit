@@ -17,6 +17,8 @@ For the C++ API reference, see [the C++ API docs](https://docs.openpit.dev/cpp-a
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 
+Contact: [info@openpit.dev](mailto:info@openpit.dev).
+
 ## Versioning Policy (Pre-1.0)
 
 Before the `1.0` release OpenPit follows a relaxed Semantic Versioning:

@@ -155,6 +155,7 @@ constraints that tolerate API evolution during the pre-stable phase.
 
 ## Community And Support
 
+- Contact the project directly at [info@openpit.dev](mailto:info@openpit.dev).
 - Ask questions and discuss integration ideas in
   [GitHub Discussions](https://github.com/openpitkit/pit/discussions).
 - Report confirmed bugs and scoped feature requests in

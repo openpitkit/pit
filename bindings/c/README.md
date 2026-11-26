@@ -15,6 +15,8 @@ For full project documentation, see [the repository README](https://github.com/o
 For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 For the split C reference manual, see [the C API docs](https://docs.openpit.dev/c-api/).
 
+Contact: [info@openpit.dev](mailto:info@openpit.dev).
+
 ## Versioning Policy (Pre‑1.0)
 
 Before the `1.0` release OpenPit follows a relaxed Semantic Versioning:

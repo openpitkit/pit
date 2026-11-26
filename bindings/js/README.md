@@ -21,6 +21,8 @@ For full project documentation, see
 For conceptual and architectural pages, see
 [the project wiki](https://github.com/openpitkit/pit/wiki).
 
+Contact: [info@openpit.dev](mailto:info@openpit.dev).
+
 ## Versioning Policy (Pre-1.0)
 
 Before the `1.0` release OpenPit follows a relaxed Semantic Versioning:
