@@ -2599,12 +2599,20 @@ struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
  * - `settlement_asset` must point to a valid string for the duration of the
  *   call.
  * - The array passed to the add function may contain multiple entries.
+ * - Each (settlement asset, mode) key may appear once per call; reject and
+ *   review barriers for the same settlement asset may coexist.
  */
 struct OpenPitPretradePoliciesPnlBoundsBarrier {
     /**
      * Settlement asset whose accumulated P&L is being monitored.
      */
     OpenPitStringView settlement_asset;
+    /**
+     * Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject, 2
+     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail the
+     * call.
+     */
+    OpenPitPretradeRuleMode mode;
     /**
      * Optional lower bound for accumulated P&L.
      */
@@ -2623,7 +2631,13 @@ struct OpenPitPretradePoliciesPnlBoundsBarrier {
  * - `initial_pnl` is pre-loaded into storage at construction; accumulation
  *   starts from this value.
  * - Both the broker barrier (if any) and this account+asset barrier are
- *   evaluated on every check; the order passes only if neither is breached.
+ *   evaluated on every check.
+ *
+ * Contract:
+ * - Each (account, settlement asset, mode) key may appear once per call;
+ *   reject and review barriers for the same account and asset may coexist.
+ * - Barriers of different modes for one (account, settlement asset) must
+ *   carry equal `initial_pnl` seeds.
  *
  * Passed to `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`
  * in the `account` array.
@@ -2637,6 +2651,12 @@ struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
      * Settlement asset whose accumulated P&L is being monitored.
      */
     OpenPitStringView settlement_asset;
+    /**
+     * Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject, 2
+     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail the
+     * call.
+     */
+    OpenPitPretradeRuleMode mode;
     /**
      * Optional lower bound for accumulated P&L for this account+asset pair.
      */
@@ -2657,6 +2677,10 @@ struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
  * Passed to `openpit_engine_configure_pnl_bounds_killswitch`. It intentionally
  * has no `initial_pnl`: runtime replacement preserves and evaluates the live
  * accumulated P&L.
+ *
+ * Contract:
+ * - Each (account, settlement asset, mode) key may appear once per call;
+ *   reject and review barriers for the same account and asset may coexist.
  */
 struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
     /**
@@ -2667,6 +2691,12 @@ struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
      * Settlement asset whose live accumulated P&L is monitored.
      */
     OpenPitStringView settlement_asset;
+    /**
+     * Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject, 2
+     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail the
+     * call.
+     */
+    OpenPitPretradeRuleMode mode;
     /**
      * Optional replacement lower bound.
      */
@@ -7657,6 +7687,20 @@ bool openpit_engine_builder_add_builtin_order_validation_policy(
 /**
  * Adds the built-in P&L bounds kill-switch policy to the engine builder.
  *
+ * Barrier keys include the mode: (settlement asset, mode) for broker barriers
+ * and (account, settlement asset, mode) for account barriers.
+ *
+ * When the policy is registered in Reject mode (the default), a Reject barrier
+ * breach rejects the order and blocks the account in pre-trade, and blocks the
+ * account on an execution report. In a review-mode registration, the same
+ * breach yields a pre-trade mark of the instance's mode for an unconfirmed
+ * order without blocking on either path. Review barrier breaches yield
+ * pre-trade marks for unconfirmed orders without blocking the account.
+ *
+ * A missing required order field rejects the order; a missing required
+ * execution-report field or P&L that cannot be computed blocks the account.
+ * Both apply in every mode, review modes included.
+ *
  * Contract:
  * - `builder` must be a valid engine builder pointer.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for
@@ -7674,6 +7718,8 @@ bool openpit_engine_builder_add_builtin_order_validation_policy(
  * Error:
  * - returns `false` when the builder is null or already consumed, when no
  *   barrier is configured, or when argument parsing fails;
+ * - an invalid mode, a duplicate (key, mode), or conflicting `initial_pnl`
+ *   seeds for one (account, settlement asset) also fail the call;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
  */
@@ -7696,6 +7742,9 @@ bool openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
  * settings setters. Runtime account barriers use a dedicated update DTO with
  * no `initial_pnl`; accumulated P&L is preserved.
  *
+ * See `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy` for
+ * how barrier breaches are handled.
+ *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
  * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
@@ -7710,6 +7759,9 @@ bool openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
  *   `account_len` entries at `account`.
  * - Each `settlement_asset` view must be valid for the duration of the call.
  * - A `has_*` flag set to `false` leaves that axis untouched.
+ * - Both 0 and 1 mean Reject. A mode above 3 or a duplicate (key, mode)
+ *   fails the whole call with `Validation` and leaves the previous barriers
+ *   in place.
  *
  * Success:
  * - returns `true`; the new barriers apply from the next check onward.

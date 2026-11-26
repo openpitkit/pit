@@ -26,6 +26,7 @@ import typing
 
 from .. import _enum, marketdata
 from .._openpit import OrderSizeLimit
+from ._enum import RuleMode
 
 if typing.TYPE_CHECKING:
     from .. import param
@@ -489,24 +490,52 @@ class PnlBoundsBrokerBarrier:
         settlement_asset: Settlement asset tracked by this barrier.
         lower_bound: Optional lower P&L bound (typically a negative loss limit).
         upper_bound: Optional upper P&L bound (typically a positive profit limit).
+        mode: Enforcement mode. Defaults to ``None``, which means
+            ``RuleMode.REJECT``. The exact strings ``"Reject"``,
+            ``"ReviewWithHold"``, and ``"ReviewWithoutHold"`` are also accepted.
 
     At least one of *lower_bound* or *upper_bound* must be provided.
+    The broker list accepts one barrier per (settlement asset, mode), so
+    Reject and review barriers for the same settlement asset can coexist.
+
+    Raises:
+        ValueError: If *mode* is invalid.
     """
 
     settlement_asset: param.Asset
     lower_bound: param.Pnl | None = None
     upper_bound: param.Pnl | None = None
+    mode: RuleMode | None = dataclasses.field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        mode = self.mode
+        if mode is None:
+            object.__setattr__(self, "mode", RuleMode.REJECT)
+            return
+
+        message = (
+            "PnlBoundsBrokerBarrier.mode must be 'Reject', 'ReviewWithHold', "
+            "or 'ReviewWithoutHold'"
+        )
+        if not issubclass(type(mode), str):
+            raise ValueError(message)
+        try:
+            parsed = RuleMode(str.__str__(mode))
+        except ValueError:
+            raise ValueError(f"{message}, got {str.__repr__(mode)}") from None
+        object.__setattr__(self, "mode", parsed)
 
 
 @dataclasses.dataclass(frozen=True)
 class PnlBoundsAccountAssetBarrier:
-    """Per-(account, settlement-asset) P&L bounds refinement.
+    """Per-(account, settlement asset, mode) P&L bounds refinement.
 
-    Pairs a :class:`PnlBoundsBrokerBarrier` (the settlement asset and bounds
-    configuration) with an account identity and a starting P&L.
+    The account list accepts one barrier per (account, settlement asset, mode).
+    Reject and review barriers for the same account and settlement asset can
+    coexist and must have equal *initial_pnl* values.
 
     Args:
-        barrier: Settlement asset and bounds for this account+asset barrier.
+        barrier: Settlement asset, bounds, and mode for this account barrier.
         account_id: Account this barrier applies to.
         initial_pnl: Starting accumulated P&L, consumed at construction only.
             Seeds P&L accrued before the engine started.
@@ -521,11 +550,12 @@ class PnlBoundsAccountAssetBarrier:
 class PnlBoundsAccountAssetBarrierUpdate:
     """Runtime replacement for a per-account P&L bounds barrier.
 
-    Runtime updates preserve the live accumulated P&L and cannot seed or reset
-    it.
+    Runtime updates preserve the live accumulated P&L. The account list accepts
+    one barrier per (account, settlement asset, mode), so Reject and review
+    barriers for the same account and settlement asset can coexist.
 
     Args:
-        barrier: Settlement asset and replacement bounds for this account.
+        barrier: Settlement asset, replacement bounds, and mode for this account.
         account_id: Account this replacement barrier applies to.
     """
 
@@ -539,6 +569,8 @@ class PnlBoundsKillswitchReadyBuilder:
     Obtain via :func:`build_pnl_bounds_killswitch` and one axis method.
     All axis methods return ``self`` for chaining.  Pass to
     ``SyncedEngineBuilder.builtin()`` or ``ReadyEngineBuilder.builtin()``.
+    ``builtin()`` raises ``ValueError`` for duplicate barrier keys or
+    conflicting initial P&L values.
     """
 
     def __init__(self) -> None:
@@ -590,6 +622,20 @@ class PnlBoundsKillswitchBuilder:
     Call :func:`build_pnl_bounds_killswitch` to obtain an instance, then
     call one of the axis methods to obtain a
     :class:`PnlBoundsKillswitchReadyBuilder`.
+
+    Broker barrier keys are (settlement asset, mode). Account barrier keys are
+    (account, settlement asset, mode).
+
+    With a Reject-mode registration (the default), a Reject barrier breach
+    rejects the order and blocks the account in pre-trade, and blocks it on an
+    execution report. With a review-mode registration, the breach yields a
+    pre-trade mark of the instance's mode for an unconfirmed order without
+    blocking on either path. Review barrier breaches yield pre-trade marks
+    for unconfirmed orders without blocking.
+
+    A missing required order field rejects the order. A missing required
+    execution-report field or P&L that cannot be computed blocks the account.
+    Both apply in every mode.
     """
 
     #: Registration name of the P&L bounds kill-switch policy. Pass to

@@ -45,6 +45,9 @@ import {
   OrderSizeAssetBarrier,
   OrderSizeLimit,
   type OrderSizeLimitInit,
+  PnlBoundsAccountAssetBarrier,
+  PnlBoundsAccountAssetBarrierUpdate,
+  PnlBoundsBrokerBarrier,
   SpotFundsPnlBoundsBarrier,
 } from "@openpit/engine/pretrade/policies";
 import { type AccountAdjustmentContext } from "@openpit/engine/accountadjustment";
@@ -163,6 +166,11 @@ buildOrderSizeLimit().assetBarriers([
 void emptyLimitInit;
 const rateLimitReady = buildRateLimit().assetBarriers([]);
 const pnlReady = buildPnlBoundsKillswitch().brokerBarriers([]);
+new PnlBoundsBrokerBarrier("USD", "-100", undefined, RuleMode.ReviewWithHold);
+new PnlBoundsAccountAssetBarrier(1n, "USD", "0", "-100", undefined, null);
+new PnlBoundsAccountAssetBarrierUpdate(1n, "USD", "-100", undefined, undefined);
+// @ts-expect-error - barrier modes use the exact RuleMode wire strings.
+new PnlBoundsBrokerBarrier("USD", "-100", undefined, "reject");
 const spotFundsBarrier = new SpotFundsPnlBoundsBarrier(
   "USD",
   "-100",

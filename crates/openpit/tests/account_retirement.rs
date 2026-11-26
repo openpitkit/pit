@@ -238,6 +238,7 @@ fn broker_rate_settings() -> RateLimitSettings {
 fn pnl_broker_settings() -> PnlBoundsKillSwitchSettings {
     PnlBoundsKillSwitchSettings::new(
         [PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: asset("USD"),
             lower_bound: Some(pnl("-100")),
             upper_bound: None,
@@ -607,6 +608,7 @@ fn retire_order_size_account_asset_limit_refuses_until_configuration_cleared() {
 fn retire_kill_switch_account_barrier_refuses_until_configuration_cleared() {
     let builder = Engine::builder::<OrderOperation, TestReport, TestAdjustment>().full_sync();
     let broker = PnlBoundsBrokerBarrier {
+        mode: openpit::pretrade::RuleMode::Reject,
         settlement_asset: asset("USD"),
         lower_bound: Some(pnl("-100")),
         upper_bound: None,

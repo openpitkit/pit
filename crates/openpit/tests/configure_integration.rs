@@ -954,10 +954,76 @@ fn build_pnl_engine_with_barriers(
 }
 
 #[test]
+fn configure_pnl_duplicate_account_rolls_back_both_barrier_lists() {
+    use openpit::pretrade::RuleMode;
+
+    let usd = Asset::new("USD").unwrap();
+    let broker = PnlBoundsBrokerBarrier {
+        settlement_asset: usd.clone(),
+        lower_bound: Some(Pnl::from_str("-1000").unwrap()),
+        upper_bound: None,
+        mode: RuleMode::Reject,
+    };
+    let account_barrier = PnlBoundsBrokerBarrier {
+        lower_bound: Some(Pnl::from_str("-100").unwrap()),
+        ..broker.clone()
+    };
+    let engine = build_pnl_engine_with_barriers(
+        [broker.clone()],
+        [PnlBoundsAccountAssetBarrier {
+            barrier: account_barrier,
+            account_id: AccountId::from_u64(1),
+            initial_pnl: Pnl::ZERO,
+        }],
+    );
+    let name = PnlBoundsKillSwitchPolicy::<FullLocking>::NAME;
+    let update = PnlBoundsAccountAssetBarrierUpdate {
+        barrier: PnlBoundsBrokerBarrier {
+            lower_bound: Some(Pnl::from_str("-200").unwrap()),
+            ..broker.clone()
+        },
+        account_id: AccountId::from_u64(1),
+    };
+    let error = engine
+        .configure()
+        .pnl_bounds_killswitch(name, |settings| {
+            settings.set_broker_barriers([PnlBoundsBrokerBarrier {
+                lower_bound: Some(Pnl::from_str("1").unwrap()),
+                ..broker
+            }])?;
+            settings.set_account_barriers([update.clone(), update])
+        })
+        .expect_err("duplicate account list must abort the combined update");
+    assert!(error.to_string().contains("duplicate account barrier"));
+    assert!(error.to_string().contains("Reject"));
+    assert!(
+        engine.start_pre_trade(order(2)).is_ok(),
+        "previous broker list must remain visible"
+    );
+    engine
+        .configure()
+        .set_account_pnl(
+            name,
+            AccountId::from_u64(1),
+            usd,
+            Pnl::from_str("-101").unwrap(),
+        )
+        .unwrap();
+    let rejects = engine
+        .start_pre_trade(order(1))
+        .expect_err("previous account list must remain visible");
+    assert_eq!(
+        rejects[0].reason,
+        "pnl kill switch triggered: account + asset barrier"
+    );
+}
+
+#[test]
 fn pnl_bounds_broker_breach_latches_account_block() {
     let usd = Asset::new("USD").expect("asset code must be valid");
     let engine = build_pnl_engine_with_barriers(
         [PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: usd.clone(),
             lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
             upper_bound: None,
@@ -1013,6 +1079,7 @@ fn pnl_bounds_account_asset_breach_latches_account_block() {
     let usd = Asset::new("USD").expect("asset code must be valid");
     let engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
         barrier: PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: usd.clone(),
             lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
             upper_bound: None,
@@ -1100,6 +1167,7 @@ fn drop_copy_blocking_matches_live_pre_trade() {
     let usd = Asset::new("USD").expect("asset code must be valid");
     let pnl_engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
         barrier: PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: usd.clone(),
             lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
             upper_bound: None,
@@ -1140,6 +1208,7 @@ fn configure_pnl_bounds_broker_barrier_added_at_runtime_triggers_reject() {
     // coverage and its orders pass freely.
     let engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
         barrier: PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: Asset::new("USD").expect("asset code must be valid"),
             lower_bound: Some(Pnl::from_str("-500").expect("pnl literal must be valid")),
             upper_bound: None,
@@ -1165,6 +1234,7 @@ fn configure_pnl_bounds_broker_barrier_added_at_runtime_triggers_reject() {
         .configure()
         .pnl_bounds_killswitch::<PnlBoundsKillSwitchPolicyError>(name, |settings| {
             settings.set_broker_barriers([PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: Asset::new("USD").expect("asset code must be valid"),
                 lower_bound: Some(Pnl::from_str("-1").expect("pnl literal must be valid")),
                 upper_bound: None,
@@ -1188,6 +1258,7 @@ fn configure_pnl_bounds_broker_barrier_added_at_runtime_triggers_reject() {
 fn configure_pnl_bounds_pre_barrier_accumulation_seen_by_new_account_asset_barrier() {
     let engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
         barrier: PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: Asset::new("USD").expect("asset code must be valid"),
             lower_bound: Some(Pnl::from_str("-500").expect("pnl literal must be valid")),
             upper_bound: None,
@@ -1209,6 +1280,7 @@ fn configure_pnl_bounds_pre_barrier_accumulation_seen_by_new_account_asset_barri
             settings.set_account_barriers([
                 PnlBoundsAccountAssetBarrierUpdate {
                     barrier: PnlBoundsBrokerBarrier {
+                        mode: openpit::pretrade::RuleMode::Reject,
                         settlement_asset: Asset::new("USD").expect("asset code must be valid"),
                         lower_bound: Some(
                             Pnl::from_str("-500").expect("pnl literal must be valid"),
@@ -1219,6 +1291,7 @@ fn configure_pnl_bounds_pre_barrier_accumulation_seen_by_new_account_asset_barri
                 },
                 PnlBoundsAccountAssetBarrierUpdate {
                     barrier: PnlBoundsBrokerBarrier {
+                        mode: openpit::pretrade::RuleMode::Reject,
                         settlement_asset: Asset::new("USD").expect("asset code must be valid"),
                         lower_bound: Some(
                             Pnl::from_str("-100").expect("pnl literal must be valid"),
@@ -1257,6 +1330,7 @@ fn configure_set_account_pnl_overrides_accumulated_pnl() {
     let engine = build_pnl_engine([
         PnlBoundsAccountAssetBarrier {
             barrier: PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: Asset::new("USD").expect("asset code must be valid"),
                 lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
                 upper_bound: None,
@@ -1266,6 +1340,7 @@ fn configure_set_account_pnl_overrides_accumulated_pnl() {
         },
         PnlBoundsAccountAssetBarrier {
             barrier: PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: Asset::new("USD").expect("asset code must be valid"),
                 lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
                 upper_bound: None,
@@ -1326,6 +1401,7 @@ fn configure_set_account_pnl_overrides_accumulated_pnl() {
 fn configure_set_account_pnl_creates_absent_entry() {
     let engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
         barrier: PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: Asset::new("USD").expect("asset code must be valid"),
             lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
             upper_bound: None,
@@ -1360,6 +1436,7 @@ fn configure_set_account_pnl_creates_absent_entry() {
 fn configure_set_account_pnl_unknown_policy_name_is_reported() {
     let engine = build_pnl_engine([PnlBoundsAccountAssetBarrier {
         barrier: PnlBoundsBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             settlement_asset: Asset::new("USD").expect("asset code must be valid"),
             lower_bound: Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
             upper_bound: None,

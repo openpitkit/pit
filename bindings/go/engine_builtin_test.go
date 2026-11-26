@@ -19,6 +19,7 @@ package openpit
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1117,6 +1118,344 @@ func TestBuiltinOrderSizeLimitRejectsDuplicateAssetKey(t *testing.T) {
 		"duplicate asset barrier for asset AAPL",
 	) {
 		t.Fatalf("Build() error = %v, want duplicate-asset error", err)
+	}
+}
+
+func TestBuiltinPnlBoundsKillSwitchBuildValidation(t *testing.T) {
+	usd := builtinTestAsset(t, "USD")
+	rejectBarrier := policies.PnlBoundsBrokerBarrier{
+		SettlementAsset: usd,
+		Mode:            reject.RuleModeReject,
+		LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+	}
+	reviewBarrier := rejectBarrier
+	reviewBarrier.Mode = reject.RuleModeReviewWithoutHold
+	unknownMode := rejectBarrier
+	unknownMode.Mode = reject.RuleMode(255)
+	accountBarrier := func(barrier policies.PnlBoundsBrokerBarrier, seed string) policies.PnlBoundsAccountAssetBarrier {
+		return policies.PnlBoundsAccountAssetBarrier{
+			Barrier:    barrier,
+			AccountID:  param.NewAccountIDFromUint64(1),
+			InitialPnl: pnlTestPnl(t, seed),
+		}
+	}
+	for _, test := range []struct {
+		name     string
+		brokers  []policies.PnlBoundsBrokerBarrier
+		accounts []policies.PnlBoundsAccountAssetBarrier
+		wantErr  string
+	}{
+		{name: "broker unknown mode", brokers: []policies.PnlBoundsBrokerBarrier{unknownMode}, wantErr: "mode"},
+		{name: "account unknown mode", accounts: []policies.PnlBoundsAccountAssetBarrier{accountBarrier(unknownMode, "0")}, wantErr: "mode"},
+		{name: "duplicate broker", brokers: []policies.PnlBoundsBrokerBarrier{rejectBarrier, rejectBarrier}, wantErr: "duplicate"},
+		{name: "different broker modes", brokers: []policies.PnlBoundsBrokerBarrier{rejectBarrier, reviewBarrier}},
+		{name: "duplicate account", accounts: []policies.PnlBoundsAccountAssetBarrier{accountBarrier(rejectBarrier, "0"), accountBarrier(rejectBarrier, "0")}, wantErr: "duplicate"},
+		{name: "conflicting seeds", accounts: []policies.PnlBoundsAccountAssetBarrier{accountBarrier(rejectBarrier, "0"), accountBarrier(reviewBarrier, "1")}, wantErr: "initial"},
+		{name: "equal seeds", accounts: []policies.PnlBoundsAccountAssetBarrier{accountBarrier(rejectBarrier, "0"), accountBarrier(reviewBarrier, "0")}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := NewEngineBuilder().NoSync().Builtin(
+				policies.BuildPnlBoundsKillSwitch().BrokerBarriers(test.brokers...).
+					AccountBarriers(test.accounts...),
+			).Build()
+			if err == nil {
+				defer engine.Stop()
+			}
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(strings.ToLower(err.Error()), test.wantErr) {
+					t.Fatalf("Build() error = %v, want %q", err, test.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Build() error = %v, want success", err)
+			}
+		})
+	}
+}
+
+func TestBuiltinPnlBoundsKillSwitchPreTradeModes(t *testing.T) {
+	for _, mode := range []reject.RuleMode{
+		reject.RuleModeReject,
+		reject.RuleModeReviewWithHold,
+		reject.RuleModeReviewWithoutHold,
+	} {
+		for _, axis := range []string{"broker", "account"} {
+			for _, source := range []string{"builder", "configurator"} {
+				t.Run(fmt.Sprintf("%d/%s/%s", mode, axis, source), func(t *testing.T) {
+					barrier := policies.PnlBoundsBrokerBarrier{
+						SettlementAsset: builtinTestAsset(t, "USD"),
+						Mode:            mode,
+						LowerBound:      optional.Some(pnlTestPnl(t, "100")),
+					}
+					initial := barrier
+					if source == "configurator" {
+						initial.Mode = reject.RuleModeReject
+						initial.LowerBound = optional.Some(pnlTestPnl(t, "-100"))
+					}
+					builder := policies.BuildPnlBoundsKillSwitch().BrokerBarriers()
+					if axis == "broker" {
+						builder.BrokerBarriers(initial)
+					} else {
+						builder.AccountBarriers(policies.PnlBoundsAccountAssetBarrier{
+							Barrier:    initial,
+							AccountID:  param.NewAccountIDFromUint64(1),
+							InitialPnl: pnlTestPnl(t, "0"),
+						})
+					}
+					engine, err := NewEngineBuilder().NoSync().Builtin(builder).Build()
+					if err != nil {
+						t.Fatalf("Build() error = %v", err)
+					}
+					defer engine.Stop()
+					if source == "configurator" {
+						var brokers []policies.PnlBoundsBrokerBarrier
+						var accounts []policies.PnlBoundsAccountAssetBarrierUpdate
+						if axis == "broker" {
+							brokers = []policies.PnlBoundsBrokerBarrier{barrier}
+						} else {
+							accounts = []policies.PnlBoundsAccountAssetBarrierUpdate{{
+								Barrier:   barrier,
+								AccountID: param.NewAccountIDFromUint64(1),
+							}}
+						}
+						if err := engine.Configure().PnlBoundsKillSwitch(
+							policies.PnlBoundsKillSwitchPolicyName, brokers, accounts,
+						); err != nil {
+							t.Fatalf("PnlBoundsKillSwitch() error = %v", err)
+						}
+					}
+					for attempt := 0; attempt < 2; attempt++ {
+						request, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1))
+						if err != nil {
+							t.Fatalf("StartPreTrade() error = %v", err)
+						}
+						if mode == reject.RuleModeReject {
+							wantCode := reject.CodePnlKillSwitchTriggered
+							if attempt > 0 {
+								wantCode = reject.CodeAccountBlocked
+							}
+							if len(rejects) != 1 || rejects[0].Code != wantCode {
+								t.Fatalf("attempt %d rejects = %v, want code %v", attempt, rejects, wantCode)
+							}
+							continue
+						}
+						if len(rejects) != 0 {
+							t.Fatalf("attempt %d rejects = %v, want no reject or account block", attempt, rejects)
+						}
+						reviews, err := request.Reviews()
+						request.Close()
+						if err != nil || len(reviews) != 1 || reviews[0].Mode != mode ||
+							reviews[0].Code != reject.CodePnlKillSwitchTriggered {
+							t.Fatalf("Reviews() = %v, %v, want one kill switch mark with mode %v", reviews, err, mode)
+						}
+					}
+					if mode == reject.RuleModeReject {
+						// Recover P&L to distinguish a persistent block from a new breach.
+						if err := engine.Configure().SetAccountPnl(
+							policies.PnlBoundsKillSwitchPolicyName,
+							param.NewAccountIDFromUint64(1), barrier.SettlementAsset,
+							pnlTestPnl(t, "200"),
+						); err != nil {
+							t.Fatalf("SetAccountPnl() error = %v", err)
+						}
+						_, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1))
+						if err != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeAccountBlocked {
+							t.Fatalf("recovered account rejects = %v, %v, want persistent block", rejects, err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestBuiltinPnlBoundsKillSwitchExecutionReportModes(t *testing.T) {
+	for _, mode := range []reject.RuleMode{
+		reject.RuleModeReject,
+		reject.RuleModeReviewWithHold,
+		reject.RuleModeReviewWithoutHold,
+	} {
+		for _, axis := range []string{"broker", "account"} {
+			t.Run(fmt.Sprintf("%d/%s", mode, axis), func(t *testing.T) {
+				barrier := policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: builtinTestAsset(t, "USD"),
+					Mode:            mode,
+					LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+				}
+				builder := policies.BuildPnlBoundsKillSwitch().BrokerBarriers()
+				if axis == "broker" {
+					builder.BrokerBarriers(barrier)
+				} else {
+					builder.AccountBarriers(policies.PnlBoundsAccountAssetBarrier{
+						Barrier:    barrier,
+						AccountID:  param.NewAccountIDFromUint64(1),
+						InitialPnl: pnlTestPnl(t, "0"),
+					})
+				}
+				engine, err := NewEngineBuilder().NoSync().Builtin(builder).Build()
+				if err != nil {
+					t.Fatalf("Build() error = %v", err)
+				}
+				defer engine.Stop()
+				result, err := engine.ApplyExecutionReport(pnlTestReport(t, 1, "AAPL", "USD", "-200"))
+				if err != nil {
+					t.Fatalf("ApplyExecutionReport() error = %v", err)
+				}
+				wantBlocks := 0
+				if mode == reject.RuleModeReject {
+					wantBlocks = 1
+				}
+				if len(result.AccountBlocks) != wantBlocks {
+					t.Fatalf("AccountBlocks = %v, want %d", result.AccountBlocks, wantBlocks)
+				}
+				if err := engine.Configure().SetAccountPnl(
+					policies.PnlBoundsKillSwitchPolicyName,
+					param.NewAccountIDFromUint64(1), barrier.SettlementAsset,
+					pnlTestPnl(t, "0"),
+				); err != nil {
+					t.Fatalf("SetAccountPnl() error = %v", err)
+				}
+				request, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1))
+				if err != nil || len(rejects) != wantBlocks {
+					t.Fatalf("rejects after P&L recovery = %v, %v, want %d", rejects, err, wantBlocks)
+				}
+				if mode == reject.RuleModeReject && rejects[0].Code != reject.CodePnlKillSwitchTriggered {
+					t.Fatalf("rejects after P&L recovery = %v, want latched kill-switch cause", rejects)
+				}
+				if request != nil {
+					request.Close()
+				}
+			})
+		}
+	}
+}
+
+func TestBuiltinPnlBoundsKillSwitchReviewEvaluationFailures(t *testing.T) {
+	for _, mode := range []reject.RuleMode{
+		reject.RuleModeReviewWithHold,
+		reject.RuleModeReviewWithoutHold,
+	} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			newEngine := func(t *testing.T) *Engine {
+				t.Helper()
+				builder := policies.BuildPnlBoundsKillSwitch().BrokerBarriers(policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: builtinTestAsset(t, "USD"),
+					Mode:            mode,
+					LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+				})
+				engine, err := NewEngineBuilder().NoSync().Builtin(builder).Build()
+				if err != nil {
+					t.Fatalf("Build() error = %v", err)
+				}
+				t.Cleanup(engine.Stop)
+				return engine
+			}
+
+			t.Run("missing instrument", func(t *testing.T) {
+				engine := newEngine(t)
+				order := pnlTestOrder(t, 1)
+				operation := order.EnsureOperationView()
+				operation.UnsetInstrument()
+				request, rejects, err := engine.StartPreTrade(order)
+				if err != nil {
+					t.Fatalf("StartPreTrade() error = %v", err)
+				}
+				if request != nil {
+					request.Close()
+					t.Fatal("StartPreTrade() returned a request, want a hard reject")
+				}
+				if len(rejects) != 1 || rejects[0].Code != reject.CodeMissingRequiredField ||
+					rejects[0].Mode != reject.RuleModeReject || rejects[0].Policy != policies.PnlBoundsKillSwitchPolicyName {
+					t.Fatalf("StartPreTrade() rejects = %v, want kill-switch MissingRequiredField reject", rejects)
+				}
+			})
+
+			t.Run("missing fee", func(t *testing.T) {
+				engine := newEngine(t)
+				report := pnlTestReport(t, 1, "AAPL", "USD", "-200")
+				impact := report.EnsureFinancialImpactView()
+				impact.UnsetFee()
+				result, err := engine.ApplyExecutionReport(report)
+				if err != nil {
+					t.Fatalf("ApplyExecutionReport() error = %v", err)
+				}
+				if len(result.AccountBlocks) != 1 || result.AccountBlocks[0].Code != reject.CodeMissingRequiredField {
+					t.Fatalf("AccountBlocks = %v, want one MissingRequiredField block", result.AccountBlocks)
+				}
+				request, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1))
+				if request != nil {
+					request.Close()
+				}
+				if err != nil || request != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeMissingRequiredField {
+					t.Fatalf("post-report rejects = %v, error = %v, want the recorded MissingRequiredField block", rejects, err)
+				}
+			})
+		})
+	}
+}
+
+func TestConfigurePnlBoundsKillSwitchValidationIsAtomic(t *testing.T) {
+	for _, axis := range []string{"broker", "account"} {
+		for _, invalid := range []string{"unknown mode", "duplicate"} {
+			t.Run(axis+"/"+invalid, func(t *testing.T) {
+				barrier := policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: builtinTestAsset(t, "USD"),
+					Mode:            reject.RuleModeReject,
+					LowerBound:      optional.Some(pnlTestPnl(t, "100")),
+				}
+				engine, err := NewEngineBuilder().NoSync().Builtin(
+					policies.BuildPnlBoundsKillSwitch().BrokerBarriers(barrier),
+				).Build()
+				if err != nil {
+					t.Fatalf("Build() error = %v", err)
+				}
+				defer engine.Stop()
+				barrier.LowerBound = optional.Some(pnlTestPnl(t, "-100"))
+				if invalid == "unknown mode" {
+					barrier.Mode = reject.RuleMode(255)
+				}
+				brokers := []policies.PnlBoundsBrokerBarrier{barrier}
+				var accounts []policies.PnlBoundsAccountAssetBarrierUpdate
+				if axis == "account" {
+					brokers = []policies.PnlBoundsBrokerBarrier{{
+						SettlementAsset: builtinTestAsset(t, "USD"),
+						Mode:            reject.RuleModeReject,
+						LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+					}}
+					accounts = []policies.PnlBoundsAccountAssetBarrierUpdate{{
+						Barrier:   barrier,
+						AccountID: param.NewAccountIDFromUint64(1),
+					}}
+				}
+				if invalid == "duplicate" {
+					if axis == "broker" {
+						brokers = append(brokers, barrier)
+					} else {
+						duplicate := accounts[0]
+						duplicate.Barrier = barrier
+						accounts = append(accounts, duplicate)
+					}
+				}
+				err = engine.Configure().PnlBoundsKillSwitch(
+					policies.PnlBoundsKillSwitchPolicyName, brokers, accounts,
+				)
+				var configErr *configure.Error
+				if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
+					t.Fatalf("PnlBoundsKillSwitch() error = %v, want *configure.Error Validation", err)
+				}
+				// The Go native wrapper sends 4 for out-of-range modes.
+				wantMessage := axis + "[0] mode is invalid: 4"
+				if invalid == "duplicate" {
+					wantMessage = "duplicate " + axis + " barrier"
+				}
+				if !strings.Contains(configErr.Message, wantMessage) {
+					t.Fatalf("validation message = %q, want %q", configErr.Message, wantMessage)
+				}
+				_, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1))
+				if err != nil || len(rejects) != 1 || rejects[0].Code != reject.CodePnlKillSwitchTriggered {
+					t.Fatalf("after invalid update rejects = %v, %v, want previous barrier's reject", rejects, err)
+				}
+			})
+		}
 	}
 }
 

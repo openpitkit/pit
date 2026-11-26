@@ -226,6 +226,13 @@ func (c Configurator) RateLimitUpdate(
 // replaces the axis with an empty set (subject to the policy's
 // at-least-one-barrier rule).
 //
+// Mode (Barrier.Mode for account barriers) is part of the key. Its zero
+// value is Reject. Each (asset, mode) or (account, asset, mode) may occur only
+// once per call. Reject and review barriers on one asset coexist.
+// See [policies.PnlBoundsKillSwitchReadyBuilder] for how breaches are handled.
+// Invalid modes or duplicate keys return an Error with
+// ErrorKindValidation and leave the previous barriers unchanged.
+//
 // Returns a *Error on a domain error.
 func (c Configurator) PnlBoundsKillSwitch(
 	name string,
@@ -238,6 +245,7 @@ func (c Configurator) PnlBoundsKillSwitch(
 		for _, b := range brokerBarriers {
 			nativeBrokers = append(nativeBrokers, native.NewPretradePoliciesPnlBoundsBarrier(
 				b.SettlementAsset.Handle(),
+				native.PretradeRuleMode(b.Mode),
 				pnlOptionalToNative(b.LowerBound),
 				pnlOptionalToNative(b.UpperBound),
 			))
@@ -257,6 +265,7 @@ func (c Configurator) PnlBoundsKillSwitch(
 				native.NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 					a.AccountID.Handle(),
 					a.Barrier.SettlementAsset.Handle(),
+					native.PretradeRuleMode(a.Barrier.Mode),
 					pnlOptionalToNative(a.Barrier.LowerBound),
 					pnlOptionalToNative(a.Barrier.UpperBound),
 				),
@@ -288,8 +297,7 @@ func (c Configurator) PnlBoundsKillSwitch(
 // exist yet, exactly as a construction-time seed would. It is distinct from
 // [Configurator.PnlBoundsKillSwitch], which retunes bounds and never touches
 // accumulated P&L. The new value is evaluated against the live bounds on the
-// next check; forcing the accumulator past a bound trips the kill switch and
-// latches an engine-level account block that this call never clears.
+// next check. This call never clears an existing account block.
 //
 // Returns a *Error on a domain error (kind TypeMismatch when the name belongs
 // to a different policy type, Unknown when no policy carries the name).

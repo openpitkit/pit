@@ -72,12 +72,14 @@ fn account_sync_engine_with_rate_limit_and_pnl_bounds_builds() {
     let pnl_bounds = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: usd.clone(),
                 lower_bound: Some(Pnl::from_str("-1000").expect("pnl")),
                 upper_bound: None,
             }],
             [PnlBoundsAccountAssetBarrier {
                 barrier: PnlBoundsBrokerBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     settlement_asset: usd.clone(),
                     lower_bound: Some(Pnl::from_str("-200").expect("pnl")),
                     upper_bound: None,

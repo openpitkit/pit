@@ -2719,15 +2719,20 @@ class Configurator:
 
         *name* must match the name given to the policy at registration time.
 
-        The barrier arguments mirror those of
-        ``ReadyEngineBuilder._add_builtin_pnl_bounds_killswitch``.
+        Broker keys are (settlement asset, mode). Account keys are (account,
+        settlement asset, mode), with the mode taken from ``barrier.mode``.
+        Runtime updates preserve live accumulated P&L.
 
         An axis passed as ``None`` is left unchanged; an empty list replaces
         the axis with an empty set (subject to the at-least-one-barrier rule).
 
+        See :class:`openpit.pretrade.policies.PnlBoundsKillswitchBuilder`
+        for how barrier breaches are handled.
+
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong
-                type, or the new settings fail validation.
+                type, or the new settings fail validation. Duplicate barrier
+                keys give kind ``Validation`` and leave both axes unchanged.
         """
 
     def set_account_pnl(
@@ -2740,15 +2745,14 @@ class Configurator:
     ) -> None:
         """Force-set the live accumulated P&L for one account entry.
 
-        *name* must match the name given to the P&L bounds kill-switch policy at
+        ``name`` must match the name given to the P&L bounds kill-switch policy at
         registration time.
 
         Unlike :meth:`pnl_bounds_killswitch`, which retunes bounds and never
         touches accumulated P&L, this is an absolute assignment (upsert) of the
-        live accumulator for ``(account, settlement_asset)``; the new value is
-        evaluated against the live bounds on the next order. Forcing the
-        accumulator past a bound trips the kill switch, which latches an
-        engine-level account block that this call does not clear.
+        live accumulator for ``(account, settlement_asset)``. The new value is
+        evaluated against the live bounds on the next order. This call never
+        clears an existing account block.
 
         Raises:
             PolicyConfigureError: If the policy is not found or has a different

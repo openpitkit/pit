@@ -148,12 +148,14 @@ fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
     let native_policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: usd(),
                 lower_bound: Some(pnl("-100000")),
                 upper_bound: Some(pnl("100000")),
             }],
             [PnlBoundsAccountAssetBarrier {
                 barrier: PnlBoundsBrokerBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     settlement_asset: usd(),
                     lower_bound: Some(pnl("-100000")),
                     upper_bound: Some(
@@ -211,12 +213,14 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
     let native_policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: usd(),
                 lower_bound: Some(pnl("-100000")),
                 upper_bound: Some(pnl("100000")),
             }],
             [PnlBoundsAccountAssetBarrier {
                 barrier: PnlBoundsBrokerBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     settlement_asset: usd(),
                     lower_bound: Some(pnl("-100000")),
                     upper_bound: Some(pnl("50")),

@@ -24,7 +24,9 @@ use crate::pretrade::policy::{
     missing_required_field_account_block, missing_required_field_reject, PolicyGroupId, PolicyName,
 };
 use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
-use crate::pretrade::{AccountBlock, PostTradeResult, PreTradeContext, PreTradePolicy, Rejects};
+use crate::pretrade::{
+    AccountBlock, PostTradeResult, PreTradeContext, PreTradePolicy, Rejects, RuleMode,
+};
 use crate::storage::{ConfigCell, Storage, StorageBuilder};
 use crate::{Mutation, Mutations};
 
@@ -48,14 +50,15 @@ pub struct PnlBoundsBrokerBarrier {
     /// `upper_bound` is typically positive; it represents the profit-taking
     /// limit.
     pub upper_bound: Option<Pnl>,
+    /// Required enforcement mode, also part of the barrier's configuration key.
+    pub mode: RuleMode,
 }
 
 /// Per-(account, settlement-asset) P&L bounds refinement.
 ///
 /// Pairs a [`PnlBoundsBrokerBarrier`] (the settlement and bounds configuration) with
-/// an account identity and a starting P&L. Both the broker barrier (per
-/// settlement asset) and this account+asset barrier are evaluated on every
-/// check; the order passes only if neither is breached.
+/// an account identity and a starting P&L. Within each mode the broker barrier
+/// takes priority over this account+asset barrier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PnlBoundsAccountAssetBarrier {
     /// Settlement asset and bounds for this account+asset barrier.
@@ -64,7 +67,8 @@ pub struct PnlBoundsAccountAssetBarrier {
     pub account_id: AccountId,
     /// Starting accumulated P&L for the account, consumed at construction only.
     ///
-    /// Seeds P&L accrued before the engine started.
+    /// Seeds P&L accrued before the engine started. Barriers of different modes
+    /// on the same account and settlement asset must supply equal seeds.
     pub initial_pnl: Pnl,
 }
 
@@ -89,6 +93,29 @@ pub enum PnlBoundsKillSwitchPolicyError {
     NoBarriersConfigured,
     /// Both lower and upper bounds are omitted for one settlement asset.
     NoBoundsConfigured { settlement_asset: Asset },
+    /// A (settlement asset, mode) key was repeated on the broker axis.
+    DuplicateBrokerBarrier {
+        /// Settlement asset whose key was repeated.
+        settlement_asset: Asset,
+        /// Enforcement mode whose key was repeated.
+        mode: RuleMode,
+    },
+    /// An (account, settlement asset, mode) key was repeated.
+    DuplicateAccountBarrier {
+        /// Account whose key was repeated.
+        account_id: AccountId,
+        /// Settlement asset whose key was repeated.
+        settlement_asset: Asset,
+        /// Enforcement mode whose key was repeated.
+        mode: RuleMode,
+    },
+    /// Barriers for one (account, settlement asset) pair supplied unequal seeds.
+    ConflictingInitialPnl {
+        /// Account whose starting P&L conflicted.
+        account_id: AccountId,
+        /// Settlement asset whose starting P&L conflicted.
+        settlement_asset: Asset,
+    },
 }
 
 impl Display for PnlBoundsKillSwitchPolicyError {
@@ -102,6 +129,29 @@ impl Display for PnlBoundsKillSwitchPolicyError {
                 f,
                 "at least one of lower_bound or upper_bound must be configured \
                  for settlement asset {settlement_asset}"
+            ),
+            Self::DuplicateBrokerBarrier {
+                settlement_asset,
+                mode,
+            } => write!(
+                f,
+                "duplicate broker barrier for settlement asset {settlement_asset}, mode {}",
+                mode.as_str()
+            ),
+            Self::DuplicateAccountBarrier {
+                settlement_asset,
+                mode,
+                ..
+            } => write!(
+                f,
+                "duplicate account barrier for settlement asset {settlement_asset}, mode {}",
+                mode.as_str()
+            ),
+            Self::ConflictingInitialPnl {
+                settlement_asset, ..
+            } => write!(
+                f,
+                "conflicting initial pnl for settlement asset {settlement_asset}"
             ),
         }
     }
@@ -138,8 +188,9 @@ impl std::error::Error for PnlBoundsKillSwitchPolicyError {}
 /// [`PnlBoundsAccountAssetBarrierUpdate`], which cannot carry a seed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PnlBoundsKillSwitchSettings {
-    account_barriers: HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrierUpdate>>,
-    broker_barriers: HashMap<Asset, PnlBoundsBrokerBarrier>,
+    account_barriers:
+        HashMap<AccountId, HashMap<(Asset, RuleMode), PnlBoundsAccountAssetBarrierUpdate>>,
+    broker_barriers: HashMap<(Asset, RuleMode), PnlBoundsBrokerBarrier>,
     initial_pnl: HashMap<(AccountId, Asset), Pnl>,
     group_id: PolicyGroupId,
 }
@@ -150,6 +201,8 @@ impl PnlBoundsKillSwitchSettings {
     /// At least one barrier must appear across `broker_barriers` and
     /// `account_barriers`. Each barrier must have at least one bound
     /// configured; `group_id` defaults to [`DEFAULT_POLICY_GROUP_ID`].
+    /// Repeated keys within a mode and unequal seeds for the same account and
+    /// settlement asset are rejected. Equal seeds across modes seed P&L once.
     pub fn new(
         broker_barriers: impl IntoIterator<Item = PnlBoundsBrokerBarrier>,
         account_barriers: impl IntoIterator<Item = PnlBoundsAccountAssetBarrier>,
@@ -161,7 +214,13 @@ impl PnlBoundsKillSwitchSettings {
                 &barrier.upper_bound,
                 &barrier.settlement_asset,
             )?;
-            broker.insert(barrier.settlement_asset.clone(), barrier);
+            let key = (barrier.settlement_asset.clone(), barrier.mode);
+            if broker.insert(key.clone(), barrier).is_some() {
+                return Err(PnlBoundsKillSwitchPolicyError::DuplicateBrokerBarrier {
+                    settlement_asset: key.0,
+                    mode: key.1,
+                });
+            }
         }
 
         let mut account = HashMap::new();
@@ -174,17 +233,34 @@ impl PnlBoundsKillSwitchSettings {
             )?;
             let account_id = barrier.account_id;
             let settlement_asset = barrier.barrier.settlement_asset.clone();
-            initial_pnl.insert((account_id, settlement_asset.clone()), barrier.initial_pnl);
-            account
+            let mode = barrier.barrier.mode;
+            let previous = account
                 .entry(account_id)
                 .or_insert_with(HashMap::new)
                 .insert(
-                    settlement_asset,
+                    (settlement_asset.clone(), mode),
                     PnlBoundsAccountAssetBarrierUpdate {
                         barrier: barrier.barrier,
                         account_id,
                     },
                 );
+            if previous.is_some() {
+                return Err(PnlBoundsKillSwitchPolicyError::DuplicateAccountBarrier {
+                    account_id,
+                    settlement_asset,
+                    mode,
+                });
+            }
+            if let Some(previous) =
+                initial_pnl.insert((account_id, settlement_asset.clone()), barrier.initial_pnl)
+            {
+                if previous != barrier.initial_pnl {
+                    return Err(PnlBoundsKillSwitchPolicyError::ConflictingInitialPnl {
+                        account_id,
+                        settlement_asset,
+                    });
+                }
+            }
         }
 
         if broker.is_empty() && account.is_empty() {
@@ -202,8 +278,8 @@ impl PnlBoundsKillSwitchSettings {
     /// Replaces the broker barriers.
     ///
     /// Validates every barrier before applying; returns an error (leaving
-    /// settings unchanged) if any barrier has neither bound set or if the
-    /// resulting combined set would be empty.
+    /// settings unchanged) if any barrier has neither bound set, repeats a
+    /// (settlement asset, mode) key, or the combined set would be empty.
     pub fn set_broker_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = PnlBoundsBrokerBarrier>,
@@ -215,7 +291,13 @@ impl PnlBoundsKillSwitchSettings {
                 &barrier.upper_bound,
                 &barrier.settlement_asset,
             )?;
-            broker.insert(barrier.settlement_asset.clone(), barrier);
+            let key = (barrier.settlement_asset.clone(), barrier.mode);
+            if broker.insert(key.clone(), barrier).is_some() {
+                return Err(PnlBoundsKillSwitchPolicyError::DuplicateBrokerBarrier {
+                    settlement_asset: key.0,
+                    mode: key.1,
+                });
+            }
         }
         if broker.is_empty() && self.account_barriers.is_empty() {
             return Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
@@ -227,10 +309,10 @@ impl PnlBoundsKillSwitchSettings {
     /// Replaces the account+asset barriers without changing accumulated P&L.
     ///
     /// Validates every barrier before applying; returns an error (leaving
-    /// settings unchanged) if any barrier has neither bound set or if the
-    /// resulting combined set would be empty. The update DTO has no
-    /// `initial_pnl`: runtime replacement always evaluates the live
-    /// accumulator.
+    /// settings unchanged) if any barrier has neither bound set, repeats an
+    /// (account, settlement asset, mode) key, or the combined set would be empty.
+    /// The update DTO has no `initial_pnl`: runtime replacement always
+    /// evaluates the live accumulator.
     pub fn set_account_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = PnlBoundsAccountAssetBarrierUpdate>,
@@ -242,10 +324,21 @@ impl PnlBoundsKillSwitchSettings {
                 &barrier.barrier.upper_bound,
                 &barrier.barrier.settlement_asset,
             )?;
-            account
-                .entry(barrier.account_id)
+            let account_id = barrier.account_id;
+            let settlement_asset = barrier.barrier.settlement_asset.clone();
+            let mode = barrier.barrier.mode;
+            if account
+                .entry(account_id)
                 .or_insert_with(HashMap::new)
-                .insert(barrier.barrier.settlement_asset.clone(), barrier);
+                .insert((settlement_asset.clone(), mode), barrier)
+                .is_some()
+            {
+                return Err(PnlBoundsKillSwitchPolicyError::DuplicateAccountBarrier {
+                    account_id,
+                    settlement_asset,
+                    mode,
+                });
+            }
         }
         if self.broker_barriers.is_empty() && account.is_empty() {
             return Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
@@ -273,18 +366,33 @@ pub(crate) type RealizedPnlStorage<LockingPolicyFactory> =
 /// P&L kill switch with per-settlement-asset bounds.
 ///
 /// Accumulates realized P&L (`pnl + fee` from execution reports) per
-/// `(account, settlement asset)` and blocks the account when the running
-/// total crosses a configured lower or upper bound.
+/// `(account, settlement asset)`. With a Reject-mode registration (the
+/// default), a Reject barrier breach rejects the order and blocks the account
+/// in pre-trade, and blocks the account on an execution report. With a
+/// review-mode registration, the same breach yields a pre-trade mark of the
+/// instance's mode for an unconfirmed order, with no account block on either
+/// path. A review barrier breach yields a pre-trade mark of the barrier's mode
+/// for an unconfirmed order without blocking.
 ///
 /// Two barrier kinds can be configured, independently or together:
-/// - **broker barrier** - one set of bounds per settlement asset, applied to
-///   every account trading that asset;
+/// - **broker barrier** - one set of bounds per settlement asset and mode,
+///   applied to every account trading that asset;
 /// - **account+asset barrier** - tighter bounds for a specific
-///   `(account, settlement asset)` pair, with an explicit starting P&L.
+///   `(account, settlement asset, mode)`, with an explicit starting P&L.
 ///
-/// An order is blocked when the realized P&L on its settlement asset is
-/// outside **either** applicable barrier. If neither barrier covers the
+/// Each review mode contributes at most one barrier mark, with broker
+/// priority over account+asset.
+/// A missing required order field rejects the order. A missing required
+/// execution-report field or P&L that cannot be computed blocks the account.
+/// These failures apply in every mode. If no barrier covers the
 /// `(account, settlement)` pair, the order passes.
+///
+/// Review barriers need an engine built with
+/// [`EngineBuilder::with_order_review`](crate::EngineBuilder::with_order_review).
+/// Without it, a pre-trade stage with review marks and no effective reject
+/// returns an engine
+/// [`MissingRequiredField`](crate::pretrade::RejectCode::MissingRequiredField)
+/// reject. Drop-copy discards review marks.
 ///
 /// Barriers are read from a [`crate::storage::ConfigCell`] on every hot-path
 /// call, so they can be replaced at runtime via
@@ -296,6 +404,7 @@ pub(crate) type RealizedPnlStorage<LockingPolicyFactory> =
 /// - at least one barrier (broker or account+asset) must be configured;
 /// - at least one of `lower_bound` or `upper_bound` must be configured for
 ///   each barrier;
+/// - duplicate keys within a mode and conflicting initial P&L seeds fail;
 /// - constructor does not validate signs of bounds;
 /// - constructor does not validate ordering (`lower_bound <= upper_bound`).
 ///
@@ -480,98 +589,108 @@ where
         ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
-        // Order accessors may call foreign code, so never invoke them while a
-        // settings snapshot guard is held. A drop-copy fast-path that finds no
-        // possible barrier is linearized at that snapshot. Otherwise the later
-        // snapshot performs both applicability and breach evaluation.
-        let (instrument, account_id) = if let Some(account_id) = ctx.drop_copy_account_id() {
-            if self.settings.with(|s| {
-                s.broker_barriers.is_empty() && !s.account_barriers.contains_key(&account_id)
-            }) {
+        // Accessors may publish settings. Keep applicability and
+        // evaluation on one version without holding a cell borrow or lock.
+        self.settings.with_snapshot(|s| {
+            let (instrument, account_id) = if let Some(account_id) = ctx.drop_copy_account_id() {
+                if s.broker_barriers.is_empty() && !s.account_barriers.contains_key(&account_id) {
+                    return Ok(());
+                }
+                let instrument = order.instrument().map_err(|e| {
+                    Rejects::from(missing_required_field_reject(self, "instrument", &e))
+                })?;
+                (instrument, account_id)
+            } else {
+                let instrument = order.instrument().map_err(|e| {
+                    Rejects::from(missing_required_field_reject(self, "instrument", &e))
+                })?;
+                let account_id = ctx.account_id().map_err(|e| {
+                    Rejects::from(missing_required_field_reject(self, "account ID", &e))
+                })?;
+                (instrument, account_id)
+            };
+            let settlement = instrument.settlement_asset();
+
+            let barriers = [
+                RuleMode::Reject,
+                RuleMode::ReviewWithHold,
+                RuleMode::ReviewWithoutHold,
+            ]
+            .map(|mode| {
+                let key = (settlement.clone(), mode);
+                let broker_barrier = s.broker_barriers.get(&key);
+                let account_barrier = s
+                    .account_barriers
+                    .get(&account_id)
+                    .and_then(|barriers| barriers.get(&key));
+                (mode, broker_barrier, account_barrier)
+            });
+            if barriers
+                .iter()
+                .all(|(_, broker, account)| broker.is_none() && account.is_none())
+            {
                 return Ok(());
             }
-            let instrument = order.instrument().map_err(|e| {
-                Rejects::from(missing_required_field_reject(self, "instrument", &e))
-            })?;
-            (instrument, account_id)
-        } else {
-            let instrument = order.instrument().map_err(|e| {
-                Rejects::from(missing_required_field_reject(self, "instrument", &e))
-            })?;
-            let account_id = ctx.account_id().map_err(|e| {
-                Rejects::from(missing_required_field_reject(self, "account ID", &e))
-            })?;
-            (instrument, account_id)
-        };
-        let settlement = instrument.settlement_asset();
-
-        let (broker_breach, account_breach) = self.settings.with(|s| {
-            let broker_barrier = s.broker_barriers.get(settlement);
-            let account_barrier = s
-                .account_barriers
-                .get(&account_id)
-                .and_then(|m| m.get(settlement));
-
-            if broker_barrier.is_none() && account_barrier.is_none() {
-                return (None, None);
-            }
-
             let current_pnl = self
                 .realized
                 .with(&(account_id, settlement.clone()), |entry| *entry)
                 .unwrap_or(Pnl::ZERO);
-
-            let bb = broker_barrier.and_then(|b| {
-                let sides = pnl_bounds::breached_sides(b.lower_bound, b.upper_bound, current_pnl);
-                if sides.is_empty() {
-                    None
-                } else {
-                    Some(pnl_bounds::barrier_breach_reject(
-                        Self::NAME,
-                        "pnl kill switch triggered: broker barrier",
-                        &sides,
-                        b.lower_bound,
-                        b.upper_bound,
-                        current_pnl,
-                        "settlement asset",
-                        &b.settlement_asset,
-                    ))
+            let mut rejects = Vec::new();
+            for (mode, broker_barrier, account_barrier) in barriers {
+                if broker_barrier.is_none() && account_barrier.is_none() {
+                    continue;
                 }
-            });
+                let bb = broker_barrier.and_then(|b| {
+                    let sides =
+                        pnl_bounds::breached_sides(b.lower_bound, b.upper_bound, current_pnl);
+                    if sides.is_empty() {
+                        None
+                    } else {
+                        Some(pnl_bounds::barrier_breach_reject(
+                            Self::NAME,
+                            "pnl kill switch triggered: broker barrier",
+                            &sides,
+                            b.lower_bound,
+                            b.upper_bound,
+                            current_pnl,
+                            "settlement asset",
+                            &b.settlement_asset,
+                        ))
+                    }
+                });
 
-            let ab = account_barrier.and_then(|a| {
-                let sides = pnl_bounds::breached_sides(
-                    a.barrier.lower_bound,
-                    a.barrier.upper_bound,
-                    current_pnl,
-                );
-                if sides.is_empty() {
-                    None
-                } else {
-                    Some(pnl_bounds::barrier_breach_reject(
-                        Self::NAME,
-                        "pnl kill switch triggered: account + asset barrier",
-                        &sides,
+                let ab = account_barrier.and_then(|a| {
+                    let sides = pnl_bounds::breached_sides(
                         a.barrier.lower_bound,
                         a.barrier.upper_bound,
                         current_pnl,
-                        "settlement asset",
-                        &a.barrier.settlement_asset,
-                    ))
+                    );
+                    if sides.is_empty() {
+                        None
+                    } else {
+                        Some(pnl_bounds::barrier_breach_reject(
+                            Self::NAME,
+                            "pnl kill switch triggered: account + asset barrier",
+                            &sides,
+                            a.barrier.lower_bound,
+                            a.barrier.upper_bound,
+                            current_pnl,
+                            "settlement asset",
+                            &a.barrier.settlement_asset,
+                        ))
+                    }
+                });
+
+                if let Some(reject) = bb.or(ab) {
+                    rejects.push(reject.with_mode(mode));
                 }
-            });
-
-            (bb, ab)
-        });
-
-        if let Some(reject) = broker_breach {
-            return Err(reject.into());
-        }
-        if let Some(reject) = account_breach {
-            return Err(reject.into());
-        }
-
-        Ok(())
+            }
+            if rejects.is_empty() {
+                Ok(())
+            } else {
+                Err(rejects.into())
+            }
+        })
     }
 
     /// Applies a post-trade report to the accumulated realized P&L for the
@@ -590,8 +709,10 @@ where
     ///
     /// Returns an [`AccountBlock`] when any required report field cannot be
     /// accessed, when `pnl + fee` or the accumulated value overflows, or when
-    /// the new accumulated value breaches a configured barrier. Returns `None`
-    /// when no barrier covers the pair and no overflow occurs.
+    /// the new accumulated value breaches a Reject-mode barrier. The engine
+    /// records a breach block only for a Reject-mode instance (the default).
+    /// Review-mode breaches never block; field access and arithmetic failures
+    /// always do.
     fn apply_execution_report(
         &self,
         ctx: &crate::pretrade::PostTradeContext<
@@ -701,21 +822,22 @@ where
 }
 
 fn is_outside_bounds(
-    broker_barriers: &HashMap<Asset, PnlBoundsBrokerBarrier>,
-    account_barriers: &HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrierUpdate>>,
+    broker_barriers: &HashMap<(Asset, RuleMode), PnlBoundsBrokerBarrier>,
+    account_barriers: &HashMap<
+        AccountId,
+        HashMap<(Asset, RuleMode), PnlBoundsAccountAssetBarrierUpdate>,
+    >,
     pnl: Pnl,
     settlement: &Asset,
     account_id: AccountId,
 ) -> bool {
-    if let Some(b) = broker_barriers.get(settlement) {
+    let key = (settlement.clone(), RuleMode::Reject);
+    if let Some(b) = broker_barriers.get(&key) {
         if pnl_bounds::outside_bounds(b.lower_bound, b.upper_bound, pnl) {
             return true;
         }
     }
-    if let Some(b) = account_barriers
-        .get(&account_id)
-        .and_then(|m| m.get(settlement))
-    {
+    if let Some(b) = account_barriers.get(&account_id).and_then(|m| m.get(&key)) {
         if pnl_bounds::outside_bounds(b.barrier.lower_bound, b.barrier.upper_bound, pnl) {
             return true;
         }
@@ -742,10 +864,13 @@ mod tests {
     use std::rc::Rc;
     use std::sync::{Arc, Barrier};
 
-    use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
+    use crate::core::{
+        HasAccountId, HasAlreadyHeld, HasConfirmed, HasFee, HasInstrument, HasPnl, Instrument,
+        OrderOperation,
+    };
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
-    use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope};
+    use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope, RuleMode};
     use crate::storage::{ConfigCell, FullLocking, NoLocking};
     use crate::RequestFieldAccessError;
 
@@ -759,6 +884,272 @@ mod tests {
     fn test_builder() -> crate::SyncedEngineBuilder<OrderOperation, TestReport, (), crate::LocalSync>
     {
         crate::Engine::builder().no_sync()
+    }
+
+    #[test]
+    fn accessors_can_publish_settings_without_changing_the_current_snapshot() {
+        struct UpdatingOrder {
+            instrument: Instrument,
+            update: Box<dyn Fn()>,
+        }
+        impl HasInstrument for UpdatingOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                (self.update)();
+                Ok(&self.instrument)
+            }
+        }
+        impl HasAccountId for UpdatingOrder {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Ok(account(1))
+            }
+        }
+        impl HasConfirmed for UpdatingOrder {
+            fn confirmed(&self) -> Result<bool, RequestFieldAccessError> {
+                Ok(false)
+            }
+        }
+        impl HasAlreadyHeld for UpdatingOrder {
+            fn already_held(&self) -> Result<bool, RequestFieldAccessError> {
+                Ok(false)
+            }
+        }
+        for drop_copy in [false, true] {
+            let builder = crate::Engine::builder::<UpdatingOrder, TestReport, ()>()
+                .with_order_review()
+                .no_sync();
+            let mut review = barrier_usd(Some(pnl("1")), None);
+            review.mode = RuleMode::ReviewWithHold;
+            let policy = TestPolicy::new(
+                PnlBoundsKillSwitchSettings::new([review], []).unwrap(),
+                builder.storage_builder(),
+            );
+            let cell = crate::pretrade::ConfigurablePolicy::settings_cell(&policy);
+            let engine = builder.pre_trade(policy).build().unwrap();
+            let order = UpdatingOrder {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").unwrap(),
+                    Asset::new("USD").unwrap(),
+                ),
+                update: Box::new(move || {
+                    cell.update(|settings| {
+                        settings.set_broker_barriers([barrier_usd(Some(pnl("1")), None)])
+                    })
+                    .unwrap();
+                }),
+            };
+            if drop_copy {
+                engine
+                    .apply_drop_copy(order)
+                    .expect("review snapshot must permit drop copy");
+            } else {
+                let request = engine
+                    .start_pre_trade(order)
+                    .expect("review snapshot must not become reject");
+                assert_eq!(request.reviews().len(), 1);
+                assert_eq!(request.reviews()[0].mode, RuleMode::ReviewWithHold);
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_mode_keys_are_rejected_atomically() {
+        for mode in [
+            RuleMode::Reject,
+            RuleMode::ReviewWithHold,
+            RuleMode::ReviewWithoutHold,
+        ] {
+            let mut broker = barrier_usd(Some(pnl("-100")), None);
+            broker.mode = mode;
+            let account_barrier = PnlBoundsAccountAssetBarrier {
+                barrier: broker.clone(),
+                account_id: account(1),
+                initial_pnl: Pnl::ZERO,
+            };
+            let broker_error = PnlBoundsKillSwitchPolicyError::DuplicateBrokerBarrier {
+                settlement_asset: broker.settlement_asset.clone(),
+                mode,
+            };
+            let account_error = PnlBoundsKillSwitchPolicyError::DuplicateAccountBarrier {
+                account_id: account(1),
+                settlement_asset: broker.settlement_asset.clone(),
+                mode,
+            };
+            assert_eq!(
+                PnlBoundsKillSwitchSettings::new([broker.clone(), broker.clone()], []),
+                Err(broker_error.clone()),
+                "duplicate broker key must fail construction"
+            );
+            assert_eq!(
+                PnlBoundsKillSwitchSettings::new(
+                    [],
+                    [account_barrier.clone(), account_barrier.clone()]
+                ),
+                Err(account_error.clone()),
+                "duplicate account key must fail construction"
+            );
+            let mut settings =
+                PnlBoundsKillSwitchSettings::new([broker.clone()], [account_barrier])
+                    .expect("unique keys");
+            let previous = settings.clone();
+            assert_eq!(
+                settings.set_broker_barriers([broker.clone(), broker.clone()]),
+                Err(broker_error)
+            );
+            assert_eq!(
+                settings, previous,
+                "duplicate broker update must preserve settings"
+            );
+            let update = PnlBoundsAccountAssetBarrierUpdate {
+                barrier: broker,
+                account_id: account(1),
+            };
+            assert_eq!(
+                settings.set_account_barriers([update.clone(), update]),
+                Err(account_error)
+            );
+            assert_eq!(
+                settings, previous,
+                "duplicate account update must preserve settings"
+            );
+        }
+    }
+
+    #[test]
+    fn account_review_barriers_prevent_retirement_until_removed() {
+        for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+            let mut review = barrier_usd(Some(pnl("-100")), None);
+            review.mode = mode;
+            let policy = TestPolicy::new(
+                PnlBoundsKillSwitchSettings::new(
+                    [barrier_usd(Some(pnl("-100")), None)],
+                    [PnlBoundsAccountAssetBarrier {
+                        barrier: review,
+                        account_id: account(1),
+                        initial_pnl: Pnl::ZERO,
+                    }],
+                )
+                .unwrap(),
+                test_builder().storage_builder(),
+            );
+            let mut mutations = crate::Mutations::new();
+            assert_eq!(<TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::LocalSync>>::retire_account(
+                &policy, account(1), &mut mutations),
+                Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount));
+            crate::pretrade::ConfigurablePolicy::settings_cell(&policy)
+                .update(|settings| settings.set_account_barriers([]))
+                .unwrap();
+            assert_eq!(<TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::LocalSync>>::retire_account(
+                &policy, account(1), &mut mutations), Ok(()));
+        }
+    }
+
+    #[test]
+    fn initial_pnl_seeds_must_agree_across_modes() {
+        let first = PnlBoundsAccountAssetBarrier {
+            barrier: barrier_usd(Some(pnl("-100")), None),
+            account_id: account(1),
+            initial_pnl: pnl("-60"),
+        };
+        for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+            let mut second = first.clone();
+            second.barrier.mode = mode;
+            let settings = PnlBoundsKillSwitchSettings::new([], [first.clone(), second.clone()])
+                .expect("equal seeds across modes must be accepted");
+            let policy = TestPolicy::new(settings, test_builder().storage_builder());
+            assert!(
+                check_start(&policy, &order("USD", account(1))).is_ok(),
+                "equal seeds must seed once, not accumulate twice"
+            );
+            second.initial_pnl = pnl("-61");
+            assert_eq!(
+                PnlBoundsKillSwitchSettings::new([], [first.clone(), second]),
+                Err(PnlBoundsKillSwitchPolicyError::ConflictingInitialPnl {
+                    account_id: account(1),
+                    settlement_asset: first.barrier.settlement_asset.clone()
+                }),
+                "unequal seeds must fail construction"
+            );
+        }
+    }
+
+    #[test]
+    fn one_review_mark_per_mode_prefers_broker_and_keeps_reject() {
+        let barriers: Vec<_> = [
+            RuleMode::Reject,
+            RuleMode::ReviewWithHold,
+            RuleMode::ReviewWithoutHold,
+        ]
+        .into_iter()
+        .map(|mode| {
+            let mut barrier = barrier_usd(Some(pnl("1")), None);
+            barrier.mode = mode;
+            barrier
+        })
+        .collect();
+        let settings = PnlBoundsKillSwitchSettings::new(
+            barriers.clone(),
+            barriers
+                .into_iter()
+                .map(|barrier| PnlBoundsAccountAssetBarrier {
+                    barrier,
+                    account_id: account(1),
+                    initial_pnl: Pnl::ZERO,
+                }),
+        )
+        .expect("different modes coexist");
+        let policy = TestPolicy::new(settings, test_builder().storage_builder());
+        let results =
+            check_start(&policy, &order("USD", account(1))).expect_err("all modes breach");
+        assert_eq!(results.len(), 3, "one result per mode, including reject");
+        for (result, mode) in results.iter().zip([
+            RuleMode::Reject,
+            RuleMode::ReviewWithHold,
+            RuleMode::ReviewWithoutHold,
+        ]) {
+            assert_eq!(result.mode, mode);
+            assert_eq!(result.code, RejectCode::PnlKillSwitchTriggered);
+            assert_eq!(result.scope, RejectScope::Account);
+            assert_eq!(result.reason, "pnl kill switch triggered: broker barrier");
+        }
+    }
+
+    #[test]
+    fn report_barriers_block_only_in_reject_mode_but_overflow_always_blocks() {
+        for mode in [
+            RuleMode::Reject,
+            RuleMode::ReviewWithHold,
+            RuleMode::ReviewWithoutHold,
+        ] {
+            for account_axis in [false, true] {
+                let mut barrier = barrier_usd(Some(pnl("-100")), None);
+                barrier.mode = mode;
+                let settings = if account_axis {
+                    PnlBoundsKillSwitchSettings::new(
+                        [],
+                        [PnlBoundsAccountAssetBarrier {
+                            barrier,
+                            account_id: account(1),
+                            initial_pnl: Pnl::ZERO,
+                        }],
+                    )
+                } else {
+                    PnlBoundsKillSwitchSettings::new([barrier], [])
+                }
+                .expect("valid settings");
+                let policy = TestPolicy::new(settings, test_builder().storage_builder());
+                let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-101")));
+                assert_eq!(
+                    blocks.len(),
+                    usize::from(mode == RuleMode::Reject),
+                    "review report breach must never block: {mode:?}, account_axis={account_axis}"
+                );
+                let max = Pnl::new(rust_decimal::Decimal::MAX);
+                assert!(apply_report_blocks(&policy, &report("USD", account(1), max)).is_empty());
+                let blocks = apply_report_blocks(&policy, &report("USD", account(1), max));
+                assert_eq!(blocks.len(), 1, "overflow must block in every mode");
+                assert_eq!(blocks[0].code, RejectCode::OrderValueCalculationFailed);
+            }
+        }
     }
 
     struct TestReport {
@@ -1252,6 +1643,7 @@ mod tests {
         let usd = Asset::new("USD").expect("asset code must be valid");
         let err = PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: RuleMode::Reject,
                 settlement_asset: usd.clone(),
                 lower_bound: None,
                 upper_bound: None,
@@ -1275,6 +1667,7 @@ mod tests {
             [barrier_usd(Some(pnl("-100")), None)],
             [PnlBoundsAccountAssetBarrier {
                 barrier: PnlBoundsBrokerBarrier {
+                    mode: RuleMode::Reject,
                     settlement_asset: usd.clone(),
                     lower_bound: None,
                     upper_bound: None,
@@ -1938,6 +2331,7 @@ mod tests {
         let err = settings
             .set_account_barriers([PnlBoundsAccountAssetBarrierUpdate {
                 barrier: PnlBoundsBrokerBarrier {
+                    mode: RuleMode::Reject,
                     settlement_asset: usd.clone(),
                     lower_bound: None,
                     upper_bound: None,
@@ -1953,7 +2347,7 @@ mod tests {
         );
         assert!(settings
             .broker_barriers
-            .contains_key(&Asset::new("USD").expect("valid")));
+            .contains_key(&(Asset::new("USD").expect("valid"), RuleMode::Reject)));
     }
 
     #[test]
@@ -2047,6 +2441,7 @@ mod tests {
         upper_bound: Option<Pnl>,
     ) -> PnlBoundsBrokerBarrier {
         PnlBoundsBrokerBarrier {
+            mode: RuleMode::Reject,
             settlement_asset: Asset::new(settlement).expect("must be valid"),
             lower_bound,
             upper_bound,
@@ -2219,31 +2614,42 @@ mod tests {
             }
         }
 
-        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
-        let report = NoPnl {
-            instrument: Instrument::new(
-                Asset::new("AAPL").expect("must be valid"),
-                Asset::new("USD").expect("must be valid"),
-            ),
-            account_id: account(1),
-            fee: Fee::ZERO,
-        };
-        let blocks = <TestPolicy as PreTradePolicy<
-            OrderOperation,
-            NoPnl,
-            (),
-            crate::core::LocalSync,
-        >>::apply_execution_report(
-            &policy,
-            &crate::pretrade::PostTradeContext::new(&report),
-            &report,
-        )
-        .map(|r| r.account_blocks)
-        .unwrap_or_default();
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
-        assert_eq!(blocks[0].reason, "failed to access required field 'P&L'");
-        assert_eq!(blocks[0].details, "failed to access field 'pnl'");
+        for mode in [
+            RuleMode::Reject,
+            RuleMode::ReviewWithHold,
+            RuleMode::ReviewWithoutHold,
+        ] {
+            let mut barrier = barrier_usd(Some(pnl("-100")), Some(pnl("50")));
+            barrier.mode = mode;
+            let policy = TestPolicy::new(
+                PnlBoundsKillSwitchSettings::new([barrier], []).unwrap(),
+                test_builder().storage_builder(),
+            );
+            let report = NoPnl {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("must be valid"),
+                    Asset::new("USD").expect("must be valid"),
+                ),
+                account_id: account(1),
+                fee: Fee::ZERO,
+            };
+            let blocks = <TestPolicy as PreTradePolicy<
+                OrderOperation,
+                NoPnl,
+                (),
+                crate::core::LocalSync,
+            >>::apply_execution_report(
+                &policy,
+                &crate::pretrade::PostTradeContext::new(&report),
+                &report,
+            )
+            .map(|r| r.account_blocks)
+            .unwrap_or_default();
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
+            assert_eq!(blocks[0].reason, "failed to access required field 'P&L'");
+            assert_eq!(blocks[0].details, "failed to access field 'pnl'");
+        }
     }
 
     #[test]

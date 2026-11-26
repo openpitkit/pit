@@ -1155,7 +1155,7 @@ fn parse_policy_reject(value: &JsValue, policy_name: &str) -> Result<Reject, JsV
         Some(scope) => parse_reject_scope(&scope)?,
         None => RejectScope::Order,
     };
-    let mode = parse_rule_mode(&get_field(value, "mode")?)?;
+    let mode = parse_rule_mode(&get_field(value, "mode")?, "reject.mode")?;
     let user_data = read_user_data(value)?;
     Ok(Reject::new(policy_name, scope, code, reason, details)
         .with_mode(mode)
@@ -1178,20 +1178,22 @@ fn parse_reject_scope(value: &str) -> Result<RejectScope, JsValue> {
 }
 
 /// Parses a case-sensitive rule mode, defaulting to `Reject` when absent.
-pub(crate) fn parse_rule_mode(value: &JsValue) -> Result<RuleMode, JsValue> {
+///
+/// `field` is the field name reported in validation errors.
+pub(crate) fn parse_rule_mode(value: &JsValue, field: &str) -> Result<RuleMode, JsValue> {
     if value.is_undefined() || value.is_null() {
         return Ok(RuleMode::Reject);
     }
     let value = value
         .as_string()
-        .ok_or_else(|| policy_type_error("reject.mode must be a string"))?;
+        .ok_or_else(|| policy_type_error(&format!("{field} must be a string")))?;
     match value.as_str() {
         mode if mode == RuleMode::Reject.as_str() => Ok(RuleMode::Reject),
         mode if mode == RuleMode::ReviewWithHold.as_str() => Ok(RuleMode::ReviewWithHold),
         mode if mode == RuleMode::ReviewWithoutHold.as_str() => Ok(RuleMode::ReviewWithoutHold),
-        _ => Err(policy_range_error(
-            "reject.mode must be \"Reject\", \"ReviewWithHold\", or \"ReviewWithoutHold\"",
-        )),
+        _ => Err(policy_range_error(&format!(
+            "{field} must be \"Reject\", \"ReviewWithHold\", or \"ReviewWithoutHold\"",
+        ))),
     }
 }
 

@@ -144,11 +144,13 @@ func NewParamPnlOptional(value ParamPnl) ParamPnlOptional {
 
 func NewPretradePoliciesPnlBoundsBarrier(
 	settlementAsset string,
+	mode PretradeRuleMode,
 	lowerBound ParamPnlOptional,
 	upperBound ParamPnlOptional,
 ) PretradePoliciesPnlBoundsBarrier {
 	return PretradePoliciesPnlBoundsBarrier{
 		settlement_asset: importString(settlementAsset),
+		mode:             ruleModeToC(mode),
 		lower_bound:      lowerBound,
 		upper_bound:      upperBound,
 	}
@@ -157,6 +159,7 @@ func NewPretradePoliciesPnlBoundsBarrier(
 func NewPretradePoliciesPnlBoundsAccountBarrier(
 	accountID ParamAccountID,
 	settlementAsset string,
+	mode PretradeRuleMode,
 	lowerBound ParamPnlOptional,
 	upperBound ParamPnlOptional,
 	initialPnl ParamPnl,
@@ -164,6 +167,7 @@ func NewPretradePoliciesPnlBoundsAccountBarrier(
 	return PretradePoliciesPnlBoundsAccountBarrier{
 		account_id:       accountID,
 		settlement_asset: importString(settlementAsset),
+		mode:             ruleModeToC(mode),
 		lower_bound:      lowerBound,
 		upper_bound:      upperBound,
 		initial_pnl:      initialPnl,
@@ -173,12 +177,14 @@ func NewPretradePoliciesPnlBoundsAccountBarrier(
 func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 	accountID ParamAccountID,
 	settlementAsset string,
+	mode PretradeRuleMode,
 	lowerBound ParamPnlOptional,
 	upperBound ParamPnlOptional,
 ) PretradePoliciesPnlBoundsAccountBarrierUpdate {
 	return PretradePoliciesPnlBoundsAccountBarrierUpdate{
 		account_id:       accountID,
 		settlement_asset: importString(settlementAsset),
+		mode:             ruleModeToC(mode),
 		lower_bound:      lowerBound,
 		upper_bound:      upperBound,
 	}

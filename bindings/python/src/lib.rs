@@ -86,7 +86,7 @@ use pyo3::basic::CompareOp;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyAttributeError, PyException, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyInt, PyModule};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyModule, PyString};
 use rust_decimal::prelude::ToPrimitive;
 
 create_exception!(openpit, RejectError, PyException);
@@ -1561,6 +1561,15 @@ impl PyConfigurator {
     /// An axis passed as ``None`` is left unchanged; an empty list replaces the
     /// axis with an empty set (subject to the policy's at-least-one-barrier
     /// rule).
+    ///
+    /// Broker keys are (settlement asset, mode). Account keys are (account,
+    /// settlement asset, mode), with the mode taken from ``barrier.mode``.
+    ///
+    /// See :class:`openpit.pretrade.policies.PnlBoundsKillswitchBuilder`
+    /// for how barrier breaches are handled.
+    ///
+    /// Duplicate keys raise ``PolicyConfigureError`` with kind ``Validation``
+    /// and leave both axes unchanged.
     #[pyo3(signature = (name, *, broker_barriers = None, account_barriers = None))]
     fn pnl_bounds_killswitch(
         &self,
@@ -1597,16 +1606,20 @@ impl PyConfigurator {
         .map_err(convert_configure_error)
     }
 
-    /// Force-set the live accumulated P&L for a ``(account, settlement_asset)``
-    /// entry of a registered P&L bounds kill-switch policy.
+    /// Force-set the live accumulated P&L for one account entry.
     ///
-    /// ``name`` must match the name given to the policy at registration time.
+    /// ``name`` must match the name given to the P&L bounds kill-switch policy at
+    /// registration time.
+    ///
     /// Unlike :meth:`pnl_bounds_killswitch`, which retunes bounds and never
     /// touches accumulated P&L, this is an absolute assignment (upsert) of the
-    /// live accumulator; the new value is evaluated against the live bounds on
-    /// the next order. Forcing the accumulator past a bound trips the kill
-    /// switch, which latches an engine-level account block that this call does
-    /// not clear.
+    /// live accumulator for ``(account, settlement_asset)``. The new value is
+    /// evaluated against the live bounds on the next order. This call never
+    /// clears an existing account block.
+    ///
+    /// Raises:
+    ///     PolicyConfigureError: If the policy is not found or has a different
+    ///         type than a P&L bounds kill-switch policy.
     #[pyo3(signature = (name, *, account, settlement_asset, pnl))]
     fn set_account_pnl(
         &self,
@@ -3763,11 +3776,7 @@ fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult<
             .as_str(),
     )?;
     let mode = match value.getattr("mode") {
-        Ok(mode) => parse_rule_mode(&mode.extract::<String>().map_err(|_| {
-            PyValueError::new_err(
-                "reject.mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold'",
-            )
-        })?)?,
+        Ok(mode) => parse_rule_mode(&mode, "reject.mode")?,
         Err(error) if error.is_instance_of::<PyAttributeError>(value.py()) => RuleMode::Reject,
         Err(error) => return Err(error),
     };
@@ -4164,25 +4173,49 @@ fn parse_policy_instance(
     Ok(openpit::PolicyInstance {
         name: name.filter(|name| !name.is_empty()),
         mode: match mode {
-            Some(mode) => parse_rule_mode(mode).map_err(|_| {
-                PyValueError::new_err(format!(
-                    "mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold', got {mode:?}"
-                ))
-            })?,
+            Some(mode) => parse_rule_mode_str(mode, "mode")?,
             None => RuleMode::Reject,
         },
     })
 }
 
-fn parse_rule_mode(value: &str) -> PyResult<RuleMode> {
+const RULE_MODE_EXPECTED: &str = "'Reject', 'ReviewWithHold', or 'ReviewWithoutHold'";
+
+fn rule_mode_from_str(value: &str) -> Option<RuleMode> {
     match value {
-        mode if mode == RuleMode::Reject.as_str() => Ok(RuleMode::Reject),
-        mode if mode == RuleMode::ReviewWithHold.as_str() => Ok(RuleMode::ReviewWithHold),
-        mode if mode == RuleMode::ReviewWithoutHold.as_str() => Ok(RuleMode::ReviewWithoutHold),
-        other => Err(PyValueError::new_err(format!(
-            "reject.mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold', got {other:?}"
-        ))),
+        mode if mode == RuleMode::Reject.as_str() => Some(RuleMode::Reject),
+        mode if mode == RuleMode::ReviewWithHold.as_str() => Some(RuleMode::ReviewWithHold),
+        mode if mode == RuleMode::ReviewWithoutHold.as_str() => Some(RuleMode::ReviewWithoutHold),
+        _ => None,
     }
+}
+
+fn parse_rule_mode(value: &Bound<'_, PyAny>, field: &str) -> PyResult<RuleMode> {
+    let value = value
+        .cast::<PyString>()
+        .map_err(|_| PyValueError::new_err(format!("{field} must be {RULE_MODE_EXPECTED}")))?;
+    if let Some(mode) = value.to_str().ok().and_then(rule_mode_from_str) {
+        return Ok(mode);
+    }
+    Err(invalid_rule_mode(value, field)?)
+}
+
+fn parse_rule_mode_str(value: &str, field: &str) -> PyResult<RuleMode> {
+    match rule_mode_from_str(value) {
+        Some(mode) => Ok(mode),
+        None => Python::attach(|py| Err(invalid_rule_mode(&PyString::new(py, value), field)?)),
+    }
+}
+
+fn invalid_rule_mode(value: &Bound<'_, PyString>, field: &str) -> PyResult<PyErr> {
+    let repr = value
+        .py()
+        .get_type::<PyString>()
+        .call_method1("__repr__", (value,))?;
+    Ok(PyValueError::new_err(format!(
+        "{field} must be {RULE_MODE_EXPECTED}, got {}",
+        repr.cast::<PyString>()?.to_str()?
+    )))
 }
 
 fn parse_reject_code(value: &str) -> PyResult<RejectCode> {
@@ -5110,6 +5143,7 @@ fn parse_pnl_bounds_barrier(obj: &Bound<'_, PyAny>) -> PyResult<PnlBoundsBrokerB
         settlement_asset: parse_asset_input(&settlement_asset)?,
         lower_bound,
         upper_bound,
+        mode: parse_rule_mode(&obj.getattr("mode")?, "PnlBoundsBrokerBarrier.mode")?,
     })
 }
 

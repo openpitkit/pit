@@ -1049,6 +1049,124 @@ def test_pnl_bounds_configuration_uses_named_entities() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("axis", ["broker", "account"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_pnl_bounds_configuration_applies_review_mode(
+    mode: openpit.pretrade.RuleMode, axis: str
+) -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
+    account_id = openpit.param.AccountId.from_int(99224416)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_pnl_bounds_killswitch().broker_barriers(
+                policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("-100"))
+            )
+        )
+        .build()
+    )
+    barrier = policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("1"), mode=mode)
+    if axis == "broker":
+        engine.configure().pnl_bounds_killswitch(
+            policies.PnlBoundsKillswitchBuilder.NAME, broker_barriers=[barrier]
+        )
+    else:
+        engine.configure().pnl_bounds_killswitch(
+            policies.PnlBoundsKillswitchBuilder.NAME,
+            account_barriers=[
+                policies.PnlBoundsAccountAssetBarrierUpdate(barrier, account_id)
+            ],
+        )
+
+    result = engine.start_pre_trade(order=conftest.make_order(account_id=account_id))
+    assert result.rejects == []
+    assert [review.mode for review in result.reviews] == [mode]
+    assert (
+        result.reviews[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("axis", ["broker", "account"])
+def test_pnl_bounds_configuration_rejects_duplicate_barriers_atomically(
+    axis: str,
+) -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
+    account_id = openpit.param.AccountId.from_int(99224417)
+    original_broker = policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("1"))
+    loose_broker = policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("-100"))
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_pnl_bounds_killswitch()
+            .broker_barriers(original_broker)
+            .account_barriers(
+                policies.PnlBoundsAccountAssetBarrier(
+                    original_broker, account_id, openpit.param.Pnl("0")
+                )
+            )
+        )
+        .build()
+    )
+
+    if axis == "broker":
+        broker_barriers = [loose_broker, loose_broker]
+        account_barriers = None
+    else:
+        broker_barriers = [loose_broker]
+        account = policies.PnlBoundsAccountAssetBarrierUpdate(loose_broker, account_id)
+        account_barriers = [account, account]
+
+    with pytest.raises(
+        openpit.PolicyConfigureError, match=f"duplicate {axis} barrier.*USD.*Reject"
+    ) as caught:
+        engine.configure().pnl_bounds_killswitch(
+            policies.PnlBoundsKillswitchBuilder.NAME,
+            broker_barriers=broker_barriers,
+            account_barriers=account_barriers,
+        )
+    assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
+
+    if axis == "account":
+        # Publishing the broker update before validation would let this pass.
+        broker_result = engine.start_pre_trade(order=conftest.make_order())
+        assert not broker_result.ok
+        assert [reject.code for reject in broker_result.rejects] == [
+            openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+        ]
+        assert (
+            broker_result.rejects[0].reason
+            == "pnl kill switch triggered: broker barrier"
+        )
+
+        engine.configure().pnl_bounds_killswitch(
+            policies.PnlBoundsKillswitchBuilder.NAME, broker_barriers=[loose_broker]
+        )
+        order = conftest.make_order(account_id=account_id)
+        reason = "pnl kill switch triggered: account + asset barrier"
+    else:
+        order = conftest.make_order()
+        reason = "pnl kill switch triggered: broker barrier"
+
+    result = engine.start_pre_trade(order=order)
+    assert not result.ok
+    assert [reject.code for reject in result.rejects] == [
+        openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    ]
+    assert result.rejects[0].reason == reason
+
+
+@pytest.mark.unit
 def test_set_account_pnl_force_sets_live_accumulator() -> None:
     policies = openpit.pretrade.policies
     account_id = openpit.param.AccountId.from_int(99224416)

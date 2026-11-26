@@ -29,7 +29,7 @@ use std::sync::Arc;
 use openpit::param::{Asset, Pnl, Quantity, Volume};
 use openpit::pretrade::{
     PolicyPreTradeResult, PostTradeContext, PostTradeResult, PreTradeContext, PreTradePolicy,
-    Rejects,
+    Rejects, RuleMode,
 };
 use openpit::storage::StorageBuilder;
 use openpit::{
@@ -46,6 +46,7 @@ use crate::param::{
 };
 
 use crate::last_error::{write_error, OpenPitOutError};
+use crate::reject::{import_rule_mode, OpenPitPretradeRuleMode};
 use crate::write_error_format;
 
 pub mod custom;
@@ -311,6 +312,20 @@ pub(super) fn parse_asset_or_error(
     }
 }
 
+/// Parses a rule mode, reporting invalid values through the builder error channel.
+pub(super) fn parse_rule_mode_or_error(
+    value: OpenPitPretradeRuleMode,
+    label: &str,
+    index: usize,
+    out_error: OpenPitOutError,
+) -> Option<RuleMode> {
+    let mode = import_rule_mode(value);
+    if mode.is_none() {
+        write_error_format!(out_error, "{}[{}] mode is invalid: {}", label, index, value);
+    }
+    mode
+}
+
 /// Parses an asset string view named `field` for a configure function, mapping
 /// any failure to an [`OpenPitConfigureError`] (the only error channel those
 /// functions expose). Mirrors [`parse_asset_or_error`], which instead targets
@@ -329,6 +344,20 @@ pub(super) fn parse_configure_asset(
     Asset::new(&raw).map_err(|e| {
         crate::engine::OpenPitConfigureError::validation(format!(
             "{label}[{index}] {field} is invalid: {e}"
+        ))
+    })
+}
+
+/// Parses a rule mode for a configure function, reporting invalid values as
+/// validation errors.
+pub(super) fn parse_configure_rule_mode(
+    value: OpenPitPretradeRuleMode,
+    label: &str,
+    index: usize,
+) -> Result<RuleMode, crate::engine::OpenPitConfigureError> {
+    import_rule_mode(value).ok_or_else(|| {
+        crate::engine::OpenPitConfigureError::validation(format!(
+            "{label}[{index}] mode is invalid: {value}"
         ))
     })
 }

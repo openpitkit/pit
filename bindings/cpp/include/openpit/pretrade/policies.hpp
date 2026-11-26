@@ -23,6 +23,7 @@
 #include "openpit/marketdata/service.hpp"
 #include "openpit/param/param.hpp"
 #include "openpit/pretrade/detail/lists.hpp"
+#include "openpit/reject/reject.hpp"
 #include "openpit/string.hpp"
 
 #include <openpit.h>
@@ -352,8 +353,11 @@ class OrderValidationPolicy {
 // Broker-level P&L bounds for one settlement asset, applied across all
 // accounts. Lower bound is typically the negative loss limit; upper bound the
 // positive profit-take limit. Either may be absent.
+// The key is (settlement asset, mode), unique within the broker list.
+// Reject and review barriers for the same asset may coexist.
 struct PnlBoundsBrokerBarrier {
   ::openpit::param::Asset settlementAsset;
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
 
@@ -362,10 +366,13 @@ struct PnlBoundsBrokerBarrier {
 };
 
 // Per-(account, settlement-asset) P&L bounds with an initial accumulated-P&L
-// seed.
+// seed. The key is (account, settlement asset, mode), unique within the account
+// list. Reject and review barriers for one (account, asset) may coexist, but
+// must have equal initialPnl: they share the same accumulator.
 struct PnlBoundsAccountBarrier {
   ::openpit::param::AccountId accountId;
   ::openpit::param::Asset settlementAsset;
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
   ::openpit::param::Pnl initialPnl;
@@ -381,9 +388,12 @@ struct PnlBoundsAccountBarrier {
 // Runtime replacement for a per-(account, settlement-asset) P&L barrier.
 // Unlike `PnlBoundsAccountBarrier`, it intentionally carries no initial P&L:
 // runtime replacement preserves the live accumulator.
+// The key is (account, settlement asset, mode), unique within the account
+// list. Reject and review barriers for the same (account, asset) may coexist.
 struct PnlBoundsAccountBarrierUpdate {
   ::openpit::param::AccountId accountId;
   ::openpit::param::Asset settlementAsset;
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
 
@@ -394,6 +404,20 @@ struct PnlBoundsAccountBarrierUpdate {
 
 // Built-in P&L bounds kill-switch policy. At least one barrier (broker or
 // account) must be configured.
+// Mode defaults to Reject. An underlying mode value of 0 also means Reject.
+// Broker barrier keys are (settlement asset, mode). Account barrier keys are
+// (account, settlement asset, mode).
+// With a Reject-mode registration (the default), a Reject barrier breach
+// rejects the order and blocks the account in pre-trade, and blocks the
+// account on an execution report. A review-mode registration turns that
+// breach into a pre-trade mark of its mode for an unconfirmed order without
+// blocking on either path. Review barrier breaches yield pre-trade marks
+// for unconfirmed orders without blocking.
+// A missing required order field rejects the order; a missing required
+// execution-report field or P&L that cannot be computed blocks the account.
+// Both apply in every mode, review modes included.
+// AddTo throws Error for mode values above 3, duplicate barrier keys,
+// conflicting initialPnl seeds, or invalid bounds.
 class PnlBoundsKillSwitchPolicy {
  public:
   PnlBoundsKillSwitchPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -420,6 +444,7 @@ class PnlBoundsKillSwitchPolicy {
     for (const PnlBoundsBrokerBarrier& barrier : m_brokerBarriers) {
       OpenPitPretradePoliciesPnlBoundsBarrier raw{};
       raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
+      raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
       raw.lower_bound =
           ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
               barrier.lowerBound);
@@ -435,6 +460,7 @@ class PnlBoundsKillSwitchPolicy {
       OpenPitPretradePoliciesPnlBoundsAccountBarrier raw{};
       raw.account_id = ::openpit::detail::Native(barrier.accountId);
       raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
+      raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
       raw.lower_bound =
           ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
               barrier.lowerBound);

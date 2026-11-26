@@ -144,8 +144,18 @@ blocked individually in place.
 
 - `build_order_validation()`: validates required order fields and basic shape.
 - `build_rate_limit()`: rejects requests after a configured limit is reached.
-- `build_pnl_bounds_killswitch()`: blocks accounts when accumulated P&L is
-  outside configured bounds.
+- `build_pnl_bounds_killswitch()`: checks accumulated P&L against configured
+  bounds. Broker barrier keys are (settlement asset, mode). Account barrier
+  keys are (account, settlement asset, mode).
+  With a `Reject` registration (the default), a `Reject` barrier
+  breach rejects the order and blocks the account in pre-trade, and blocks it
+  on an execution report. With a review-mode registration, the breach yields a
+  pre-trade mark of the instance's mode for an unconfirmed order without
+  blocking on either path. A review barrier breach yields a pre-trade mark
+  for an unconfirmed order without blocking. A missing
+  required order field rejects the order; a missing required execution-report
+  field or P&L that cannot be computed blocks the account. Both apply in every
+  mode, review modes included.
 - `build_order_size_limit()`: enforces optional quantity limits by underlying
   asset and notional limits by settlement asset, with additive broker caps.
 - `build_spot_funds()`: enforces available-funds checks by default and tracks

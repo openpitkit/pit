@@ -174,6 +174,13 @@ class Configurator {
     }
   }
 
+  /// Replaces the supplied barrier lists; nullopt leaves an axis unchanged.
+  /// Keys include mode: (asset, mode) for brokers, (account, asset, mode) for
+  /// accounts. Reject and review barriers may coexist.
+  /// See ::openpit::pretrade::policies::PnlBoundsKillSwitchPolicy for how
+  /// barrier breaches are handled.
+  /// Throws ConfigureError with kind Validation for invalid modes, duplicate
+  /// keys or invalid bounds; the previous barriers remain in force.
   void PnlBoundsKillSwitch(
       std::string_view name,
       std::optional<
@@ -189,6 +196,7 @@ class Configurator {
         OpenPitPretradePoliciesPnlBoundsBarrier raw{};
         raw.settlement_asset =
             ::openpit::detail::Native(barrier.settlementAsset);
+        raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
         raw.lower_bound =
             ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
                 barrier.lowerBound);
@@ -208,6 +216,7 @@ class Configurator {
         raw.account_id = ::openpit::detail::Native(barrier.accountId);
         raw.settlement_asset =
             ::openpit::detail::Native(barrier.settlementAsset);
+        raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
         raw.lower_bound =
             ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
                 barrier.lowerBound);

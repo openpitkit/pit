@@ -478,6 +478,7 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
     let pnl_policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: usd.clone(),
                 lower_bound: Some(Pnl::from_str("-1000")?),
                 upper_bound: None,
@@ -1327,6 +1328,7 @@ fn example_wiki_policies_pnl_bounds_killswitch() -> Result<(), Box<dyn std::erro
     let policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: Asset::new("USD")?,
                 lower_bound: Some(Pnl::from_str("-1000")?),
                 upper_bound: Some(Pnl::from_str("500")?),
@@ -2385,6 +2387,7 @@ fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
     let policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: Asset::new("USD")?,
                 lower_bound: Some(Pnl::from_str("-100")?),
                 upper_bound: None,

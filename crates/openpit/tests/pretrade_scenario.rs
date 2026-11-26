@@ -1116,6 +1116,7 @@ fn pnl_bounds_barrier(
     upper_bound: Option<Pnl>,
 ) -> PnlBoundsBrokerBarrier {
     PnlBoundsBrokerBarrier {
+        mode: openpit::pretrade::RuleMode::Reject,
         settlement_asset,
         lower_bound,
         upper_bound,

@@ -24,12 +24,17 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/reject"
 )
 
 // PnlBoundsBrokerBarrier defines broker-level P&L bounds applied across all
-// accounts for one settlement asset.
+// accounts for one settlement asset. Each (settlement asset, Mode) may occur
+// only once in a barrier list. Reject and review barriers on one asset coexist.
 type PnlBoundsBrokerBarrier struct {
 	SettlementAsset param.Asset
+	// Mode is the rule mode of this barrier and part of its key. The zero
+	// value means Reject.
+	Mode reject.RuleMode
 	// LowerBound is typically negative and represents the loss limit.
 	LowerBound optional.Option[param.Pnl]
 	// UpperBound is typically positive and represents the profit-taking
@@ -40,10 +45,10 @@ type PnlBoundsBrokerBarrier struct {
 // PnlBoundsAccountAssetBarrier defines per-(account, settlement asset) P&L
 // bounds with an initial P&L seed.
 //
-// Barrier carries the settlement asset and bounds configuration (identical to
-// the broker-level shape); AccountID and InitialPnl bind it to a specific
-// account. Both the broker barrier (if any) and this account+asset barrier are
-// evaluated on every check; the order passes only if neither is breached.
+// Barrier.Mode carries the rule mode. Each (account, asset, mode) may occur
+// only once in a barrier list. Barriers of different modes on one (account,
+// asset) must carry equal InitialPnl. Broker and account barriers are evaluated
+// on every check.
 type PnlBoundsAccountAssetBarrier struct {
 	// Barrier holds the settlement asset and P&L bounds for this
 	// account+asset pair. The fields mirror PnlBoundsBrokerBarrier so that
@@ -59,6 +64,8 @@ type PnlBoundsAccountAssetBarrier struct {
 
 // PnlBoundsAccountAssetBarrierUpdate updates bounds for an existing
 // per-(account, settlement asset) accumulator without replacing its live P&L.
+// Barrier.Mode carries the rule mode; each (account, asset, mode) may occur
+// only once per call.
 type PnlBoundsAccountAssetBarrierUpdate struct {
 	Barrier PnlBoundsBrokerBarrier
 	// AccountID is the account this barrier applies to.
@@ -78,6 +85,19 @@ type PnlBoundsKillSwitchBuilder struct {
 
 // PnlBoundsKillSwitchReadyBuilder holds a fully-configured P&L bounds
 // kill-switch policy.
+//
+// Barrier keys include the mode. Broker barriers use (settlement asset, mode)
+// and account barriers use (account, settlement asset, mode).
+// With a Reject-mode registration (the default), a Reject barrier breach
+// rejects the order and blocks the account in pre-trade, and blocks the
+// account on an execution report. A review-mode registration turns that
+// breach into a pre-trade mark of its mode for an unconfirmed order without
+// blocking on either path. A review barrier breach yields a pre-trade mark
+// for an unconfirmed order without blocking.
+//
+// A missing required order field rejects the order. A missing required
+// execution-report field or P&L that cannot be computed blocks the account.
+// Both apply in every mode.
 type PnlBoundsKillSwitchReadyBuilder struct {
 	brokerBarriers                 []native.PretradePoliciesPnlBoundsBarrier
 	brokerBarrierSettlementAssets  []param.Asset
@@ -130,6 +150,7 @@ func (b *PnlBoundsKillSwitchReadyBuilder) BrokerBarriers(
 			b.brokerBarriers,
 			native.NewPretradePoliciesPnlBoundsBarrier(
 				barrier.SettlementAsset.Handle(),
+				native.PretradeRuleMode(barrier.Mode),
 				newParamPnlOptionalFromOptional(barrier.LowerBound),
 				newParamPnlOptionalFromOptional(barrier.UpperBound),
 			),
@@ -162,6 +183,7 @@ func (b *PnlBoundsKillSwitchReadyBuilder) AccountBarriers(
 			native.NewPretradePoliciesPnlBoundsAccountBarrier(
 				barrier.AccountID.Handle(),
 				barrier.Barrier.SettlementAsset.Handle(),
+				native.PretradeRuleMode(barrier.Barrier.Mode),
 				newParamPnlOptionalFromOptional(barrier.Barrier.LowerBound),
 				newParamPnlOptionalFromOptional(barrier.Barrier.UpperBound),
 				barrier.InitialPnl.Handle(),

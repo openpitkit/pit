@@ -21,14 +21,17 @@ import {
   AssetError,
   Engine,
   EngineBuildError,
+  EngineBuildErrorKind,
   ParamError,
 } from "@openpit/engine";
 import { QuoteTtl } from "@openpit/engine/marketdata";
 import { TradeAmount } from "@openpit/engine/param";
 import type { OrderInit } from "@openpit/engine/model";
 import type { Policy } from "@openpit/engine/pretrade";
+import { RuleMode } from "@openpit/engine/reject";
 import {
   buildOrderSizeLimit,
+  buildPnlBoundsKillswitch,
   buildRateLimit,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
@@ -36,6 +39,9 @@ import {
   OrderSizeAssetBarrier,
   OrderSizeBrokerBarrier,
   OrderSizeLimit,
+  PnlBoundsAccountAssetBarrier,
+  PnlBoundsAccountAssetBarrierUpdate,
+  PnlBoundsBrokerBarrier,
   RateLimit,
   RateLimitBrokerBarrier,
   SpotFundsOverride,
@@ -275,6 +281,106 @@ describe("policy instances", () => {
       expect(caught).toBe(marker);
     },
   );
+});
+
+describe("P&L-bounds kill switch validation", () => {
+  function accountBarrier(initialPnl: string, mode: RuleMode) {
+    return new PnlBoundsAccountAssetBarrier(
+      ORDER_SIZE_ACCOUNT,
+      "USD",
+      initialPnl,
+      "-100",
+      undefined,
+      mode,
+    );
+  }
+
+  const brokerBarrier = (mode: RuleMode) =>
+    new PnlBoundsBrokerBarrier("USD", "-100", undefined, mode);
+
+  describe.each([
+    ["broker barrier", brokerBarrier],
+    ["account barrier", (mode: RuleMode) => accountBarrier("0", mode)],
+    [
+      "account barrier update",
+      (mode: RuleMode) =>
+        new PnlBoundsAccountAssetBarrierUpdate(
+          ORDER_SIZE_ACCOUNT,
+          "USD",
+          "-100",
+          undefined,
+          mode,
+        ),
+    ],
+  ] as const)("%s", (_label, construct) => {
+    it("throws RangeError for a mode with the wrong case", () => {
+      expect(() => construct("reject" as never)).toThrow(RangeError);
+      expect(() => construct("reject" as never)).toThrow(
+        /^mode must be "Reject", "ReviewWithHold", or "ReviewWithoutHold"$/,
+      );
+    });
+
+    it("throws TypeError for a non-string mode", () => {
+      expect(() => construct(1 as never)).toThrow(TypeError);
+      expect(() => construct(1 as never)).toThrow(/^mode must be a string$/);
+    });
+  });
+
+  it.each([
+    {
+      cause: "duplicate broker barrier",
+      configure: () =>
+        buildPnlBoundsKillswitch().brokerBarriers([
+          brokerBarrier(RuleMode.ReviewWithHold),
+          brokerBarrier(RuleMode.ReviewWithHold),
+        ]),
+    },
+    {
+      cause: "duplicate account barrier",
+      configure: () =>
+        buildPnlBoundsKillswitch().accountBarriers([
+          accountBarrier("0", RuleMode.ReviewWithHold),
+          accountBarrier("0", RuleMode.ReviewWithHold),
+        ]),
+    },
+    {
+      cause: "conflicting initial pnl",
+      configure: () =>
+        buildPnlBoundsKillswitch().accountBarriers([
+          accountBarrier("0", RuleMode.Reject),
+          accountBarrier("1", RuleMode.ReviewWithHold),
+        ]),
+    },
+  ])("reports $cause as an engine build error", ({ cause, configure }) => {
+    try {
+      Engine.builder().builtin(configure()).build();
+      throw new Error("expected engine build error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EngineBuildError);
+      expect((error as EngineBuildError).kind).toBe(
+        EngineBuildErrorKind.InvalidConfiguration,
+      );
+      expect((error as EngineBuildError).message).toContain(cause);
+    }
+  });
+
+  it("accepts distinct modes for the same keys and a shared initial P&L", () => {
+    expect(() =>
+      Engine.builder()
+        .builtin(
+          buildPnlBoundsKillswitch()
+            .brokerBarriers([
+              brokerBarrier(RuleMode.Reject),
+              brokerBarrier(RuleMode.ReviewWithHold),
+            ])
+            .accountBarriers([
+              accountBarrier("0", RuleMode.Reject),
+              accountBarrier("0", RuleMode.ReviewWithoutHold),
+            ]),
+        )
+        .build(),
+    ).not.toThrow();
+  });
 });
 
 describe("rate-limit boundary conversion", () => {

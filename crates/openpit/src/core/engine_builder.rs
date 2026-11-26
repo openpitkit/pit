@@ -256,12 +256,14 @@ fn order_review_flags<Order: HasConfirmed + HasAlreadyHeld>(
 /// let pnl_policy = PnlBoundsKillSwitchPolicy::new(
 ///     PnlBoundsKillSwitchSettings::new(
 ///         [PnlBoundsBrokerBarrier {
+///             mode: openpit::pretrade::RuleMode::Reject,
 ///             settlement_asset: Asset::new("USD")?,
 ///             lower_bound: Some(Pnl::from_str("-500")?),
 ///             upper_bound: None,
 ///         }],
 ///         [PnlBoundsAccountAssetBarrier {
 ///             barrier: PnlBoundsBrokerBarrier {
+///                 mode: openpit::pretrade::RuleMode::Reject,
 ///                 settlement_asset: Asset::new("USD")?,
 ///                 lower_bound: Some(Pnl::from_str("-200")?),
 ///                 upper_bound: None,

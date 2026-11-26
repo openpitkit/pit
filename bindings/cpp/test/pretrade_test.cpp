@@ -1693,6 +1693,406 @@ TEST(BuiltinPolicy, PnlBoundsKillSwitchBrokerBarrierBuilds) {
   EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
 }
 
+TEST(BuiltinPolicy, PnlBoundsKillSwitchDefaultsToReject) {
+  const auto account = openpit::param::AccountId::FromUint64(42);
+  const policies::PnlBoundsBrokerBarrier broker(openpit::param::Asset("USD"));
+  const policies::PnlBoundsAccountBarrier accountBarrier(
+      account, openpit::param::Asset("USD"),
+      openpit::param::Pnl::FromString("0"));
+  const policies::PnlBoundsAccountBarrierUpdate update(
+      account, openpit::param::Asset("USD"));
+  EXPECT_EQ(broker.mode, RuleMode::Reject);
+  EXPECT_EQ(accountBarrier.mode, RuleMode::Reject);
+  EXPECT_EQ(update.mode, RuleMode::Reject);
+}
+
+TEST(BuiltinPolicy, PnlBoundsKillSwitchPreTradeModes) {
+  for (const auto mode :
+       {static_cast<RuleMode>(0), RuleMode::Reject, RuleMode::ReviewWithHold,
+        RuleMode::ReviewWithoutHold}) {
+    const bool rejects =
+        mode == static_cast<RuleMode>(0) || mode == RuleMode::Reject;
+    for (const bool accountAxis : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(accountAxis);
+      const auto account = openpit::param::AccountId::FromUint64(42);
+      const auto loss = openpit::param::Pnl::FromString("-150");
+      openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+      policies::PnlBoundsKillSwitchPolicy config;
+      if (accountAxis) {
+        policies::PnlBoundsAccountBarrier barrier(
+            account, openpit::param::Asset("USD"), loss);
+        barrier.mode = mode;
+        barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+        config.AccountBarrier(barrier);
+      } else {
+        policies::PnlBoundsBrokerBarrier barrier(openpit::param::Asset("USD"));
+        barrier.mode = mode;
+        barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+        config.BrokerBarrier(barrier);
+      }
+      builder.Add(config);
+      const auto engine = builder.Build();
+      if (!accountAxis) {
+        engine.Configure().SetAccountPnl(
+            policies::PnlBoundsKillSwitchPolicyName, account,
+            openpit::param::Asset("USD"), loss);
+      }
+
+      {
+        auto start = engine.StartPreTrade(MakeDryRunHookOrder());
+        if (rejects) {
+          ASSERT_FALSE(start.Passed());
+          ASSERT_EQ(start.rejects.size(), 1u);
+          EXPECT_EQ(start.rejects.front().code,
+                    RejectCode::PnlKillSwitchTriggered);
+        } else {
+          ASSERT_TRUE(start.Passed());
+          EXPECT_TRUE(start.rejects.empty());
+          const auto reviews = start.request->Reviews();
+          ASSERT_EQ(reviews.size(), 1u);
+          EXPECT_EQ(reviews.front().mode, mode);
+          EXPECT_EQ(reviews.front().code, RejectCode::PnlKillSwitchTriggered);
+        }
+      }
+      engine.Configure().SetAccountPnl(policies::PnlBoundsKillSwitchPolicyName,
+                                       account, openpit::param::Asset("USD"),
+                                       openpit::param::Pnl::FromString("0"));
+      const auto following = engine.StartPreTrade(MakeDryRunHookOrder());
+      EXPECT_EQ(following.Passed(), !rejects);
+      if (rejects) {
+        ASSERT_EQ(following.rejects.size(), 1u);
+        EXPECT_EQ(following.rejects.front().code, RejectCode::AccountBlocked);
+      }
+    }
+  }
+}
+
+TEST(BuiltinPolicy, PnlBoundsKillSwitchReviewOrderMissingInstrumentRejects) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    policies::PnlBoundsBrokerBarrier barrier(openpit::param::Asset("USD"));
+    barrier.mode = mode;
+    barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+    policies::PnlBoundsKillSwitchPolicy config;
+    config.BrokerBarrier(std::move(barrier));
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(config);
+    const auto engine = builder.Build();
+
+    auto order = MakeDryRunHookOrder();
+    order.operation->instrument.reset();
+    const auto start = engine.StartPreTrade(order);
+    EXPECT_FALSE(start.Passed());
+    ASSERT_EQ(start.rejects.size(), 1u);
+    EXPECT_EQ(start.rejects.front().code, RejectCode::MissingRequiredField);
+    EXPECT_EQ(start.rejects.front().mode, RuleMode::Reject);
+    EXPECT_EQ(start.rejects.front().policy,
+              policies::PnlBoundsKillSwitchPolicyName);
+  }
+}
+
+TEST(BuiltinPolicy, PnlBoundsKillSwitchExecutionReportModesAndMissingFee) {
+  for (const auto mode : {RuleMode::Reject, RuleMode::ReviewWithHold,
+                          RuleMode::ReviewWithoutHold}) {
+    for (const bool accountAxis : {false, true}) {
+      for (const bool missingFee : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(mode));
+        SCOPED_TRACE(accountAxis);
+        SCOPED_TRACE(missingFee);
+        const auto account = openpit::param::AccountId::FromUint64(42);
+        openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+        policies::PnlBoundsKillSwitchPolicy config;
+        if (accountAxis) {
+          policies::PnlBoundsAccountBarrier barrier(
+              account, openpit::param::Asset("USD"),
+              openpit::param::Pnl::FromString("0"));
+          barrier.mode = mode;
+          barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+          config.AccountBarrier(barrier);
+        } else {
+          policies::PnlBoundsBrokerBarrier barrier(
+              openpit::param::Asset("USD"));
+          barrier.mode = mode;
+          barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+          config.BrokerBarrier(barrier);
+        }
+        builder.Add(config);
+        const auto engine = builder.Build();
+        openpit::model::ExecutionReportOperation operation;
+        operation.accountId = account;
+        operation.instrument = openpit::model::Instrument(
+            openpit::param::Asset("AAPL"), openpit::param::Asset("USD"));
+        operation.side = openpit::model::Side::Buy;
+        openpit::model::ExecutionReport report;
+        report.operation = std::move(operation);
+        openpit::model::FinancialImpact impact;
+        impact.pnl = openpit::param::Pnl::FromString("-150");
+        if (!missingFee) {
+          impact.fee = openpit::param::Fee::FromString("0");
+        }
+        report.financialImpact = std::move(impact);
+
+        const auto result = engine.ApplyExecutionReport(report);
+        const bool blocks = missingFee || mode == RuleMode::Reject;
+        if (blocks) {
+          ASSERT_EQ(result.accountBlocks.size(), 1u);
+          EXPECT_EQ(result.accountBlocks.front().code,
+                    missingFee ? RejectCode::MissingRequiredField
+                               : RejectCode::PnlKillSwitchTriggered);
+          if (missingFee) {
+            EXPECT_THAT(result.accountBlocks.front().reason,
+                        testing::HasSubstr("fee"));
+          }
+        } else {
+          EXPECT_TRUE(result.accountBlocks.empty());
+        }
+        // Remove the breach so a refusal proves a latched account block.
+        engine.Configure().SetAccountPnl(
+            policies::PnlBoundsKillSwitchPolicyName, account,
+            openpit::param::Asset("USD"), openpit::param::Pnl::FromString("0"));
+        const auto following = engine.StartPreTrade(MakeDryRunHookOrder());
+        EXPECT_EQ(following.Passed(), !blocks);
+        if (blocks) {
+          EXPECT_FALSE(following.rejects.empty());
+        }
+      }
+    }
+  }
+}
+
+TEST(BuiltinPolicy, PnlBoundsKillSwitchBuildRejectsDuplicateKeys) {
+  for (const auto mode : {RuleMode::Reject, RuleMode::ReviewWithHold,
+                          RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    policies::PnlBoundsBrokerBarrier broker(openpit::param::Asset("USD"));
+    broker.mode = mode;
+    broker.lowerBound = openpit::param::Pnl::FromString("-100");
+    policies::PnlBoundsAccountBarrier account(
+        openpit::param::AccountId::FromUint64(42), openpit::param::Asset("USD"),
+        openpit::param::Pnl::FromString("0"));
+    account.mode = mode;
+    account.lowerBound = broker.lowerBound;
+    auto duplicateBroker = broker;
+    auto duplicateAccount = account;
+    if (mode == RuleMode::Reject) {
+      duplicateBroker.mode = static_cast<RuleMode>(0);
+      duplicateAccount.mode = static_cast<RuleMode>(0);
+    }
+    openpit::EngineBuilder brokerBuilder(openpit::SyncPolicy::Full);
+    try {
+      brokerBuilder.Add(policies::PnlBoundsKillSwitchPolicy{}
+                            .BrokerBarrier(broker)
+                            .BrokerBarrier(duplicateBroker));
+      FAIL() << "duplicate broker barriers should fail";
+    } catch (const openpit::Error& error) {
+      EXPECT_THAT(error.Message(),
+                  testing::HasSubstr("duplicate broker barrier"));
+    }
+    openpit::EngineBuilder accountBuilder(openpit::SyncPolicy::Full);
+    try {
+      accountBuilder.Add(policies::PnlBoundsKillSwitchPolicy{}
+                             .AccountBarrier(account)
+                             .AccountBarrier(duplicateAccount));
+      FAIL() << "duplicate account barriers should fail";
+    } catch (const openpit::Error& error) {
+      EXPECT_THAT(error.Message(),
+                  testing::HasSubstr("duplicate account barrier"));
+    }
+  }
+}
+
+TEST(BuiltinPolicy, PnlBoundsKillSwitchBuildAllowsModesWithEqualSeeds) {
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    policies::PnlBoundsBrokerBarrier broker(openpit::param::Asset("USD"));
+    broker.lowerBound = openpit::param::Pnl::FromString("-100");
+    auto reviewBroker = broker;
+    reviewBroker.mode = mode;
+    policies::PnlBoundsAccountBarrier account(
+        openpit::param::AccountId::FromUint64(42), openpit::param::Asset("USD"),
+        openpit::param::Pnl::FromString("0"));
+    account.lowerBound = broker.lowerBound;
+    auto reviewAccount = account;
+    reviewAccount.mode = mode;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    EXPECT_NO_THROW(builder.Add(policies::PnlBoundsKillSwitchPolicy{}
+                                    .BrokerBarrier(broker)
+                                    .BrokerBarrier(reviewBroker)
+                                    .AccountBarrier(account)
+                                    .AccountBarrier(reviewAccount)));
+    EXPECT_NO_THROW({ const auto engine = builder.Build(); });
+
+    reviewAccount.initialPnl = openpit::param::Pnl::FromString("1");
+    openpit::EngineBuilder conflicting(openpit::SyncPolicy::Full);
+    try {
+      conflicting.Add(policies::PnlBoundsKillSwitchPolicy{}
+                          .AccountBarrier(account)
+                          .AccountBarrier(reviewAccount));
+      FAIL() << "conflicting initial P&L should fail";
+    } catch (const openpit::Error& error) {
+      EXPECT_THAT(error.Message(),
+                  testing::HasSubstr("conflicting initial pnl"));
+    }
+  }
+}
+
+TEST(BuiltinPolicy, PnlBoundsKillSwitchBuildRejectsInvalidModes) {
+  policies::PnlBoundsBrokerBarrier broker(openpit::param::Asset("USD"));
+  broker.mode = static_cast<RuleMode>(4);
+  broker.lowerBound = openpit::param::Pnl::FromString("-100");
+  openpit::EngineBuilder brokerBuilder(openpit::SyncPolicy::Full);
+  try {
+    brokerBuilder.Add(
+        policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(broker));
+    FAIL() << "an invalid broker mode should fail";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.Message(),
+                testing::HasSubstr("broker[0] mode is invalid: 4"));
+  }
+  policies::PnlBoundsAccountBarrier account(
+      openpit::param::AccountId::FromUint64(42), openpit::param::Asset("USD"),
+      openpit::param::Pnl::FromString("0"));
+  account.mode = static_cast<RuleMode>(4);
+  account.lowerBound = broker.lowerBound;
+  openpit::EngineBuilder accountBuilder(openpit::SyncPolicy::Full);
+  try {
+    accountBuilder.Add(
+        policies::PnlBoundsKillSwitchPolicy{}.AccountBarrier(account));
+    FAIL() << "an invalid account mode should fail";
+  } catch (const openpit::Error& error) {
+    EXPECT_THAT(error.Message(),
+                testing::HasSubstr("account[0] mode is invalid: 4"));
+  }
+}
+
+TEST(BuiltinPolicy, PnlBoundsKillSwitchConfigurePreservesModes) {
+  for (const auto mode :
+       {static_cast<RuleMode>(0), RuleMode::Reject, RuleMode::ReviewWithHold,
+        RuleMode::ReviewWithoutHold}) {
+    for (const bool accountAxis : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(accountAxis);
+      const auto account = openpit::param::AccountId::FromUint64(42);
+      policies::PnlBoundsBrokerBarrier broker(openpit::param::Asset("USD"));
+      broker.lowerBound = openpit::param::Pnl::FromString("-1000");
+      openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+      builder.Add(policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(broker));
+      const auto engine = builder.Build();
+      engine.Configure().SetAccountPnl(policies::PnlBoundsKillSwitchPolicyName,
+                                       account, openpit::param::Asset("USD"),
+                                       openpit::param::Pnl::FromString("-150"));
+      if (accountAxis) {
+        policies::PnlBoundsAccountBarrierUpdate update(
+            account, openpit::param::Asset("USD"));
+        update.mode = mode;
+        update.lowerBound = openpit::param::Pnl::FromString("-100");
+        engine.Configure().PnlBoundsKillSwitch(
+            policies::PnlBoundsKillSwitchPolicyName, std::nullopt,
+            std::vector<policies::PnlBoundsAccountBarrierUpdate>{update});
+      } else {
+        broker.mode = mode;
+        broker.lowerBound = openpit::param::Pnl::FromString("-100");
+        engine.Configure().PnlBoundsKillSwitch(
+            policies::PnlBoundsKillSwitchPolicyName,
+            std::vector<policies::PnlBoundsBrokerBarrier>{broker});
+      }
+      const auto start = engine.StartPreTrade(MakeDryRunHookOrder());
+      if (mode == static_cast<RuleMode>(0) || mode == RuleMode::Reject) {
+        ASSERT_FALSE(start.Passed());
+        ASSERT_EQ(start.rejects.size(), 1u);
+        EXPECT_EQ(start.rejects.front().code,
+                  RejectCode::PnlKillSwitchTriggered);
+        const auto following = engine.StartPreTrade(MakeDryRunHookOrder());
+        ASSERT_EQ(following.rejects.size(), 1u);
+        EXPECT_EQ(following.rejects.front().code, RejectCode::AccountBlocked);
+      } else {
+        ASSERT_TRUE(start.Passed());
+        EXPECT_TRUE(start.rejects.empty());
+        const auto reviews = start.request->Reviews();
+        ASSERT_EQ(reviews.size(), 1u);
+        EXPECT_EQ(reviews.front().mode, mode);
+      }
+    }
+  }
+}
+
+TEST(BuiltinPolicy,
+     PnlBoundsKillSwitchConfigureValidationKeepsPreviousBarriers) {
+  for (const bool accountAxis : {false, true}) {
+    for (const bool invalidMode : {false, true}) {
+      SCOPED_TRACE(accountAxis);
+      SCOPED_TRACE(invalidMode);
+      const auto account = openpit::param::AccountId::FromUint64(42);
+      policies::PnlBoundsBrokerBarrier broker(openpit::param::Asset("USD"));
+      broker.lowerBound = openpit::param::Pnl::FromString("-100");
+      policies::PnlBoundsAccountBarrier initial(
+          account, openpit::param::Asset("USD"),
+          openpit::param::Pnl::FromString("-150"));
+      initial.lowerBound = broker.lowerBound;
+      openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+      policies::PnlBoundsKillSwitchPolicy config;
+      if (accountAxis) {
+        config.AccountBarrier(initial);
+      } else {
+        config.BrokerBarrier(broker);
+      }
+      builder.Add(config);
+      const auto engine = builder.Build();
+      if (!accountAxis) {
+        engine.Configure().SetAccountPnl(
+            policies::PnlBoundsKillSwitchPolicyName, account,
+            openpit::param::Asset("USD"),
+            openpit::param::Pnl::FromString("-150"));
+      }
+      broker.lowerBound = openpit::param::Pnl::FromString("-200");
+      policies::PnlBoundsAccountBarrierUpdate update(
+          account, openpit::param::Asset("USD"));
+      update.lowerBound = broker.lowerBound;
+      if (invalidMode) {
+        broker.mode = static_cast<RuleMode>(4);
+        update.mode = static_cast<RuleMode>(4);
+      }
+      try {
+        if (accountAxis) {
+          engine.Configure().PnlBoundsKillSwitch(
+              policies::PnlBoundsKillSwitchPolicyName, std::nullopt,
+              invalidMode
+                  ? std::vector<policies::PnlBoundsAccountBarrierUpdate>{update}
+                  : std::vector<policies::PnlBoundsAccountBarrierUpdate>{
+                        update, update});
+        } else {
+          engine.Configure().PnlBoundsKillSwitch(
+              policies::PnlBoundsKillSwitchPolicyName,
+              invalidMode
+                  ? std::vector<policies::PnlBoundsBrokerBarrier>{broker}
+                  : std::vector<policies::PnlBoundsBrokerBarrier>{broker,
+                                                                  broker});
+        }
+        FAIL() << "invalid P&L barriers should fail configuration";
+      } catch (const openpit::ConfigureError& error) {
+        EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
+        EXPECT_THAT(
+            error.Message(),
+            testing::HasSubstr(
+                invalidMode ? (accountAxis ? "account[0] mode is invalid: 4"
+                                           : "broker[0] mode is invalid: 4")
+                            : (accountAxis ? "duplicate account barrier"
+                                           : "duplicate broker barrier")));
+      }
+      const auto start = engine.StartPreTrade(MakeDryRunHookOrder());
+      ASSERT_FALSE(start.Passed());
+      ASSERT_EQ(start.rejects.size(), 1u);
+      EXPECT_EQ(start.rejects.front().code, RejectCode::PnlKillSwitchTriggered);
+      const auto following = engine.StartPreTrade(MakeDryRunHookOrder());
+      ASSERT_EQ(following.rejects.size(), 1u);
+      EXPECT_EQ(following.rejects.front().code, RejectCode::AccountBlocked);
+    }
+  }
+}
+
 TEST(BuiltinPolicy, SpotFundsLimitOnlyBuilds) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   // No market-data service: limit-only mode, which needs no MD handle.

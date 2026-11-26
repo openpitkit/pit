@@ -38,6 +38,7 @@ import {
 } from "@openpit/engine/param";
 import { type OrderInit } from "@openpit/engine/model";
 import { Lock, PnlHaltReason } from "@openpit/engine/pretrade";
+import { RuleMode } from "@openpit/engine/reject";
 import {
   buildOrderSizeLimit,
   buildPnlBoundsKillswitch,
@@ -49,6 +50,8 @@ import {
   OrderSizeBrokerBarrier,
   OrderSizeLimit,
   OrderSizeLimitBuilder,
+  PnlBoundsAccountAssetBarrier,
+  PnlBoundsAccountAssetBarrierUpdate,
   PnlBoundsBrokerBarrier,
   PnlBoundsKillswitchBuilder,
   RateLimit,
@@ -137,6 +140,211 @@ function expectConfigureError(
   expect(error).toBeInstanceOf(PolicyConfigureError);
   expect((error as PolicyConfigureError).kind).toBe(kind);
 }
+
+describe("P&L-bounds kill switch", () => {
+  const name = PnlBoundsKillswitchBuilder.NAME;
+
+  function buildBroker(...mode: [mode?: RuleMode | null]): Engine {
+    return Engine.builder()
+      .builtin(
+        buildPnlBoundsKillswitch().brokerBarriers([
+          new PnlBoundsBrokerBarrier("USD", "-100", undefined, ...mode),
+        ]),
+      )
+      .build();
+  }
+
+  function setPnl(engine: Engine, pnl: string): void {
+    engine.configure().setAccountPnl(name, {
+      account: ACCOUNT,
+      settlementAsset: "USD",
+      pnl,
+    });
+  }
+
+  it.each([
+    { label: "omitted mode", build: () => buildBroker() },
+    { label: "null mode", build: () => buildBroker(null) },
+    { label: "Reject", build: () => buildBroker(RuleMode.Reject) },
+  ])("rejects and latches an account block with $label", ({ build }) => {
+    const engine = build();
+    setPnl(engine, "-150");
+
+    const rejected = engine.startPreTrade(makeOrder());
+    expect(rejected.ok).toBe(false);
+    expect(rejected.reviews).toEqual([]);
+    expect(rejected.rejects.map((reject) => reject.code)).toEqual([
+      "PnlKillSwitchTriggered",
+    ]);
+
+    setPnl(engine, "0");
+    const blocked = engine.startPreTrade(makeOrder());
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects.map((reject) => reject.code)).toEqual([
+      "AccountBlocked",
+    ]);
+  });
+
+  describe.each([RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold])(
+    "%s",
+    (mode) => {
+      function expectReviewAndUnblockedAccount(engine: Engine): void {
+        const started = engine.startPreTrade(makeOrder());
+        expect(started.ok).toBe(true);
+        expect(started.rejects).toEqual([]);
+        expect(started.reviews).toMatchObject([
+          { mode, code: "PnlKillSwitchTriggered" },
+        ]);
+
+        const following = engine.executePreTrade(makeOrder());
+        expect(following.ok).toBe(true);
+        expect(following.rejects).toEqual([]);
+        expect(following.reviews).toMatchObject([
+          { mode, code: "PnlKillSwitchTriggered" },
+        ]);
+        following.reservation!.rollback();
+      }
+
+      it("marks a broker breach and leaves the account open", () => {
+        const engine = buildBroker(mode);
+        setPnl(engine, "-150");
+        expectReviewAndUnblockedAccount(engine);
+      });
+
+      it("marks an account breach and leaves the account open", () => {
+        const engine = Engine.builder()
+          .builtin(
+            buildPnlBoundsKillswitch().accountBarriers([
+              new PnlBoundsAccountAssetBarrier(
+                ACCOUNT,
+                "USD",
+                "-150",
+                "-100",
+                undefined,
+                mode,
+              ),
+            ]),
+          )
+          .build();
+        expectReviewAndUnblockedAccount(engine);
+      });
+
+      it("carries the account update mode into the active barriers", () => {
+        const engine = buildBroker();
+        setPnl(engine, "-150");
+        engine.configure().pnlBoundsKillswitch(name, {
+          brokerBarriers: [
+            new PnlBoundsBrokerBarrier("USD", "-1000", undefined),
+          ],
+          accountBarriers: [
+            new PnlBoundsAccountAssetBarrierUpdate(
+              ACCOUNT,
+              "USD",
+              "-100",
+              undefined,
+              mode,
+            ),
+          ],
+        });
+        expectReviewAndUnblockedAccount(engine);
+      });
+
+      it("rejects an order missing a required instrument field", () => {
+        const engine = buildBroker(mode);
+        const result = engine.startPreTrade({
+          operation: { accountId: ACCOUNT, underlyingAsset: "AAPL" },
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.reviews).toEqual([]);
+        expect(result.rejects).toMatchObject([
+          { code: "MissingRequiredField", mode: RuleMode.Reject, policy: name },
+        ]);
+      });
+    },
+  );
+
+  it("preserves the broker barrier on a duplicate broker update", () => {
+    const engine = buildBroker();
+    setPnl(engine, "-150");
+    const barrier = new PnlBoundsBrokerBarrier(
+      "USD",
+      "-1000",
+      undefined,
+      RuleMode.ReviewWithHold,
+    );
+
+    try {
+      engine.configure().pnlBoundsKillswitch(name, {
+        brokerBarriers: [barrier, barrier],
+      });
+      throw new Error("expected validation error");
+    } catch (error) {
+      expectConfigureError(error, ConfigureErrorKind.Validation);
+      expect((error as PolicyConfigureError).validationMessage).toContain(
+        "duplicate broker barrier",
+      );
+    }
+
+    expect(engine.startPreTrade(makeOrder()).rejects[0]?.code).toBe(
+      "PnlKillSwitchTriggered",
+    );
+  });
+
+  it("preserves both barrier axes on a duplicate account update", () => {
+    const accountWithBarrier = 99_224_417n;
+    const engine = Engine.builder()
+      .builtin(
+        buildPnlBoundsKillswitch()
+          .brokerBarriers([
+            new PnlBoundsBrokerBarrier("USD", "-100", undefined),
+          ])
+          .accountBarriers([
+            new PnlBoundsAccountAssetBarrier(
+              accountWithBarrier,
+              "USD",
+              "-75",
+              "-50",
+              undefined,
+            ),
+          ]),
+      )
+      .build();
+    setPnl(engine, "-150");
+    const barrier = new PnlBoundsAccountAssetBarrierUpdate(
+      accountWithBarrier,
+      "USD",
+      "-1000",
+      undefined,
+    );
+
+    try {
+      engine.configure().pnlBoundsKillswitch(name, {
+        brokerBarriers: [new PnlBoundsBrokerBarrier("USD", "-1000", undefined)],
+        accountBarriers: [barrier, barrier],
+      });
+      throw new Error("expected validation error");
+    } catch (error) {
+      expectConfigureError(error, ConfigureErrorKind.Validation);
+      expect((error as PolicyConfigureError).validationMessage).toContain(
+        "duplicate account barrier",
+      );
+    }
+
+    const accountOrder = makeOrder("1", "100", accountWithBarrier);
+    const accountReject = engine.startPreTrade(accountOrder).rejects[0];
+    expect(accountReject?.reason).toBe(
+      "pnl kill switch triggered: account + asset barrier",
+    );
+    expect(accountReject?.code).toBe("PnlKillSwitchTriggered");
+
+    const brokerReject = engine.startPreTrade(makeOrder()).rejects[0];
+    expect(brokerReject?.reason).toBe(
+      "pnl kill switch triggered: broker barrier",
+    );
+    expect(brokerReject?.code).toBe("PnlKillSwitchTriggered");
+  });
+});
 
 describe("empty policy lifecycle", () => {
   it("cycles every rate-limit axis through empty settings", () => {

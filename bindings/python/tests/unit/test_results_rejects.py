@@ -314,9 +314,27 @@ def test_policy_reject_preserves_mode_string(mode: str) -> None:
     assert reject.mode is mode
 
 
+class ModeWithRaisingRepr(str):
+    def __repr__(self) -> str:
+        raise RuntimeError("mode __repr__ must not be called")
+
+
 @pytest.mark.unit
-@pytest.mark.parametrize("mode", ["reject", "Review", None, 1])
-def test_engine_rejects_invalid_mode_on_custom_object(mode: str | int | None) -> None:
+@pytest.mark.parametrize(
+    ("mode", "suffix"),
+    [
+        ("reject", ", got 'reject'"),
+        ("Review", ", got 'Review'"),
+        (None, ""),
+        (1, ""),
+        pytest.param(
+            ModeWithRaisingRepr("Review"), ", got 'Review'", id="raising-repr"
+        ),
+    ],
+)
+def test_engine_rejects_invalid_mode_on_custom_object(
+    mode: str | int | None, suffix: str
+) -> None:
     class InvalidModePolicy(openpit.pretrade.Policy):
         @property
         def name(self) -> str:
@@ -348,10 +366,29 @@ def test_engine_rejects_invalid_mode_on_custom_object(mode: str | int | None) ->
         lambda: engine.execute_pre_trade(order=order),
         lambda: engine.execute_pre_trade_dry_run(order=order),
     ):
-        with pytest.raises(
-            ValueError, match="'Reject', 'ReviewWithHold', or 'ReviewWithoutHold'"
-        ):
+        with pytest.raises(ValueError) as exc_info:
             execute()
+        assert str(exc_info.value) == (
+            "reject.mode must be 'Reject', 'ReviewWithHold', "
+            f"or 'ReviewWithoutHold'{suffix}"
+        )
+
+
+@pytest.mark.unit
+def test_engine_rejects_invalid_policy_instance_mode() -> None:
+    class InvalidModePolicy(openpit.pretrade.Policy):
+        @property
+        def name(self) -> str:
+            return "InvalidModePolicy"
+
+    with pytest.raises(ValueError) as exc_info:
+        openpit.Engine.builder().no_sync().pre_trade(
+            policy=InvalidModePolicy(),
+            mode="Review",  # type: ignore[arg-type]
+        )
+    assert str(exc_info.value) == (
+        "mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold', got 'Review'"
+    )
 
 
 @pytest.mark.unit

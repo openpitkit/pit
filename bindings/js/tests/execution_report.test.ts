@@ -22,13 +22,15 @@ import {
   ExecutionReport,
   ExecutionReportFillDetails,
 } from "@openpit/engine/model";
-import { MonetaryAmount } from "@openpit/engine/param";
+import { MonetaryAmount, TradeAmount } from "@openpit/engine/param";
 import { Lock } from "@openpit/engine/pretrade";
 import {
   buildPnlBoundsKillswitch,
   buildSpotFunds,
   PnlBoundsBrokerBarrier,
+  PnlBoundsKillswitchBuilder,
 } from "@openpit/engine/pretrade/policies";
+import { RuleMode } from "@openpit/engine/reject";
 
 describe("MonetaryAmount", () => {
   it("preserves an exact fee and validated currency", () => {
@@ -151,4 +153,82 @@ describe("execution-report required fields", () => {
       "failed to access field 'fill.lock'",
     );
   });
+});
+
+describe("P&L-bounds kill switch execution reports", () => {
+  const operation = {
+    underlyingAsset: "AAPL",
+    settlementAsset: "USD",
+    accountId: 99_224_416n,
+    side: "BUY" as const,
+  };
+  const order = {
+    operation: { ...operation, tradeAmount: TradeAmount.quantity("1") },
+  };
+
+  function buildEngine(mode: RuleMode): Engine {
+    return Engine.builder()
+      .builtin(
+        buildPnlBoundsKillswitch().brokerBarriers([
+          new PnlBoundsBrokerBarrier("USD", "-100", undefined, mode),
+        ]),
+      )
+      .build();
+  }
+
+  const report = { operation, financialImpact: { pnl: "-150", fee: "0" } };
+
+  it("latches a Reject breach with the report's original cause", () => {
+    const engine = buildEngine(RuleMode.Reject);
+    const result = engine.applyExecutionReport(report);
+    expect(result.accountBlocks.map((block) => block.code)).toEqual([
+      "PnlKillSwitchTriggered",
+    ]);
+
+    engine.configure().setAccountPnl(PnlBoundsKillswitchBuilder.NAME, {
+      account: operation.accountId,
+      settlementAsset: operation.settlementAsset,
+      pnl: "0",
+    });
+    const blocked = engine.startPreTrade(order);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects.map((reject) => reject.code)).toEqual([
+      "PnlKillSwitchTriggered",
+    ]);
+  });
+
+  describe.each([RuleMode.ReviewWithHold, RuleMode.ReviewWithoutHold])(
+    "%s",
+    (mode) => {
+      it("leaves the account open after a report breaches the barrier", () => {
+        const engine = buildEngine(mode);
+        expect(engine.applyExecutionReport(report).accountBlocks).toEqual([]);
+
+        const next = engine.startPreTrade(order);
+        expect(next.ok).toBe(true);
+        expect(next.rejects).toEqual([]);
+        expect(next.reviews.map((review) => review.mode)).toEqual([mode]);
+      });
+
+      it("blocks the account after a report with missing P&L", () => {
+        const engine = buildEngine(mode);
+        const result = engine.applyExecutionReport({
+          operation,
+          financialImpact: { fee: "0" },
+        });
+        expect(result.accountBlocks).toMatchObject([
+          {
+            code: "MissingRequiredField",
+            details: "failed to access field 'financial_impact.pnl'",
+          },
+        ]);
+
+        const blocked = engine.startPreTrade(order);
+        expect(blocked.ok).toBe(false);
+        expect(blocked.rejects.map((reject) => reject.code)).toEqual([
+          "MissingRequiredField",
+        ]);
+      });
+    },
+  );
 });

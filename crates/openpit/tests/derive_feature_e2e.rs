@@ -137,6 +137,7 @@ fn derive_feature_reexport_builds_wrappers_and_engine_smoke_path() {
     let pnl_policy = PnlBoundsKillSwitchPolicy::new(
         PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: Asset::new("USD").expect("must be valid"),
                 lower_bound: Some(Pnl::from_str("-500").expect("must be valid")),
                 upper_bound: None,

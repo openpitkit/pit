@@ -56,11 +56,17 @@ fn parse_configure_optional_pnl(
 /// - `settlement_asset` must point to a valid string for the duration of the
 ///   call.
 /// - The array passed to the add function may contain multiple entries.
+/// - Each (settlement asset, mode) key may appear once per call; reject and
+///   review barriers for the same settlement asset may coexist.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesPnlBoundsBarrier {
     /// Settlement asset whose accumulated P&L is being monitored.
     pub settlement_asset: OpenPitStringView,
+    /// Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject,
+    /// 2 means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3
+    /// fail the call.
+    pub mode: OpenPitPretradeRuleMode,
     /// Optional lower bound for accumulated P&L.
     pub lower_bound: OpenPitParamPnlOptional,
     /// Optional upper bound for accumulated P&L.
@@ -74,7 +80,13 @@ pub struct OpenPitPretradePoliciesPnlBoundsBarrier {
 /// - `initial_pnl` is pre-loaded into storage at construction; accumulation
 ///   starts from this value.
 /// - Both the broker barrier (if any) and this account+asset barrier are
-///   evaluated on every check; the order passes only if neither is breached.
+///   evaluated on every check.
+///
+/// Contract:
+/// - Each (account, settlement asset, mode) key may appear once per call;
+///   reject and review barriers for the same account and asset may coexist.
+/// - Barriers of different modes for one (account, settlement asset) must
+///   carry equal `initial_pnl` seeds.
 ///
 /// Passed to `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy` in
 /// the `account` array.
@@ -85,6 +97,10 @@ pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
     pub account_id: OpenPitParamAccountId,
     /// Settlement asset whose accumulated P&L is being monitored.
     pub settlement_asset: OpenPitStringView,
+    /// Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject,
+    /// 2 means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3
+    /// fail the call.
+    pub mode: OpenPitPretradeRuleMode,
     /// Optional lower bound for accumulated P&L for this account+asset pair.
     pub lower_bound: OpenPitParamPnlOptional,
     /// Optional upper bound for accumulated P&L for this account+asset pair.
@@ -98,6 +114,10 @@ pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
 /// Passed to `openpit_engine_configure_pnl_bounds_killswitch`. It intentionally
 /// has no `initial_pnl`: runtime replacement preserves and evaluates the live
 /// accumulated P&L.
+///
+/// Contract:
+/// - Each (account, settlement asset, mode) key may appear once per call;
+///   reject and review barriers for the same account and asset may coexist.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
@@ -105,6 +125,10 @@ pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
     pub account_id: OpenPitParamAccountId,
     /// Settlement asset whose live accumulated P&L is monitored.
     pub settlement_asset: OpenPitStringView,
+    /// Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject,
+    /// 2 means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3
+    /// fail the call.
+    pub mode: OpenPitPretradeRuleMode,
     /// Optional replacement lower bound.
     pub lower_bound: OpenPitParamPnlOptional,
     /// Optional replacement upper bound.
@@ -113,6 +137,20 @@ pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
 
 #[no_mangle]
 /// Adds the built-in P&L bounds kill-switch policy to the engine builder.
+///
+/// Barrier keys include the mode: (settlement asset, mode) for broker barriers
+/// and (account, settlement asset, mode) for account barriers.
+///
+/// When the policy is registered in Reject mode (the default), a Reject
+/// barrier breach rejects the order and blocks the account in pre-trade, and
+/// blocks the account on an execution report. In a review-mode registration,
+/// the same breach yields a pre-trade mark of the instance's mode for an
+/// unconfirmed order without blocking on either path. Review barrier breaches
+/// yield pre-trade marks for unconfirmed orders without blocking the account.
+///
+/// A missing required order field rejects the order; a missing required
+/// execution-report field or P&L that cannot be computed blocks the account.
+/// Both apply in every mode, review modes included.
 ///
 /// Contract:
 /// - `builder` must be a valid engine builder pointer.
@@ -130,6 +168,8 @@ pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
 /// Error:
 /// - returns `false` when the builder is null or already consumed, when no
 ///   barrier is configured, or when argument parsing fails;
+/// - an invalid mode, a duplicate (key, mode), or conflicting `initial_pnl`
+///   seeds for one (account, settlement asset) also fail the call;
 /// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
 ///   error handle that MUST be released with `openpit_destroy_shared_string`.
 pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
@@ -159,6 +199,9 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
     };
     let mut barriers = Vec::with_capacity(broker_slice.len());
     for (index, param) in broker_slice.iter().enumerate() {
+        let Some(mode) = parse_rule_mode_or_error(param.mode, "broker", index, out_error) else {
+            return false;
+        };
         let settlement = match parse_asset_or_error(
             param.settlement_asset,
             "broker",
@@ -191,6 +234,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
         };
         barriers.push(PnlBoundsBrokerBarrier {
             settlement_asset: settlement,
+            mode,
             lower_bound,
             upper_bound,
         });
@@ -209,6 +253,9 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
     };
     let mut account_barriers = Vec::with_capacity(account_slice.len());
     for (index, param) in account_slice.iter().enumerate() {
+        let Some(mode) = parse_rule_mode_or_error(param.mode, "account", index, out_error) else {
+            return false;
+        };
         let account_id = AccountId::from_u64(param.account_id);
         let settlement = match parse_asset_or_error(
             param.settlement_asset,
@@ -250,6 +297,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
         account_barriers.push(PnlBoundsAccountAssetBarrier {
             barrier: PnlBoundsBrokerBarrier {
                 settlement_asset: settlement,
+                mode,
                 lower_bound,
                 upper_bound,
             },
@@ -297,6 +345,9 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
 /// replace-shaped settings setters. Runtime account barriers use a dedicated
 /// update DTO with no `initial_pnl`; accumulated P&L is preserved.
 ///
+/// See `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`
+/// for how barrier breaches are handled.
+///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
 /// - `name` selects the policy; it is interpreted as UTF-8. A built-in
@@ -311,6 +362,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
 ///   `account_len` entries at `account`.
 /// - Each `settlement_asset` view must be valid for the duration of the call.
 /// - A `has_*` flag set to `false` leaves that axis untouched.
+/// - Both 0 and 1 mean Reject. A mode above 3 or a duplicate (key, mode) fails
+///   the whole call with `Validation` and leaves the previous barriers in place.
 ///
 /// Success:
 /// - returns `true`; the new barriers apply from the next check onward.
@@ -372,6 +425,13 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
+            let mode = match parse_configure_rule_mode(entry.mode, "broker", index) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
             let settlement = match parse_configure_asset(
                 entry.settlement_asset,
                 "broker",
@@ -410,6 +470,7 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
             };
             out.push(PnlBoundsBrokerBarrier {
                 settlement_asset: settlement,
+                mode,
                 lower_bound,
                 upper_bound,
             });
@@ -439,6 +500,13 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
+            let mode = match parse_configure_rule_mode(entry.mode, "account", index) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
             let settlement = match parse_configure_asset(
                 entry.settlement_asset,
                 "account",
@@ -478,6 +546,7 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
             out.push(PnlBoundsAccountAssetBarrierUpdate {
                 barrier: PnlBoundsBrokerBarrier {
                     settlement_asset: settlement,
+                    mode,
                     lower_bound,
                     upper_bound,
                 },
@@ -611,6 +680,11 @@ mod tests {
 
     use crate::order::OpenPitOrder;
     use crate::param::{OpenPitParamDecimal, OpenPitParamPnl, OpenPitParamQuantity};
+    use crate::reject::{
+        OPENPIT_PRETRADE_RULE_MODE_REJECT, OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+    };
+    use openpit::pretrade::RuleMode;
 
     fn cstr_to_string(handle: *mut crate::string::OpenPitSharedString) -> String {
         if handle.is_null() {
@@ -727,7 +801,461 @@ mod tests {
             crate::engine::OpenPitPretradeStatus::Passed,
             "start_pre_trade should pass"
         );
+        let reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+            request,
+            std::ptr::null_mut(),
+        );
+        assert!(!reviews.is_null());
+        assert_eq!(crate::reject::openpit_pretrade_reject_list_len(reviews), 0);
+        crate::reject::openpit_destroy_pretrade_reject_list(reviews);
         crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+    }
+
+    fn broker_barrier(mode: OpenPitPretradeRuleMode) -> OpenPitPretradePoliciesPnlBoundsBarrier {
+        OpenPitPretradePoliciesPnlBoundsBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode,
+            lower_bound: pnl_optional(Some(pnl_param(-100, 0))),
+            upper_bound: pnl_optional(None),
+        }
+    }
+
+    fn account_barrier(
+        mode: OpenPitPretradeRuleMode,
+        seed: i128,
+    ) -> OpenPitPretradePoliciesPnlBoundsAccountBarrier {
+        let broker = broker_barrier(mode);
+        OpenPitPretradePoliciesPnlBoundsAccountBarrier {
+            account_id: 7,
+            settlement_asset: broker.settlement_asset,
+            mode,
+            lower_bound: broker.lower_bound,
+            upper_bound: broker.upper_bound,
+            initial_pnl: pnl_param(seed, 0),
+        }
+    }
+
+    fn add_barriers(
+        broker: &[OpenPitPretradePoliciesPnlBoundsBarrier],
+        account: &[OpenPitPretradePoliciesPnlBoundsAccountBarrier],
+    ) -> Result<(), String> {
+        let builder = crate::engine::openpit_create_engine_builder(
+            crate::engine::OpenPitSyncPolicy::Full as u8,
+            std::ptr::null_mut(),
+        );
+        assert!(!builder.is_null());
+        let mut error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                builder,
+                0,
+                broker.as_ptr(),
+                broker.len(),
+                account.as_ptr(),
+                account.len(),
+                std::ptr::null(),
+                &mut error,
+            )
+        };
+        crate::engine::openpit_destroy_engine_builder(builder);
+        if ok {
+            assert!(error.is_null());
+            Ok(())
+        } else {
+            assert!(!error.is_null());
+            Err(cstr_to_string(error))
+        }
+    }
+
+    #[test]
+    fn builder_validates_barrier_modes_on_both_axes() {
+        for mode in [
+            0,
+            4,
+            OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            for account_axis in [false, true] {
+                // Put the tested mode at index 1, on a distinct key.
+                let mut broker = [
+                    broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT),
+                    broker_barrier(mode),
+                ];
+                broker[0].settlement_asset = OpenPitStringView::from_utf8("EUR");
+                let mut account = [
+                    account_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 0),
+                    account_barrier(mode, 0),
+                ];
+                account[0].account_id = 8;
+                let result = if account_axis {
+                    add_barriers(&[], &account)
+                } else {
+                    add_barriers(&broker, &[])
+                };
+                if mode == 4 {
+                    let axis = if account_axis { "account" } else { "broker" };
+                    assert_eq!(
+                        result,
+                        Err(format!("{axis}[1] mode is invalid: {mode}")),
+                        "mode {mode}"
+                    );
+                } else {
+                    assert_eq!(
+                        result,
+                        Ok(()),
+                        "valid mode {mode}, account axis {account_axis}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn builder_barrier_keys_include_mode_on_both_axes() {
+        let modes = [
+            (0, RuleMode::Reject),
+            (1, RuleMode::Reject),
+            (2, RuleMode::ReviewWithHold),
+            (3, RuleMode::ReviewWithoutHold),
+        ];
+        for (first, first_mode) in modes {
+            for (second, second_mode) in modes {
+                for account_axis in [false, true] {
+                    let result = if account_axis {
+                        add_barriers(
+                            &[],
+                            &[account_barrier(first, 0), account_barrier(second, 0)],
+                        )
+                    } else {
+                        add_barriers(&[broker_barrier(first), broker_barrier(second)], &[])
+                    };
+                    if first_mode == second_mode {
+                        let axis = if account_axis { "account" } else { "broker" };
+                        let message = result.expect_err("duplicate (key, mode) must fail");
+                        assert!(
+                            message.starts_with("pnl_bounds_killswitch_policy creation failed: "),
+                            "{message}"
+                        );
+                        assert!(
+                            message.contains(&format!("duplicate {axis} barrier")),
+                            "{message}"
+                        );
+                        assert!(
+                            message.contains(&format!("mode {first_mode:?}")),
+                            "{message}"
+                        );
+                    } else {
+                        assert_eq!(result, Ok(()), "different modes must coexist");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn builder_requires_equal_account_seeds_across_modes() {
+        for review in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            for seed in [0, 1] {
+                let result = add_barriers(
+                    &[],
+                    &[
+                        account_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 0),
+                        account_barrier(review, seed),
+                    ],
+                );
+                if seed == 0 {
+                    assert_eq!(result, Ok(()), "equal seeds must be accepted");
+                } else {
+                    let message = result.expect_err("conflicting seeds must fail");
+                    assert!(
+                        message.starts_with("pnl_bounds_killswitch_policy creation failed: "),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains("conflicting initial pnl for settlement asset USD"),
+                        "{message}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn configure_validates_modes_and_duplicates_without_changing_barriers() {
+        for account_axis in [false, true] {
+            for mode in [
+                0,
+                4,
+                OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+                OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+            ] {
+                let original = broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT);
+                let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+                    openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                        builder,
+                        0,
+                        &original,
+                        1,
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null(),
+                        std::ptr::null_mut(),
+                    )
+                });
+                // If either axis were applied despite failure, zero P&L would
+                // breach this positive lower bound on the next request.
+                let mut replacement = broker_barrier(mode);
+                replacement.lower_bound = pnl_optional(Some(pnl_param(1, 0)));
+                let broker_replacement = OpenPitPretradePoliciesPnlBoundsBarrier {
+                    mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                    ..replacement
+                };
+                let mut broker = [replacement; 2];
+                let mut account = [OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
+                    account_id: 7,
+                    settlement_asset: replacement.settlement_asset,
+                    mode,
+                    lower_bound: replacement.lower_bound,
+                    upper_bound: replacement.upper_bound,
+                }; 2];
+                if matches!(mode, 0 | 4) {
+                    broker[0].mode = OPENPIT_PRETRADE_RULE_MODE_REJECT;
+                    account[0].mode = OPENPIT_PRETRADE_RULE_MODE_REJECT;
+                }
+                let mut error = std::ptr::null_mut();
+                let ok = unsafe {
+                    openpit_engine_configure_pnl_bounds_killswitch(
+                        engine,
+                        OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
+                        if account_axis {
+                            &broker_replacement
+                        } else {
+                            broker.as_ptr()
+                        },
+                        if account_axis { 1 } else { broker.len() },
+                        true,
+                        account.as_ptr(),
+                        account.len(),
+                        account_axis,
+                        &mut error,
+                    )
+                };
+                assert!(
+                    !ok,
+                    "configure must reject mode {mode} or a duplicate, account axis {account_axis}"
+                );
+                assert!(!error.is_null());
+                assert_eq!(
+                    crate::engine::openpit_configure_error_get_kind(error),
+                    crate::engine::OpenPitConfigureErrorKind::Validation
+                );
+                let view = crate::engine::openpit_configure_error_get_message(error);
+                let message =
+                    unsafe { std::str::from_utf8(std::slice::from_raw_parts(view.ptr, view.len)) }
+                        .unwrap();
+                let axis = if account_axis { "account" } else { "broker" };
+                if mode == 4 {
+                    assert_eq!(message, format!("{axis}[1] mode is invalid: {mode}"));
+                } else {
+                    assert!(
+                        message.contains(&format!("duplicate {axis} barrier")),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains(&format!(
+                            "mode {}",
+                            import_rule_mode(mode).unwrap().as_str()
+                        )),
+                        "{message}"
+                    );
+                }
+                crate::engine::openpit_destroy_configure_error(error);
+                run_start_pre_trade_passes(engine);
+                assert!(unsafe {
+                    openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
+                        engine,
+                        OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
+                        7,
+                        OpenPitStringView::from_utf8("USD"),
+                        pnl_param(-150, 0),
+                        std::ptr::null_mut(),
+                    )
+                });
+                let order = valid_pit_order();
+                let mut request = std::ptr::null_mut();
+                let mut rejects = std::ptr::null_mut();
+                let status = crate::engine::openpit_engine_start_pre_trade(
+                    engine,
+                    &order,
+                    &mut request,
+                    &mut rejects,
+                    std::ptr::null_mut(),
+                );
+                assert_eq!(
+                    status,
+                    crate::engine::OpenPitPretradeStatus::Rejected,
+                    "original barrier must still reject at P&L -150"
+                );
+                assert!(!rejects.is_null());
+                assert_eq!(crate::reject::openpit_pretrade_reject_list_len(rejects), 1);
+                let mut reject = std::mem::MaybeUninit::uninit();
+                assert!(crate::reject::openpit_pretrade_reject_list_get(
+                    rejects,
+                    0,
+                    reject.as_mut_ptr()
+                ));
+                let reject = unsafe { reject.assume_init() };
+                assert_eq!(reject.mode, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+                assert_eq!(
+                    reject.code,
+                    crate::reject::OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+                );
+                crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+                crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+                crate::engine::openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn barrier_breach_modes_through_builder_and_configure() {
+        for mode in [
+            0,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            for account_axis in [false, true] {
+                for configure in [false, true] {
+                    let initial_mode = if configure {
+                        OPENPIT_PRETRADE_RULE_MODE_REJECT
+                    } else {
+                        mode
+                    };
+                    let broker = broker_barrier(initial_mode);
+                    let account = account_barrier(initial_mode, 0);
+                    let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+                        openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                            builder,
+                            0,
+                            if account_axis {
+                                std::ptr::null()
+                            } else {
+                                &broker
+                            },
+                            usize::from(!account_axis),
+                            if account_axis {
+                                &account
+                            } else {
+                                std::ptr::null()
+                            },
+                            usize::from(account_axis),
+                            std::ptr::null(),
+                            std::ptr::null_mut(),
+                        )
+                    });
+                    if configure {
+                        let replacement = broker_barrier(mode);
+                        let account_update = OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
+                            account_id: 7,
+                            settlement_asset: replacement.settlement_asset,
+                            mode,
+                            lower_bound: replacement.lower_bound,
+                            upper_bound: replacement.upper_bound,
+                        };
+                        assert!(unsafe {
+                            openpit_engine_configure_pnl_bounds_killswitch(
+                                engine,
+                                OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
+                                &replacement,
+                                1,
+                                !account_axis,
+                                &account_update,
+                                1,
+                                account_axis,
+                                std::ptr::null_mut(),
+                            )
+                        });
+                    }
+                    assert!(unsafe {
+                        openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
+                            engine,
+                            OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
+                            7,
+                            OpenPitStringView::from_utf8("USD"),
+                            pnl_param(-150, 0),
+                            std::ptr::null_mut(),
+                        )
+                    });
+                    for attempt in 0..2 {
+                        let order = valid_pit_order();
+                        let mut request = std::ptr::null_mut();
+                        let mut rejects = std::ptr::null_mut();
+                        let status = crate::engine::openpit_engine_start_pre_trade(
+                            engine,
+                            &order,
+                            &mut request,
+                            &mut rejects,
+                            std::ptr::null_mut(),
+                        );
+                        if mode == 0 {
+                            assert_eq!(status, crate::engine::OpenPitPretradeStatus::Rejected);
+                            assert!(request.is_null());
+                            assert_eq!(crate::reject::openpit_pretrade_reject_list_len(rejects), 1);
+                            let mut reject = std::mem::MaybeUninit::uninit();
+                            assert!(crate::reject::openpit_pretrade_reject_list_get(
+                                rejects,
+                                0,
+                                reject.as_mut_ptr()
+                            ));
+                            let reject = unsafe { reject.assume_init() };
+                            assert_eq!(reject.mode, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+                            assert_eq!(
+                                reject.code,
+                                if attempt == 0 {
+                                    crate::reject::OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+                                } else {
+                                    crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
+                                }
+                            );
+                            crate::reject::openpit_destroy_pretrade_reject_list(rejects);
+                            continue;
+                        }
+                        assert_eq!(
+                            status,
+                            crate::engine::OpenPitPretradeStatus::Passed,
+                            "review: mode {mode}, account {account_axis}, configure {configure}"
+                        );
+                        assert!(rejects.is_null(), "review breach must not reject");
+                        let reviews = crate::engine::openpit_pretrade_pre_trade_request_get_reviews(
+                            request,
+                            std::ptr::null_mut(),
+                        );
+                        assert!(!reviews.is_null());
+                        assert_eq!(crate::reject::openpit_pretrade_reject_list_len(reviews), 1);
+                        let mut mark = std::mem::MaybeUninit::uninit();
+                        assert!(crate::reject::openpit_pretrade_reject_list_get(
+                            reviews,
+                            0,
+                            mark.as_mut_ptr()
+                        ));
+                        let mark = unsafe { mark.assume_init() };
+                        assert_eq!(mark.mode, mode, "review mark must retain barrier mode");
+                        assert_eq!(
+                            mark.code,
+                            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+                        );
+                        crate::reject::openpit_destroy_pretrade_reject_list(reviews);
+                        crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+                    }
+                    crate::engine::openpit_destroy_engine(engine);
+                }
+            }
+        }
     }
 
     #[test]
@@ -735,6 +1263,7 @@ mod tests {
         let usd = OpenPitStringView::from_utf8("USD");
         let broker = [OpenPitPretradePoliciesPnlBoundsBarrier {
             settlement_asset: usd,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
             lower_bound: pnl_optional(Some(pnl_param(-10000, 0))),
             upper_bound: pnl_optional(None),
         }];
@@ -841,6 +1370,7 @@ mod tests {
     fn configure_pnl_bounds_killswitch_rejects_null_and_invalid_utf8_names() {
         let broker = [OpenPitPretradePoliciesPnlBoundsBarrier {
             settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
             lower_bound: pnl_optional(Some(pnl_param(-10000, 0))),
             upper_bound: pnl_optional(None),
         }];
@@ -898,6 +1428,7 @@ mod tests {
         // account) has no history, so it passes before the override.
         let broker = [OpenPitPretradePoliciesPnlBoundsBarrier {
             settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
             lower_bound: pnl_optional(Some(pnl_param(-100, 0))),
             upper_bound: pnl_optional(None),
         }];

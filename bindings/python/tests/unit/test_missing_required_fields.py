@@ -1,6 +1,7 @@
 # Copyright The Pit Project Owners. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import conftest
 import openpit
 import openpit.pretrade
 import pytest
@@ -24,7 +25,10 @@ def test_start_pre_trade_order_without_operation_produces_missing_field_reject()
 
 
 @pytest.mark.unit
-def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+def test_start_pre_trade_pnl_kill_switch_without_operation_rejects(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
     policies = openpit.pretrade.policies
     engine = (
         openpit.Engine.builder()
@@ -34,6 +38,7 @@ def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
                 policies.PnlBoundsBrokerBarrier(
                     settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-500"),
+                    mode=mode,
                 )
             )
         )
@@ -42,17 +47,17 @@ def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
     order = openpit.Order()
     result = engine.start_pre_trade(order=order)
     assert not result.ok
+    assert result.reviews == []
     assert len(result.rejects) == 1
     assert result.rejects[0].code == openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD
+    assert result.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
 
 
 @pytest.mark.unit
-def test_apply_execution_report_without_financial_impact_does_not_panic() -> None:
-    """
-    Engine must not panic when financial_impact group is absent.
-
-    Kill switch must not trigger.
-    """
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+def test_pnl_kill_switch_execution_report_without_pnl_blocks_account(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
     policies = openpit.pretrade.policies
     engine = (
         openpit.Engine.builder()
@@ -62,6 +67,7 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
                 policies.PnlBoundsBrokerBarrier(
                     settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-500"),
+                    mode=mode,
                 )
             )
         )
@@ -78,8 +84,10 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
         ),
     )
     post = engine.apply_execution_report(report=report)
-    assert post.account_blocks
+    assert len(post.account_blocks) == 1
     assert post.account_blocks[0].code == "MissingRequiredField"
+    assert post.account_blocks[0].reason == "failed to access required field 'P&L'"
+    assert not engine.start_pre_trade(order=conftest.make_order()).ok
 
 
 @pytest.mark.unit

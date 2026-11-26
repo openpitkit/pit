@@ -209,27 +209,188 @@ def test_rate_limit_rejects_second_order_in_window() -> None:
 
 
 @pytest.mark.unit
-def test_pnl_kill_switch_triggers_when_pnl_outside_bounds() -> None:
+def test_pnl_broker_barrier_defaults_to_reject() -> None:
+    barrier = openpit.pretrade.policies.PnlBoundsBrokerBarrier
+    usd = openpit.param.Asset("USD")
+    lower_bound = openpit.param.Pnl("-100")
+    assert barrier(usd, lower_bound).mode is openpit.pretrade.RuleMode.REJECT
+    assert barrier(usd, lower_bound, mode=None).mode is openpit.pretrade.RuleMode.REJECT
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mode", "spelling"),
+    [
+        (openpit.pretrade.RuleMode.REJECT, "Reject"),
+        (openpit.pretrade.RuleMode.REVIEW_WITH_HOLD, "ReviewWithHold"),
+        (openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD, "ReviewWithoutHold"),
+    ],
+)
+def test_pnl_broker_barrier_accepts_enum_and_exact_string(
+    mode: openpit.pretrade.RuleMode, spelling: str
+) -> None:
+    barrier = openpit.pretrade.policies.PnlBoundsBrokerBarrier
+    usd = openpit.param.Asset("USD")
+    lower_bound = openpit.param.Pnl("-100")
+    assert barrier(usd, lower_bound, mode=mode).mode is mode
+    assert barrier(usd, lower_bound, mode=spelling).mode is mode
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mode", "suffix"),
+    [
+        ("reject", ", got 'reject'"),
+        ("Review", ", got 'Review'"),
+        ("Reject\n", r", got 'Reject\n'"),
+        (1, ""),
+    ],
+)
+def test_pnl_broker_barrier_rejects_invalid_mode(mode: object, suffix: str) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        openpit.pretrade.policies.PnlBoundsBrokerBarrier(
+            openpit.param.Asset("USD"), openpit.param.Pnl("-100"), mode=mode
+        )
+    expected = (
+        "PnlBoundsBrokerBarrier.mode must be 'Reject', 'ReviewWithHold', "
+        f"or 'ReviewWithoutHold'{suffix}"
+    )
+    assert str(exc_info.value) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("native", [False, True], ids=["dataclass", "native"])
+def test_pnl_broker_barrier_ignores_mode_repr_override(native: bool) -> None:
+    class ModeWithRaisingRepr(str):
+        def __repr__(self) -> str:
+            raise RuntimeError("mode __repr__ must not be called")
+
     policies = openpit.pretrade.policies
+    asset = openpit.param.Asset("USD")
+    lower_bound = openpit.param.Pnl("-100")
+    mode = ModeWithRaisingRepr("Review")
+
+    with pytest.raises(ValueError) as exc_info:
+        if native:
+            barrier = policies.PnlBoundsBrokerBarrier(asset, lower_bound)
+            object.__setattr__(barrier, "mode", mode)
+            policy = policies.build_pnl_bounds_killswitch().broker_barriers(barrier)
+            openpit.Engine.builder().no_sync().builtin(policy)
+        else:
+            policies.PnlBoundsBrokerBarrier(
+                asset,
+                lower_bound,
+                mode=mode,  # type: ignore[arg-type]
+            )
+    assert str(exc_info.value) == (
+        "PnlBoundsBrokerBarrier.mode must be 'Reject', 'ReviewWithHold', "
+        "or 'ReviewWithoutHold', got 'Review'"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("axis", ["broker", "account"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_pnl_kill_switch_breach_marks_order_for_review(
+    mode: openpit.pretrade.RuleMode, axis: str
+) -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    barrier = policies.PnlBoundsBrokerBarrier(
+        openpit.param.Asset("USD"), openpit.param.Pnl("1"), mode=mode
+    )
+    builder = policies.build_pnl_bounds_killswitch()
+    if axis == "broker":
+        policy = builder.broker_barriers(barrier)
+    else:
+        policy = builder.account_barriers(
+            policies.PnlBoundsAccountAssetBarrier(
+                barrier, account_id, openpit.param.Pnl("0")
+            )
+        )
+    engine = openpit.Engine.builder().no_sync().builtin(policy).build()
+
+    order = conftest.make_order(account_id=account_id)
+    first = engine.start_pre_trade(order=order)
+    assert first.rejects == []
+    assert [review.mode for review in first.reviews] == [mode]
+    assert (
+        first.reviews[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+    assert first.request is not None
+    executed = first.request.execute()
+    assert executed.rejects == []
+    assert [review.mode for review in executed.reviews] == [mode]
+    assert executed.reservation is not None
+    executed.reservation.rollback()
+
+    next_order = openpit.Order(
+        operation=order.operation, review=openpit.OrderReview(confirmed=True)
+    )
+    following = engine.start_pre_trade(order=next_order)
+    assert following.ok
+    assert following.reviews == []
+
+
+@pytest.mark.unit
+def test_pnl_kill_switch_reject_breach_blocks_account_in_pre_trade() -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
     engine = (
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_pnl_bounds_killswitch()
-            .broker_barriers(
-                policies.PnlBoundsBrokerBarrier(
-                    settlement_asset=openpit.param.Asset("USD"),
-                    lower_bound=openpit.param.Pnl("-100"),
-                )
+            policies.build_pnl_bounds_killswitch().broker_barriers(
+                policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("1"))
             )
-            .account_barriers(
-                policies.PnlBoundsAccountAssetBarrier(
-                    barrier=policies.PnlBoundsBrokerBarrier(
-                        settlement_asset=openpit.param.Asset("USD"),
-                        lower_bound=openpit.param.Pnl("-100"),
-                    ),
-                    account_id=openpit.param.AccountId.from_int(99224416),
-                    initial_pnl=openpit.param.Pnl("0"),
+        )
+        .build()
+    )
+
+    result = engine.start_pre_trade(order=conftest.make_order())
+    assert not result.ok
+    assert result.reviews == []
+    assert [reject.code for reject in result.rejects] == [
+        openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    ]
+    assert result.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
+
+    engine.configure().pnl_bounds_killswitch(
+        policies.PnlBoundsKillswitchBuilder.NAME,
+        broker_barriers=[
+            policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("-100"))
+        ],
+    )
+    following = engine.start_pre_trade(order=conftest.make_order())
+    assert not following.ok
+    assert [reject.code for reject in following.rejects] == [
+        openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", list(openpit.pretrade.RuleMode))
+def test_pnl_kill_switch_execution_report_breach_blocks_only_in_reject_mode(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    usd = openpit.param.Asset("USD")
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_pnl_bounds_killswitch().broker_barriers(
+                policies.PnlBoundsBrokerBarrier(
+                    settlement_asset=usd,
+                    lower_bound=openpit.param.Pnl("-100"),
+                    mode=mode,
                 )
             )
         )
@@ -237,17 +398,99 @@ def test_pnl_kill_switch_triggers_when_pnl_outside_bounds() -> None:
     )
 
     post_trade = engine.apply_execution_report(
-        report=conftest.make_report(pnl=openpit.param.Pnl("-120"))
+        report=conftest.make_report(
+            account_id=account_id, pnl=openpit.param.Pnl("-120")
+        )
     )
-    assert post_trade.account_blocks
+    order = conftest.make_order(account_id=account_id)
+    if mode is openpit.pretrade.RuleMode.REJECT:
+        assert post_trade.account_blocks
+        engine.configure().set_account_pnl(
+            policies.PnlBoundsKillswitchBuilder.NAME,
+            account=account_id,
+            settlement_asset=usd,
+            pnl=openpit.param.Pnl("0"),
+        )
+        following = engine.start_pre_trade(order=order)
+        assert not following.ok
+        assert [reject.code for reject in following.rejects] == [
+            openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+        ]
+        assert following.rejects[0].scope == "account"
+    else:
+        assert not post_trade.account_blocks
+        following = engine.start_pre_trade(order=order)
+        assert following.ok
+        assert [review.mode for review in following.reviews] == [mode]
 
-    blocked = engine.start_pre_trade(order=conftest.make_order())
-    assert not blocked.ok
-    assert len(blocked.rejects) == 1
-    assert (
-        blocked.rejects[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+
+@pytest.mark.unit
+def test_pnl_kill_switch_broker_barriers_are_unique_by_asset_and_mode() -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
+    reject = policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("-100"))
+    review = policies.PnlBoundsBrokerBarrier(
+        usd, openpit.param.Pnl("-50"), mode=openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
     )
-    assert blocked.rejects[0].scope == "account"
+
+    with pytest.raises(ValueError, match="duplicate broker barrier.*USD.*Reject"):
+        openpit.Engine.builder().no_sync().builtin(
+            policies.build_pnl_bounds_killswitch().broker_barriers(reject, reject)
+        ).build()
+
+    openpit.Engine.builder().no_sync().builtin(
+        policies.build_pnl_bounds_killswitch().broker_barriers(reject, review)
+    ).build()
+
+
+@pytest.mark.unit
+def test_pnl_kill_switch_account_barriers_are_unique_by_account_asset_and_mode() -> (
+    None
+):
+    policies = openpit.pretrade.policies
+    barrier = policies.PnlBoundsAccountAssetBarrier(
+        policies.PnlBoundsBrokerBarrier(
+            openpit.param.Asset("USD"), openpit.param.Pnl("-100")
+        ),
+        openpit.param.AccountId.from_int(99224416),
+        openpit.param.Pnl("0"),
+    )
+
+    with pytest.raises(ValueError, match="duplicate account barrier.*USD.*Reject"):
+        openpit.Engine.builder().no_sync().builtin(
+            policies.build_pnl_bounds_killswitch().account_barriers(barrier, barrier)
+        ).build()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("review_initial_pnl", ["0", "1"])
+def test_pnl_kill_switch_account_barriers_share_initial_pnl(
+    review_initial_pnl: str,
+) -> None:
+    policies = openpit.pretrade.policies
+    usd = openpit.param.Asset("USD")
+    account_id = openpit.param.AccountId.from_int(99224416)
+    reject = policies.PnlBoundsAccountAssetBarrier(
+        policies.PnlBoundsBrokerBarrier(usd, openpit.param.Pnl("-100")),
+        account_id,
+        openpit.param.Pnl("0"),
+    )
+    review = policies.PnlBoundsAccountAssetBarrier(
+        policies.PnlBoundsBrokerBarrier(
+            usd,
+            openpit.param.Pnl("-50"),
+            mode=openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        ),
+        account_id,
+        openpit.param.Pnl(review_initial_pnl),
+    )
+    builder = openpit.Engine.builder().no_sync()
+    policy = policies.build_pnl_bounds_killswitch().account_barriers(reject, review)
+    if review_initial_pnl == "0":
+        builder.builtin(policy).build()
+    else:
+        with pytest.raises(ValueError, match="conflicting initial pnl.*USD"):
+            builder.builtin(policy).build()
 
 
 @pytest.mark.unit

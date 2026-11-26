@@ -127,7 +127,7 @@ fn parse_policy_instance(
         .filter(|name| !name.is_empty())
     };
     let mode = Reflect::get(&value, &JsValue::from_str("mode"))?;
-    let mode = parse_rule_mode(&mode).map_err(|_| {
+    let mode = parse_rule_mode(&mode, "instance.mode").map_err(|_| {
         invalid("instance.mode must be Reject, ReviewWithHold, or ReviewWithoutHold")
     })?;
     Ok(openpit::PolicyInstance { name, mode })

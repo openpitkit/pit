@@ -273,12 +273,19 @@ impl JsConfigurator {
 
     /// Retunes a registered P&L-bounds kill-switch policy at runtime.
     ///
+    /// Each supplied list replaces its axis. Broker keys are `(settlementAsset,
+    /// mode)` and account keys are `(accountId, settlementAsset, mode)`.
+    /// Validation failure preserves both current lists. Runtime updates
+    /// preserve accumulated P&L.
+    ///
+    /// See {@link PnlBoundsKillswitchBuilder} for how barrier breaches are handled.
+    ///
     /// # Errors
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
-    /// validation failure. Throws `ParamError` for malformed options. Throws
-    /// `LifecycleError` when the owning engine is re-entered synchronously from
-    /// one of its policy callbacks.
+    /// validation failure, including a duplicate barrier key. Throws
+    /// `ParamError` for malformed options and `LifecycleError` when the owning
+    /// engine is re-entered synchronously from one of its policy callbacks.
     #[wasm_bindgen(js_name = pnlBoundsKillswitch)]
     pub fn pnl_bounds_killswitch(
         &self,

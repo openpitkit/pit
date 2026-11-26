@@ -29,7 +29,7 @@ use openpit::pretrade::policies::{
     PnlBoundsAccountAssetBarrier, PnlBoundsAccountAssetBarrierUpdate, PnlBoundsBrokerBarrier,
     PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,
 };
-use openpit::pretrade::PolicyGroupId;
+use openpit::pretrade::{PolicyGroupId, RuleMode};
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
@@ -39,6 +39,15 @@ use crate::domain::{
 use crate::error::engine_build_configuration_error;
 use crate::param::ids::JsAccountId;
 
+use super::parse_rule_mode;
+
+#[wasm_bindgen]
+extern "C" {
+    /// A rule mode wire string.
+    #[wasm_bindgen(typescript_type = "import(\"../types.js\").RuleMode")]
+    pub type RuleModeLike;
+}
+
 /// Broker-wide P&L-bounds barrier (at least one bound required).
 #[wasm_bindgen(js_name = PnlBoundsBrokerBarrier)]
 #[derive(Clone)]
@@ -46,6 +55,7 @@ pub struct JsPnlBoundsBrokerBarrier {
     settlement_asset: Asset,
     lower_bound: Option<Pnl>,
     upper_bound: Option<Pnl>,
+    mode: RuleMode,
 }
 
 #[wasm_bindgen(js_class = PnlBoundsBrokerBarrier)]
@@ -56,20 +66,27 @@ impl JsPnlBoundsBrokerBarrier {
     /// `DecimalInput`, or `null`/`undefined`. At least one bound must be set;
     /// the core validates this on build.
     ///
+    /// `mode` defaults to `Reject`. Each broker list accepts one barrier per
+    /// `(settlementAsset, mode)`. A reject barrier and a review barrier can
+    /// coexist for the same asset.
+    ///
     /// # Errors
     ///
     /// Throws `AssetError` when `settlementAsset` is empty or `ParamError` on
-    /// an invalid bound.
+    /// an invalid bound. Throws `TypeError` for a non-string mode and
+    /// `RangeError` for an unrecognized mode string.
     #[wasm_bindgen(constructor)]
     pub fn new(
         settlement_asset: &str,
         lower_bound: OptionalPnlLike,
         upper_bound: OptionalPnlLike,
+        mode: Option<RuleModeLike>,
     ) -> Result<JsPnlBoundsBrokerBarrier, JsValue> {
         Ok(Self {
             settlement_asset: parse_asset(settlement_asset)?,
             lower_bound: resolve_optional_pnl(lower_bound.into())?,
             upper_bound: resolve_optional_pnl(upper_bound.into())?,
+            mode: parse_rule_mode(&JsValue::from(mode), "mode")?,
         })
     }
 
@@ -86,6 +103,7 @@ impl JsPnlBoundsBrokerBarrier {
             settlement_asset: self.settlement_asset.clone(),
             lower_bound: self.lower_bound,
             upper_bound: self.upper_bound,
+            mode: self.mode,
         }
     }
 }
@@ -98,6 +116,7 @@ pub struct JsPnlBoundsAccountAssetBarrierUpdate {
     settlement_asset: Asset,
     lower_bound: Option<Pnl>,
     upper_bound: Option<Pnl>,
+    mode: RuleMode,
 }
 
 #[wasm_bindgen(js_class = PnlBoundsAccountAssetBarrierUpdate)]
@@ -107,22 +126,29 @@ impl JsPnlBoundsAccountAssetBarrierUpdate {
     /// Unlike `PnlBoundsAccountAssetBarrier`, this type has no `initialPnl`:
     /// runtime updates preserve the live accumulated P&L.
     ///
+    /// `mode` defaults to `Reject`. Each account list accepts one barrier per
+    /// `(accountId, settlementAsset, mode)`. A reject barrier and a review
+    /// barrier can coexist for the same account and asset.
+    ///
     /// # Errors
     ///
     /// Throws `AssetError` when `settlementAsset` is empty or `ParamError` on
-    /// an invalid bound.
+    /// an invalid bound. Throws `TypeError` for a non-string mode and
+    /// `RangeError` for an unrecognized mode string.
     #[wasm_bindgen(constructor)]
     pub fn new(
         account_id: AccountIdLike,
         settlement_asset: &str,
         lower_bound: OptionalPnlLike,
         upper_bound: OptionalPnlLike,
+        mode: Option<RuleModeLike>,
     ) -> Result<JsPnlBoundsAccountAssetBarrierUpdate, JsValue> {
         Ok(Self {
             account_id: JsAccountId::from_inner(resolve_account_id(account_id.into())?),
             settlement_asset: parse_asset(settlement_asset)?,
             lower_bound: resolve_optional_pnl(lower_bound.into())?,
             upper_bound: resolve_optional_pnl(upper_bound.into())?,
+            mode: parse_rule_mode(&JsValue::from(mode), "mode")?,
         })
     }
 
@@ -139,6 +165,7 @@ impl JsPnlBoundsAccountAssetBarrierUpdate {
                 settlement_asset: self.settlement_asset.clone(),
                 lower_bound: self.lower_bound,
                 upper_bound: self.upper_bound,
+                mode: self.mode,
             },
             account_id: self.account_id.inner(),
         }
@@ -154,6 +181,7 @@ pub struct JsPnlBoundsAccountAssetBarrier {
     initial_pnl: Pnl,
     lower_bound: Option<Pnl>,
     upper_bound: Option<Pnl>,
+    mode: RuleMode,
 }
 
 #[wasm_bindgen(js_class = PnlBoundsAccountAssetBarrier)]
@@ -164,10 +192,16 @@ impl JsPnlBoundsAccountAssetBarrier {
     /// accept a `Pnl`, a `DecimalInput`, or `null`/`undefined` (at least one
     /// bound required, validated on build).
     ///
+    /// `mode` defaults to `Reject`. Each account list accepts one barrier per
+    /// `(accountId, settlementAsset, mode)`. A reject barrier and a review
+    /// barrier can coexist for the same account and asset with equal
+    /// `initialPnl`.
+    ///
     /// # Errors
     ///
     /// Throws `AssetError` when `settlementAsset` is empty or `ParamError` on
-    /// an invalid value.
+    /// an invalid value. Throws `TypeError` for a non-string mode and
+    /// `RangeError` for an unrecognized mode string.
     #[wasm_bindgen(constructor)]
     pub fn new(
         account_id: AccountIdLike,
@@ -175,6 +209,7 @@ impl JsPnlBoundsAccountAssetBarrier {
         initial_pnl: PnlLike,
         lower_bound: OptionalPnlLike,
         upper_bound: OptionalPnlLike,
+        mode: Option<RuleModeLike>,
     ) -> Result<JsPnlBoundsAccountAssetBarrier, JsValue> {
         Ok(Self {
             account_id: JsAccountId::from_inner(resolve_account_id(account_id.into())?),
@@ -182,6 +217,7 @@ impl JsPnlBoundsAccountAssetBarrier {
             initial_pnl: resolve_pnl(initial_pnl.into())?,
             lower_bound: resolve_optional_pnl(lower_bound.into())?,
             upper_bound: resolve_optional_pnl(upper_bound.into())?,
+            mode: parse_rule_mode(&JsValue::from(mode), "mode")?,
         })
     }
 
@@ -199,6 +235,7 @@ impl JsPnlBoundsAccountAssetBarrier {
                 settlement_asset: self.settlement_asset.clone(),
                 lower_bound: self.lower_bound,
                 upper_bound: self.upper_bound,
+                mode: self.mode,
             },
             account_id: self.account_id.inner(),
             initial_pnl: self.initial_pnl,
@@ -207,6 +244,20 @@ impl JsPnlBoundsAccountAssetBarrier {
 }
 
 /// Configuring builder for the builtin P&L-bounds kill-switch policy.
+///
+/// Broker barrier keys are `(settlementAsset, mode)`. Account barrier keys
+/// are `(accountId, settlementAsset, mode)`.
+///
+/// With a `Reject` registration (the default), a `Reject` barrier breach
+/// rejects the order and blocks the account in pre-trade, and blocks it on an
+/// execution report. With a review-mode registration, the breach yields a
+/// pre-trade mark of the instance's mode for an unconfirmed order without
+/// blocking on either path. Review barrier breaches yield pre-trade marks
+/// for unconfirmed orders without blocking.
+///
+/// A missing required order field rejects the order. A missing required
+/// execution-report field or P&L that cannot be computed blocks the account.
+/// Both apply in every mode.
 #[wasm_bindgen(js_name = PnlBoundsKillswitchBuilder)]
 #[derive(Clone, Default)]
 pub struct JsPnlBoundsKillswitchBuilder {
@@ -285,8 +336,9 @@ impl JsPnlBoundsKillswitchBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `EngineBuildError` when no barrier is configured or a barrier has
-    /// no bound set.
+    /// Throws `EngineBuildError` of kind `InvalidConfiguration` when no
+    /// barrier is configured, a barrier has no bound, a barrier key repeats,
+    /// or barriers for the same account and asset have different initial P&L.
     pub(crate) fn build_policy(
         &self,
         storage_builder: &crate::engine::StorageBuilderRef,
@@ -309,6 +361,11 @@ impl JsPnlBoundsKillswitchBuilder {
 }
 
 /// Creates a fresh P&L-bounds kill-switch configuring builder.
+///
+/// Registering its token with the engine throws `EngineBuildError` of kind
+/// `InvalidConfiguration` if no barriers are configured, a barrier has no
+/// bound, a key repeats, or barriers for the same account and asset have
+/// different `initialPnl`.
 #[wasm_bindgen(js_name = buildPnlBoundsKillswitch)]
 pub fn build_pnl_bounds_killswitch() -> JsPnlBoundsKillswitchBuilder {
     JsPnlBoundsKillswitchBuilder::default()
