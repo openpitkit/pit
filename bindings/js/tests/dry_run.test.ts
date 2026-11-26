@@ -631,6 +631,39 @@ describe("Spot Funds review with an existing hold", () => {
       { balance: "40000", held: "60000", incoming: "0" },
       { balance: "0", held: "0", incoming: "6" },
     ]);
+    order.review = { confirmed: false, alreadyHeld: true };
+    const expectedMarks = unflagged.reviews.map(({ code, mode }) => ({
+      code,
+      mode,
+    }));
+    const heldDry = engine.executePreTradeDryRun(order);
+    expect(heldDry.isPass).toBe(true);
+    expect(heldDry.reviews.map(({ code, mode }) => ({ code, mode }))).toEqual(
+      expectedMarks,
+    );
+    expect(heldDry.lock().size()).toBe(0);
+    expect(heldDry.accountAdjustments()).toEqual([]);
+    expect([
+      holdings(engine, ACCOUNT, "USD"),
+      holdings(engine, ACCOUNT, "AAPL"),
+    ]).toEqual(before);
+    const unconfirmed = engine.executePreTrade(order);
+    expect(unconfirmed.ok).toBe(true);
+    expect(
+      unconfirmed.reviews.map(({ code, mode }) => ({ code, mode })),
+    ).toEqual(expectedMarks);
+    expect(
+      unconfirmed
+        .reservation!.reviews()
+        .map(({ code, mode }) => ({ code, mode })),
+    ).toEqual(expectedMarks);
+    expect(unconfirmed.reservation!.lock().size()).toBe(0);
+    expect(unconfirmed.reservation!.accountAdjustments()).toEqual([]);
+    unconfirmed.reservation!.commit();
+    expect([
+      holdings(engine, ACCOUNT, "USD"),
+      holdings(engine, ACCOUNT, "AAPL"),
+    ]).toEqual(before);
     order.review = { confirmed: true, alreadyHeld: true };
     const rerun = engine.executePreTrade(order);
     expect(rerun.ok).toBe(true);

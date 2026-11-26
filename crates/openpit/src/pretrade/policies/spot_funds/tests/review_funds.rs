@@ -390,9 +390,9 @@ fn confirmed_review_funds_hold_as_track_only_without_marks() {
 }
 
 #[test]
-fn already_held_review_funds_drop_marks_without_a_second_hold() {
+fn already_held_review_funds_return_marks_without_a_second_hold() {
     for side in [Side::Buy, Side::Sell] {
-        for (mode, _) in REVIEW_MODES {
+        for (mode, rule_mode) in REVIEW_MODES {
             let policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
             let mut order = order(side, false);
             let mut mutations = Mutations::new();
@@ -416,10 +416,21 @@ fn already_held_review_funds_drop_marks_without_a_second_hold() {
                     &order,
                     &mut mutations,
                 );
-                assert!(marks.is_empty(), "already-held review must drop every mark");
+                if confirmed {
+                    assert!(marks.is_empty(), "confirmed funds review must drop marks");
+                } else {
+                    assert_eq!(
+                        marks.len(),
+                        1,
+                        "already-held review must keep the funds mark"
+                    );
+                    assert_eq!(marks[0].code, RejectCode::InsufficientFunds);
+                    assert_eq!(marks[0].scope, RejectScope::Order);
+                    assert_eq!(marks[0].mode, rule_mode);
+                }
                 assert!(
                     outcome.is_none(),
-                    "already-held review must return Ok(None)"
+                    "already-held review must carry no policy result"
                 );
                 assert!(
                     mutations.is_empty(),

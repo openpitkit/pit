@@ -1093,6 +1093,11 @@ func assertSpotFundsAlreadyHeldReviewMarks(t *testing.T, engine *openpit.Engine,
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertSpotFundsReviewMarks(t, marks, code, modes)
+}
+
+func assertSpotFundsReviewMarks(t *testing.T, marks []reject.Reject, code reject.Code, modes []reject.RuleMode) {
+	t.Helper()
 	for _, mode := range modes {
 		count := 0
 		for _, mark := range marks {
@@ -1101,7 +1106,7 @@ func assertSpotFundsAlreadyHeldReviewMarks(t *testing.T, engine *openpit.Engine,
 			}
 		}
 		if count != 1 {
-			t.Fatalf("pre-confirmation marks = %v, want one code %v mode %v", marks, code, mode)
+			t.Fatalf("review marks = %v, want one code %v mode %v", marks, code, mode)
 		}
 	}
 }
@@ -1159,7 +1164,7 @@ func TestSpotFundsAlreadyHeldRejectPnlKeepsFirstHold(t *testing.T) {
 	assertSpotFundsSameAmounts(t, spotFundsAmounts(t, engine, account, usd), before)
 }
 
-func TestSpotFundsAlreadyHeldOmitsBreachedReviewPnl(t *testing.T) {
+func TestSpotFundsAlreadyHeldReviewPnlMarksUntilConfirmed(t *testing.T) {
 	engine, account, order := seedSpotFundsAlreadyHeldOrder(t, policies.SpotFundsLimitModeReviewWithHold, "11")
 	usd := mustAsset(t, "USD")
 	before := spotFundsAmounts(t, engine, account, usd)
@@ -1167,6 +1172,33 @@ func TestSpotFundsAlreadyHeldOmitsBreachedReviewPnl(t *testing.T) {
 	configureSpotFundsAlreadyHeldPnl(t, engine, account, usd, "-50")
 	assertSpotFundsAlreadyHeldReviewMarks(t, engine, order, reject.CodePnlKillSwitchTriggered, []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold})
 	review := order.EnsureReviewView()
+	review.SetAlreadyHeld(true)
+	assertSpotFundsAlreadyHeldReviewMarks(t, engine, order, reject.CodePnlKillSwitchTriggered, []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold})
+	aaplBefore := spotFundsAmounts(t, engine, account, mustAsset(t, "AAPL"))
+	rerun, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil || rerun == nil || len(rejects) != 0 {
+		t.Fatalf("unconfirmed already-held rerun = %v, rejects = %v, error = %v", rerun, rejects, err)
+	}
+	marks, err := rerun.Reviews()
+	if err != nil || len(marks) != 2 {
+		t.Fatalf("unconfirmed already-held reviews = %v, error = %v, want two PnlKillSwitchTriggered marks", marks, err)
+	}
+	assertSpotFundsReviewMarks(t, marks, reject.CodePnlKillSwitchTriggered, []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold})
+	lock, err := rerun.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := lock.Prices()
+	if err != nil || len(prices) != 0 {
+		t.Fatalf("unconfirmed already-held lock prices = %v, error = %v, want none", prices, err)
+	}
+	adjustments, err := rerun.AccountAdjustments()
+	if err != nil || len(adjustments) != 0 {
+		t.Fatalf("unconfirmed already-held adjustments = %v, error = %v, want none", adjustments, err)
+	}
+	rerun.CommitAndClose()
+	assertSpotFundsSameAmounts(t, spotFundsAmounts(t, engine, account, usd), before)
+	assertSpotFundsSameAmounts(t, spotFundsAmounts(t, engine, account, mustAsset(t, "AAPL")), aaplBefore)
 	review.SetConfirmed(true)
 	review.SetAlreadyHeld(true)
 	commitSpotFundsAlreadyHeldRerun(t, engine, order)
