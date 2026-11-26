@@ -1241,9 +1241,17 @@ pub extern "C" fn openpit_pretrade_pre_trade_reservation_rollback(
 ///   the reservation.
 /// - On approval, rerun with `OpenPitOrderReview.confirmed` set to
 ///   `OPENPIT_TRI_BOOL_TRUE`. Set `already_held` to `OPENPIT_TRI_BOOL_TRUE`
-///   only if Spot Funds kept its own hold. It did so only when every mark was
-///   with-hold and no Spot Funds instance registered in a review mode marked
-///   the order. Send the order only if the rerun has no rejects.
+///   only if Spot Funds kept its own hold. It did so only when every mark of
+///   that first run was with-hold and no Spot Funds instance registered in a
+///   review mode marked the order. Send the order only if the rerun has no
+///   rejects.
+/// - A review of an already-held rerun changes no Spot Funds hold: whatever its
+///   marks, the hold the first review kept stays. On approval, rerun with
+///   `confirmed` set to `OPENPIT_TRI_BOOL_TRUE` and `already_held` set to
+///   `OPENPIT_TRI_BOOL_TRUE` again; if the order ends without a committed
+///   approval rerun, release that hold with a final cancel report via
+///   `openpit_engine_apply_execution_report`, carrying the remaining reserved
+///   quantity and the first run's Spot Funds lock prices, as described below.
 /// - After committing an already-held rerun, use its lock for execution reports
 ///   and append only the first run's Spot Funds group prices. Read each group's
 ///   prices with `openpit_pretrade_pre_trade_lock_prices_of` and

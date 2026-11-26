@@ -132,8 +132,9 @@ class PolicyReject:
             A policy instance registered in a review mode that marked the order
             in its main-stage check retains none of its own.
             A Spot Funds instance registered in a review mode that marked the
-            order holds nothing. After such a review, rerun with
-            ``confirmed=True`` only.
+            order holds nothing. After such a first review, rerun with
+            ``confirmed=True`` only. A review of an already-held rerun changes
+            no Spot Funds hold.
             Send only if the rerun has no rejects.
             Both stages report evaluation failures as ``"Reject"``.
             Any account-adjustment entry rejects the batch and is reported as

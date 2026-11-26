@@ -151,7 +151,8 @@ export const RuleMode = {
    * On approval, rerun with `review.confirmed` and add `review.alreadyHeld`
    * only if Spot Funds kept its own hold in the committed review.
    * A Spot Funds instance registered in a review mode that marked the order
-   * holds nothing. After such a review, rerun with `review.confirmed` only.
+   * holds nothing. After such a first review, rerun with `review.confirmed`
+   * only. A review of an already-held rerun changes no Spot Funds hold.
    * See `Reservation.reviews()` for the lifecycle.
    */
   ReviewWithHold: "ReviewWithHold",

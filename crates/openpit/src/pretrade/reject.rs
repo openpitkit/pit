@@ -94,7 +94,8 @@ pub enum RuleMode {
     /// On approval, rerun with `confirmed` and add `already_held` only if Spot
     /// Funds kept its own hold in the committed review.
     /// A Spot Funds instance registered in a review mode that marked the order
-    /// holds nothing. After such a review, rerun with `confirmed` only.
+    /// holds nothing. After such a first review, rerun with `confirmed` only.
+    /// A review of an already-held rerun changes no Spot Funds hold.
     /// See [`super::PreTradeReservation`].
     ReviewWithHold,
     /// Request a human decision. Any `ReviewWithoutHold` mark makes the
