@@ -3,5 +3,7 @@
 # macOS 27 refuses to load such an image built against the macOS 27 SDK.
 # Turn that pass off here; the release cdylibs drop the same symbols at link
 # time in their build scripts instead.
+# RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS in the environment replace this entry.
+# Add flags through CARGO_TARGET_<TRIPLE>_RUSTFLAGS, as the release recipe does.
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "strip=none"]

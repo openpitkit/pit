@@ -465,8 +465,12 @@ build-ffi-target-release target:
         exit 0
         ;;
     esac
-    export RUSTFLAGS="${rustflags}"
-    cargo build -p openpit-ffi --release --locked --target "{{ target }}"
+    # RUSTFLAGS replaces .cargo/config.toml's target rustflags. The target
+    # environment variable is joined with them.
+    unset RUSTFLAGS
+    target_key="$(printf '%s' "{{ target }}" | LC_ALL=C tr '[:lower:]-' '[:upper:]_')"
+    env "CARGO_TARGET_${target_key}_RUSTFLAGS=${rustflags}" \
+      cargo build -p openpit-ffi --release --locked --target "{{ target }}"
 # Package the built runtime library into dist/ with a sha256 sidecar (unix).
 [unix]
 package-runtime target goos goarch lib_name:
