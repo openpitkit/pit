@@ -162,7 +162,7 @@ class BalanceOperation(_AccountAdjustmentBalanceOperation):
     # @typing.override
     @property
     def realized_pnl(self) -> Pnl | PnlHaltReason | None:
-        """Optional account-currency realized PnL replacement or explicit halt."""
+        """Optional account-currency realized PnL replacement or halt."""
         return _AccountAdjustmentBalanceOperation.realized_pnl.__get__(self, type(self))
 
     def __repr__(self) -> str:
@@ -240,7 +240,7 @@ class PositionOperation(_AccountAdjustmentPositionOperation):
     # @typing.override
     @property
     def leverage(self) -> Leverage | None:
-        """Optional leverage snapshot/setting carried with the position adjustment."""
+        """Optional leverage snapshot or setting for the adjustment."""
         return _AccountAdjustmentPositionOperation.leverage.__get__(self, type(self))
 
     def __repr__(self) -> str:

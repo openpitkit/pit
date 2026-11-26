@@ -72,7 +72,8 @@ pub use pnl::{
 
 const SPOT_FUNDS_POLICY_NAME: &str = "SpotFundsPolicy";
 
-// known cost: every call site does `holdings.with_mut((id, asset.clone()), ...)` -
+// known cost: every call site does
+// `holdings.with_mut((id, asset.clone()), ...)` -
 // Asset::clone per lookup. SmolStr is allocator-free for tickers ≤22 bytes.
 pub(super) type HoldingsKey = (AccountId, Asset);
 
@@ -430,9 +431,9 @@ fn release_account_pnl_lease<StorageFactory>(
 /// A numeric breach of a review-mode P&L barrier yields a pre-trade mark
 /// without blocking the account. Non-order operations produce no review marks
 /// and do not block on review breaches. The policy does not read the
-/// `confirmed` flag: review barriers are evaluated for every order. Halted-state
-/// and currency-mismatch rejects stay effective in any mode. The engine decides
-/// what a mark means for a confirmed order.
+/// `confirmed` flag: review barriers are evaluated for every order.
+/// Halted-state and currency-mismatch rejects stay effective in any mode. The
+/// engine decides what a mark means for a confirmed order.
 ///
 /// The runtime-updatable slippage / pricing / override cascade lives in
 /// [`SpotFundsSettings`], stored behind a settings cell read allocation-free
@@ -500,9 +501,9 @@ where
     /// settings cell and may be updated at runtime.
     ///
     /// `market_orders` enables market-order support when `Some`. It carries the
-    /// shared [`MarketDataService`](crate::marketdata::MarketDataService) handle
-    /// the policy prices market orders against. Pass `None` to disable market
-    /// orders (they will be rejected with
+    /// shared [`MarketDataService`](crate::marketdata::MarketDataService)
+    /// handle the policy prices market orders against. Pass `None` to disable
+    /// market orders (they will be rejected with
     /// [`crate::pretrade::RejectCode::UnsupportedOrderType`]).
     ///
     /// `storage_builder` must come from the engine builder so the internal
@@ -809,7 +810,8 @@ where
     ///
     /// The tag is fixed at construction and has no runtime setter. See
     /// [`PolicyGroupId`]
-    /// and [`DEFAULT_POLICY_GROUP_ID`](crate::pretrade::DEFAULT_POLICY_GROUP_ID)
+    /// and
+    /// [`DEFAULT_POLICY_GROUP_ID`](crate::pretrade::DEFAULT_POLICY_GROUP_ID)
     /// for details.
     pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
         self.group_id = id;

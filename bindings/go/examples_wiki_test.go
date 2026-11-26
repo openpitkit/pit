@@ -434,7 +434,8 @@ func (p *BlockOnAdjustmentPolicy) ApplyAccountAdjustment(
 // --- Shared helpers ---
 
 // Source: https://wiki.openpit.dev/Domain-Types/ - Create Validated Values.
-// Keep this example synced with the wiki snippet when constructor behavior changes.
+// Keep this example synced with the wiki snippet when constructor behavior
+// changes.
 func TestExampleWikiDomainTypesCreateValidatedValues(t *testing.T) {
 	asset, err := param.NewAsset("AAPL")
 	if err != nil {
@@ -468,7 +469,8 @@ func TestExampleWikiDomainTypesCreateValidatedValues(t *testing.T) {
 }
 
 // Source: https://wiki.openpit.dev/Domain-Types/ - Create Validated Values.
-// Keep this example synced with wiki snippets when constructor behavior changes.
+// Keep this example synced with wiki snippets when constructor behavior
+// changes.
 func TestExampleWikiDomainTypesAssetValidationError(t *testing.T) {
 	_, err := param.NewAsset("  ")
 	if err == nil {
@@ -480,7 +482,8 @@ func TestExampleWikiDomainTypesAssetValidationError(t *testing.T) {
 }
 
 // Source: https://wiki.openpit.dev/Domain-Types/ - Account Identifiers.
-// Keep this example synced with wiki snippets when constructor behavior changes.
+// Keep this example synced with wiki snippets when constructor behavior
+// changes.
 func TestExampleWikiDomainTypesAccountIDValidationError(t *testing.T) {
 	_, err := param.NewAccountIDFromString("  ")
 	if err == nil {
@@ -3051,7 +3054,8 @@ func TestExampleWikiDynamicPolicyReconfigurationRateLimit(t *testing.T) {
 	}
 
 	// Tighten the broker limit to 2 at runtime, without rebuilding the engine.
-	// Built-in policies register under their type name (policies.RateLimitPolicyName).
+	// Built-in policies register under their type name
+	// (policies.RateLimitPolicyName).
 	err = engine.Configure().RateLimit(
 		policies.RateLimitPolicyName,
 		[]policies.RateLimitBrokerBarrier{{
@@ -3413,7 +3417,8 @@ func TestExampleWikiSpotFundsPerAccountLimitMode(t *testing.T) {
 		t.Fatalf("Reason = %q, want %q", rejects[0].Reason, "spot funds insufficient")
 	}
 
-	// Pin this account to TrackOnly: per-account override wins over global Enforce.
+	// Pin this account to TrackOnly: per-account override wins over global
+	// Enforce.
 	if err := engine.Configure().SpotFundsAccountLimitMode(
 		policies.SpotFundsPolicyName,
 		accountID,
@@ -3499,7 +3504,8 @@ func TestExampleWikiDynamicPolicyReconfigurationSetAccountPnl(t *testing.T) {
 	reservation.CommitAndClose()
 
 	// Force-set the account's accumulated P&L to -150 USD, below the bound.
-	// Built-in policies register under their type name (policies.PnlBoundsKillSwitchPolicyName).
+	// Built-in policies register under their type name
+	// (policies.PnlBoundsKillSwitchPolicyName).
 	forced, err := param.NewPnlFromString("-150")
 	if err != nil {
 		t.Fatalf("NewPnlFromString(-150) error = %v", err)

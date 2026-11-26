@@ -220,7 +220,8 @@ impl_request_has_field_passthrough!(
     HasAccountAdjustmentIncomingLowerBound, incoming_lower, Option<PositionSize>;
 );
 
-/// Direct adjustment of a physical asset balance without hedge/netting semantics.
+/// Direct adjustment of a physical asset balance without hedge/netting
+/// semantics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustmentBalanceOperation {
     pub asset: Asset,
@@ -343,7 +344,8 @@ impl_request_has_field_passthrough!(
     HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>;
 );
 
-/// Direct adjustment of a derivatives-like position with explicit position mode.
+/// Direct adjustment of a derivatives-like position with explicit position
+/// mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustmentPositionOperation {
     pub instrument: Instrument,

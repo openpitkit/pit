@@ -49,11 +49,11 @@ type fundingFuture struct {
 }
 
 // collectOrder awaits an order-check future, records its open-loop latency
-// (resolve - VirtualT0, the HEADLINE) and its service-time diagnostic (resolve -
-// actual submit), and checks the per-op oracle. For an accepted order it hands
-// the reservation to the finalizer pool to CommitAndClose off the measured path
-// (commit is a no-op; close releases the native handle, KEEPING the in-place
-// hold). It NEVER closes/rolls back an accepted order.
+// (resolve - VirtualT0, the HEADLINE) and its service-time diagnostic
+// (resolve - actual submit), and checks the per-op oracle. For an accepted
+// order it hands the reservation to the finalizer pool to CommitAndClose off
+// the measured path (commit is a no-op; close releases the native handle,
+// KEEPING the in-place hold). It NEVER closes/rolls back an accepted order.
 //
 // The latency is computed from the resolve instant captured immediately after
 // Await returns, so any engine queueing or stall the order experienced is
@@ -162,20 +162,20 @@ func (r *run) collectFunding(item inflight) {
 // handOffFinalize hands an accepted reservation to the finalizer pool WITHOUT
 // EVER BLOCKING the collector (a blocked collector would stop draining the work
 // handoff and so throttle the open-loop submit schedule with harness-internal
-// backlog). It tries the fast buffered finalize channel first; if that buffer is
-// momentarily full it spills to the unbounded finalizeOverflow, which finalizers
-// also drain.
+// backlog). It tries the fast buffered finalize channel first; if that buffer
+// is momentarily full it spills to the unbounded finalizeOverflow, which
+// finalizers also drain.
 //
-// Spilling here is counted as a HARNESS handoff stall DIAGNOSTIC. Unlike the work
-// handoff (whose fast path fills mainly because the ENGINE is slow - real
+// Spilling here is counted as a HARNESS handoff stall DIAGNOSTIC. Unlike the
+// work handoff (whose fast path fills mainly because the ENGINE is slow - real
 // latency), the finalize backlog is purely harness-internal: it forms only when
-// the finalizer pool cannot keep up with CommitAndClose throughput, never because
-// of engine order-check latency. Because the handoff is non-blocking and
-// CommitAndClose is fully off the measured path (the latency was already recorded
-// at resolve), a full finalize fast path does NOT throttle the submit schedule
-// and does NOT invalidate the run - it is reported as a diagnostic only. The
-// reservation is still finalized (from the overflow) - the stall is counted,
-// never a dropped reservation.
+// the finalizer pool cannot keep up with CommitAndClose throughput, never
+// because of engine order-check latency. Because the handoff is non-blocking
+// and CommitAndClose is fully off the measured path (the latency was already
+// recorded at resolve), a full finalize fast path does NOT throttle the submit
+// schedule and does NOT invalidate the run - it is reported as a diagnostic
+// only. The reservation is still finalized (from the overflow) - the stall is
+// counted, never a dropped reservation.
 //
 // On context cancellation it closes the reservation directly so the native
 // handle never leaks.
@@ -200,17 +200,17 @@ func (r *run) handOffFinalize(reservation *asyncengine.AsyncReservation) {
 // finalizeLoop is one finalizer goroutine. It drains accepted reservations from
 // BOTH the fast finalize channel AND the unbounded finalizeOverflow that the
 // collector spills into when the fast buffer is full, and finalizes each with
-// CommitAndClose (commit = no-op, close releases the native handle while KEEPING
-// the in-place hold). This is strictly off the measured path. A CommitAndClose
-// error is surfaced loudly via the oracle.
+// CommitAndClose (commit = no-op, close releases the native handle while
+// KEEPING the in-place hold). This is strictly off the measured path. A
+// CommitAndClose error is surfaced loudly via the oracle.
 //
-// The CommitAndClose is submitted on the reservation's per-account queue and may
-// sit behind that account's later order-checks (true open-loop pipelining no
-// longer serialises an account), so awaiting it here keeps that wait off the
-// collector and out of every measured interval. The overflow is drained first on
-// every iteration so spilled reservations cannot be stranded; when the collectors
-// close the finalize channel, the closed branch drains any remaining overflow
-// before returning, so no accepted reservation is ever leaked.
+// The CommitAndClose is submitted on the reservation's per-account queue and
+// may sit behind that account's later order-checks (true open-loop pipelining
+// no longer serialises an account), so awaiting it here keeps that wait off the
+// collector and out of every measured interval. The overflow is drained first
+// on every iteration so spilled reservations cannot be stranded; when the
+// collectors close the finalize channel, the closed branch drains any remaining
+// overflow before returning, so no accepted reservation is ever leaked.
 func (r *run) finalizeLoop() {
 	for {
 		if reservation, ok := r.finalizeOverflow.pop(); ok {

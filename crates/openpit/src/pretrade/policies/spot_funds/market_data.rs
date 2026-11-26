@@ -44,7 +44,7 @@ use super::market_order_pricer::WithSlippage;
 /// Upper bound (inclusive) on any slippage value, in basis points.
 const MAX_SLIPPAGE_BPS: u16 = 10_000;
 
-// ─── SpotFundsConfigError ─────────────────────────────────────────────────────
+// ─── SpotFundsConfigError ────────────────────────────────────────────────────
 
 /// Error returned when building or updating [`SpotFundsSettings`].
 #[non_exhaustive]
@@ -142,7 +142,7 @@ fn check_slippage_bps(bps: u16) -> Result<(), SpotFundsConfigError> {
     Ok(())
 }
 
-// ─── SpotFundsPriceError ──────────────────────────────────────────────────────
+// ─── SpotFundsPriceError ─────────────────────────────────────────────────────
 
 /// Error returned by the effective-price helpers on
 /// [`SpotFundsMarketData`].
@@ -155,7 +155,7 @@ pub(super) enum SpotFundsPriceError {
     CalculationFailed,
 }
 
-// ─── SpotFundsPricingSource ───────────────────────────────────────────────────
+// ─── SpotFundsPricingSource ──────────────────────────────────────────────────
 
 /// Source the policy uses to derive the base price for a market order
 /// before slippage is applied.
@@ -179,16 +179,16 @@ pub enum SpotFundsPricingSource {
     BookTop,
 }
 
-// ─── SpotFundsOverride ────────────────────────────────────────────────────────
+// ─── SpotFundsOverride ───────────────────────────────────────────────────────
 
 /// Override *value* applied at a slippage-cascade target.
 ///
 /// Holds the slippage knob a [`SpotFundsOverrideTarget`] applies to the
-/// instrument/account/account group it selects. Every field is optional: a `None`
-/// means "fall back to the next tier of the cascade and ultimately the global
-/// setting configured on the settings". The struct is named to flag its role as
-/// the container for override knobs - future settings land here as additional
-/// `Option<_>` fields, and call sites that initialise it via
+/// instrument/account/account group it selects. Every field is optional: a
+/// `None` means "fall back to the next tier of the cascade and ultimately the
+/// global setting configured on the settings". The struct is named to flag its
+/// role as the container for override knobs - future settings land here as
+/// additional `Option<_>` fields, and call sites that initialise it via
 /// `..Default::default()` keep compiling.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SpotFundsOverride {
@@ -198,22 +198,23 @@ pub struct SpotFundsOverride {
     pub slippage_bps: Option<u16>,
 }
 
-// ─── SpotFundsOverrideTarget ──────────────────────────────────────────────────
+// ─── SpotFundsOverrideTarget ─────────────────────────────────────────────────
 
 /// Selects which accounts a [`SpotFundsOverride`] applies to within the
 /// slippage resolution cascade.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpotFundsOverrideTarget {
-    /// Instrument-level default: applies when no account- or account-group-scoped
-    /// override matches the order's account.
+    /// Instrument-level default: applies when no account- or
+    /// account-group-scoped override matches the order's account.
     Instrument(InstrumentId),
-    /// Applies to the instrument only for this exact account (highest priority).
+    /// Applies to the instrument only for this exact account (highest
+    /// priority).
     InstrumentAccount(InstrumentId, AccountId),
     /// Applies to the instrument only for accounts in this account group.
     InstrumentAccountGroup(InstrumentId, AccountGroupId),
 }
 
-// ─── SpotFundsSettings ────────────────────────────────────────────────────────
+// ─── SpotFundsSettings ───────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpotFundsPnlBarrierSet {
@@ -419,10 +420,11 @@ impl SpotFundsPnlBarrierSet {
 /// Runtime-updatable settings of [`SpotFundsPolicy`](super::SpotFundsPolicy).
 ///
 /// Carries the slippage / pricing-source / override cascade and the funds
-/// limit-mode cascade. Slippage resolves per order along three override scopes -
-/// per `(instrument, account_id)`, per `(instrument, account_group_id)`, and per
-/// `instrument` - falling back to the global slippage. The limit mode resolves
-/// per order along an account-centric cascade - per `account_id`, per
+/// limit-mode cascade. Slippage resolves per order along three override
+/// scopes - per `(instrument, account_id)`, per
+/// `(instrument, account_group_id)`, and per `instrument` - falling back to the
+/// global slippage. The limit mode
+/// resolves per order along an account-centric cascade - per `account_id`, per
 /// `account_group_id`, then global - and decides whether a reservation that
 /// exceeds available funds is rejected ([`SpotFundsLimitMode::Enforce`]),
 /// merely tracked ([`SpotFundsLimitMode::TrackOnly`]), or marked for review
@@ -436,8 +438,8 @@ impl SpotFundsPnlBarrierSet {
 /// and can be pinned, replaced, or cleared at runtime.
 ///
 /// Built via [`SpotFundsSettings::new`] and handed to
-/// [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new); the slippage knobs and
-/// the limit mode are then mutable at runtime through the setters.
+/// [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new); the slippage knobs
+/// and the limit mode are then mutable at runtime through the setters.
 #[derive(Clone, Debug)]
 pub struct SpotFundsSettings {
     account_overrides: HashMap<(InstrumentId, AccountId), WithSlippage>,
@@ -475,7 +477,7 @@ impl SpotFundsSettings {
     /// Pass `SpotFundsPricingSource::Mark` for the default source and `[]` (or
     /// any empty iterator) for no overrides. The instance starts with the
     /// default policy group; assign a tag via
-    /// [`SpotFundsPolicy::with_policy_group_id`](super::SpotFundsPolicy::with_policy_group_id).
+    /// [`SpotFundsPolicy::with_policy_group_id`].
     ///
     /// Each `(target, override)` pair places a [`SpotFundsOverride`] into one
     /// of three slippage scopes selected by [`SpotFundsOverrideTarget`]: per
@@ -495,6 +497,9 @@ impl SpotFundsSettings {
     /// [`set_global_limit_mode`](Self::set_global_limit_mode),
     /// [`set_account_limit_mode`](Self::set_account_limit_mode) and
     /// [`set_account_group_limit_mode`](Self::set_account_group_limit_mode).
+    ///
+    /// [`SpotFundsPolicy::with_policy_group_id`]:
+    ///     super::SpotFundsPolicy::with_policy_group_id
     pub fn new<Overrides>(
         slippage_bps: u16,
         pricing_source: SpotFundsPricingSource,
@@ -567,7 +572,8 @@ impl SpotFundsSettings {
     /// per-account-group override matches.
     ///
     /// [`SpotFundsLimitMode::TrackOnly`] disables the insufficient-funds reject
-    /// for orders that resolve to the global tier; [`SpotFundsLimitMode::Enforce`]
+    /// for orders that resolve to the global tier;
+    /// [`SpotFundsLimitMode::Enforce`]
     /// restores the gating behavior.
     /// Review modes mark a shortfall with or without recording the hold; see
     /// [`SpotFundsLimitMode`].
@@ -591,8 +597,8 @@ impl SpotFundsSettings {
     /// Inserts or clears the funds limit-mode override for one account group.
     ///
     /// `Some(mode)` applies `mode` to every account in the group that has no
-    /// per-account override. `None` clears any previous override, so the cascade
-    /// falls through to the global mode for accounts in the group.
+    /// per-account override. `None` clears any previous override, so the
+    /// cascade falls through to the global mode for accounts in the group.
     pub fn set_account_group_limit_mode(
         &mut self,
         account_group_id: AccountGroupId,
@@ -1042,7 +1048,7 @@ fn collect_pnl_account_barriers(
     Ok(out)
 }
 
-// ─── SpotFundsMarketData ──────────────────────────────────────────────────────
+// ─── SpotFundsMarketData ─────────────────────────────────────────────────────
 
 /// Market-data service handle for [`SpotFundsPolicy`](super::SpotFundsPolicy).
 ///
@@ -2290,7 +2296,8 @@ mod tests {
         )
         .expect("settings must build");
         // Account info yields no account group, so the account-group tier is
-        // skipped entirely and the instrument default (1000 bps) applies -> 110.
+        // skipped entirely and the instrument default (1000 bps) applies ->
+        // 110.
         assert_eq!(buy_price_of(&svc, &settings, id, acc, &None), Ok(px("110")));
         // A present but non-matching group still falls through to instrument.
         assert_eq!(
@@ -2378,7 +2385,7 @@ mod tests {
         );
     }
 
-    // ── Sell-side cascade tests ───────────────────────────────────────────────
+    // ── Sell-side cascade tests ──────────────────────────────────────────────
     //
     // Formula: mark * (1 - factor), factor = bps / 10_000, mark = 100.
     //   3000 bps -> 100 * 0.70 = 70
@@ -2501,9 +2508,10 @@ mod tests {
         );
     }
 
-    // ── Limit-mode cascade tests ──────────────────────────────────────────────
+    // ── Limit-mode cascade tests ─────────────────────────────────────────────
     //
-    // Resolution order mirrors `pricer_for`: account -> account group -> global.
+    // Resolution order mirrors `pricer_for`: account -> account group ->
+    // global.
 
     fn default_settings() -> SpotFundsSettings {
         SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())

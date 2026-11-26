@@ -31,11 +31,11 @@ use super::{
     HasReduceOnly, HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument,
 };
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Data: main operation parameters reported by the execution.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionReportOperation {
     pub instrument: Instrument,
@@ -45,8 +45,8 @@ pub struct ExecutionReportOperation {
 }
 
 /// Adds main operation parameters reported by the execution.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithExecutionReportOperation<InnerExecutionReport> {
     pub inner: InnerExecutionReport,
@@ -117,17 +117,18 @@ impl_request_has_field_passthrough!(
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Data: financial impact parameters reported by the execution.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FinancialImpact {
     /// Realized trading result contributed by this report.
     ///
-    /// Positive values for gains, negative values for losses. Fees can be included in this value,
-    /// but if included, the included value must be excluded from `fee` value.
+    /// Positive values for gains, negative values for losses. Fees can be
+    /// included in this value, but if included, the included value must be
+    /// excluded from `fee` value.
     pub pnl: Pnl,
     /// Fee or rebate associated with this report event.
     ///
@@ -136,8 +137,8 @@ pub struct FinancialImpact {
 }
 
 /// Adds financial impact parameters reported by the execution.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithFinancialImpact<InnerExecutionReport> {
     pub inner: InnerExecutionReport,
@@ -177,11 +178,11 @@ impl_request_has_field_passthrough!(
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Data: trade reported by the execution.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionReportFillDetails {
     pub last_trade: Option<Trade>,
@@ -206,8 +207,8 @@ pub struct ExecutionReportFillDetails {
 }
 
 /// Adds financial impact parameters reported by the execution.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithExecutionReportFillDetails<InnerExecutionReport> {
     pub inner: InnerExecutionReport,
@@ -267,12 +268,12 @@ impl_request_has_field_passthrough!(
     HasExecutionReportIsFinal, is_final, bool;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Data: position impact parameters reported by the execution.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 pub struct ExecutionReportPositionImpact {
     /// Whether this execution opened or closed exposure.
     pub position_effect: Option<PositionEffect>,
@@ -281,8 +282,8 @@ pub struct ExecutionReportPositionImpact {
 }
 
 /// Adds position impact parameters reported by the execution.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithExecutionReportPositionImpact<InnerExecutionReport> {
     pub inner: InnerExecutionReport,
@@ -297,7 +298,7 @@ impl_request_has_field!(
     HasExecutionReportPositionSide, position_side, Option<PositionSide>, position_side;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

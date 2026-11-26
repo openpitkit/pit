@@ -20,12 +20,12 @@ use super::reservation::PreTradeReservation;
 
 /// Opaque deferred pre-trade capability produced by `start_pre_trade`.
 ///
-/// Created by [`crate::Engine::start_pre_trade`] after start-stage policies pass.
-/// Holds a single-use capability: once [`PreTradeRequest::execute`] is called, the
-/// object is consumed and cannot be reused.
+/// Created by [`crate::Engine::start_pre_trade`] after start-stage policies
+/// pass. Holds a single-use capability: once [`PreTradeRequest::execute`] is
+/// called, the object is consumed and cannot be reused.
 ///
-/// The capability is single-use: once [`PreTradeRequest::execute`] is called, the
-/// request is consumed and cannot be reused.
+/// The capability is single-use: once [`PreTradeRequest::execute`] is called,
+/// the request is consumed and cannot be reused.
 ///
 /// The request does not expose the underlying order to the caller;
 /// those values are visible only to the engine and the policies.

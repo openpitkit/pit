@@ -1685,10 +1685,12 @@ def format_args(args: list[tuple[str, str]]) -> str:
     return ", ".join(f"{map_type(rust_type)} {name}" for name, rust_type in args)
 
 
-def format_doc_comment(lines: list[str]) -> str:
+def format_doc_comment(lines: list[str], indent: str = "") -> str:
     lines = normalize_doc_lines(lines)
     if not lines:
         return ""
+    prefix = f"{indent} *"
+    max_text_width = 80 - len(prefix) - 1
     wrapped: list[str] = []
     for line in lines:
         if not line:
@@ -1697,7 +1699,7 @@ def format_doc_comment(lines: list[str]) -> str:
         if line.startswith("- "):
             chunks = textwrap.wrap(
                 line[2:],
-                width=74,
+                width=min(74, max_text_width),
                 initial_indent="- ",
                 subsequent_indent="  ",
                 break_long_words=False,
@@ -1708,14 +1710,17 @@ def format_doc_comment(lines: list[str]) -> str:
         wrapped.extend(
             textwrap.wrap(
                 line,
-                width=76,
+                width=min(76, max_text_width),
                 break_long_words=False,
                 break_on_hyphens=False,
             )
             or [""]
         )
-    body = "\n".join(f" * {line}" if line else " *" for line in wrapped)
-    return f"/**\n{body}\n */\n"
+    for line in wrapped:
+        if len(line) > max_text_width:
+            raise ValueError(f"C header comment cannot wrap at 80 characters: {line!r}")
+    body = "\n".join(f"{prefix} {line}" if line else prefix for line in wrapped)
+    return f"{indent}/**\n{body}\n{indent} */\n"
 
 
 def format_multiline_function(
@@ -1881,10 +1886,9 @@ def render_header(items: list[Item]) -> str:
         keyword = "union" if item.kind == "union" else "struct"
         parts.append(format_doc_comment(item.docs) + f"{keyword} {item.name} {{")
         for field_item in item.fields:
-            field_doc = format_doc_comment(field_item.docs)
+            field_doc = format_doc_comment(field_item.docs, indent="    ")
             if field_doc:
-                for doc_line in field_doc.rstrip().splitlines():
-                    parts.append(f"    {doc_line}" if doc_line else "")
+                parts.append(field_doc.rstrip())
             parts.extend(format_field_decl_lines(field_item))
         parts.append("};")
         parts.append("")

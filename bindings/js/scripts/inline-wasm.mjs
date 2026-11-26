@@ -18,8 +18,8 @@
 // Base64-inlines the generated `openpit_js_bg.wasm` into a TypeScript module
 // (`src-ts/wasm/openpit_js_inline.ts`). The browser loader imports these bytes
 // and instantiates synchronously, so the published browser bundle carries the
-// wasm with no `fetch`, no `fs`, and no separate asset to host - it works on any
-// CDN and in edge isolates (Cloudflare Workers) with zero configuration.
+// wasm with no `fetch`, no `fs`, and no separate asset to host - it works on
+// any CDN and in edge isolates (Cloudflare Workers) with zero configuration.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

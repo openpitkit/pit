@@ -44,7 +44,8 @@ impl std::fmt::Display for RequestFieldAccessError {
 
 impl std::error::Error for RequestFieldAccessError {}
 
-/// A macro to generate the trait that requests a specific field from the request.
+/// A macro to generate the trait that requests a specific field from the
+/// request.
 #[macro_export]
 macro_rules! has_request_field_trait {
     (
@@ -59,6 +60,9 @@ macro_rules! has_request_field_trait {
             ) -> ::std::result::Result<$ret, $crate::RequestFieldAccessError>;
         }
 
+        // The generic is in scope for caller tokens. `T` is least likely
+        // to collide with a caller's type name.
+        // nosemgrep: short-generic-parameter-rust
         impl<T> $trait for T
         where
             T: std::ops::Deref,
@@ -176,7 +180,8 @@ has_request_field_trait!(
 );
 
 has_request_field_trait!(
-    /// Requested worst execution price used for size translation and price-sensitive checks.
+    /// Requested worst execution price used for size translation and
+    /// price-sensitive checks.
     ///
     /// `None` means the order should execute at market price.
     HasOrderPrice,
@@ -242,7 +247,8 @@ where
 }
 
 has_request_field_trait!(
-    /// Amount earmarked for outgoing settlement and unavailable for immediate use.
+    /// Amount earmarked for outgoing settlement and unavailable for immediate
+    /// use.
     HasAccountAdjustmentHeld,
     held -> Option<AdjustmentAmount>
 );
@@ -292,7 +298,8 @@ has_request_field_trait!(
 has_request_field_trait!(HasAccountAdjustmentPositionLeverage, position_leverage -> Option<Leverage>);
 
 has_request_field_trait!(
-    /// Optional account-wide realized-PnL operation carried by an account adjustment.
+    /// Optional account-wide realized-PnL operation carried by an account
+    /// adjustment.
     HasAccountAdjustmentPnlOperation,
     account_adjustment_pnl_operation -> Option<PnlState>
 );

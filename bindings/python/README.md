@@ -174,7 +174,8 @@ elif result.ok:
     result.reservation.commit()
 else:
     for reject in result.rejects:
-        # OrderSizeLimitPolicy [OrderQtyExceedsLimit]: order quantity exceeded
+        # OrderSizeLimitPolicy [OrderQtyExceedsLimit]: order quantity
+        # exceeded
         print(f"{reject.policy} [{reject.code}]: {reject.reason}")
 ```
 

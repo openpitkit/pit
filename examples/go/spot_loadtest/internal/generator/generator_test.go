@@ -209,8 +209,8 @@ func TestLifecycleValidity(t *testing.T) {
 	}
 }
 
-// TestRejectControllerConvergence asserts the predicted reject rate over a large
-// stream lands within tolerance of the configured target.
+// TestRejectControllerConvergence asserts the predicted reject rate over a
+// large stream lands within tolerance of the configured target.
 func TestRejectControllerConvergence(t *testing.T) {
 	t.Parallel()
 
@@ -308,7 +308,8 @@ func TestSelfFundingPreventsStarvation(t *testing.T) {
 //     report-return delay is non-negative);
 //   - a same-account order-check that follows an accepted order's settlement is
 //     scheduled strictly after that settlement (dependent-order causality);
-//   - under a positive offered rate the timeline actually advances (not all zero).
+//   - under a positive offered rate the timeline actually advances (not all
+//     zero).
 func TestVirtualTimelineCausal(t *testing.T) {
 	t.Parallel()
 

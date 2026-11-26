@@ -28,9 +28,9 @@ import (
 )
 
 // Handle 0 of an AccountGroupID legally names the default ("everyone-else")
-// bucket, so the service cannot tell an unset group from a deliberate one. These
-// tests pin that the binding rejects the unset value before it reaches the
-// service, and that param.DefaultAccountGroup keeps addressing that bucket.
+// bucket, so the service cannot tell an unset group from a deliberate one.
+// These tests pin that the binding rejects the unset value before it reaches
+// the service, and that param.DefaultAccountGroup keeps addressing that bucket.
 
 type fixedGroupAccountInfo struct {
 	group param.AccountGroupID

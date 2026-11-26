@@ -634,13 +634,14 @@ describe("order-size limits", () => {
     expect(aboveAccount.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
   });
 
-  // These two look like tautologies - the order is under every visible cap - and
-  // they are not. Quantity resolves by the instrument's underlying asset (AAPL)
-  // and notional by its settlement asset (USD), so the quantity-only USD barrier
-  // and the notional-only AAPL barrier each leave absent exactly the cap its own
-  // key would make the engine consult. An absent cap turned into a zero cap
-  // would land on that live chain and reject. Keep the asymmetry: one barrier
-  // carrying both caps, or both keyed on one asset, silently removes the check.
+  // These two look like tautologies - the order is under every visible cap -
+  // and they are not. Quantity resolves by the instrument's underlying asset
+  // (AAPL) and notional by its settlement asset (USD), so the quantity-only USD
+  // barrier and the notional-only AAPL barrier each leave absent exactly the
+  // cap its own key would make the engine consult. An absent cap turned into a
+  // zero cap would land on that live chain and reject. Keep the asymmetry: one
+  // barrier carrying both caps, or both keyed on one asset, silently removes
+  // the check.
   it("preserves absent caps on the chains fed by asset keys", () => {
     const engine = Engine.builder()
       .builtin(

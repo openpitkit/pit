@@ -270,7 +270,7 @@ class AsyncEngine {
     return future;
   }
 
-  // Two-value variant of `Call`: `op` returns a `std::pair<A, B>` mirroring the
+  // Two-value variant of `Call`: `op` returns a pair matching the
   // synchronous engine tuples (request-or-rejects, reservation-or-rejects).
   // Returns a `PairFuture<FirstValue, SecondValue>`.
   template <typename FirstValue, typename SecondValue, typename Operation>

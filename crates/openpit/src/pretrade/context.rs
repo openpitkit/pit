@@ -398,7 +398,8 @@ where
     /// Returns a callback-scoped recorder for drop-copy start-stage mutations.
     ///
     /// Bindings use this handle to preserve the same transactional seam as
-    /// [`Self::record_drop_copy_start_mutation`] without retaining this context.
+    /// [`Self::record_drop_copy_start_mutation`] without retaining this
+    /// context.
     #[doc(hidden)]
     pub fn drop_copy_start_mutation_recorder(&self) -> Option<DropCopyStartMutationRecorder> {
         self.drop_copy

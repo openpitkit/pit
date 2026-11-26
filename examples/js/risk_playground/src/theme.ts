@@ -26,7 +26,7 @@ export function readTheme(): ThemeMode {
     return isThemeMode(value) ? value : "system";
   } catch (error) {
     console.warn("theme preference unreadable, using the system theme", error);
-    // fallback(approved): blocked storage must not break the page; the theme is a convenience
+    // fallback(approved): the optional theme must work with blocked storage
     return "system";
   }
 }
@@ -35,7 +35,7 @@ export function saveTheme(theme: ThemeMode): void {
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   } catch (error) {
-    // fallback(approved): blocked storage keeps the selected theme for this visit only
+    // fallback(approved): blocked storage limits the theme to this visit
     console.warn("theme preference not saved", error);
   }
 }

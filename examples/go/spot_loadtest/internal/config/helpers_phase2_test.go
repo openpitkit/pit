@@ -59,10 +59,10 @@ func dropLines(s string, markers ...string) string {
 	return strings.Join(out, "\n")
 }
 
-// replaceLines replaces two lines in fullConfig: the line containing oldLine1 is
-// replaced with replacement1, and the line containing oldLine2 is replaced with
-// replacement2. Used to mutate two related keys in one step (e.g. strategy +
-// sharded_workers together).
+// replaceLines replaces two lines in fullConfig: the line containing oldLine1
+// is replaced with replacement1, and the line containing oldLine2 is replaced
+// with replacement2. Used to mutate two related keys in one step (e.g.
+// strategy + sharded_workers together).
 func replaceLines(oldLine1, replacement1, oldLine2, replacement2 string) string {
 	s := strings.Replace(fullConfig, oldLine1, replacement1, 1)
 	return strings.Replace(s, oldLine2, replacement2, 1)

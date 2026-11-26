@@ -15,7 +15,7 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
-"""Pre-trade pipeline components: policies, rejects, requests, and reservations."""
+"""Pre-trade policies, rejects, requests, and reservations."""
 
 from __future__ import annotations
 
@@ -352,7 +352,7 @@ Rejects = list[Reject]
 
 
 class Lock(_Lock):
-    """Pre-trade price lock payload: grouped `(policy_group_id, price)` records."""
+    """Pre-trade price lock grouping `(policy_group_id, price)` pairs."""
 
     def __new__(cls, *args: object, **kwargs: object) -> Lock:
         return _Lock.__new__(cls, *args, **kwargs)

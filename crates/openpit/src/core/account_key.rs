@@ -98,7 +98,9 @@ impl<FirstComponent, SecondComponent, ThirdComponent> AccountKey
 ///
 /// let builder = Engine::builder::<(), (), ()>().account_sync();
 /// let _ = builder.storage_builder().create_for_bound_key::<AccountId, u64>();
-/// let _ = builder.storage_builder().create_for_bound_key::<(AccountId, Asset), u64>();
+/// let _ = builder
+///     .storage_builder()
+///     .create_for_bound_key::<(AccountId, Asset), u64>();
 /// ```
 ///
 /// Keys that do not identify an account are rejected at compile time

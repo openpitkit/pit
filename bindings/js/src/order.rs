@@ -643,7 +643,8 @@ pub struct JsOrderReview {
 
 #[wasm_bindgen(js_class = OrderReview)]
 impl JsOrderReview {
-    /// Constructs a review group with `confirmed` and `alreadyHeld` set to `false`.
+    /// Constructs a review group with `confirmed` and `alreadyHeld` set to
+    /// `false`.
     #[wasm_bindgen(constructor)]
     pub fn new() -> JsOrderReview {
         Self::default()

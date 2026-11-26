@@ -30,12 +30,14 @@
 //!
 //! 1. [`Engine::start_pre_trade`] runs start-stage policies and returns a
 //!    [`pretrade::PreTradeRequest`].
-//! 2. [`pretrade::PreTradeRequest::execute`] runs main-stage policies and returns a
-//!    [`pretrade::PreTradeReservation`].
+//! 2. [`pretrade::PreTradeRequest::execute`] runs main-stage policies and
+//!    returns a [`pretrade::PreTradeReservation`].
 //! 3. [`pretrade::PreTradeReservation::commit`] or
 //!    [`pretrade::PreTradeReservation::rollback`] finalizes reserved state.
-//! 4. [`Engine::apply_execution_report`] feeds realized outcomes back into policies.
-//! 5. [`Engine::apply_account_adjustment`] validates non-trade adjustment batches.
+//! 4. [`Engine::apply_execution_report`] feeds realized outcomes back into
+//!    policies.
+//! 5. [`Engine::apply_account_adjustment`] validates non-trade adjustment
+//!    batches.
 //!
 //! The current crate scope is deliberately narrow: in-memory admission control,
 //! exact decimal value types, and a small set of built-in start-stage

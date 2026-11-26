@@ -28,20 +28,21 @@
 //   - one submitter goroutine per account owns that account's ordered
 //     sub-stream. It paces each event by sleeping until the event's VirtualT0
 //     (relative to a shared run start), stamps that virtual arrival as the
-//     measured t0, submits non-blocking, hands {future, t0, actual-submit, event}
-//     to the collector via a buffered channel, and IMMEDIATELY advances to the
-//     next event. It NEVER awaits a future and never waits for a decision before
-//     the next submit, so many of one account's ops may be in flight at once
-//     (true pipelining);
-//   - a collector goroutine pool drains the channel, Awaits each future, records
-//     the open-loop latency = resolveTime - VirtualT0 (and, for order-checks, the
-//     service-time diagnostic = resolveTime - actualSubmit), checks the per-op
-//     oracle, and hands accepted reservations to the finalizer pool;
+//     measured t0, submits non-blocking, hands {future, t0, actual-submit,
+//     event} to the collector via a buffered channel, and IMMEDIATELY advances
+//     to the next event. It NEVER awaits a future and never waits for a
+//     decision before the next submit, so many of one account's ops may be in
+//     flight at once (true pipelining);
+//   - a collector goroutine pool drains the channel, Awaits each future,
+//     records the open-loop latency = resolveTime - VirtualT0 (and, for
+//     order-checks, the service-time diagnostic = resolveTime - actualSubmit),
+//     checks the per-op oracle, and hands accepted reservations to the
+//     finalizer pool;
 //   - a finalizer goroutine pool CommitAndCloses accepted reservations off the
 //     measured path;
-//   - settlements and runtime funding are submitted by the per-account scheduler
-//     at their own virtual arrival times (settlements are NO LONGER triggered by
-//     the collector).
+//   - settlements and runtime funding are submitted by the per-account
+//     scheduler at their own virtual arrival times (settlements are NO LONGER
+//     triggered by the collector).
 //
 // # Open-loop latency definition (coordinated-omission defence)
 //
@@ -55,9 +56,9 @@
 // the order check (stage 1->2) and the report settlement (stage 3->4).
 //
 // A separate SERVICE-TIME diagnostic (`resolveTime - actualSubmit`) is captured
-// for order-checks and exposed ONLY in the diagnostics section. It discounts the
-// queue wait that accrued before the actual submit, so it hides the saturation
-// tail by construction and is never the headline.
+// for order-checks and exposed ONLY in the diagnostics section. It discounts
+// the queue wait that accrued before the actual submit, so it hides the
+// saturation tail by construction and is never the headline.
 //
 // # Why the strict per-op oracle survives true open-loop
 //
@@ -65,12 +66,13 @@
 // account; reservation Commit/Close routed through the same queue) and the
 // spot-funds hold is applied IN-PLACE at ExecutePreTrade (Commit is a no-op;
 // only Close-without-commit rolls back). Each account's causal sub-stream is
-// submitted from a single goroutine in emission order, and the generator assigns
-// VirtualT0 so that order is non-decreasing per account (a top-up before its
-// order, an order-check before its settlement, a settlement before a dependent
-// later order). FIFO-per-account therefore replays the shadow's offline-ordered
-// decisions exactly, so the precomputed per-event predictions can be checked as
-// each op resolves (order-independently) without any per-op blocking.
+// submitted from a single goroutine in emission order, and the generator
+// assigns VirtualT0 so that order is non-decreasing per account (a top-up
+// before its order, an order-check before its settlement, a settlement before a
+// dependent later order). FIFO-per-account therefore replays the shadow's
+// offline-ordered decisions exactly, so the precomputed per-event predictions
+// can be checked as each op resolves (order-independently) without any per-op
+// blocking.
 //
 // # Commit/close is outside every measured interval
 //
@@ -81,8 +83,8 @@
 // hold). It uses CommitAndClose (keep), NEVER Close (rollback), for an accepted
 // order. The commit happens strictly after the measured span closes, never
 // inside it, and on a separate pool so the collector's Await loop stays
-// responsive. A rejected or transport-failed order reserves nothing, so there is
-// no reservation to finalize.
+// responsive. A rejected or transport-failed order reserves nothing, so there
+// is no reservation to finalize.
 //
 // # Oracle (strict, per account)
 //
@@ -120,10 +122,10 @@
 //     operations.
 //   - ExecutePreTrade (order-check) resolves with a reservation, not an outcome
 //     list. AsyncReservation.AccountAdjustments exposes the reservation's
-//     predicted adjustments, but the load test does not retain the per-operation
-//     expected balance state at the point where the reservation is observed.
-//     Comparing those outcomes would therefore require a broader oracle
-//     redesign. The current ORDER-CHECK oracle remains decision-only.
+//     predicted adjustments, but the load test does not retain the
+//     per-operation expected balance state at the point where the reservation
+//     is observed. Comparing those outcomes would therefore require a broader
+//     oracle redesign. The current ORDER-CHECK oracle remains decision-only.
 //
 // This means the oracle is balance-exact for funding and settlement, and
 // decision-only for the order-check itself. That is not a silent weakening: a

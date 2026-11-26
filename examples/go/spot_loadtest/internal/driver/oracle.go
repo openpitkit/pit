@@ -38,11 +38,11 @@ import (
 // InsufficientFunds: it always seeds the charge asset first, so the contract's
 // not-configured case never fires on a positive charge, and the real
 // SpotFundsPolicy reports InsufficientFunds (not a distinct not-configured
-// reject) on the order path anyway. Any other reason is therefore unexpected and
-// returns false so checkOrder fails loudly rather than inventing a mapping. (The
-// not-configured reason can appear on a FUNDING reject, but that path checks the
-// accept/reject decision via the batch error, not a reject code, so it does not
-// go through here.)
+// reject) on the order path anyway. Any other reason is therefore unexpected
+// and returns false so checkOrder fails loudly rather than inventing a mapping.
+// (The not-configured reason can appear on a FUNDING reject, but that path
+// checks the accept/reject decision via the batch error, not a reject code, so
+// it does not go through here.)
 func orderRejectCodeFor(reason generator.RejectReason) (reject.Code, bool) {
 	switch reason {
 	case generator.RejectInsufficientFunds:
@@ -53,8 +53,8 @@ func orderRejectCodeFor(reason generator.RejectReason) (reject.Code, bool) {
 }
 
 // orderObservation is the engine's response to one order-check, handed to the
-// oracle by the collector. accepted is true when ExecutePreTrade resolved with a
-// reservation; otherwise rejects carries the engine reject list.
+// oracle by the collector. accepted is true when ExecutePreTrade resolved with
+// a reservation; otherwise rejects carries the engine reject list.
 type orderObservation struct {
 	accepted bool
 	rejects  []reject.Reject
@@ -88,9 +88,9 @@ type fundingObservation struct {
 // the engine's response, with no shared mutable aggregate state, so the
 // open-loop collector pool may run them in any completion order. The AGGREGATE
 // invariants are computed once at the end (checkInvariants) by replaying the
-// predictions in deterministic emission (Seq) order, so they too are independent
-// of the concurrent processing order. This is what lets the strict oracle
-// survive true open-loop while staying race-free.
+// predictions in deterministic emission (Seq) order, so they too are
+// independent of the concurrent processing order. This is what lets the strict
+// oracle survive true open-loop while staying race-free.
 type oracle struct {
 	mu sync.Mutex
 
@@ -146,11 +146,11 @@ func (o *oracle) failExternal(err error) {
 
 // checkOrder verifies an order-check outcome against the event's prediction.
 // Balances are not directly observable on the order path (the async reservation
-// wrapper does not surface AccountAdjustments), so this asserts the decision and
-// the reject code only (see package doc). It is order-independent: it compares
-// the fixed prediction against the engine response and mutates no shared state
-// beyond the locked counter and first-error slot. The event's global Seq names
-// the op in any error.
+// wrapper does not surface AccountAdjustments), so this asserts the decision
+// and the reject code only (see package doc). It is order-independent: it
+// compares the fixed prediction against the engine response and mutates no
+// shared state beyond the locked counter and first-error slot. The event's
+// global Seq names the op in any error.
 func (o *oracle) checkOrder(ev *generator.Event, obs orderObservation) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -216,9 +216,9 @@ func (o *oracle) checkSettlement(ev *generator.Event, obs settleObservation) {
 	}
 }
 
-// checkFunding verifies a funding adjustment against the event's prediction: the
-// accept/reject decision and, on accept, the engine-volunteered post-op balance
-// of the funded asset against the predicted Post. Order-independent.
+// checkFunding verifies a funding adjustment against the event's prediction:
+// the accept/reject decision and, on accept, the engine-volunteered post-op
+// balance of the funded asset against the predicted Post. Order-independent.
 func (o *oracle) checkFunding(ev *generator.Event, obs fundingObservation) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -258,9 +258,9 @@ func (o *oracle) checkFunding(ev *generator.Event, obs fundingObservation) {
 // checkInvariants asserts the aggregate fund-conservation and no-oversell
 // invariants over the predicted end state. It is called ONCE after the run has
 // drained, and it reconstructs the end state by replaying the predictions in
-// deterministic emission (Seq) order - NOT from any concurrently-mutated state -
-// so it is independent of the order in which the open-loop collectors checked
-// the live ops. The predictions are the same authoritative Post values the
+// deterministic emission (Seq) order, independent of concurrently-mutated
+// state and the order in which the open-loop collectors checked the live ops.
+// The predictions are the same authoritative Post values the
 // per-op checks asserted the engine reproduced, so a clean per-op run plus a
 // clean replay here pins the engine's end state end-to-end.
 //
@@ -268,8 +268,8 @@ func (o *oracle) checkFunding(ev *generator.Event, obs fundingObservation) {
 //   - Conservation: for every asset, the sum over all accounts of
 //     (available + held) equals the net value that entered the system for that
 //     asset, where net value = external funding injections + signed trade flow
-//     (a buy spends q*p of settlement cash and gains q of the underlying; a sell
-//     does the reverse). The order-check hold is internal to one asset
+//     (a buy spends q*p of settlement cash and gains q of the underlying; a
+//     sell does the reverse). The order-check hold is internal to one asset
 //     (available->held) so it nets to zero in the per-asset total.
 func (o *oracle) checkInvariants(events []generator.Event) error {
 	// If a per-op divergence already failed the run, surface it first.
@@ -375,10 +375,10 @@ func checkHoldingsConserved(final map[assetKey]holdings, expected map[string]dec
 }
 
 // compareLeg asserts the engine's volunteered post-op available/held for one
-// affected leg equal the predicted balance exactly. The SpotFundsPolicy sets the
-// outcome Absolute fields to the true post-op available()/held(), so an exact
-// decimal compare is correct. A field the policy omits (zero delta) means that
-// field did not change; the oracle then trusts the predicted value for the
+// affected leg equal the predicted balance exactly. The SpotFundsPolicy sets
+// the outcome Absolute fields to the true post-op available()/held(), so an
+// exact decimal compare is correct. A field the policy omits (zero delta) means
+// that field did not change; the oracle then trusts the predicted value for the
 // unchanged field only when the changed field matched, which is sufficient
 // because the changed field is what the op moved.
 func compareLeg(kind string, ev *generator.Event, want generator.Balance, got accountadjustment.AccountOutcomeEntry) error {

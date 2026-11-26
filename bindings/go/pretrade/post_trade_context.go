@@ -31,7 +31,8 @@ import (
 // context or using it after that hook has returned is undefined.
 type PostTradeContext struct{ handle native.PostTradeContext }
 
-// NewPostTradeContextFromHandle creates a PostTradeContext from a native handle.
+// NewPostTradeContextFromHandle creates a PostTradeContext from a native
+// handle.
 func NewPostTradeContextFromHandle(handle native.PostTradeContext) PostTradeContext {
 	return PostTradeContext{handle: handle}
 }

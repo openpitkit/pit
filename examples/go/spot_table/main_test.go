@@ -29,8 +29,8 @@ const coverageTable = "../../tables/spot/coverage.md"
 
 // TestFast is the quick check: it runs the coverage scenario through both
 // engines once and asserts every row's verdict. The scenario uses every feature
-// of the runner, so a green run covers the whole tool end to end in well under a
-// second.
+// of the runner, so a green run covers the whole tool end to end in well under
+// a second.
 func TestFast(t *testing.T) {
 	table, err := ParseFile(coverageTable)
 	if err != nil {

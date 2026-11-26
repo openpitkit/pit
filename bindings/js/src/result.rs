@@ -1001,7 +1001,8 @@ impl JsPostTradeResult {
     /// # Errors
     ///
     /// Throws `TypeError` when an array contains a value of the wrong type.
-    /// Throws `RangeError` when capacity cannot be reserved for an outcome array.
+    /// Throws `RangeError` when capacity cannot be reserved for an outcome
+    /// array.
     #[wasm_bindgen(constructor)]
     pub fn new(
         #[wasm_bindgen(unchecked_optional_param_type = "readonly AccountBlock[]")]
@@ -1030,9 +1031,9 @@ impl JsPostTradeResult {
     /// recomputed it unchanged. A halt-reason outcome has no authoritative PnL
     /// value and must not be interpreted as zero. SpotFunds emits a halt reason
     /// only when the current report transitions the account accumulator to
-    /// halted; later reports omit the unchanged halt. Position force-sets do not
-    /// re-arm it, and unchanged halted position PnL is likewise omitted from
-    /// `accountAdjustments`.
+    /// halted; later reports omit the unchanged halt. Position force-sets do
+    /// not re-arm it, and unchanged halted position PnL is likewise omitted
+    /// from `accountAdjustments`.
     #[wasm_bindgen(getter, js_name = accountPnls)]
     pub fn account_pnls(&self) -> Vec<JsAccountPnlOutcome> {
         self.account_pnls.clone()

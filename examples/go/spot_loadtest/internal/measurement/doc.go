@@ -52,17 +52,18 @@
 //
 // The latency values arriving from the driver are already CO-correct: the
 // driver stamps intended_t0 *before* the non-blocking submit and computes
-// latency = resolve_time - intended_t0, so any queue-wait or submit backpressure
-// is inside the measured interval. This package does not recompute CO.
+// latency = resolve_time - intended_t0, so any queue-wait or submit
+// backpressure is inside the measured interval. This package does not recompute
+// CO.
 //
 // # Observer inner metrics (diagnostic, separate from headline)
 //
 // ObserverSink records queue_wait and engine_compute durations reported by the
-// asyncengine Observer callbacks. These are per-account *aggregate* distributions
-// (not correlated to a specific order): the dispatcher reports OnDequeue/waited
-// and OnComplete/ran for every task on every account, summed over all accounts.
-// They belong exclusively to the diagnostic snapshot section, never the headline.
-// Wire only when config.Run.Observer = true.
+// asyncengine Observer callbacks. These are per-account *aggregate*
+// distributions (not correlated to a specific order): the dispatcher reports
+// OnDequeue/waited and OnComplete/ran for every task on every account, summed
+// over all accounts. They belong exclusively to the diagnostic snapshot
+// section, never the headline. Wire only when config.Run.Observer = true.
 //
 // # Anti-dead-code-elimination checksum
 //

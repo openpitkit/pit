@@ -107,8 +107,8 @@ pub trait SyncMode: 'static {
 /// # }
 /// ```
 ///
-/// `LocalEngine<T>` is `!Send + !Sync`; attempting to send it across threads
-/// does not compile:
+/// `LocalEngine` is `!Send + !Sync`. Sending it across threads does not
+/// compile:
 ///
 /// ```compile_fail
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -171,7 +171,8 @@ impl SyncMode for LocalSync {
 /// stronger invariant provide their own narrowly scoped synchronization.
 /// Membership, retirement, Spot Funds retunes and all currency setters and
 /// clearers are caller-guaranteed exclusive in this mode too: no other engine
-/// call may be in flight. Debug builds detect overlap; release builds do not wait.
+/// call may be in flight. Debug builds detect overlap; release builds do not
+/// wait.
 ///
 /// # Examples
 ///

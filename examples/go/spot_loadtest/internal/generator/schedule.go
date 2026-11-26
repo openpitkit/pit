@@ -40,19 +40,19 @@ const causalGap = time.Microsecond
 //
 // Model (two clocks combined by max):
 //
-//   - globalClock advances ONLY on each order-check, by one inter-arrival of the
-//     offered process ([arrival] offered_rate, Poisson/exponential). This makes
-//     the AGGREGATE order-check arrival rate across all accounts equal
+//   - globalClock advances ONLY on each order-check, by one inter-arrival of
+//     the offered process ([arrival] offered_rate, Poisson/exponential). This
+//     makes the AGGREGATE order-check arrival rate across all accounts equal
 //     offered_rate. When offered_rate == 0 the process is unpaced (return 0).
-//   - acctClock[account] is the earliest virtual instant the account's next event
-//     may occupy, reflecting causal dependencies: the hold is visible at an
-//     order-check's VirtualT0, the fill at its settlement's VirtualT0, and a
+//   - acctClock[account] is the earliest virtual instant the account's next
+//     event may occupy, reflecting causal dependencies: the hold is visible at
+//     an order-check's VirtualT0, the fill at its settlement's VirtualT0, and a
 //     same-account successor must follow by at least causalGap.
 //
-// Each event's VirtualT0 = max(its offered-process instant, its account's causal
-// floor). The max only ever pushes an event LATER than the bare offered tick,
-// which is the honest intended arrival: a dependent order genuinely cannot be
-// intended to arrive before its dependency completed.
+// Each event's VirtualT0 = max(its offered-process instant, its account's
+// causal floor). The max only ever pushes an event LATER than the bare offered
+// tick, which is the honest intended arrival: a dependent order genuinely
+// cannot be intended to arrive before its dependency completed.
 func (gen *generator) assignVirtualTimes() {
 	vg := newScheduleRNG(gen.cfg.Run.Seed)
 	rate := float64(gen.cfg.Arrival.OfferedRate)
@@ -132,7 +132,8 @@ func reportDelayParams(rd config.ReportDelay) (mean time.Duration, sigma float64
 // to a settlement's virtual time. With a zero mean it returns 0. Otherwise:
 //   - fixed: the mean exactly;
 //   - lognormal (default when a mean is set): a lognormal whose MEDIAN is the
-//     mean, i.e. mean * exp(sigma * Z), Z ~ N(0,1). One schedule-RNG normal draw.
+//     mean, i.e. mean * exp(sigma * Z), Z ~ N(0,1). One schedule-RNG normal
+//     draw.
 //
 // All draws come from the schedule RNG in a fixed order, so the timeline stays
 // deterministic for a given seed.

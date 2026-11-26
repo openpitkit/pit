@@ -134,7 +134,8 @@ def test_spot_funds_sell_reservation_quote_incoming_surfaces() -> None:
     # Seed 5 AAPL so the sell can proceed.
     _seed_balance(engine, account_id, "AAPL", 5)
 
-    # Sell 2 AAPL @ 150: holds 2 AAPL (underlying) and reserves 300 USD incoming.
+    # Sell 2 AAPL @ 150: holds 2 AAPL (underlying) and reserves 300 USD
+    # incoming.
     order = openpit.Order(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument("AAPL", "USD"),

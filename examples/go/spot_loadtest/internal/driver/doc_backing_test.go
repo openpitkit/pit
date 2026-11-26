@@ -23,11 +23,11 @@ package driver
 // (the "Build and run" section and the report structure walkthrough).
 //
 // This test loads configs/baseline.ini through the real config parser (guarding
-// that the committed reference config stays in sync with the tightened validator),
-// then runs a reduced end-to-end - 30 000 order-checks instead of the 2 000 000
-// in the baseline - through the REAL openpit asyncengine, and finally renders the
-// report, asserting every named block is present and the run is oracle-clean with
-// zero backpressure.
+// that the committed reference config stays in sync with the tightened
+// validator), then runs a reduced end-to-end - 30 000 order-checks instead of
+// the 2 000 000 in the baseline - through the REAL openpit asyncengine, and
+// finally renders the report, asserting every named block is present and the
+// run is oracle-clean with zero backpressure.
 //
 // The test requires the native core:
 //
@@ -273,9 +273,9 @@ func syntheticDocEnv() env.Env {
 }
 
 // TestBaselineIniParsesAndValidates is the unit layer of the doc-backing test:
-// it asserts configs/baseline.ini passes strict validation in isolation, without
-// requiring the native core. This catches config-drift early even in environments
-// where OPENPIT_RUNTIME_LIBRARY_PATH is not set.
+// it asserts configs/baseline.ini passes strict validation in isolation,
+// without requiring the native core. This catches config-drift early even in
+// environments where OPENPIT_RUNTIME_LIBRARY_PATH is not set.
 //
 // Mirror of: examples/go/spot_loadtest/README.md (configuration section).
 func TestBaselineIniParsesAndValidates(t *testing.T) {
@@ -287,7 +287,8 @@ func TestBaselineIniParsesAndValidates(t *testing.T) {
 		t.Fatalf("configs/baseline.ini failed strict validation: %v", err)
 	}
 
-	// Spot-check expected baseline values so a committed config mutation is caught.
+	// Spot-check expected baseline values so a committed config mutation is
+	// caught.
 	if cfg.Run.Seed != 0xC0FFEE {
 		t.Errorf("Run.Seed = %#x, want 0xC0FFEE", cfg.Run.Seed)
 	}

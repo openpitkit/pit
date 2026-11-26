@@ -33,14 +33,14 @@ import (
 // Close, CommitAndClose, and RollbackAndClose are routed through the same
 // per-account queue as the call that produced the reservation. This preserves
 // the AccountSync invariant up to and including reservation finalization.
-// Lock, AccountAdjustments, and Reviews are synchronous. Snapshot reads distinguish
-// three states. While open, an admitted read completes before native
-// finalization starts. While finalizing, a read returns
-// ErrFinalizationInProgress immediately. That signal is transient, the read
-// may succeed later, and the caller still owns the handle and owes it a
-// terminal call. Once closed, reads return pretrade.ErrReservationClosed
-// permanently. Reads resume after Commit or Rollback; closing operations leave
-// the wrapper closed.
+// Lock, AccountAdjustments, and Reviews are synchronous. Snapshot reads
+// distinguish three states. While open, an admitted read completes before
+// native finalization starts. While finalizing, a read returns
+// ErrFinalizationInProgress immediately. That signal is transient, the read may
+// succeed later, and the caller still owns the handle and owes it a terminal
+// call. Once closed, reads return pretrade.ErrReservationClosed permanently.
+// Reads resume after Commit or Rollback; closing operations leave the wrapper
+// closed.
 //
 // Lifecycle calls are serialized by the wrapper. Sequential calls after
 // resolution or close, including Commit after Close and repeated Commit,

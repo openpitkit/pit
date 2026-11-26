@@ -150,7 +150,8 @@ class Instrument:
     def underlying_asset(self) -> Asset:
         """Returns the asset that is bought or sold.
 
-        This is the asset in which order quantity and resulting position are measured.
+        This is the asset in which order quantity and resulting position are
+        measured.
         """
         return self._inner.underlying_asset
 
@@ -178,7 +179,7 @@ class Instrument:
 
 
 class OrderOperation(_OrderOperation):
-    """Main operation parameters that describe side, instrument, price, and amount."""
+    """Main order parameters cover side, instrument, price, and amount."""
 
     # @typing.override
     def __new__(cls, *args: typing.Any, **kwargs: typing.Any) -> OrderOperation:
@@ -641,7 +642,8 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
     @property
     def lock(self) -> Lock:
         """Order lock payload."""
-        # Lazy import avoids runtime import cycles between core and pretrade modules.
+        # Lazy import avoids runtime import cycles between core and pretrade
+        # modules.
         from .pretrade import Lock as _PythonLock
 
         value = _ExecutionReportFillDetails.lock.__get__(self, type(self))

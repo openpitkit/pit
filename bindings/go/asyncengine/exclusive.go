@@ -34,7 +34,8 @@ import (
 // Ordinary tasks pay nothing for this method. Each lane is stopped by a
 // barrier behind every task whose Submit returned before the section began;
 // a Submit still in flight may land on either side. Work submitted during the
-// section waits behind the barrier, with the usual back-pressure on a full queue.
+// section waits behind the barrier, with the usual back-pressure on a full
+// queue.
 //
 // ctx bounds only the wait before fn starts and must be cancellable: a ctx
 // whose Done is nil is refused with ErrExclusiveContext, because an unbounded

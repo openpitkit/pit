@@ -35,11 +35,11 @@ import (
 // underlying *native.String) is collected.
 //
 // This design solves a CGo constraint: every C struct that carries a string
-// field (OpenPitStringView) stores a raw pointer to the string bytes.  When such a
-// struct is held in Go memory and passed to C via a Go pointer, the CGo checker
-// enforces "Go memory must not contain Go pointers".  By keeping the bytes on
-// the C heap, OpenPitStringView.ptr is always a C pointer - invisible to the
-// checker.  See internal/native/string.go for the allocation details.
+// field (OpenPitStringView) stores a raw pointer to the string bytes.  When
+// such a struct is held in Go memory and passed to C via a Go pointer, the CGo
+// checker enforces "Go memory must not contain Go pointers".  By keeping the
+// bytes on the C heap, OpenPitStringView.ptr is always a C pointer - invisible
+// to the checker.  See internal/native/string.go for the allocation details.
 //
 // # Lifetime contract for model structs
 //

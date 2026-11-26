@@ -72,7 +72,7 @@ pub use custom::{
     OpenPitPretradePreTradePolicyRetireAccountFn,
 };
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Opaque pointer for a policy object.
 ///
@@ -88,8 +88,8 @@ pub use custom::{
 /// - After the pointer is added to the engine builder, the engine keeps its own
 ///   reference to the same policy object.
 /// - The caller must still destroy its own pointer when that local copy is no
-///   longer needed. Destroying the caller pointer does not remove the policy from
-///   the engine if the engine already retained it.
+///   longer needed. Destroying the caller pointer does not remove the policy
+///   from the engine if the engine already retained it.
 /// - Destroy the caller-owned pointer with
 ///   `openpit_destroy_pretrade_pre_trade_policy` exactly once.
 pub struct PolicyHandle<Policy: ?Sized> {
@@ -106,18 +106,19 @@ impl<Policy: ?Sized + GeneralPreTradePolicy> PolicyHandle<Policy> {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Unified trait object for all pre-trade hooks exposed through FFI.
 ///
-/// It is backed by `PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>`
+/// It is backed by
+/// `PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>`
 /// because the core engine now routes start-stage checks, main-stage checks,
 /// execution-report updates, and account-adjustment validation through the same
 /// policy list.
 type UnifiedPreTradePolicy =
     dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::EngineLocking>;
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 pub trait GeneralPreTradePolicy {
     fn name(&self) -> &str;
@@ -129,7 +130,7 @@ impl GeneralPreTradePolicy for UnifiedPreTradePolicy {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Opaque context passed to main-stage C policy callbacks.
 ///
@@ -161,9 +162,9 @@ pub struct OpenPitMutations {
 
 /// Callback invoked for either commit or rollback of a registered mutation.
 ///
-/// A finalizer has no right to fail: by the time it runs the decision is already
-/// made and the state it finalizes was applied eagerly, so there is nothing left
-/// to compensate and no caller left to answer.
+/// A finalizer has no right to fail: by the time it runs the decision is
+/// already made and the state it finalizes was applied eagerly, so there is
+/// nothing left to compensate and no caller left to answer.
 ///
 /// Returns `true` on success. On `false`, the callback may write a caller-owned
 /// `OpenPitSharedString` to `out_error`; the engine consumes and destroys it
@@ -252,7 +253,7 @@ pub(crate) fn mutation_from_ffi_callbacks(
     mutation
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 pub(super) fn policy_storage(
     builder: &crate::engine::OpenPitEngineBuilder,
@@ -281,8 +282,8 @@ pub(super) unsafe fn try_slice_arg<'a, Element>(
 
 /// Parses an asset string view named `field` (for example `"settlement_asset"`
 /// or `"account_currency"`), reporting any failure through the shared-string
-/// builder error channel. The `field` name is used verbatim in the error text so
-/// each caller reports the field its API actually exposes.
+/// builder error channel. The `field` name is used verbatim in the error text
+/// so each caller reports the field its API actually exposes.
 pub(super) fn parse_asset_or_error(
     value: OpenPitStringView,
     label: &str,
@@ -313,7 +314,8 @@ pub(super) fn parse_asset_or_error(
     }
 }
 
-/// Parses a rule mode, reporting invalid values through the builder error channel.
+/// Parses a rule mode, reporting invalid values through the builder error
+/// channel.
 pub(super) fn parse_rule_mode_or_error(
     value: OpenPitPretradeRuleMode,
     label: &str,
@@ -446,7 +448,7 @@ pub(super) unsafe fn cstr_arg(ptr: OpenPitStringView) -> Option<String> {
     Some(value)
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 struct DynPreTradePolicy {
     inner: Arc<UnifiedPreTradePolicy>,
@@ -541,7 +543,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Destroys the caller-owned pointer for a pre-trade policy.
@@ -565,7 +567,7 @@ pub extern "C" fn openpit_destroy_pretrade_pre_trade_policy(
     unsafe { drop(Box::from_raw(policy)) };
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Returns the stable policy name for a pre-trade policy pointer.
@@ -584,7 +586,7 @@ pub extern "C" fn openpit_pretrade_pre_trade_policy_get_name(
     unsafe { (&*policy).get_name() }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 fn get_policy_arc<Policy: ?Sized>(
     builder: *mut crate::engine::OpenPitEngineBuilder,
@@ -622,9 +624,9 @@ fn get_policy_arc<Policy: ?Sized>(
 ///
 /// Lifetime contract:
 /// - The engine builder retains its own reference to the policy object.
-/// - The caller still owns the passed pointer and must release that local pointer
-///   separately with `openpit_destroy_pretrade_pre_trade_policy` when it is no
-///   longer needed.
+/// - The caller still owns the passed pointer and must release that local
+///   pointer separately with `openpit_destroy_pretrade_pre_trade_policy` when
+///   it is no longer needed.
 pub extern "C" fn openpit_engine_builder_add_pre_trade_policy(
     builder: *mut crate::engine::OpenPitEngineBuilder,
     policy: *mut OpenPitPretradePreTradePolicy,
@@ -647,7 +649,7 @@ pub extern "C" fn openpit_engine_builder_add_pre_trade_policy(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Registers one commit/rollback mutation in the provided collector.
@@ -667,10 +669,10 @@ pub extern "C" fn openpit_engine_builder_add_pre_trade_policy(
 ///   `openpit_engine_retire_account`, `commit_fn` applies the removal for the
 ///   first time and `rollback_fn` has nothing to undo. That call finalizes the
 ///   mutations itself and returns no handle.
-/// - Neither callback may fail. A failure reported by either one never fails the
-///   void commit or rollback call; it arms the engine kill switch. A mutation
-///   registered here is a custom-policy mutation, so that kill switch blocks
-///   EVERY account until an operator calls
+/// - Neither callback may fail. A failure reported by either one never fails
+///   the void commit or rollback call; it arms the engine kill switch. A
+///   mutation registered here is a custom-policy mutation, so that kill switch
+///   blocks EVERY account until an operator calls
 ///   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
 /// - After the executed callback returns, `free_fn` is called exactly once when
 ///   provided.
@@ -711,7 +713,7 @@ pub unsafe extern "C" fn openpit_mutations_push(
     true
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -330,7 +330,8 @@ func TestChecksumInReport(t *testing.T) {
 	}
 }
 
-// TestRejectRateInWorkload verifies that target and achieved reject rates appear.
+// TestRejectRateInWorkload verifies that target and achieved reject rates
+// appear.
 func TestRejectRateInWorkload(t *testing.T) {
 	var buf bytes.Buffer
 	reporter.Write(&buf, syntheticEnv(), syntheticConfig(), "configs/test.ini",
@@ -410,7 +411,8 @@ func TestObserverDisabledMessage(t *testing.T) {
 	}
 }
 
-// TestTrajectoryWindowsPresent verifies per-window rows appear in the trajectory.
+// TestTrajectoryWindowsPresent verifies per-window rows appear in the
+// trajectory.
 func TestTrajectoryWindowsPresent(t *testing.T) {
 	var buf bytes.Buffer
 	reporter.Write(&buf, syntheticEnv(), syntheticConfig(), "configs/test.ini",
@@ -423,7 +425,8 @@ func TestTrajectoryWindowsPresent(t *testing.T) {
 	}
 }
 
-// TestReproductionRecipe verifies the config flag appears in the reproduction recipe.
+// TestReproductionRecipe verifies the config flag appears in the reproduction
+// recipe.
 func TestReproductionRecipe(t *testing.T) {
 	var buf bytes.Buffer
 	reporter.Write(&buf, syntheticEnv(), syntheticConfig(), "configs/baseline.ini",
@@ -467,7 +470,8 @@ func TestSingleWindowNoWarmupExclusion(t *testing.T) {
 	}
 }
 
-// TestDistributionOverheadBlock verifies overhead summary appears when probes > 0.
+// TestDistributionOverheadBlock verifies overhead summary appears when probes >
+// 0.
 func TestDistributionOverheadBlock(t *testing.T) {
 	var buf bytes.Buffer
 	reporter.Write(&buf, syntheticEnv(), syntheticConfig(), "configs/test.ini",

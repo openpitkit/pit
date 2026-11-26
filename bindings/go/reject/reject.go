@@ -30,8 +30,8 @@ const (
 )
 
 // RuleMode specifies the action to take when a pre-trade rule is breached.
-// Its zero value is RuleModeReject. An unknown mode replaces the policy's entire
-// result with a CodeSystemUnavailable reject.
+// Its zero value is RuleModeReject. An unknown mode replaces the policy's
+// entire result with a CodeSystemUnavailable reject.
 type RuleMode uint8
 
 const (
@@ -59,7 +59,8 @@ func (c Code) IsEvaluationFailure() bool {
 	return native.PretradeRejectCodeIsEvaluationFailure(native.PretradeRejectCode(c))
 }
 
-// Predefined reject codes used by built-in policies and available to custom policies.
+// Predefined reject codes used by built-in policies and available to custom
+// policies.
 const (
 	CodeMissingRequiredField            Code = native.RejectCodeMissingRequiredField
 	CodeInvalidFieldFormat              Code = native.RejectCodeInvalidFieldFormat
@@ -131,7 +132,8 @@ type Reject struct {
 
 // New creates a Reject with mode RuleModeReject. Set Mode for review.
 // In pre-trade, holds survive review only if
-// every mark is RuleModeReviewWithHold. Any RuleModeReviewWithoutHold clears them.
+// every mark is RuleModeReviewWithHold. Any RuleModeReviewWithoutHold clears
+// them.
 func New(
 	code Code, // stable machine-readable reject code
 	policy string, // policy name that produced the reject

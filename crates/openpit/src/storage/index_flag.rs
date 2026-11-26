@@ -26,7 +26,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// domain: implementations must guarantee that a successful
 /// [`store`](Self::store) happens-before any subsequent
 /// [`load`](Self::load) observing the stored value, across the threads that
-/// the engine's storage factory admits as observers of the storage index domain.
+/// the engine's storage factory admits as observers of the storage index
+/// domain.
 ///
 /// The trait is open. Built-in implementations are provided for
 /// [`std::cell::Cell<bool>`] (single-thread) and

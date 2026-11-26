@@ -44,10 +44,10 @@ const sourceManifest = JSON.parse(
 // `./package.json` is the only non-code export. Every other key is a code
 // subpath; its shape is asserted by the "declares every export" test, so an
 // unexpected shape fails instead of being skipped. Every code subpath is loaded
-// by the CommonJS and ESM smokes, type-checked by the declaration consumer under
-// NodeNext and Bundler, bundled and run by the browser esm and cjs consumers,
-// and checked by the dist and pack tests. The mixed import/require identity
-// smoke covers a fixed representative subset on purpose.
+// by the CommonJS and ESM smokes, type-checked by the declaration consumer
+// under NodeNext and Bundler, bundled and run by the browser esm and cjs
+// consumers, and checked by the dist and pack tests. The mixed import/require
+// identity smoke covers a fixed representative subset on purpose.
 const packageSubpaths = Object.keys(sourceManifest.exports).filter(
   (subpath) => subpath !== "./package.json",
 );

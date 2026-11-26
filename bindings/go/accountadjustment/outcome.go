@@ -79,7 +79,8 @@ type PnlOutcomeAmount struct {
 	Absolute param.Pnl
 }
 
-// NewPnlOutcomeAmountFromHandle creates a PnlOutcomeAmount from a native handle.
+// NewPnlOutcomeAmountFromHandle creates a PnlOutcomeAmount from a native
+// handle.
 func NewPnlOutcomeAmountFromHandle(handle native.PnlOutcomeAmount) PnlOutcomeAmount {
 	return PnlOutcomeAmount{
 		Delta:    param.NewPnlFromHandle(native.PnlOutcomeAmountGetDelta(handle)),
@@ -121,7 +122,8 @@ func newNativeParamPriceOptional(
 	return native.NewParamPriceOptionalSet(price.Handle())
 }
 
-// AccountOutcomeEntry is the raw outcome data produced by a policy for one asset.
+// AccountOutcomeEntry is the raw outcome data produced by a policy for one
+// asset.
 type AccountOutcomeEntry struct {
 	// Asset this outcome refers to.
 	Asset param.Asset
@@ -197,7 +199,8 @@ type Outcome struct {
 	Entry AccountOutcomeEntry
 }
 
-// NewAccountAdjustmentOutcomeFromHandle creates an Outcome from a native handle.
+// NewAccountAdjustmentOutcomeFromHandle creates an Outcome from a native
+// handle.
 func NewAccountAdjustmentOutcomeFromHandle(
 	handle native.AccountAdjustmentOutcome,
 ) Outcome {

@@ -190,7 +190,8 @@ func TestDriverOraclePipeline(t *testing.T) {
 	// overflow) and CommitAndClose is fully off the measured path, so under
 	// saturation (unpaced: every arrival at t0) the finalizer pool may transiently
 	// lag and the stall counter may be non-zero WITHOUT contaminating the headline
-	// or invalidating the run. We log the count for visibility but do not assert it.
+	// or invalidating the run. We log the count for visibility but do not assert
+	// it.
 	t.Logf("handoff stalls = %d (diagnostic only; off-path, does not invalidate the run)",
 		stats.HandoffStalls)
 
@@ -268,8 +269,8 @@ func TestDriverBoundedConcurrency(t *testing.T) {
 
 	stats, _, err := Run(ctx, stream, dcfg)
 	// A healthy bounded run must NOT be flagged invalid for ANY reason: no
-	// backpressure and a non-zero anti-DCE checksum. A nil error proves none of the
-	// invalid sentinels fired (the precedence ladder in Run returns the first
+	// backpressure and a non-zero anti-DCE checksum. A nil error proves none of
+	// the invalid sentinels fired (the precedence ladder in Run returns the first
 	// applicable one). A handoff stall is NOT an invalidity trigger.
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil (healthy bounded run must not be flagged invalid)", err)
@@ -289,7 +290,8 @@ func TestDriverBoundedConcurrency(t *testing.T) {
 		t.Fatal("healthy bounded run has a zero anti-DCE checksum on a non-empty run")
 	}
 	// Bounded concurrency must still pipeline deeply (true open-loop): the peak
-	// in-flight reflects the virtual schedule's overlap, well above the active set.
+	// in-flight reflects the virtual schedule's overlap, well above the active
+	// set.
 	wantInFlight := int64(cfg.Concurrency.ActiveAccounts) //nolint:gosec // active accounts is a small configured bound
 	if stats.MaxInFlight <= wantInFlight {
 		t.Fatalf("max in-flight = %d, want > active accounts %d (bounded concurrency must still pipeline)",
@@ -305,16 +307,17 @@ func TestDriverBoundedConcurrency(t *testing.T) {
 	}
 }
 
-// TestDriverPacedSubmission exercises the PACED offered-rate path: the generator
-// stamps virtual arrivals from a positive offered rate, and the driver paces each
-// event to its virtual arrival open-loop. Under a finite offered rate the
-// in-flight depth follows Little's law (rate * latency) and so is modest, but
-// submission still overlaps decisions (open-loop), which the witness asserts.
+// TestDriverPacedSubmission exercises the PACED offered-rate path: the
+// generator stamps virtual arrivals from a positive offered rate, and the
+// driver paces each event to its virtual arrival open-loop. Under a finite
+// offered rate the in-flight depth follows Little's law (rate * latency) and so
+// is modest, but submission still overlaps decisions (open-loop), which the
+// witness asserts.
 func TestDriverPacedSubmission(t *testing.T) {
 	cfg := testConfig(0x5EED, 8000, 0.05)
 	// Pace the virtual timeline from a positive offered rate (the generator owns
-	// pacing now; the driver follows the per-event virtual arrivals). Inter-arrival
-	// spacing is always exponential (Poisson).
+	// pacing now; the driver follows the per-event virtual arrivals).
+	// Inter-arrival spacing is always exponential (Poisson).
 	cfg.Arrival = config.Arrival{OfferedRate: 100000}
 	stream, err := generator.Generate(cfg)
 	if err != nil {
@@ -348,12 +351,13 @@ func TestDriverPacedSubmission(t *testing.T) {
 // TestDriverShardedStrategy exercises the sharded dispatch path end-to-end.
 // It builds and runs a short stream under strategy = sharded (3 workers) and
 // asserts:
-//   - the per-op oracle still agrees with the engine (sharded preserves per-account
-//     FIFO within each shard, which is sufficient when one account always routes to
-//     the same shard);
+//   - the per-op oracle still agrees with the engine (sharded preserves
+//     per-account FIFO within each shard, which is sufficient when one account
+//     always routes to the same shard);
 //   - aggregate invariants hold;
 //   - submission stayed open-loop (max in-flight > 1);
-//   - backpressure was zero (sharded has no queue cap so ErrQueueLimit never fires);
+//   - backpressure was zero (sharded has no queue cap so ErrQueueLimit never
+//     fires);
 //   - measurement windows are populated.
 //
 // This is the primary wiring verification for the sharded path.

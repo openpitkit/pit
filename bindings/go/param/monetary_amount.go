@@ -36,7 +36,8 @@ func NewMonetaryAmount(amount Fee, currency Asset) MonetaryAmount {
 	}
 }
 
-// NewMonetaryAmountFromHandle creates an optional MonetaryAmount from a native handle.
+// NewMonetaryAmountFromHandle creates an optional MonetaryAmount from a native
+// handle.
 func NewMonetaryAmountFromHandle(
 	value native.ParamMonetaryAmount,
 ) optional.Option[MonetaryAmount] {

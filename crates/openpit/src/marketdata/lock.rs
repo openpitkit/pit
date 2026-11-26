@@ -15,7 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-//! Internal-lock abstraction for [`MarketDataService`](super::MarketDataService).
+//! Internal-lock abstraction for
+//! [`MarketDataService`](super::MarketDataService).
 //!
 //! [`MarketDataLock`] abstracts the per-field synchronization primitive that
 //! the market-data service uses for its registry, slot vector, and per-slot
@@ -35,7 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-/// Read/write lock over a `T` used by the market-data service internals.
+/// Internal read/write lock over a market-data value.
 ///
 /// # Safety
 ///
@@ -74,8 +75,8 @@ pub unsafe trait MarketDataLock<LockedValue> {
 
 /// No-synchronization lock used by single-thread market-data services.
 ///
-/// Stores the value in an [`UnsafeCell`] and hands out `&T` / `&mut T`
-/// directly with no runtime synchronization. Sound only because the owning
+/// Stores the value in an [`UnsafeCell`] and hands out shared or mutable
+/// references without runtime synchronization. Sound only because the owning
 /// service is constrained to single-threaded use (its handle is `Rc`, hence
 /// `!Send`/`!Sync`, in [`LocalSync`](crate::LocalSync) mode; the binding
 /// layer enforces the same constraint at runtime in no-sync mode).
@@ -164,7 +165,7 @@ unsafe impl<LockedValue> MarketDataLock<LockedValue> for NoopLock<LockedValue> {
     }
 }
 
-// ─── RwLock (parking_lot) ─────────────────────────────────────────────────────
+// ─── RwLock (parking_lot) ────────────────────────────────────────────────────
 
 // SAFETY: `parking_lot::RwLock` upholds the standard reader-writer
 // invariants, which is exactly what the `MarketDataLock` contract requires.
@@ -191,7 +192,7 @@ unsafe impl<LockedValue> MarketDataLock<LockedValue> for RwLock<LockedValue> {
     }
 }
 
-// ─── RuntimeLock ───────────────────────────────────────────────────────────────
+// ─── RuntimeLock ─────────────────────────────────────────────────────────────
 
 /// Runtime-branched market-data lock for the binding layer.
 ///
@@ -320,7 +321,7 @@ unsafe impl<LockedValue> MarketDataLock<LockedValue> for RuntimeLock<LockedValue
     }
 }
 
-// ─── ServiceTtlGate ────────────────────────────────────────────────────────────
+// ─── ServiceTtlGate ──────────────────────────────────────────────────────────
 
 /// Monotonic gate guarding the service-level TTL cascade tiers.
 ///
@@ -332,7 +333,8 @@ unsafe impl<LockedValue> MarketDataLock<LockedValue> for RuntimeLock<LockedValue
 ///
 /// # Contract
 ///
-/// The flag is **strictly monotonic**: once [`mark_present`](Self::mark_present)
+/// The flag is **strictly monotonic**: once
+/// [`mark_present`](Self::mark_present)
 /// has been called it must keep reporting "present" forever. The service never
 /// resets it (leaving it set after a `clear_*` is conservatively correct: it
 /// only forgoes the optimization), so racing setters and readers always resolve

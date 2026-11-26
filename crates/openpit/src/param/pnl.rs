@@ -29,11 +29,12 @@ impl Pnl {
         CashFlow::from_pnl(self)
     }
 
-    /// Converts P&L into a position size for instruments where P&L is denominated in the base
-    /// asset.
+    /// Converts P&L into a position size for instruments where P&L is
+    /// denominated in the base asset.
     ///
-    /// Positive P&L becomes a positive position size (profit increases position),
-    /// negative P&L becomes a negative position size (loss decreases position).
+    /// Positive P&L becomes a positive position size (profit increases
+    /// position), negative P&L becomes a negative position size (loss decreases
+    /// position).
     pub fn to_position_size(self) -> super::position_size::PositionSize {
         PositionSize::new(self.to_decimal())
     }

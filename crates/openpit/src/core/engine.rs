@@ -88,7 +88,8 @@ pub(crate) struct EngineInner<Trait: EngineTrait> {
 /// Error returned when account-adjustment batch validation fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountAdjustmentBatchError {
-    /// Policy entries that rejected the batch, all reported as [`RuleMode::Reject`].
+    /// Policy entries that rejected the batch, all reported as
+    /// [`RuleMode::Reject`].
     pub rejects: Rejects,
     /// Zero-based index of the failing adjustment.
     pub failed_adjustment_index: usize,
@@ -157,7 +158,10 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use openpit::param::{Asset, Price, Quantity, Side, TradeAmount};
 /// use openpit::{Engine, Instrument, OrderOperation, WithOrderOperation};
-/// use openpit::{FinancialImpact, ExecutionReportOperation, WithFinancialImpact, WithExecutionReportOperation};
+/// use openpit::{
+///     FinancialImpact, ExecutionReportOperation, WithFinancialImpact,
+///     WithExecutionReportOperation,
+/// };
 /// use openpit::pretrade::policies::OrderValidationPolicy;
 ///
 /// type MyOrder = WithOrderOperation<()>;
@@ -171,7 +175,10 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 /// let order = WithOrderOperation {
 ///     inner: (),
 ///     operation: OrderOperation {
-///         instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+///         instrument: Instrument::new(
+///             Asset::new("AAPL")?,
+///             Asset::new("USD")?,
+///         ),
 ///         account_id: openpit::param::AccountId::from_u64(12345),
 ///         side: Side::Buy,
 ///         trade_amount: TradeAmount::Quantity(Quantity::from_f64(100.0)?),
@@ -196,11 +203,11 @@ impl<Trait: EngineTrait> Engine<Trait> {
 
     /// Returns a handle to the engine's account registry.
     ///
-    /// The returned [`Accounts`] handle shares the engine's single account-group
-    /// registry and its single blocked-accounts set; register or unregister
-    /// account-group membership and block or unblock accounts and groups through
-    /// it. The handle is cloneable and inherits the engine's synchronization
-    /// mode.
+    /// The returned [`Accounts`] handle shares the engine's single
+    /// account-group registry and its single blocked-accounts set; register or
+    /// unregister account-group membership and block or unblock accounts and
+    /// groups through it. The handle is cloneable and inherits the engine's
+    /// synchronization mode.
     pub fn accounts(&self) -> Accounts<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory> {
         Accounts::new(
             AccountGroupsHandle::from_inner(self.inner.account_groups.clone()),
@@ -225,7 +232,11 @@ impl<Trait: EngineTrait> Engine<Trait> {
 /// Single-threaded engine type alias.
 ///
 /// Equivalent to
-/// `Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, LocalSync>>`.
+///
+/// ```text
+/// Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, LocalSync>>
+/// ```
+///
 /// Produced by [`EngineBuilder::no_sync`] chains.
 pub type LocalEngine<Order, ExecutionReport = (), AccountAdjustment = ()> =
     Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, LocalSync>>;
@@ -233,7 +244,13 @@ pub type LocalEngine<Order, ExecutionReport = (), AccountAdjustment = ()> =
 /// Account-sharded engine type alias.
 ///
 /// Equivalent to
-/// `Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, AccountSync>>`.
+///
+/// ```text
+/// Engine<
+///     EngineTraitOf<Order, ExecutionReport, AccountAdjustment, AccountSync>,
+/// >
+/// ```
+///
 /// Produced by [`EngineBuilder::account_sync`] chains. Engine handle is
 /// `Send + !Sync`.
 pub type AccountSyncEngine<Order, ExecutionReport = (), AccountAdjustment = ()> =
@@ -242,9 +259,13 @@ pub type AccountSyncEngine<Order, ExecutionReport = (), AccountAdjustment = ()> 
 /// Multi-threaded engine type alias.
 ///
 /// Equivalent to
-/// `Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, FullSync>>`.
-/// Produced by [`EngineBuilder::full_sync`] chains. The resulting engine handle is
-/// `Send + Sync` and may be wrapped in `Arc<FullSyncEngine<...>>`.
+///
+/// ```text
+/// Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, FullSync>>
+/// ```
+///
+/// Produced by [`EngineBuilder::full_sync`] chains. The resulting engine handle
+/// is `Send + Sync` and may be wrapped in `Arc<FullSyncEngine<...>>`.
 pub type FullSyncEngine<Order, ExecutionReport = (), AccountAdjustment = ()> =
     Engine<EngineTraitOf<Order, ExecutionReport, AccountAdjustment, FullSync>>;
 
@@ -284,10 +305,10 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// # Account blocks
     ///
     /// The blocked set is consulted first: an order whose account is blocked
-    /// individually, belongs to a blocked group, or arrives while a global block
-    /// is active is rejected before any policy runs. While anything is blocked,
-    /// an order whose account ID cannot be read is rejected too, because the
-    /// engine cannot clear it against the blocked set.
+    /// individually, belongs to a blocked group, or arrives while a global
+    /// block is active is rejected before any policy runs. While anything is
+    /// blocked, an order whose account ID cannot be read is rejected too,
+    /// because the engine cannot clear it against the blocked set.
     ///
     /// An effective start-stage reject with [`RejectScope::Account`] latches a
     /// block for the order's account. The block persists until lifted, so later
@@ -426,13 +447,15 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// do not stop the pipeline or appear in the operation. Rejects that mean a
     /// policy could not evaluate or apply the historical order fail the whole
     /// operation. On such a failure, collected mutations are rolled back and
-    /// deferred start-stage effects and account blocks are discarded. Rate-limit
-    /// attempts are the deliberate exception: they consume budget exactly like
-    /// an ordinary pre-trade request, including when a later policy fails.
-    /// Existing account and account-group blocks are ignored for admission.
+    /// deferred start-stage effects and account blocks are discarded.
+    /// Rate-limit attempts are the deliberate exception: they consume budget
+    /// exactly like an ordinary pre-trade request, including when a later
+    /// policy fails. Existing account and account-group blocks are ignored for
+    /// admission.
     ///
     /// The returned [`DropCopyOperation`] is finalized by its owner exactly
-    /// like the [`PreTradeReservation`] returned by [`Self::execute_pre_trade`]:
+    /// like the [`PreTradeReservation`] returned by
+    /// [`Self::execute_pre_trade`]:
     /// it retains the prepared mutations, [`DropCopyOperation::commit`] applies
     /// them, and an explicit or implicit rollback compensates them. Deferred
     /// account-control operations and consumed rate-limit attempts are applied
@@ -585,11 +608,11 @@ impl<Trait: EngineTrait> Engine<Trait> {
 
     /// Runs start-stage checks as a non-mutating dry-run.
     ///
-    /// Returns a [`PreTradeDryRunReport`] describing the verdict the start stage
-    /// *would* return for `order`, with zero effect on engine state: no policy
-    /// side effect is applied (a rate-limit budget is not spent) and no account
-    /// block is recorded, even when an account-scope reject *would* latch one.
-    /// A repeated dry-run never moves engine state.
+    /// Returns a [`PreTradeDryRunReport`] describing the verdict the start
+    /// stage *would* return for `order`, with zero effect on engine state: no
+    /// policy side effect is applied (a rate-limit budget is not spent) and no
+    /// account block is recorded, even when an account-scope reject *would*
+    /// latch one. A repeated dry-run never moves engine state.
     ///
     /// The reported lock and account adjustments are always empty: those are
     /// produced by the main stage, which this method does not run. See
@@ -684,9 +707,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// the account adjustments both stages *would* produce for `order`, with
     /// zero effect on engine state: no rate-limit budget is spent, no
     /// reservation or hold is applied, and no account block is recorded. Any
-    /// mutations a main-stage policy registers on the dry-run path are dropped -
-    /// neither committed nor rolled back - so a repeated dry-run never moves
-    /// engine state.
+    /// mutations a main-stage policy registers on the dry-run path are
+    /// dropped - neither committed nor rolled back - so a repeated dry-run
+    /// never moves engine state.
     ///
     /// The start stage runs first; if it would reject, the report carries those
     /// rejects (and the would-be account block) and the main stage is skipped,
@@ -819,11 +842,13 @@ impl<Trait: EngineTrait> Engine<Trait> {
         PreTradeDryRunReport::new(rejects, lock, outcomes, account_block, reviews)
     }
 
-    /// Applies post-trade updates across all policies and returns aggregated result.
+    /// Applies post-trade updates across all policies and returns aggregated
+    /// result.
     ///
-    /// Each policy applies its state changes immediately and directly to storage.
-    /// Processing is **not atomic**: if one policy sets an account block, the
-    /// state changes already applied by earlier policies are not rolled back.
+    /// Each policy applies its state changes immediately and directly to
+    /// storage. Processing is **not atomic**: if one policy sets an account
+    /// block, the state changes already applied by earlier policies are not
+    /// rolled back.
     ///
     /// Reject scope is not consulted on this path; this method does not derive
     /// an account block from a reject.
@@ -831,15 +856,16 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// ([`RejectCode::is_evaluation_failure`]) is dropped, neither recorded nor
     /// returned.
     ///
-    /// A non-empty [`PostTradeResult::account_blocks`] means at least one policy entered a
-    /// blocked state after the report was applied. This does **not** imply that
-    /// [`PostTradeResult::account_adjustments`] were undone - they reflect storage
-    /// that has already been mutated and must be propagated by the caller.
+    /// A non-empty [`PostTradeResult::account_blocks`] means at least one
+    /// policy entered a blocked state after the report was applied. This does
+    /// **not** imply that [`PostTradeResult::account_adjustments`] were
+    /// undone - they reflect storage that has already been mutated and must be
+    /// propagated by the caller.
     ///
-    /// [`PostTradeResult::account_adjustments`] contains zero or more account position
-    /// modifications in policy registration order. A single asset may appear more than once;
-    /// the exact content depends on which policies the engine was configured with and how
-    /// those policies choose to report.
+    /// [`PostTradeResult::account_adjustments`] contains zero or more account
+    /// position modifications in policy registration order. A single asset may
+    /// appear more than once; the exact content depends on which policies the
+    /// engine was configured with and how those policies choose to report.
     pub fn apply_execution_report(&self, report: &Trait::ExecutionReport) -> PostTradeResult
     where
         Trait::ExecutionReport: HasAccountId,
@@ -1026,13 +1052,13 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// [`Engine`]. Retire several accounts in one exclusive stretch rather
     /// than one at a time. Before retiring, finalize (commit or roll back) or
     /// drop every pre-trade request, reservation, and drop-copy operation of
-    /// the account, and submit no new work for it. The engine cannot see a request
-    /// that holds no policy state, such as a [`PreTradeRequest`] returned by
-    /// [`Self::start_pre_trade`] but not yet executed. Executing such a handle
-    /// after retirement acts on the account as if it were new and, after the
-    /// `AccountId` is reused, on someone else's account. Do not reuse the
-    /// `AccountId` until this method returns `Ok(())`.
-    /// `Ok(())` means every policy's removal committed.
+    /// the account, and submit no new work for it. The engine cannot see a
+    /// request that holds no policy state, such as a [`PreTradeRequest`]
+    /// returned by [`Self::start_pre_trade`] but not yet executed. Executing
+    /// such a handle after retirement acts on the account as if it were new
+    /// and, after the `AccountId` is reused, on someone else's account. Do not
+    /// reuse the `AccountId` until this method returns `Ok(())`. `Ok(())` means
+    /// every policy's removal committed.
     ///
     /// # Errors
     ///
@@ -1135,7 +1161,8 @@ fn validated_order_review<Trait: EngineTrait>(
 /// [`check_pre_trade_start`](PreTradePolicy::check_pre_trade_start) or its
 /// dry-run variant); the loop, reject merge, and first-account-block selection
 /// are identical for both. The caller decides whether to record the returned
-/// [`AccountBlock`] - this function never touches the blocked-accounts registry.
+/// [`AccountBlock`] - this function never touches the blocked-accounts
+/// registry.
 fn run_pre_trade_start_stage<Trait, Hook>(
     inner: &EngineInner<Trait>,
     ctx: &PreTradeContextOf<Trait>,
@@ -1717,7 +1744,8 @@ mod tests {
         }
     }
 
-    /// Minimal execution-report stub for tests that don't require report fields.
+    /// Minimal execution-report stub for tests that don't require report
+    /// fields.
     #[derive(Clone)]
     struct NoAccountReport;
 
@@ -3583,8 +3611,9 @@ mod tests {
         assert_eq!(rejects[0].policy, "Engine");
         assert_eq!(rejects[0].scope, RejectScope::Order);
         assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
-        // Drop-copy ignores blocks for admission, so the guard must describe the
-        // unreadable account and never send the integrator after a stuck block.
+        // Drop-copy ignores blocks for admission, so the guard must describe
+        // the unreadable account and never send the integrator after a stuck
+        // block.
         assert_eq!(
             rejects[0].reason,
             "drop-copy requires a readable account ID"
@@ -6779,7 +6808,7 @@ mod tests {
         }
     }
 
-    // ── Send/Sync type assertions ─────────────────────────────────────────────
+    // ── Send/Sync type assertions ────────────────────────────────────────────
 
     #[test]
     fn synced_engine_with_full_storage_is_send_and_sync() {
@@ -6811,17 +6840,17 @@ mod tests {
         assert_send::<super::AccountSyncEngine<OrderOperation>>();
     }
 
-    // ── pre-trade dry-run ──────────────────────────────────────────────────────
+    // ── pre-trade dry-run ────────────────────────────────────────────────────
 
     fn ps(value: &str) -> PositionSize {
         PositionSize::from_str(value).expect("position size must be valid")
     }
 
     /// Main-stage mock whose normal hook mutates immediately (bumping a shared
-    /// counter and registering a commit/rollback pair), while its dry-run hook is
-    /// read-only. Both hooks report the identical lock price and outcome entry, so
-    /// a dry-run report can be compared field-for-field against a real
-    /// reservation.
+    /// counter and registering a commit/rollback pair), while its dry-run hook
+    /// is read-only. Both hooks report the identical lock price and outcome
+    /// entry, so a dry-run report can be compared field-for-field against a
+    /// real reservation.
     struct ImmediateSideEffectMainPolicy {
         name: &'static str,
         immediate_calls: Rc<Cell<usize>>,

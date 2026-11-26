@@ -248,7 +248,7 @@ class RateLimitBuilder:
     def broker_barriers(
         self, *barriers: RateLimitBrokerBarrier
     ) -> RateLimitReadyBuilder:
-        """Append broker-wide barriers, one per mode, and return a ready builder.
+        """Add one broker barrier per mode and return a ready builder.
 
         A repeated mode fails the engine build with ``ValueError``.
         """
@@ -267,7 +267,10 @@ class RateLimitBuilder:
     def account_asset_barriers(
         self, *barriers: RateLimitAccountAssetBarrier
     ) -> RateLimitReadyBuilder:
-        """Add per-(account, settlement-asset) barriers and return a ready builder."""
+        """Add per-account/asset barriers and return a ready builder.
+
+        The asset is the settlement asset.
+        """
         return self._ready.account_asset_barriers(*barriers)
 
 
@@ -609,7 +612,8 @@ class PnlBoundsBrokerBarrier:
     Args:
         settlement_asset: Settlement asset tracked by this barrier.
         lower_bound: Optional lower P&L bound (typically a negative loss limit).
-        upper_bound: Optional upper P&L bound (typically a positive profit limit).
+        upper_bound: Optional upper P&L bound (typically a positive profit
+        limit).
         mode: Enforcement mode. Defaults to ``None``, which means
             ``RuleMode.REJECT``. The exact strings ``"Reject"``,
             ``"ReviewWithHold"``, and ``"ReviewWithoutHold"`` are also accepted.
@@ -662,7 +666,8 @@ class PnlBoundsAccountAssetBarrierUpdate:
     barriers for the same account and settlement asset can coexist.
 
     Args:
-        barrier: Settlement asset, replacement bounds, and mode for this account.
+        barrier: Settlement asset, replacement bounds, and mode for this
+        account.
         account_id: Account this replacement barrier applies to.
     """
 
@@ -974,7 +979,8 @@ class SpotFundsPnlBoundsBarrier:
     Args:
         currency: Currency matched when the account has an effective currency.
         lower_bound: Optional lower P&L bound (typically a negative loss limit).
-        upper_bound: Optional upper P&L bound (typically a positive profit limit).
+        upper_bound: Optional upper P&L bound (typically a positive profit
+        limit).
         mode: Enforcement mode. Defaults to ``None``, which means
             ``RuleMode.REJECT``. The exact strings ``"Reject"``,
             ``"ReviewWithHold"``, and ``"ReviewWithoutHold"`` are also accepted.

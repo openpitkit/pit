@@ -33,7 +33,8 @@ use super::storage::Storage;
 ///
 /// 1. Accept a `&StorageBuilder<Factory>` obtained from an engine builder
 ///    at policy construction time.
-/// 2. Call [`create_for_bound_key`](Self::create_for_bound_key) for each internal data table.
+/// 2. Call [`create_for_bound_key`](Self::create_for_bound_key) for each
+///    internal data table.
 /// 3. Operate on the resulting [`Storage`] instances exclusively through
 ///    [`Storage::with`](super::Storage::with) and
 ///    [`Storage::with_mut`](super::Storage::with_mut).
@@ -48,7 +49,7 @@ use super::storage::Storage;
 /// `StorageBuilder` is intentionally **not [`Clone`]**. The intended usage
 /// is for the engine builder to own it during the application's
 /// initialization phase. Application code passes
-/// [`SyncedEngineBuilder::storage_builder`](crate::SyncedEngineBuilder::storage_builder)
+/// [`SyncedEngineBuilder::storage_builder`]
 /// by shared reference to every policy that needs to create storages.
 ///
 /// Storing a `StorageBuilder` inside a policy - even by value through
@@ -62,13 +63,20 @@ use super::storage::Storage;
 /// use openpit::Engine;
 ///
 /// let engine_builder = Engine::builder::<(), (), ()>().full_sync();
-/// let users = engine_builder.storage_builder().create_for_bound_key::<u64, String>();
-/// let orders = engine_builder.storage_builder().create_for_bound_key::<u64, Vec<u8>>();
+/// let users = engine_builder
+///     .storage_builder()
+///     .create_for_bound_key::<u64, String>();
+/// let orders = engine_builder
+///     .storage_builder()
+///     .create_for_bound_key::<u64, Vec<u8>>();
 /// // `users` and `orders` are unrelated storages; locking one does
 /// // not affect the other.
 /// users.with_mut(1, || "alice".to_string(), |_, _| {});
 /// orders.with_mut(42, Vec::new, |_, _| {});
 /// ```
+///
+/// [`SyncedEngineBuilder::storage_builder`]:
+///     crate::SyncedEngineBuilder::storage_builder
 pub struct StorageBuilder<LockingPolicyFactory>
 where
     LockingPolicyFactory: super::policy::LockingPolicyFactory,
@@ -141,12 +149,16 @@ where
         self.locking_policy_factory.create_policy()
     }
 
-    /// Creates an empty storage wrapped in a [`LockingPolicyFactory::Shared`](crate::storage::LockingPolicyFactory::Shared)
+    /// Creates an empty storage wrapped in a [`LockingPolicyFactory::Shared`]
     /// handle.
     ///
-    /// Equivalent to `Factory::new_shared(self.create_for_bound_key::<Key, Value>())`.
+    /// Equivalent to
+    /// `Factory::new_shared(self.create_for_bound_key::<Key, Value>())`.
     /// Use this when the storage needs to be shared across clones of the
     /// same policy.
+    ///
+    /// [`LockingPolicyFactory::Shared`]:
+    ///     crate::storage::LockingPolicyFactory::Shared
     #[inline]
     pub fn create_shared<Key, Value>(
         &self,

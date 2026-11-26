@@ -28,8 +28,8 @@
 //   - seeding an account's available cash via applyAccountAdjustment
 //   - the reservation mechanic: a committed BUY holds settlement funds, so a
 //     follow-up BUY that needs the same cash is rejected with InsufficientFunds
-//   - tying a fill back to its reservation by carrying the pre-trade lock on the
-//     execution report, so SpotFunds settles the right held amount
+//   - tying a fill back to its reservation by carrying the pre-trade lock on
+//     the execution report, so SpotFunds settles the right held amount
 //
 // Audience: an integrator who wants to lift the SpotFunds call pattern into
 // their own order/fill pipeline.

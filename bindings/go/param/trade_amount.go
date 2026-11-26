@@ -49,7 +49,8 @@ func NewVolumeTradeAmount(v Volume) TradeAmount {
 	)
 }
 
-// NewTradeAmountFromHandle creates an optional TradeAmount from a native handle.
+// NewTradeAmountFromHandle creates an optional TradeAmount from a native
+// handle.
 func NewTradeAmountFromHandle(amount native.ParamTradeAmount) optional.Option[TradeAmount] {
 	if native.ParamTradeAmountGetKind(amount) == native.ParamTradeAmountKindNotSet {
 		return optional.None[TradeAmount]()

@@ -38,7 +38,7 @@ use openpit::{
     SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource, UnknownInstrumentId,
 };
 
-// ── Value helpers ─────────────────────────────────────────────────────────────
+// ── Value helpers ────────────────────────────────────────────────────────────
 
 fn asset(s: &str) -> Asset {
     Asset::new(s).expect("valid asset")
@@ -68,8 +68,9 @@ fn grp(id: u32) -> AccountGroupId {
     AccountGroupId::from_u32(id).expect("valid account group id")
 }
 
-/// A pre-resolved account info: `Some(group)` or `None`. `Option<AccountGroupId>`
-/// implements `AccountInfo`, so it can be passed directly to `get`.
+/// A pre-resolved account info: `Some(group)` or `None`.
+/// `Option<AccountGroupId>` implements `AccountInfo`, so it can be passed
+/// directly to `get`.
 fn group_source(group: Option<AccountGroupId>) -> Option<AccountGroupId> {
     group
 }
@@ -90,9 +91,9 @@ fn get_default<Sync: openpit::MarketDataSync>(
     .ok()
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 1 - LocalSync: register, push, get
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn local_sync_register_push_get() {
@@ -115,9 +116,9 @@ fn local_sync_register_push_get() {
     assert_eq!(got.ask, None);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 2 - FullSync: concurrent reads under push storm
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn full_sync_concurrent_reads_under_push_storm() {
@@ -163,9 +164,9 @@ fn full_sync_concurrent_reads_under_push_storm() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 3 - Quote carries optional bid/ask
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn quote_carries_optional_bid_ask() {
@@ -186,9 +187,9 @@ fn quote_carries_optional_bid_ask() {
     assert_eq!(got.ask, Some(px("150.5")));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 4 - Infinite TTL keeps quote visible indefinitely
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn infinite_ttl_keeps_quote_visible() {
@@ -206,9 +207,9 @@ fn infinite_ttl_keeps_quote_visible() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 5 - Finite TTL hides aged quote
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn finite_ttl_hides_aged_quote() {
@@ -355,9 +356,9 @@ fn maximum_source_age_saturates_under_finite_ttl() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 6 - Per-instrument TTL override beats service default
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn per_instrument_ttl_override_beats_service_default() {
@@ -391,9 +392,9 @@ fn per_instrument_ttl_override_beats_service_default() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 7 - Push after TTL expiry restores visibility
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_after_ttl_expiry_restores_visibility() {
@@ -414,9 +415,9 @@ fn push_after_ttl_expiry_restores_visibility() {
     assert_eq!(q.mark, Some(px("110")));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 8 - Clear hides quote without touching the registry
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn clear_hides_quote_without_removing_instrument() {
@@ -443,9 +444,9 @@ fn clear_hides_quote_without_removing_instrument() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - push (replace semantics): missing fields are cleared
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_replaces_all_fields() {
@@ -473,9 +474,9 @@ fn push_replaces_all_fields() {
     assert_eq!(got.ask, None, "replace must drop ask");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - register_with_id and duplicate detection
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn register_with_id_duplicates_are_rejected() {
@@ -502,9 +503,9 @@ fn register_with_id_duplicates_are_rejected() {
     ));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - push on unregistered id returns Err(UnknownInstrumentId)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_on_unregistered_id_returns_error() {
@@ -524,9 +525,9 @@ fn push_on_unregistered_id_returns_error() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - register / register_with_ttl on duplicate instrument return error
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn register_duplicate_instrument_returns_error() {
@@ -559,9 +560,9 @@ fn register_duplicate_instrument_returns_error() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - push_by_instrument auto-registers on first sight and reuses id later
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_by_instrument_auto_registers_and_reuses_id() {
@@ -595,9 +596,9 @@ fn push_by_instrument_auto_registers_and_reuses_id() {
     assert_eq!(got2.mark, Some(px("110")));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - set_instrument_ttl changes freshness; unknown id returns error
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn set_instrument_ttl_changes_freshness_and_errors_on_unknown_id() {
@@ -641,9 +642,9 @@ fn set_instrument_ttl_changes_freshness_and_errors_on_unknown_id() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 10 - SpotFundsPolicy with MarketData: market order passes with slippage
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 struct SfTestReport {
     instrument: Instrument,
@@ -845,13 +846,13 @@ fn spot_funds_policy_with_market_data_market_order_passes() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test 11 - SpotFundsPolicy without market orders rejects market order
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - book-top pricing source: market buy uses ask side of the book
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn spot_funds_book_top_uses_ask_for_market_buy() {
@@ -906,9 +907,9 @@ fn spot_funds_book_top_uses_ask_for_market_buy() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - book-top without ask rejects with MarkPriceUnavailable (no fallback)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn spot_funds_book_top_without_ask_rejects_market_buy() {
@@ -953,9 +954,9 @@ fn spot_funds_book_top_without_ask_rejects_market_buy() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - per-instrument slippage override beats the global setting
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn spot_funds_per_instrument_override_only_affects_its_id() {
@@ -1027,9 +1028,9 @@ fn spot_funds_per_instrument_override_only_affects_its_id() {
         .any(|r| r.code == RejectCode::InsufficientFunds));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - out-of-range override slippage is rejected at construction
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn spot_funds_instrument_override_out_of_range_returns_error() {
@@ -1083,9 +1084,9 @@ fn spot_funds_policy_without_market_orders_rejects_market_order() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - push_for fans out to per-account and per-group buckets
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_for_fans_out_to_account_and_group_buckets() {
@@ -1165,8 +1166,8 @@ fn push_for_fans_out_to_account_and_group_buckets() {
         "AccountThenGroup must not fall through to the default bucket"
     );
 
-    // AccountThenGroupThenDefault: account 8 with an unrelated group 9 falls all
-    // the way through to the default bucket.
+    // AccountThenGroupThenDefault: account 8 with an unrelated group 9 falls
+    // all the way through to the default bucket.
     assert_eq!(
         svc.get(
             id,
@@ -1180,9 +1181,9 @@ fn push_for_fans_out_to_account_and_group_buckets() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - push_for targets the default bucket via DEFAULT_ACCOUNT_GROUP
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_for_default_group_writes_everyone_else_bucket() {
@@ -1209,9 +1210,9 @@ fn push_for_default_group_writes_everyone_else_bucket() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - push_for with both lists empty is a caller-bug error
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_for_with_no_targets_returns_error() {
@@ -1232,9 +1233,9 @@ fn push_for_with_no_targets_returns_error() {
     assert_eq!(err, PushForError::NoTarget);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - push_for on an unregistered id returns UnknownInstrument
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn push_for_on_unregistered_id_returns_error() {
@@ -1260,9 +1261,9 @@ fn push_for_on_unregistered_id_returns_error() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Test - get is unknown-instrument aware
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn get_on_unregistered_id_reports_unknown_instrument() {
@@ -1282,9 +1283,9 @@ fn get_on_unregistered_id_reports_unknown_instrument() {
     assert_eq!(err, MarketDataError::UnknownInstrument);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - tier 1 (instrument × account) beats every lower tier
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_instrument_account_is_highest_priority() {
@@ -1332,9 +1333,9 @@ fn ttl_cascade_instrument_account_is_highest_priority() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - account/group axes beat the instrument-only axis (tier 7)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_account_beats_instrument_only() {
@@ -1371,7 +1372,8 @@ fn ttl_cascade_account_beats_instrument_only() {
 
 #[test]
 fn ttl_cascade_group_beats_instrument_only() {
-    // Instrument-level (tier 7) INFINITE; service-level group TTL (tier 5) tiny.
+    // Instrument-level (tier 7) INFINITE; service-level group TTL (tier 5)
+    // tiny.
     let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
     let id = svc
         .register_with_ttl(instr("AAPL", "USD"), QuoteTtl::Infinite)
@@ -1402,9 +1404,9 @@ fn ttl_cascade_group_beats_instrument_only() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - INFINITE at a higher tier stops the cascade ("never expires")
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_set_infinite_stops_cascade() {
@@ -1444,9 +1446,10 @@ fn ttl_cascade_set_infinite_stops_cascade() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TTL cascade - falls through to the global default (tier 8) when nothing is set
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// TTL cascade - falls through to the global default (tier 8) when nothing is
+// set
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_falls_through_to_global_default() {
@@ -1467,10 +1470,10 @@ fn ttl_cascade_falls_through_to_global_default() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - TTL is resolved by the requested (account, group), not the
 // bucket the quote came from
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_uses_requested_axes_not_found_bucket() {
@@ -1514,9 +1517,9 @@ fn ttl_cascade_uses_requested_axes_not_found_bucket() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - clear_*_ttl reverts an axis back to inherit
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_clear_account_ttl_reverts_to_inherit() {
@@ -1551,9 +1554,9 @@ fn ttl_cascade_clear_account_ttl_reverts_to_inherit() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Quote selection - a stale quote in a more-specific bucket blocks fallthrough
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn select_quote_stale_specific_bucket_blocks_fallthrough_to_default() {
@@ -1608,10 +1611,10 @@ fn select_quote_stale_specific_bucket_blocks_fallthrough_to_default() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // Laziness - AccountInfo::group() is consulted at most once, and not at all
 // when the per-account bucket and TTL cascade never need it
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 /// Counting [`AccountInfo`] spy: records how many times `group()` is invoked.
 struct CountingAccountInfo {
@@ -1705,9 +1708,9 @@ fn group_resolved_exactly_once_on_fallthrough() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - instrument × group (tier 2) as the sole effective setting
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_instrument_group_is_sole_setting() {
@@ -1743,9 +1746,9 @@ fn ttl_cascade_instrument_group_is_sole_setting() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - instrument × default-group (tier 3) as the only setting
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_instrument_default_group_is_sole_setting() {
@@ -1773,9 +1776,9 @@ fn ttl_cascade_instrument_default_group_is_sole_setting() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - service-level default-group (tier 6) as the only setting
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_service_default_group_is_sole_setting() {
@@ -1801,9 +1804,9 @@ fn ttl_cascade_service_default_group_is_sole_setting() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - clear_account_group_ttl reverts a service-group axis to inherit
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_clear_account_group_ttl_reverts_to_inherit() {
@@ -1838,9 +1841,9 @@ fn ttl_cascade_clear_account_group_ttl_reverts_to_inherit() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - clear_instrument_ttl reverts the instrument axis to inherit
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_clear_instrument_ttl_reverts_to_inherit() {
@@ -1866,9 +1869,9 @@ fn ttl_cascade_clear_instrument_ttl_reverts_to_inherit() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - clear_instrument_account_ttl reverts the tier-1 cell to inherit
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_clear_instrument_account_ttl_reverts_to_inherit() {
@@ -1907,9 +1910,9 @@ fn ttl_cascade_clear_instrument_account_ttl_reverts_to_inherit() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - clear_instrument_account_group_ttl reverts the cell to inherit
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_cascade_clear_instrument_account_group_ttl_reverts_to_inherit() {
@@ -1947,9 +1950,9 @@ fn ttl_cascade_clear_instrument_account_group_ttl_reverts_to_inherit() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // TTL cascade - the expiry boundary is inclusive (elapsed >= ttl)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn ttl_boundary_is_inclusive() {

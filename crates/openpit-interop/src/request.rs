@@ -141,7 +141,8 @@ impl HasAutoBorrow for Order {
     }
 }
 
-/// Root execution-report aggregate carrying access groups for all report fields.
+/// Root execution-report aggregate carrying access groups for all report
+/// fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionReport {
     pub operation: ExecutionReportOperationAccess,
@@ -241,7 +242,8 @@ impl HasOrderPrice for ExecutionReport {
     }
 }
 
-/// Root account-adjustment aggregate carrying access groups for all adjustment fields.
+/// Root account-adjustment aggregate carrying access groups for all adjustment
+/// fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustment {
     pub operation: AccountAdjustmentOperationAccess,
@@ -367,11 +369,13 @@ impl HasAccountAdjustmentIncomingLowerBound for AccountAdjustment {
     }
 }
 
-/// Generic request wrapper pairing a domain root aggregate with a binding-layer payload.
+/// Generic request wrapper pairing a domain root aggregate with a binding-layer
+/// payload.
 ///
 /// The `request` field carries the validated domain values; the `payload` field
-/// carries an opaque per-binding token whose meaning, lifetime, and thread-safety
-/// are the caller's responsibility. Access to both is via the public fields.
+/// carries an opaque per-binding token whose meaning, lifetime, and
+/// thread-safety are the caller's responsibility. Access to both is via the
+/// public fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestWithPayload<Request, Payload> {
     pub request: Request,

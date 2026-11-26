@@ -16,8 +16,8 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 //! Procedural macros for the `openpit` SDK.
 //!
-//! This crate provides derive macros that generate request-field capability implementations
-//! expected by `openpit` policies.
+//! This crate provides derive macros that generate request-field capability
+//! implementations expected by `openpit` policies.
 //!
 //! # `RequestFields`
 //!
@@ -27,13 +27,14 @@
 //!
 //! - `inner`: marks the field used for passthrough delegation.
 //! - `TraitPath(method -> ReturnType)`: generate direct impl for the field.
-//! - `TraitPath(-> ReturnType)`: same as above, method inferred from `Has*` trait name.
+//! - `TraitPath(-> ReturnType)`: same as above, method inferred from `Has*`
+//!   trait name.
 //!
 //! On a field marked with `inner`, trait items generate passthrough impls with
 //! `where InnerType: TraitPath`.
 //!
-//! Old syntax `#[request_fields(...)]` is rejected with a compile-time error that points to
-//! `#[openpit(...)]`.
+//! Old syntax `#[request_fields(...)]` is rejected with a compile-time error
+//! that points to `#[openpit(...)]`.
 
 use proc_macro::TokenStream;
 use quote::quote;

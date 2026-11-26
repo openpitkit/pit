@@ -116,7 +116,7 @@ class Instrument:
         """Returns the asset used for monetary settlement."""
 
 class OrderOperation:
-    """Main operation parameters that describe side, instrument, price, and amount."""
+    """Main order parameters cover side, instrument, price, and amount."""
 
     def __init__(
         self,
@@ -218,7 +218,7 @@ class OrderReview:
         """
 
 class Order:
-    """Extensible Python order model accepted by ``openpit.Engine.start_pre_trade``."""
+    """Extensible order model for ``openpit.Engine.start_pre_trade``."""
 
     def __init__(
         self,
@@ -371,7 +371,7 @@ class ExecutionReportPositionImpact:
         """Hedge-mode leg affected by this execution."""
 
 class ExecutionReport:
-    """Extensible Python execution-report model consumed by post-trade callbacks."""
+    """Extensible Python execution report for post-trade callbacks."""
 
     def __init__(
         self,

@@ -204,13 +204,13 @@ struct RateLimitSlot {
 /// the window and flood protection persists across it. The account-axis
 /// sliding logs survive replacements by construction, since they live in the
 /// policy keyed per account and mode rather than in these settings. Clearing
-/// an account or account+asset barrier leaves that key's log in storage, even when
-/// the last barrier is cleared. Re-adding the key resumes counting the orders
-/// still inside its configured window unless the account was retired:
+/// an account or account+asset barrier leaves that key's log in storage, even
+/// when the last barrier is cleared. Re-adding the key resumes counting the
+/// orders still inside its configured window unless the account was retired:
 /// [`Engine::retire_account`](crate::Engine::retire_account) deletes its logs
-/// once no barrier names it, so re-added barriers start with empty logs.
-/// A re-added broker or asset barrier starts a fresh window.
-/// Mode is part of every key; counters are independent across modes.
+/// once no barrier names it, so re-added barriers start with empty logs. A
+/// re-added broker or asset barrier starts a fresh window. Mode is part of
+/// every key; counters are independent across modes.
 ///
 /// All axes may be empty; the policy then admits every order. Barriers can
 /// be added later through [`Engine::configure`](crate::Engine::configure).
@@ -620,7 +620,8 @@ impl AtomicWindowCounter {
 /// - every axis may be empty; the policy then admits every order;
 /// - barriers can be added later through
 ///   [`Engine::configure`](crate::Engine::configure);
-/// - repeated (key, mode) pairs within an axis return a duplicate-barrier error.
+/// - repeated (key, mode) pairs within an axis return a duplicate-barrier
+///   error.
 ///
 /// # Account retirement
 ///
@@ -852,16 +853,16 @@ where
     /// Dry-run start-stage check.
     ///
     /// Rate limiting is an immediate-side-effect policy: the normal
-    /// [`check_pre_trade_start`](Self::check_pre_trade_start) consumes a slot in
-    /// every applicable window counter, and rejected attempts are never rolled
-    /// back. A dry-run must not move that state, so this override consumes no
-    /// budget and pushes nothing into any counter. It still reports the verdict
-    /// a real call would produce: it runs the real check's path without
-    /// recording the order - each fixed-window counter is *peeked* read-only
-    /// for the count a push would yield, and each sliding-window log is counted
-    /// by the same rule as in the real check and left as it is - so an order
-    /// that would breach an already-exhausted window is rejected here too, with
-    /// no side effect.
+    /// [`check_pre_trade_start`](Self::check_pre_trade_start) consumes a slot
+    /// in every applicable window counter, and rejected attempts are never
+    /// rolled back. A dry-run must not move that state, so this override
+    /// consumes no budget and pushes nothing into any counter. It still reports
+    /// the verdict a real call would produce: it runs the real check's path
+    /// without recording the order - each fixed-window counter is *peeked*
+    /// read-only for the count a push would yield, and each sliding-window log
+    /// is counted by the same rule as in the real check and left as it is - so
+    /// an order that would breach an already-exhausted window is rejected here
+    /// too, with no side effect.
     fn check_pre_trade_start_dry_run(
         &self,
         ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
@@ -1982,7 +1983,8 @@ mod tests {
         let policy = asset_policy("EUR", 1, Duration::from_secs(10));
         let base = Instant::now();
 
-        // Order uses USD, policy has EUR barrier - should pass regardless of count
+        // Order uses USD, policy has EUR barrier - should pass regardless of
+        // count
         assert!(check_at(&policy, &order(account(1)), base).is_ok());
         assert!(check_at(&policy, &order(account(1)), base + Duration::from_secs(1)).is_ok());
     }
@@ -2171,7 +2173,7 @@ mod tests {
         assert_eq!(reject[0].reason, "rate limit exceeded: broker barrier");
     }
 
-    // ── group id ──────────────────────────────────────────────────────────────
+    // ── group id ─────────────────────────────────────────────────────────────
 
     #[test]
     fn group_id_is_carried_from_policy_builder() {

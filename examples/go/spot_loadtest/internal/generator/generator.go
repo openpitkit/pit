@@ -143,8 +143,8 @@ func (gen *generator) seedAccounts() {
 // dormant pool (weighted so chatty cohorts cycle back often and the dormant
 // majority almost never). Consequently the number of DISTINCT accounts active
 // within any short window stays bounded near ActiveAccounts, which bounds the
-// engine's live per-account dispatch queues. The whole schedule is driven by the
-// single RNG consumed in a fixed order, so it stays a pure function of
+// engine's live per-account dispatch queues. The whole schedule is driven by
+// the single RNG consumed in a fixed order, so it stays a pure function of
 // (seed, config) and the stream remains byte-identical for a given seed.
 func (gen *generator) run() error {
 	target := gen.cfg.Run.TotalOps

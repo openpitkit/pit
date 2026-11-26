@@ -117,7 +117,8 @@ fn rate_limit_mode(
 ///
 /// Contract:
 /// - `builder` must be a valid engine builder pointer.
-/// - `policy_group_id` assigns the policy to a policy group (pass `0` for default).
+/// - `policy_group_id` assigns the policy to a policy group (pass `0` for
+///   default).
 /// - `instance` supplies the registration name and mode.
 ///   Register a policy that keeps its own state (Spot Funds, the rate limit,
 ///   the P&L bounds kill switch, a custom policy that holds funds or counts) in
@@ -375,10 +376,10 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 ///   policy added via `openpit_engine_builder_add_builtin_rate_limit_policy`
 ///   registers under its fixed name `"RateLimitPolicy"`, so pass that string
 ///   here.
-/// - When `has_broker`/`has_asset`/`has_account`/`has_account_asset` is `true`, the
-///   matching pointer must point to `*_len` readable entries (a length of
-///   zero clears that axis and allows a null pointer). Each
-///   `settlement_asset` view must be valid for the duration of the call.
+/// - When `has_broker`/`has_asset`/`has_account`/`has_account_asset` is `true`,
+///   the matching pointer must point to `*_len` readable entries (a length of
+///   zero clears that axis and allows a null pointer). Each `settlement_asset`
+///   view must be valid for the duration of the call.
 /// - A `has_*` flag set to `false` leaves that axis untouched regardless of
 ///   the pointer/length arguments.
 /// - Each barrier's `mode` is 0 or 1 for Reject, 2 for ReviewWithHold, or
@@ -397,8 +398,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 ///   describing the unknown policy, settings-type mismatch, or rejected
 ///   update.
 /// - a null `engine` returns `false` and, when `out_error` is non-null, writes
-///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
-///   with `openpit_destroy_configure_error`.
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be
+///   released with `openpit_destroy_configure_error`.
 pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,

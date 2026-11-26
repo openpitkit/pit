@@ -132,7 +132,8 @@ where
             .accounting_quote(account_id, account_group, &inverse)
             .and_then(|quote| quote.mark)
         {
-            // A zero reverse quote denotes a zero converted value, not missing FX.
+            // A zero reverse quote denotes a zero converted value, not missing
+            // FX.
             if mark.to_decimal().is_zero() {
                 return Some(Decimal::ZERO);
             }
@@ -1142,14 +1143,15 @@ where
     }
 
     /// Reconciles one asset leg of a fill: `held -= consume`,
-    /// `available += consume + flow_received`, and `incoming -= incoming_consume`,
+    /// `available += consume + flow_received`, and
+    /// `incoming -= incoming_consume`,
     /// recorded into `deltas`.
     ///
     /// `consume` is the (non-negative) reserved portion this fill releases from
     /// `held`; `flow_received` is the signed cash/asset flow into `available`
     /// (positive inflow, negative outflow); `incoming_consume` drains the
-    /// acquiring leg's projected inflow (never folded into `available`). When all
-    /// three are zero the leg is left untouched and no outcome is emitted.
+    /// acquiring leg's projected inflow (never folded into `available`). When
+    /// all three are zero the leg is left untouched and no outcome is emitted.
     #[allow(clippy::too_many_arguments)]
     fn settle_fill_leg(
         &self,
@@ -1170,7 +1172,8 @@ where
         // available: the reservation handed back, plus (or minus) the real
         // signed flow. For a fully reserved outflow this is the price-
         // improvement savings; for an unreserved inflow it is the whole flow.
-        // `incoming_consume` is reconciled separately and never enters this sum.
+        // `incoming_consume` is reconciled separately and never enters this
+        // sum.
         let balance_credit = consume.checked_add(flow_received).map_err(|_| {
             arithmetic_overflow_account_block(
                 Self::NAME,
@@ -1311,9 +1314,9 @@ where
     }
 
     /// Computes the settlement `incoming` consumed by one fill: the projected
-    /// proceeds `max(0, lock_price * fill_qty)` for a sell, zero for a buy. Lock
-    /// handling mirrors [`Self::settlement_fill_consume`] - the lock price is
-    /// mandatory, and a missing lock blocks the account.
+    /// proceeds `max(0, lock_price * fill_qty)` for a sell, zero for a buy.
+    /// Lock handling mirrors [`Self::settlement_fill_consume`] - the lock price
+    /// is mandatory, and a missing lock blocks the account.
     fn settlement_incoming_amount(
         &self,
         settlement_asset: &Asset,
@@ -1352,10 +1355,10 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         // Resolve the settlement lock up-front, before any leg mutation, so a
-        // missing lock blocks the account with no holdings touched - symmetric to
-        // the fill path. The settlement release amounts depend on the mandatory
-        // lock price; computing them first keeps the block ahead of the
-        // underlying mutation below.
+        // missing lock blocks the account with no holdings touched - symmetric
+        // to the fill path. The settlement release amounts depend on the
+        // mandatory lock price; computing them first keeps the block ahead of
+        // the underlying mutation below.
         let settlement_held_release =
             self.settlement_release(settlement_asset, side, remaining_reserved_quantity, lock)?;
         let settlement_incoming_release = self.settlement_incoming_release(
@@ -1366,8 +1369,8 @@ where
         )?;
 
         // Underlying release: only sells reserved underlying held, by quantity;
-        // only buys projected base incoming, by quantity. The unfilled remainder
-        // of each is released here.
+        // only buys projected base incoming, by quantity. The unfilled
+        // remainder of each is released here.
         let underlying_held_release = match side {
             Side::Buy => PositionSize::ZERO,
             Side::Sell => remaining_reserved_quantity.to_position_size(),
@@ -1443,10 +1446,10 @@ where
     }
 
     /// Reconciles one asset leg of a cancel: `held -= held_release`,
-    /// `available += held_release`, and `incoming -= incoming_release`, recorded
-    /// into `deltas`. When both releases are zero the leg is a no-op. Held and
-    /// incoming are folded into a single slot mutation so no concurrent check
-    /// observes a half-released leg.
+    /// `available += held_release`, and `incoming -= incoming_release`,
+    /// recorded into `deltas`. When both releases are zero the leg is a no-op.
+    /// Held and incoming are folded into a single slot mutation so no
+    /// concurrent check observes a half-released leg.
     fn release_leg(
         &self,
         account_id: AccountId,
@@ -1754,11 +1757,11 @@ fn settlement_lock_price(
     Ok(Some(single_lock_price(policy, lock, group_id, purpose)?))
 }
 
-/// Computes the reserved settlement `held` amount for `quantity`, given the lock
-/// price and side: `max(0, settlement_outflow)`, where the outflow is
+/// Computes the reserved settlement `held` amount for `quantity`, given the
+/// lock price and side: `max(0, settlement_outflow)`, where the outflow is
 /// `+price*qty` for a buy and `-price*qty` for a sell. The lock price is
-/// mandatory for every accepted order; the `None` guard is a defensive zero that
-/// the strict lock resolution upstream no longer reaches.
+/// mandatory for every accepted order; the `None` guard is a defensive zero
+/// that the strict lock resolution upstream no longer reaches.
 fn settlement_reserved_amount(
     policy: &str,
     side: Side,

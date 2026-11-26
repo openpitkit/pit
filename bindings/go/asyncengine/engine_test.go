@@ -699,7 +699,8 @@ func TestAsyncEngineSubmitCtxCancel(t *testing.T) {
 	}
 	f3Cancel()
 
-	// Receive the future (the goroutine may need a moment to unblock after cancel).
+	// Receive the future (the goroutine may need a moment to unblock after
+	// cancel).
 	var f3 *future.Future2[*AsyncRequest, []reject.Reject]
 	select {
 	case f3 = <-f3resultCh:

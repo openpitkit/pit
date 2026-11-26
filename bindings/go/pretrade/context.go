@@ -64,12 +64,13 @@ func (c Context) RecordDropCopyStartMutation(commit, rollback func()) error {
 // pre-trade context.
 //
 // The present flag is false when the context carries no account control because
-// no account could be bound to the request, in which case the returned handle is
-// nil and must not be used. The returned handle is valid to use only within the
-// pre-trade transaction of this request - through the commit or rollback of its
-// reservation (so it may be captured into a mutation commit/rollback callback
-// for deferred blocking); using it afterwards is unspecified. Its memory is
-// reclaimed by the garbage collector; callers do not manage its lifetime.
+// no account could be bound to the request, in which case the returned handle
+// is nil and must not be used. The returned handle is valid to use only within
+// the pre-trade transaction of this request - through the commit or rollback of
+// its reservation (so it may be captured into a mutation commit/rollback
+// callback for deferred blocking); using it afterwards is unspecified. Its
+// memory is reclaimed by the garbage collector; callers do not manage its
+// lifetime.
 func (c Context) AccountControl() (*reject.AccountControl, bool) {
 	control := reject.NewAccountControlFromHandle(
 		native.PretradeContextGetAccountControl(c.handle),

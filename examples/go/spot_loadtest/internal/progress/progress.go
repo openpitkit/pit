@@ -35,7 +35,8 @@ import (
 	"openpit-loadtest-spot-funds-go/internal/measurement"
 )
 
-// DefaultInterval is the default tick interval used when the caller passes zero.
+// DefaultInterval is the default tick interval used when the caller passes
+// zero.
 const DefaultInterval = 500 * time.Millisecond
 
 // Scale factors for compact count/rate rendering.

@@ -22,20 +22,19 @@
 // that invoked it. The engine handle's threading capability depends on the sync
 // policy selected at builder time:
 //
-//   - FullSync - concurrent invocation of ordinary methods on the same handle is
-//     safe. Sequential cross-thread invocation is also safe.
+//   - FullSync - concurrent invocation of ordinary methods on the same handle
+//     is safe. Sequential cross-thread invocation is also safe.
 //   - NoSync - the handle must stay on the OS thread that created the engine.
-//   - AccountSync - concurrent ordinary invocation on the same handle is safe when the
-//     caller pins each account to a single chain (one queue or one worker at a
-//     time), so calls for the same account are never concurrent. The
-//     exclusive operations - account-group membership, every account/group
-//     currency setter and clearer, the
-//     SpotFunds retune, and account retirement - run with no other call on
-//     the handle in flight; the engine takes no lock for them. Custom policy
-//     hooks for distinct accounts may run concurrently, so a custom policy
-//     synchronizes any state of its own that is not keyed by account. The
-//     asyncengine subpackage provides a ready-made dispatcher, with
-//     AsyncEngine.Exclusive for the exclusive operations; see
+//   - AccountSync - concurrent ordinary invocation on the same handle is safe
+//     when the caller pins each account to a single chain (one queue or one
+//     worker at a time), so calls for the same account are never concurrent.
+//     The exclusive operations - account-group membership, every account/group
+//     currency setter and clearer, the SpotFunds retune, and account
+//     retirement - run with no other call on the handle in flight. The engine
+//     takes no lock for them. Custom policy hooks for distinct accounts may run
+//     concurrently, so a custom policy synchronizes any state of its own that
+//     is not keyed by account. The asyncengine subpackage provides a ready-made
+//     dispatcher, with AsyncEngine.Exclusive for the exclusive operations; see
 //     AccountSyncReadyEngineBuilder.BuildAsync.
 //
 // In every mode, including FullSync, the caller runs membership, retirement,
@@ -353,8 +352,9 @@ func (e *Engine) ApplyAccountAdjustment(
 // in flight, as asyncengine.AsyncEngine.Exclusive ensures; retire several
 // accounts in one exclusive stretch. A pending unexecuted request can be
 // invisible to this call; executing it later acts on the account as new and,
-// after ID reuse, on someone else's account. Do not reuse the ID before this method succeeds.
-// After a finalizer failure, never reuse it, even after a later success.
+// after ID reuse, on someone else's account. Do not reuse the ID before this
+// method succeeds. After a finalizer failure, never reuse it, even after a
+// later success.
 //
 // A domain failure is a *reject.AccountRetirementError. A finalizer failure
 // may leave policy state partly removed and arms the engine kill switch.

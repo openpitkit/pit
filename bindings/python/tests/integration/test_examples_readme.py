@@ -113,7 +113,8 @@ def test_readme_hello_world() -> None:
         result.reservation.commit()
     else:
         for reject in result.rejects:
-            # OrderSizeLimitPolicy [OrderQtyExceedsLimit]: order quantity exceeded
+            # OrderSizeLimitPolicy [OrderQtyExceedsLimit]: order quantity
+            # exceeded
             print(f"{reject.policy} [{reject.code}]: {reject.reason}")
 
     assert not result.ok
@@ -215,11 +216,12 @@ def test_readme_quickstart() -> None:
 
     request = start_result.request
 
-    # 3. Quick, lightweight checks, such as fat-finger scope or enabled kill
-    # switch, were performed during pre-trade request creation. The system state
-    # has not yet changed, except in cases where each request, even rejected ones,
-    # must be considered. Before the heavy-duty checks, other work on the request
-    # can be performed simply by holding the request object.
+    # 3. Quick, lightweight checks, such as fat-finger scope or enabled
+    #    kill switch, were performed during pre-trade request creation. The
+    #    system state has not yet changed, except in cases where each
+    #    request, even rejected ones, must be considered. Before the
+    #    heavy-duty checks, other work on the request can be performed
+    #    simply by holding the request object.
 
     # 4. Real pre-trade and risk control.
     execute_result = request.execute()
@@ -452,7 +454,8 @@ def test_docs_guides_engine_build_engine() -> None:
 
 @pytest.mark.integration
 def test_docs_guides_engine_explicit_two_stage_flow() -> None:
-    # Source: bindings/python/docs/guides/engine.md - Run the explicit two-stage flow
+    # Source: bindings/python/docs/guides/engine.md - Run the explicit two-stage
+    # flow
     engine = (
         openpit.Engine.builder()
         .no_sync()

@@ -303,7 +303,8 @@ class PolicyAccountAdjustmentResult:
             the batch and discards the other fields.
         mutations: Mutations registered by the policy.
         account_adjustments: Per-asset outcomes produced by the policy.
-        account_blocks: Account blocks recorded after the accepted batch commits.
+        account_blocks: Account blocks recorded after the accepted batch
+        commits.
     """
 
     rejects: tuple[PolicyReject, ...] = ()

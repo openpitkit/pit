@@ -41,8 +41,11 @@ pub enum SpotFundsLimitMode {
     ///
     /// This is the conventional pre-trade behavior: a reservation that would
     /// drive `available` below zero is refused with
-    /// [`RejectCode::InsufficientFunds`](crate::pretrade::RejectCode::InsufficientFunds)
+    /// [`RejectCode::InsufficientFunds`]
     /// and never recorded.
+    ///
+    /// [`RejectCode::InsufficientFunds`]:
+    ///     crate::pretrade::RejectCode::InsufficientFunds
     #[default]
     Enforce,
 

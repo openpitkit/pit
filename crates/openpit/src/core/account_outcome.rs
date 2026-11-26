@@ -22,19 +22,21 @@ use crate::pretrade::AccountBlock;
 /// A delta/absolute pair for one position field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutcomeAmount {
-    /// Signed change applied by this operation relative to the field value at operation start.
+    /// Signed change applied by this operation relative to the field value at
+    /// operation start.
     ///
-    /// This is the authoritative value for position bookkeeping. Apply each operation's
-    /// `delta` sequentially to an external position store to maintain consistency
-    /// regardless of operation ordering or concurrency.
+    /// This is the authoritative value for position bookkeeping. Apply each
+    /// operation's `delta` sequentially to an external position store to
+    /// maintain consistency regardless of operation ordering or concurrency.
     pub delta: PositionSize,
-    /// Field value at the moment the policy returned, **before** deferred commit.
+    /// Field value at the moment the policy returned, **before** deferred
+    /// commit.
     ///
     /// This snapshot is taken under the policy's internal lock, but it may be
     /// superseded by the time the caller reads it - a concurrent operation on
     /// another thread can change the slot between the policy write and the
-    /// caller's read. Use `delta` as the source of truth for position bookkeeping;
-    /// treat `absolute` as a convenience hint only.
+    /// caller's read. Use `delta` as the source of truth for position
+    /// bookkeeping; treat `absolute` as a convenience hint only.
     pub absolute: PositionSize,
 }
 
@@ -164,9 +166,9 @@ pub struct AccountOutcomeEntry {
 /// produced it.
 ///
 /// The engine wraps each [`AccountOutcomeEntry`] returned by a policy with
-/// that business entity's [`PolicyGroupId`] before appending it to the result list.
-/// Business entities sharing a group tag produce adjacent entries with the same
-/// `policy_group_id`, in business entity registration order.
+/// that business entity's [`PolicyGroupId`] before appending it to the result
+/// list. Business entities sharing a group tag produce adjacent entries with
+/// the same `policy_group_id`, in business entity registration order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustmentOutcome {
     /// Policy-group tag of the policy that produced this outcome.

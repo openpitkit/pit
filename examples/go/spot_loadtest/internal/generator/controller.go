@@ -28,11 +28,12 @@ package generator
 //	force the next eligible order iff rate < target
 //
 // This bang-bang law steers the running rate toward target: whenever the rate
-// dips below target the controller forces rejects (pushing it up); once at/above
-// target it stops forcing (letting accepts pull it down). Over a large stream
-// the rate settles within one event of target, i.e. well inside any practical
-// tolerance, provided enough orders are eligible to force. Eligibility is gated
-// by the cohort's reject propensity so forced rejects land where configured.
+// dips below target the controller forces rejects (pushing it up); once
+// at/above target it stops forcing (letting accepts pull it down). Over a large
+// stream the rate settles within one event of target, i.e. well inside any
+// practical tolerance, provided enough orders are eligible to force.
+// Eligibility is gated by the cohort's reject propensity so forced rejects land
+// where configured.
 //
 // Determinism: the only randomness is the eligibility draw (one Float64 per
 // candidate), consumed in stream order, so the forced-reject pattern is

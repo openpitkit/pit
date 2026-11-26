@@ -23,10 +23,11 @@
  * the out-of-band `AccountBlock`, and the `AccountControl` handle a policy
  * uses to block accounts from a callback.
  *
- * A reject is NOT an exception: `engine.startPreTrade()` and `request.execute()`
- * return rejects on the result object. The {@link AccountBlockError} thrown by
- * the admin block operations is re-exported here for convenience; it is the
- * same class as on the root `@openpit/engine` error surface.
+ * A reject is NOT an exception: `engine.startPreTrade()` and
+ * `request.execute()` return rejects on the result object. The {@link
+ * AccountBlockError} thrown by the admin block operations is re-exported here
+ * for convenience; it is the same class as on the root `@openpit/engine` error
+ * surface.
  *
  * @packageDocumentation
  */

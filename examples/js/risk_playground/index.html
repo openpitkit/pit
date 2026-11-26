@@ -60,7 +60,7 @@
       try {
         stored = localStorage.getItem(key);
       } catch (error) {
-        // fallback(approved): blocked storage must not break the page; the theme is a convenience
+        // fallback(approved): the optional theme must work with blocked storage
         console.warn("theme preference unreadable, using the system theme", error);
       }
       const theme = stored === "light" || stored === "dark" || stored === "system"

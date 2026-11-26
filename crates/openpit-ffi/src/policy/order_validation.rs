@@ -26,7 +26,8 @@ use super::*;
 ///
 /// Contract:
 /// - `builder` must be a valid engine builder pointer.
-/// - `policy_group_id` assigns the policy to a policy group (pass `0` for default).
+/// - `policy_group_id` assigns the policy to a policy group (pass `0` for
+///   default).
 /// - `instance` supplies the registration name and mode.
 ///   Register a policy that keeps its own state (Spot Funds, the rate limit,
 ///   the P&L bounds kill switch, a custom policy that holds funds or counts) in

@@ -22,7 +22,8 @@ use crate::param::{AccountGroupId, AccountId, Asset, Price};
 use crate::pretrade::AccountBlock;
 use crate::PnlState;
 
-/// Per-policy result of [`crate::pretrade::PreTradePolicy::perform_pre_trade_check`].
+/// Per-policy result of
+/// [`crate::pretrade::PreTradePolicy::perform_pre_trade_check`].
 ///
 /// Carries two independent payloads:
 ///
@@ -32,8 +33,8 @@ use crate::PnlState;
 ///   [`crate::core::AccountAdjustmentOutcome`] list.
 /// - `lock_prices` - prices the policy needs to persist for the order's
 ///   [`crate::pretrade::PreTradeLock`]. Each price is pushed under the policy's
-///   [`crate::pretrade::PolicyGroupId`] in insertion order; the policy never sets the
-///   group itself.
+///   [`crate::pretrade::PolicyGroupId`] in insertion order; the policy never
+///   sets the group itself.
 #[derive(Clone, Debug, Default)]
 pub struct PolicyPreTradeResult {
     pub account_adjustments: SmallVec<[AccountOutcomeEntry; 1]>,
@@ -55,7 +56,8 @@ impl PolicyPreTradeResult {
     }
 }
 
-/// Per-policy result of [`crate::pretrade::PreTradePolicy::apply_account_adjustment`].
+/// Per-policy result of
+/// [`crate::pretrade::PreTradePolicy::apply_account_adjustment`].
 ///
 /// The engine attaches the producing policy's group tag to
 /// `account_adjustments`, commits the accepted batch, then records every

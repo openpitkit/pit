@@ -186,7 +186,7 @@ def test_pre_trade_passes_with_mutations() -> None:
 
 @pytest.mark.unit
 def test_pre_trade_none_and_mutations_interleaved() -> None:
-    """First policy returns an empty result, second returns mutations. Batch passes."""
+    """Accept an empty first result and mutations from the second policy."""
     engine = (
         openpit.Engine.builder()
         .no_sync()

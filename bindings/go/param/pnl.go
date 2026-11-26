@@ -129,7 +129,8 @@ func NewPnlOptionFromHandle(v native.ParamPnlOptional) optional.Option[Pnl] {
 	return optional.Some(NewPnlFromHandle(native.ParamPnlOptionalGet(v)))
 }
 
-// NewPnlFromStringRounded creates a Pnl from a string, rounded to the given scale.
+// NewPnlFromStringRounded creates a Pnl from a string, rounded to the given
+// scale.
 func NewPnlFromStringRounded(
 	v string,
 	scale uint32,
@@ -142,7 +143,8 @@ func NewPnlFromStringRounded(
 	return NewPnlFromHandle(nativeValue), nil
 }
 
-// NewPnlFromFloatRounded creates a Pnl from a float64, rounded to the given scale.
+// NewPnlFromFloatRounded creates a Pnl from a float64, rounded to the given
+// scale.
 func NewPnlFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) (Pnl, error) {
 	nativeValue, err := native.CreateParamPnlFromF64Rounded(v, scale, strategy.native())
 	if err != nil {
@@ -208,31 +210,36 @@ func (v Pnl) Handle() native.ParamPnl {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v Pnl) Float() float64 {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamPnlToF64(v.native))
 }
 
 // String returns the decimal string representation of the pnl.
 func (v Pnl) String() string {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamPnlToString(v.native))
 }
 
 // IsZero reports whether the pnl is zero.
 func (v Pnl) IsZero() bool {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamPnlIsZero(v.native))
 }
 
 // Equal reports whether v and other are equal.
 func (v Pnl) Equal(other Pnl) bool {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamPnlCompare(v.native, other.native)) == 0
 }
 
 // Compare returns -1, 0, or 1 comparing v to other.
 func (v Pnl) Compare(other Pnl) int {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamPnlCompare(v.native, other.native))
 }
 
@@ -290,7 +297,8 @@ func (v Pnl) CheckedMulFloat(scalar float64) (Pnl, error) {
 	return NewPnlFromHandle(result), nil
 }
 
-// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
+// CheckedDivInt returns v / divisor or an error on division by zero or
+// overflow.
 func (v Pnl) CheckedDivInt(divisor int64) (Pnl, error) {
 	result, err := native.ParamPnlCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -308,7 +316,8 @@ func (v Pnl) CheckedDivUint(divisor uint64) (Pnl, error) {
 	return NewPnlFromHandle(result), nil
 }
 
-// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
+// CheckedDivFloat returns v / divisor or an error on division by zero or
+// overflow.
 func (v Pnl) CheckedDivFloat(divisor float64) (Pnl, error) {
 	result, err := native.ParamPnlCheckedDivF64(v.native, divisor)
 	if err != nil {

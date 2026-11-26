@@ -21,17 +21,18 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// Inert verdict of a pre-trade dry-run.
 ///
 /// A dry-run runs the applicable pre-trade stages against current engine state
-/// and reports what *would* happen, with zero effect on that state: no rate-limit
-/// budget is spent, no reservation or hold is applied, and no account is
-/// blocked. Repeating a dry-run never moves engine state.
+/// and reports what *would* happen, with zero effect on that state: no
+/// rate-limit budget is spent, no reservation or hold is applied, and no
+/// account is blocked. Repeating a dry-run never moves engine state.
 ///
 /// Unlike [`PreTradeReservation`](crate::pretrade::PreTradeReservation), this
 /// report carries no commit/rollback capability. It is inert by construction -
 /// there is nothing to finalize - so it exposes no `commit`/`rollback` methods.
-/// The fields describe the outcome the equivalent real call would have produced:
+/// The fields describe the outcome the equivalent real call would have
+/// produced:
 ///
-/// - [`is_pass`](Self::is_pass) / [`rejects`](Self::rejects): whether the stages
-///   produce no effective rejects, and the rejects collected otherwise.
+/// - [`is_pass`](Self::is_pass) / [`rejects`](Self::rejects): whether the
+///   stages produce no effective rejects, and the rejects collected otherwise.
 /// - [`reviews`](Self::reviews): review marks requiring a human decision even
 ///   when `is_pass()` is true. Callers inspect these before submission.
 /// - [`lock`](Self::lock): the [`PreTradeLock`] the main stage would have
@@ -41,8 +42,8 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 ///   `held`/`available` outcomes the main stage would have produced, with the
 ///   same numbers a real reservation would report for the same order and state.
 /// - [`account_block`](Self::account_block): the [`AccountBlock`] an
-///   account-scope reject would have latched - reported here, but *not* recorded
-///   in the engine's blocked-accounts registry.
+///   account-scope reject would have latched - reported here, but *not*
+///   recorded in the engine's blocked-accounts registry.
 ///
 /// # Examples
 ///
@@ -70,7 +71,8 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// if report.is_pass() && report.reviews().is_empty() {
 ///     let mut reservation = engine.start_pre_trade(order)?.execute()?;
 ///     if reservation.reviews().is_empty() {
-///         // Send the order to the venue only when no human decision is needed.
+///         // Send the order to the venue only when no human decision is
+///         // needed.
 ///     }
 ///     // Commit both paths. Review keeps holds only for all with-hold marks.
 ///     reservation.commit();
@@ -106,8 +108,8 @@ impl PreTradeDryRunReport {
 
     /// Returns `true` when the executed stages produce no effective rejects.
     ///
-    /// Equivalent to `self.rejects().is_none()`. Review marks do not change this
-    /// value; inspect [`Self::reviews`] before deciding to send the order.
+    /// Equivalent to `self.rejects().is_none()`. Review marks do not change
+    /// this value; inspect [`Self::reviews`] before deciding to send the order.
     pub fn is_pass(&self) -> bool {
         self.rejects.is_none()
     }
@@ -138,17 +140,18 @@ impl PreTradeDryRunReport {
     /// Returns the account position modifications the main stage would have
     /// produced, grouped by [`super::PolicyGroupId`].
     ///
-    /// The numbers match what a real reservation would report for the same order
-    /// and engine state. Empty when the start stage would have rejected or when
-    /// any without-hold review is returned, or no policy reports an adjustment.
+    /// The numbers match what a real reservation would report for the same
+    /// order and engine state. Empty when the start stage would have rejected
+    /// or when any without-hold review is returned, or no policy reports an
+    /// adjustment.
     pub fn account_adjustments(&self) -> &[AccountAdjustmentOutcome] {
         &self.would_be_account_adjustments
     }
 
     /// Returns the account block an account-scope reject would have latched.
     ///
-    /// A real call records this block in the engine's blocked-accounts registry;
-    /// a dry-run reports it here without recording it.
+    /// A real call records this block in the engine's blocked-accounts
+    /// registry; a dry-run reports it here without recording it.
     pub fn account_block(&self) -> Option<&AccountBlock> {
         self.would_be_account_block.as_ref()
     }

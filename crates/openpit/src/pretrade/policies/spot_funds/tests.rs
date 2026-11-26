@@ -1731,7 +1731,8 @@ fn sell_qty_market_registered_without_quote_rejects_mark_price_unavailable() {
 
 #[test]
 fn sell_volume_market_zero_slip_holds_correct_quantity() {
-    // AAPL=10, mark=200, slip=0 → effective=200*(1-0)=200, vol=400, charge=2 AAPL
+    // AAPL=10, mark=200, slip=0 → effective=200*(1-0)=200, vol=400, charge=2
+    // AAPL
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy_with_market_data(aapl_usd.clone(), px("200"), 0);
@@ -2099,8 +2100,9 @@ fn sell_fill_without_lock_price_blocks_account() {
     let _ = mutations.commit_all();
     // held(AAPL)=10, available(AAPL)=0, incoming(USD)=2000.
 
-    // The fill arrives without its lock: the settlement leg cannot reconcile, so
-    // the account is blocked exactly like a buy, before any holdings mutation.
+    // The fill arrives without its lock: the settlement leg cannot reconcile,
+    // so the account is blocked exactly like a buy, before any holdings
+    // mutation.
     let fill = make_report(
         acc,
         aapl_usd,
@@ -2333,8 +2335,8 @@ fn buy_market_cancel_uses_lock_price_for_release() {
         )])),
     );
     report_blocks(&policy, &fill);
-    // Fill consumed 4*230=920 from held (lock price), savings=140 returned to available.
-    // After fill: held=2300-920=1380, available=7700+140=7840.
+    // Fill consumed 4*230=920 from held (lock price), savings=140 returned to
+    // available. After fill: held=2300-920=1380, available=7700+140=7840.
 
     let cancel = make_report(
         acc,
@@ -4988,7 +4990,8 @@ fn adjustment_rollback_overflow_blocks_account_via_engine() {
     // public batch engine API is synchronous, so we cannot trigger that
     // path through `apply_account_adjustment` alone.
     //
-    // The wiring guarantee covered by `hold_rollback_overflow_blocks_account_via_engine`
+    // The wiring guarantee covered by
+    // `hold_rollback_overflow_blocks_account_via_engine`
     // applies symmetrically to adjustment rollback: both rollback closures
     // share the same `account_blocker` field and use the same
     // `record_rollback_overflow` helper. The test below asserts the same
@@ -5186,7 +5189,8 @@ fn spot_funds_account_sync_is_send() {
 /// [`BlockedAccounts`](crate::core::BlockedAccounts) facility.
 /// `SpotFundsPolicy<AccountSync, FullSync>` is `Send` (the shared handles are
 /// `IndexShared`, not bare `Arc`), exercising the `AccountSync` storage path
-/// directly. The test constructs an [`AccountControl`](crate::core::AccountControl)
+/// directly. The test constructs an
+/// [`AccountControl`](crate::core::AccountControl)
 /// from the same `IndexShared<BlockedAccounts<IndexLocking>>` and passes it
 /// via context, mirroring what the engine does at runtime.
 #[test]
@@ -8743,7 +8747,8 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("EUR"), "10");
     // A tracked AAPL position: the fee-only correction folds into its realized
-    // P&L (account currency) and reaches the barrier through the same net delta.
+    // P&L (account currency) and reaches the barrier through the same net
+    // delta.
     seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
 
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
@@ -9689,7 +9694,8 @@ fn account_pnl_accumulator_overflow_halts_account_pnl() {
     let policy = build_policy_from_settings(s, None);
     policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::new(Decimal::MAX)));
 
-    // A negative fee is a rebate -> positive P&L delta of +1; MAX + 1 overflows.
+    // A negative fee is a rebate -> positive P&L delta of +1; MAX + 1
+    // overflows.
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("-1", "USD"));
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert_eq!(result.account_blocks.len(), 1);
@@ -9748,8 +9754,8 @@ fn account_pnl_accumulator_overflow_halts_without_barrier() {
 }
 
 // Negative twin of the accumulator overflow: seed at Decimal::MIN, apply a fill
-// whose positive fee is a cost (negative P&L delta). MIN + negative underflows in
-// apply_account_pnl_delta and halts the account-PnL accumulator.
+// whose positive fee is a cost (negative P&L delta). MIN + negative underflows
+// in apply_account_pnl_delta and halts the account-PnL accumulator.
 #[test]
 fn account_pnl_accumulator_negative_overflow_halts_account_pnl() {
     use rust_decimal::Decimal;
@@ -9800,7 +9806,8 @@ fn fee_pnl_conversion_overflow_halts_position_and_account_pnl() {
     let b = engine_builder();
     let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
     let fx_id = svc.register(eur_usd).expect("register must succeed");
-    // EUR->USD mark of 2 turns a Decimal::MAX EUR fee into MAX * 2, overflowing.
+    // EUR->USD mark of 2 turns a Decimal::MAX EUR fee into MAX * 2,
+    // overflowing.
     svc.push(fx_id, Quote::new().with_mark(px("2")), Duration::ZERO)
         .expect("push must succeed");
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
@@ -14040,7 +14047,8 @@ fn short_open_then_buy_to_close_realizes_pnl() {
         .expect("AAPL pnl must be present")
         .as_ref()
         .expect("AAPL pnl must be calculated");
-    // Buy 4 to cover a short at 70 vs avg 100: realized = (70 - 100) * -(4) = 120.
+    // Buy 4 to cover a short at 70 vs avg 100: realized = (70 - 100) * -(4) =
+    // 120.
     assert_eq!(pnl.delta, pnl_value("120"));
     // No prior realized PnL on the slot, so the cumulative equals this fill.
     assert_eq!(pnl.absolute, pnl_value("120"));
@@ -14095,7 +14103,8 @@ fn exact_close_fill_resets_average_to_none_and_keeps_realized_pnl() {
         .expect("AAPL pnl must be present")
         .as_ref()
         .expect("AAPL pnl must be calculated");
-    // Close the whole long at 130 vs avg 100: realized = (130 - 100) * 10 = 300.
+    // Close the whole long at 130 vs avg 100: realized = (130 - 100) * 10 =
+    // 300.
     assert_eq!(pnl.delta, pnl_value("300"));
     // No prior realized PnL on the slot, so the cumulative equals this fill.
     assert_eq!(pnl.absolute, pnl_value("300"));
@@ -14329,8 +14338,8 @@ fn adjustment_rollback_restores_untracked_realized_pnl_to_none() {
 fn realized_pnl_starts_after_rollback_restores_unset_state() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    // Seed a long with an average but NO realized-PnL tracking. The average lets
-    // a later fill have a basis; realized_pnl is `None`.
+    // Seed a long with an average but NO realized-PnL tracking. The average
+    // lets a later fill have a basis; realized_pnl is `None`.
     seed(&policy, acc, asset("AAPL"), "10");
     let seed_position = adj_with_avg(
         asset("AAPL"),
@@ -14702,9 +14711,9 @@ fn sell_fill_flipping_long_to_short_realizes_and_reopens_at_price() {
 
 #[test]
 fn batch_force_setting_realized_pnl_then_rejected_rolls_back_to_prior() {
-    // End-to-end through the engine batch API: a balance + realized-PnL force-set
-    // that is later rejected in the same batch must roll the realized PnL back to
-    // its prior value via the inverse delta.
+    // End-to-end through the engine batch API: a balance + realized-PnL
+    // force-set that is later rejected in the same batch must roll the realized
+    // PnL back to its prior value via the inverse delta.
     let acc = account(99224416);
     let policy = build_policy(None, None);
     seed(&policy, acc, asset("AAPL"), "10");
@@ -14713,8 +14722,8 @@ fn batch_force_setting_realized_pnl_then_rejected_rolls_back_to_prior() {
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
     let _ = mutations.commit_all();
 
-    // Force-set realized PnL to 50, then drive the same closure to reject via an
-    // out-of-range balance bound so the whole adjustment is rolled back.
+    // Force-set realized PnL to 50, then drive the same closure to reject via
+    // an out-of-range balance bound so the whole adjustment is rolled back.
     let force = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut mutations);
@@ -14747,8 +14756,8 @@ fn build_policy_with_limit_mode(mode: SpotFundsLimitMode) -> TestPolicy {
     SpotFundsPolicy::new(s, None, b.storage_builder())
 }
 
-/// Publishes a new global limit mode through the policy's settings cell, exactly
-/// as the runtime `Configurator::spot_funds` surface would.
+/// Publishes a new global limit mode through the policy's settings cell,
+/// exactly as the runtime `Configurator::spot_funds` surface would.
 fn set_runtime_global_limit_mode(policy: &TestPolicy, mode: SpotFundsLimitMode) {
     use crate::pretrade::ConfigurablePolicy;
     use crate::storage::ConfigCell;
@@ -14942,10 +14951,10 @@ fn runtime_switch_to_track_only_changes_gating_for_next_reservation() {
 
 #[test]
 fn track_only_dry_run_buy_over_available_matches_mutating_reservation() {
-    // Regression guard: the dry-run gate must resolve TrackOnly exactly like the
-    // mutating gate. Run the same under-funded buy as
-    // `track_only_buy_over_available_is_not_rejected_and_drives_available_negative`
-    // through both entries on equivalent fresh state and assert the dry-run
+    // Regression guard: the dry-run gate must resolve TrackOnly exactly like
+    // the mutating gate. Run the under-funded buy from the TrackOnly
+    // negative-availability test through both entries on equivalent fresh
+    // state and assert the dry-run
     // outcome byte-matches the holdings the mutating reservation produces. If a
     // future edit desyncs the two limit-mode gates this fails.
     let acc = account(99224416);
@@ -14972,9 +14981,9 @@ fn track_only_dry_run_buy_over_available_matches_mutating_reservation() {
     let usd = holdings_of(&mut_policy, acc, &asset("USD")).expect("must exist");
     let aapl = holdings_of(&mut_policy, acc, &asset("AAPL")).expect("must exist");
 
-    // Settlement leg: held is the full requested 2000, available driven negative
-    // to -1000 (seed 1000 minus the 2000 hold). The dry-run reports the same
-    // absolute balance the mutating path's `available()` reaches.
+    // Settlement leg: held is the full requested 2000, available driven
+    // negative to -1000 (seed 1000 minus the 2000 hold). The dry-run reports
+    // the same absolute balance the mutating path's `available()` reaches.
     assert_eq!(outcome.account_adjustments.len(), 2);
     let entry = &outcome.account_adjustments[0];
     assert_eq!(entry.asset, asset("USD"));
@@ -15007,10 +15016,11 @@ fn track_only_dry_run_buy_over_available_matches_mutating_reservation() {
 
 #[test]
 fn track_only_dry_run_still_rejects_arithmetic_overflow_without_panicking() {
-    // Mirror of `track_only_still_rejects_arithmetic_overflow_without_panicking`
+    // Mirror of
+    // `track_only_still_rejects_arithmetic_overflow_without_panicking`
     // on the dry-run entry: TrackOnly never suppresses the overflow integrity
-    // guard, so the dry-run twin must also map to ArithmeticOverflow rather than
-    // InsufficientFunds, and must not panic.
+    // guard, so the dry-run twin must also map to ArithmeticOverflow rather
+    // than InsufficientFunds, and must not panic.
     let acc = account(99224416);
     let policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
     // Seed the settlement slot's `held` at the top of the decimal range so the
@@ -15079,7 +15089,8 @@ fn buy_volume_price_divergent_full_fill_nets_incoming_and_held_to_zero() {
 
     // Fill 6 @ 90 (price below the lock): the settlement leg releases 100*6=600
     // held and credits the price improvement (100-90)*6=60 to available; the
-    // base leg drains 6 of the projected incoming (10 -> 4) and credits 6 owned.
+    // base leg drains 6 of the projected incoming (10 -> 4) and credits 6
+    // owned.
     let fill_a = make_report(
         acc,
         aapl_usd.clone(),
@@ -15098,11 +15109,11 @@ fn buy_volume_price_divergent_full_fill_nets_incoming_and_held_to_zero() {
     assert!(report_blocks(&policy, &fill_a).is_empty());
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("4"));
 
-    // Final fill 4 @ 110 (price above the lock): the settlement leg releases the
-    // remaining 100*4=400 held (-> 0) and debits the deficit (100-110)*4=-40
-    // from available; the base leg drains the last 4 incoming (-> 0).
-    // Fill qty 6+4 plus remaining reserved quantity 0 equals 10, so both legs
-    // converge.
+    // Final fill 4 @ 110 (price above the lock): the settlement leg releases
+    // the remaining 100*4=400 held (-> 0) and debits the deficit
+    // (100-110)*4=-40 from available; the base leg drains the last 4 incoming
+    // (-> 0). Fill qty 6+4 plus remaining reserved quantity 0 equals 10, so
+    // both legs converge.
     let fill_b = make_report(
         acc,
         aapl_usd,
@@ -15267,8 +15278,10 @@ fn sell_volume_price_divergent_full_fill_nets_held_and_incoming_to_zero() {
 
     // Sell Volume(v=1000) @ lock 100: reserved underlying held = v / |lock| =
     // 1000 / 100 = 10 AAPL and reserved settlement incoming = 100 * 10 = 1000
-    // USD. This is the symmetric counterpart of the buy: the sell underlying-held
-    // leg mirrors the buy base-incoming leg (same quantity basis, factor |lock|).
+    // USD. This is the symmetric counterpart of the buy: the sell
+    // underlying-held leg mirrors the buy base-incoming leg (same quantity
+    // basis, factor
+    // |lock|).
     let order = make_order(
         acc,
         aapl_usd.clone(),
@@ -15324,8 +15337,9 @@ fn sell_volume_price_divergent_full_fill_nets_held_and_incoming_to_zero() {
         )])),
     );
     assert!(report_blocks(&policy, &fill_b).is_empty());
-    // Underlying held converges to zero despite fill != lock (the whole point of
-    // the symmetry), and the reserved settlement incoming drains to zero too.
+    // Underlying held converges to zero despite fill != lock (the whole point
+    // of the symmetry), and the reserved settlement incoming drains to zero
+    // too.
     assert_balance(&policy, acc, "AAPL", "0", "0");
     assert_eq!(incoming_of(&policy, acc, "USD"), PositionSize::ZERO);
     // Proceeds credited to available: 6*110 + 4*90 = 1020.
@@ -15341,9 +15355,9 @@ fn sell_volume_price_divergent_full_fill_nets_held_and_incoming_to_zero() {
 // any occurrence in a surfaced string is the leaked account id.
 const SENTINEL: u64 = 424242;
 
-// The account id must never surface in the reject/block free text: those strings
-// flow into logs and to managers who could otherwise use the id to reach data
-// they are not authorized to see.
+// The account id must never surface in the reject/block free text: those
+// strings flow into logs and to managers who could otherwise use the id to
+// reach data they are not authorized to see.
 fn assert_account_id_redacted(reason: &str, details: &str) {
     assert!(
         !reason.contains("424242"),

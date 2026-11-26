@@ -56,7 +56,8 @@ pub const OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD: OpenPitPretradeRuleMod
 /// Raw stable classification code for a reject.
 ///
 /// Read this first when you need machine-readable handling. The textual fields
-/// in [`OpenPitPretradeReject`] provide operator-facing explanation and extra context.
+/// in [`OpenPitPretradeReject`] provide operator-facing explanation and extra
+/// context.
 ///
 /// Valid codes are `1..=42`, `254` (`Custom`), and `255` (`Other`). Unknown
 /// incoming codes are mapped to `Other` (`255`).
@@ -477,8 +478,8 @@ pub extern "C" fn openpit_pretrade_reject_list_get_accept_sentinel(
 /// `openpit_pretrade_reject_list_get_accept_sentinel`.
 ///
 /// Use it to tell the two `false` outcomes of
-/// `openpit_pretrade_reject_list_push` apart: an unknown reject scope or mode is a bad
-/// reject payload, while the accept list is a bad target pointer.
+/// `openpit_pretrade_reject_list_push` apart: an unknown reject scope or mode
+/// is a bad reject payload, while the accept list is a bad target pointer.
 ///
 /// Contract:
 /// - passing null is allowed and returns `false`;

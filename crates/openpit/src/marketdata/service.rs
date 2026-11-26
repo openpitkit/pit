@@ -32,7 +32,7 @@ use super::quote::{Quote, QuoteTtl};
 use super::resolution::{AccountInfo, QuoteResolution};
 use super::ttl::TtlSetting;
 
-// ─── InstrumentRegistry ───────────────────────────────────────────────────────
+// ─── InstrumentRegistry ──────────────────────────────────────────────────────
 
 /// Internal instrument registration state.
 pub(crate) struct InstrumentRegistry {
@@ -86,7 +86,7 @@ impl InstrumentRegistry {
     }
 }
 
-// ─── MarketDataService ────────────────────────────────────────────────────────
+// ─── MarketDataService ───────────────────────────────────────────────────────
 
 /// Live market-data service.
 ///
@@ -148,7 +148,7 @@ impl InstrumentRegistry {
 /// [`set_account_group_ttl`](Self::set_account_group_ttl),
 /// [`set_instrument_ttl`](Self::set_instrument_ttl),
 /// [`set_instrument_account_ttl`](Self::set_instrument_account_ttl), and
-/// [`set_instrument_account_group_ttl`](Self::set_instrument_account_group_ttl);
+/// [`set_instrument_account_group_ttl`];
 /// each level can be reverted to "inherit" via the matching `clear_*_ttl`
 /// method.
 ///
@@ -169,6 +169,8 @@ impl InstrumentRegistry {
 /// selection and the instrument-specific TTL cascade are resolved under one
 /// read guard, so a read cannot combine state from opposite sides of a
 /// concurrent publication or TTL update.
+///
+/// [`set_instrument_account_group_ttl`]: Self::set_instrument_account_group_ttl
 pub struct MarketDataService<Sync: MarketDataSync> {
     /// Non-ZST allocation identifying this service across moves. A call cache
     /// retains its mode-aware owner until all entries for the call are dropped.
@@ -200,7 +202,7 @@ pub struct MarketDataService<Sync: MarketDataSync> {
 }
 
 impl<Sync: MarketDataSync> MarketDataService<Sync> {
-    // ── Registration ──────────────────────────────────────────────────────────
+    // ── Registration ─────────────────────────────────────────────────────────
 
     /// Registers `instrument` with the service-wide default TTL and returns an
     /// auto-assigned [`InstrumentId`].
@@ -310,7 +312,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         Ok(instrument_id)
     }
 
-    // ── TTL setters ───────────────────────────────────────────────────────────
+    // ── TTL setters ──────────────────────────────────────────────────────────
 
     /// Pins the service-level TTL for `account_id` (cascade tier 4).
     ///
@@ -500,7 +502,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         }
     }
 
-    // ── Push by id (default bucket) ───────────────────────────────────────────
+    // ── Push by id (default bucket) ──────────────────────────────────────────
 
     /// Publishes a new quote for `id` into the default ("everyone-else")
     /// bucket, **replacing** the entire stored snapshot.
@@ -547,7 +549,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         Ok(())
     }
 
-    // ── Targeted fan-out push by id ───────────────────────────────────────────
+    // ── Targeted fan-out push by id ──────────────────────────────────────────
 
     /// Publishes a new quote for `id` into the per-account bucket of every
     /// account in `accounts` and the per-group bucket of every group in
@@ -625,7 +627,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         Ok(())
     }
 
-    // ── Push by instrument name (default bucket) ──────────────────────────────
+    // ── Push by instrument name (default bucket) ─────────────────────────────
 
     /// Publishes a new quote for `instrument` into the default bucket
     /// (replace semantics).
@@ -649,7 +651,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         instrument_id
     }
 
-    // ── Get ───────────────────────────────────────────────────────────────────
+    // ── Get ──────────────────────────────────────────────────────────────────
 
     /// Returns the latest quote for `(instrument_id, account_id)` under
     /// `resolution`, distinguishing unknown instruments, unavailable quotes,
@@ -697,8 +699,9 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
                     .get(slot_idx as usize)
                     .ok_or(MarketDataError::QuoteUnavailable)?;
 
-                // A single memoized group resolution shared by quote selection and the
-                // TTL cascade, so `account_info.group()` runs at most once per read.
+                // A single memoized group resolution shared by quote selection
+                // and the TTL cascade, so `account_info.group()` runs at most
+                // once per read.
                 let mut group_cell: Option<Option<AccountGroupId>> = None;
 
                 let state = slot.state.read();
@@ -750,10 +753,10 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
             return setting.as_duration();
         }
         // Tiers 4-6 live behind two service-wide locks. The gate pairs with the
-        // setters' `mark_present`: if it reports "possibly present" the inserted
-        // entries are visible; otherwise both maps are provably empty, so skip
-        // both shared-lock acquisitions (the common no-service-TTL deployment)
-        // and fall through to the instrument-level tier.
+        // setters' `mark_present`: if it reports "possibly present" the
+        // inserted entries are visible; otherwise both maps are provably empty,
+        // so skip both shared-lock acquisitions (the common no-service-TTL
+        // deployment) and fall through to the instrument-level tier.
         if self.has_service_level_ttl.is_possibly_present() {
             // Tier 4: service-level account.
             if let Some(setting) = self.account_ttl.read().get(&account_id) {
@@ -778,7 +781,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         self.default_ttl
     }
 
-    // ── Instrument resolution ─────────────────────────────────────────────────
+    // ── Instrument resolution ────────────────────────────────────────────────
 
     /// Resolves an `Instrument` to its `InstrumentId`, if registered by name.
     pub fn resolve(&self, instrument: &Instrument) -> Option<InstrumentId> {
@@ -789,7 +792,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         )
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // ── Internal helpers ─────────────────────────────────────────────────────
 
     /// Resolves `id` to its slot index, or [`UnknownInstrumentId`].
     fn slot_for_id(&self, instrument_id: InstrumentId) -> Result<u32, UnknownInstrumentId> {
@@ -869,7 +872,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     }
 }
 
-// ─── Free helpers ──────────────────────────────────────────────────────────────
+// ─── Free helpers ────────────────────────────────────────────────────────────
 
 /// Stores one quote observation in `map[key]`, stamping `now` and retaining its
 /// source age.

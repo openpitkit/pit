@@ -33,8 +33,9 @@ import (
 // global currency tier every unassigned account inherits, so the engine cannot
 // tell an unset group from a deliberate one. These tests pin that the group
 // currency setters reject the unset value before it reaches the engine, and
-// that param.DefaultAccountGroup keeps addressing the global tier. The effective
-// currency is read back through the spot-funds P&L barrier currency check.
+// that param.DefaultAccountGroup keeps addressing the global tier. The
+// effective currency is read back through the spot-funds P&L barrier currency
+// check.
 
 // newEURAccountBarrierEngine arms an EUR account barrier for every account, so
 // an account's effective currency shows up as a currency-mismatch block once

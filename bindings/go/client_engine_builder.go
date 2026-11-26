@@ -209,7 +209,8 @@ func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) Build() (
 	return &ClientEngine[Order, Report, Adjustment]{engine: engine}, nil
 }
 
-// PreTrade appends additional client pre-trade policies to an already-ready builder.
+// PreTrade appends additional client pre-trade policies to an already-ready
+// builder.
 //
 // Register a policy that keeps its own state (Spot Funds, the rate limit, the
 // P&L bounds kill switch, a custom policy that holds funds or counts) in

@@ -88,8 +88,8 @@ pub struct OpenPitPretradePoliciesPnlBoundsBarrier {
 /// - Barriers of different modes for one (account, settlement asset) must
 ///   carry equal `initial_pnl` seeds.
 ///
-/// Passed to `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy` in
-/// the `account` array.
+/// Passed to `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`
+/// in the `account` array.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
@@ -154,7 +154,8 @@ pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
 ///
 /// Contract:
 /// - `builder` must be a valid engine builder pointer.
-/// - `policy_group_id` assigns the policy to a policy group (pass `0` for default).
+/// - `policy_group_id` assigns the policy to a policy group (pass `0` for
+///   default).
 /// - `instance` supplies the registration name and mode.
 ///   Register a policy that keeps its own state (Spot Funds, the rate limit,
 ///   the P&L bounds kill switch, a custom policy that holds funds or counts) in
@@ -368,7 +369,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
 /// - Each `settlement_asset` view must be valid for the duration of the call.
 /// - A `has_*` flag set to `false` leaves that axis untouched.
 /// - Both 0 and 1 mean Reject. A mode above 3 or a duplicate (key, mode) fails
-///   the whole call with `Validation` and leaves the previous barriers in place.
+///   the whole call with `Validation` and leaves the previous barriers in
+///   place.
 ///
 /// Success:
 /// - returns `true`; the new barriers apply from the next check onward.
@@ -377,8 +379,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
 /// - returns `false`; if `out_error` is non-null, writes a caller-owned
 ///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
 /// - a null `engine` returns `false` and, when `out_error` is non-null, writes
-///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
-///   with `openpit_destroy_configure_error`.
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be
+///   released with `openpit_destroy_configure_error`.
 pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,
@@ -612,8 +614,8 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
 /// - returns `false`; if `out_error` is non-null, writes a caller-owned
 ///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
 /// - a null `engine` returns `false` and, when `out_error` is non-null, writes
-///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
-///   with `openpit_destroy_configure_error`.
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be
+///   released with `openpit_destroy_configure_error`.
 pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,

@@ -38,9 +38,9 @@ use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
 /// every funds limit mode. A review-mode breach yields a pre-trade review mark
 /// without blocking; non-order operations produce neither a mark nor a block.
 /// Halted values and account-tier currency mismatches block in any rule mode.
-/// Review barriers are evaluated whether or not the order is confirmed. A Reject
-/// breach ends evaluation. A position axis compares each position. Barrier
-/// precedence is resolved independently per rule mode.
+/// Review barriers are evaluated whether or not the order is confirmed. A
+/// Reject breach ends evaluation. A position axis compares each position.
+/// Barrier precedence is resolved independently per rule mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SpotFundsPnlBoundsAxis {
     /// Sum of unrealized P&L over the account's positions, in the account
@@ -72,8 +72,8 @@ pub struct SpotFundsPnlBoundsBarrier {
     ///
     /// With a known effective account currency, an account-tier mismatch fails
     /// closed and blocks the account; account-group and global mismatches are
-    /// skipped. A known-currency account with no account barrier and no matching
-    /// fallback has no effective barrier, but its realized P&L keeps
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its realized P&L keeps
     /// accumulating and publishing. Without an effective currency, the first
     /// in-scope barrier applies. Bounds are compared as stored and are never
     /// FX-converted.
@@ -101,7 +101,8 @@ pub struct SpotFundsPnlBoundsAccountGroupBarrier {
 /// Account P&L bounds refinement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsAccountBarrier {
-    /// Bounds for the account, including the rule mode in the configuration key.
+    /// Bounds for the account, including the rule mode in the configuration
+    /// key.
     pub barrier: SpotFundsPnlBoundsBarrier,
     /// Account this barrier applies to.
     pub account_id: AccountId,

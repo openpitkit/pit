@@ -22,13 +22,15 @@
 //!
 //! - [`PreTradePolicy`] models start-stage, main-stage, post-trade, and
 //!   account-adjustment policy hooks;
-//! - [`PreTradeRequest`] is the single-use handle returned after start-stage success;
+//! - [`PreTradeRequest`] is the single-use handle returned after start-stage
+//!   success;
 //! - [`PreTradeReservation`] is the finalizable handle for reserved state;
 //! - [`DropCopyOperation`] is the finalizable handle for drop-copy
 //!   bookkeeping;
 //! - [`PreTradeDryRunReport`] is the inert verdict of a non-mutating dry-run.
 //!
-//! Custom controls typically start from the policy traits plus [`PreTradeContext`].
+//! Custom controls typically start from the policy traits plus
+//! [`PreTradeContext`].
 
 mod configurable;
 mod context;

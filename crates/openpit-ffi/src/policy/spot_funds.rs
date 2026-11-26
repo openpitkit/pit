@@ -297,7 +297,8 @@ pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
 pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
     /// Account group the barrier applies to.
     pub account_group_id: OpenPitParamAccountGroupId,
-    /// Bounds and rule mode for this group. A repeated (group, mode) is invalid.
+    /// Bounds and rule mode for this group. A repeated (group, mode) is
+    /// invalid.
     pub barrier: OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
 }
 
@@ -307,7 +308,8 @@ pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
 pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
     /// Account the barrier applies to.
     pub account_id: OpenPitParamAccountId,
-    /// Bounds and rule mode for this account. A repeated (account, mode) is invalid.
+    /// Bounds and rule mode for this account. A repeated (account, mode) is
+    /// invalid.
     pub barrier: OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
 }
 
@@ -895,8 +897,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
 /// - returns `false`; if `out_error` is non-null, writes a caller-owned
 ///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
 /// - a null `engine` returns `false` and, when `out_error` is non-null, writes
-///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
-///   with `openpit_destroy_configure_error`.
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be
+///   released with `openpit_destroy_configure_error`.
 pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,
@@ -1252,12 +1254,12 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_axis(
 /// accumulator after a calculation halt. A halted state sets or keeps it
 /// halted and replaces the stored halt reason. Neither form affects a
 /// position-level accumulator. A numeric state beyond an effective Reject-mode
-/// bound returns the policy-reported `PnlKillSwitchTriggered` block. A breach of
-/// a review-mode bound returns no block and no review mark: configuration does
-/// not issue review marks. A halted state with an effective barrier of any mode
-/// returns the block. The engine processes that block request before returning.
-/// An existing first-cause block remains unchanged but does not suppress the
-/// returned block.
+/// bound returns the policy-reported `PnlKillSwitchTriggered` block. A breach
+/// of a review-mode bound returns no block and no review mark: configuration
+/// does not issue review marks. A halted state with an effective barrier of any
+/// mode returns the block. The engine processes that block request before
+/// returning. An existing first-cause block remains unchanged but does not
+/// suppress the returned block.
 ///
 /// Contract:
 /// - on success, returns a caller-owned account-block list, possibly empty;
@@ -1442,8 +1444,8 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_limit_mode(
 ///
 /// Success / error: as
 /// `openpit_engine_configure_spot_funds_global_limit_mode`. An invalid
-/// `asset`, `mode` or supplied `limit` returns `false` with a `Validation` error
-/// naming the invalid input.
+/// `asset`, `mode` or supplied `limit` returns `false` with a `Validation`
+/// error naming the invalid input.
 #[no_mangle]
 pub unsafe extern "C" fn openpit_engine_configure_spot_funds_position_limit(
     engine: *mut crate::engine::OpenPitEngine,

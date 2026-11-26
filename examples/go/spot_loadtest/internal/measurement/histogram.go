@@ -42,9 +42,9 @@ func newHist() *hdrhistogram.Histogram {
 // leaves totalCount unchanged) when the value exceeds the histogram's range, so
 // a bare RecordValue with the error discarded would silently lose exactly the
 // coordinated-omission upper tail. Clamping preserves the COUNT (one sample is
-// recorded at the ceiling) at the cost of the exact magnitude above the ceiling.
-// It reports whether a clamp occurred so the caller can surface the clamped
-// total in the report.
+// recorded at the ceiling) at the cost of the exact magnitude above the
+// ceiling. It reports whether a clamp occurred so the caller can surface the
+// clamped total in the report.
 //
 // Methodology invariant: latencies above the histogram ceiling are clamped
 // (saturated), never dropped; the clamped count is reported.

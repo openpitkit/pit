@@ -55,7 +55,7 @@ use super::*;
 /// caller code.
 pub struct OpenPitPostTradeContext;
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Opaque pointer for a pre-trade policy.
 ///
@@ -68,7 +68,7 @@ pub struct OpenPitPostTradeContext;
 ///   post-trade, and account-adjustment hooks.
 pub type OpenPitPretradePreTradePolicy = PolicyHandle<UnifiedPreTradePolicy>;
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Callback used by a custom pre-trade policy to validate one order before a
 /// deferred pre-trade request is created.
@@ -87,7 +87,8 @@ pub type OpenPitPretradePreTradePolicy = PolicyHandle<UnifiedPreTradePolicy>;
 /// - Return null only when the callback could not evaluate the order. The
 ///   engine converts it to a fatal `SystemUnavailable` reject.
 /// - If `openpit_pretrade_reject_list_push` refuses an item, do not return the
-///   list as-is; release it and return null for a fatal `SystemUnavailable` reject.
+///   list as-is; release it and return null for a fatal `SystemUnavailable`
+///   reject.
 /// - Set explicit `code` and `scope` values in every
 ///   list item.
 ///   The record `mode` is optional; zero means `Reject`.
@@ -145,7 +146,8 @@ pub type OpenPitPretradePreTradePolicyCheckPreTradeStartFn =
 /// - Return null only when the callback could not evaluate the order. The
 ///   engine converts it to a fatal `SystemUnavailable` reject.
 /// - If `openpit_pretrade_reject_list_push` refuses an item, do not return the
-///   list as-is; release it and return null for a fatal `SystemUnavailable` reject.
+///   list as-is; release it and return null for a fatal `SystemUnavailable`
+///   reject.
 /// - Every returned item must contain explicit `code` and `scope`.
 ///   The record `mode` is optional; zero means `Reject`.
 /// - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
@@ -315,7 +317,7 @@ pub type OpenPitPretradePreTradePolicyRetireAccountFn = unsafe extern "C" fn(
 /// - The callback must release any resources associated with `user_data`.
 pub type OpenPitPretradePreTradePolicyFreeUserDataFn = unsafe extern "C" fn(user_data: *mut c_void);
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 pub(super) struct CustomPreTradePolicy {
     pub(super) name: String,
@@ -604,7 +606,7 @@ impl Drop for CustomPreTradePolicy {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 pub(super) unsafe fn parse_policy_name(
     name_ptr: OpenPitStringView,
@@ -671,8 +673,9 @@ pub(super) fn import_reject_list_result(
 ///   account-scoped state. A custom policy that keeps account-scoped state MUST
 ///   provide it; otherwise that state silently survives retirement and a
 ///   reused account id inherits it.
-/// - Non-null callbacks and `free_user_data_fn` must remain callable for as long
-///   as the policy may still be used by either the caller pointer or the engine.
+/// - Non-null callbacks and `free_user_data_fn` must remain callable for as
+///   long as the policy may still be used by either the caller pointer or the
+///   engine.
 /// - Custom main-stage and account-adjustment callbacks can register
 ///   commit/rollback mutations through their `mutations` pointer.
 /// - The retirement callback and the mutations it registers run under the
@@ -690,10 +693,10 @@ pub(super) fn import_reject_list_result(
 ///   or frees it; it is forwarded verbatim to the registered callbacks.
 ///   Lifetime, thread-safety, and meaning of the pointed-at state are entirely
 ///   the caller's responsibility. Under `OpenPitSyncPolicy_None` or
-///   `OpenPitSyncPolicy_Account`, the caller serialises per-handle invocation per
-///   the SDK threading contract; under `OpenPitSyncPolicy_Full`, the caller is
-///   responsible for making any state reachable through `user_data` safe under
-///   concurrent invocation.
+///   `OpenPitSyncPolicy_Account`, the caller serialises per-handle invocation
+///   per the SDK threading contract; under `OpenPitSyncPolicy_Full`, the caller
+///   is responsible for making any state reachable through `user_data` safe
+///   under concurrent invocation.
 ///
 /// Success:
 /// - returns a new caller-owned policy object.
@@ -748,18 +751,19 @@ pub unsafe extern "C" fn openpit_create_pretrade_custom_pre_trade_policy(
     }
 }
 
-/// Builds a `CustomPreTradePolicy` from caller-provided callbacks and wraps it in
-/// a caller-owned, type-erased policy handle.
+/// Builds a `CustomPreTradePolicy` from caller-provided callbacks and wraps it
+/// in a caller-owned, type-erased policy handle.
 ///
 /// Shared body of `openpit_create_pretrade_custom_pre_trade_policy` and
 /// `openpit_create_pretrade_custom_pre_trade_policy_with_dry_run`: the former
-/// passes `None` for both dry-run hooks, the latter forwards the caller's hooks.
-/// The dry-run hooks are baked in before type erasure, so the resulting handle is
-/// immutable.
-/// Callback set shared by the two custom pre-trade policy constructors.
+/// passes `None` for both dry-run hooks, the latter forwards the caller's
+/// hooks. The dry-run hooks are baked in before type erasure, so the resulting
+/// handle is immutable. Callback set shared by the two custom pre-trade policy
+/// constructors.
 ///
-/// Groups the per-stage hooks so the shared builder keeps a small argument list;
-/// the public `extern "C"` constructors pack their flat parameters into this.
+/// Groups the per-stage hooks so the shared builder keeps a small argument
+/// list; the public `extern "C"` constructors pack their flat parameters into
+/// this.
 struct CustomPreTradeCallbacks {
     check_pre_trade_start_fn: Option<OpenPitPretradePreTradePolicyCheckPreTradeStartFn>,
     perform_pre_trade_check_fn: Option<OpenPitPretradePreTradePolicyPerformPreTradeCheckFn>,
@@ -804,12 +808,13 @@ unsafe fn build_custom_pre_trade_policy(
 /// Creates a custom pre-trade policy with explicit dry-run hooks.
 ///
 /// This is an additive companion to
-/// `openpit_create_pretrade_custom_pre_trade_policy`: it takes the same callbacks
-/// plus a dry-run variant for each pre-trade stage, placed right after its normal
-/// counterpart. The dry-run callbacks reuse the SAME function-pointer types as
-/// their normal counterparts - `check_pre_trade_start_dry_run_fn` has the same
-/// shape as `check_pre_trade_start_fn`, and `perform_pre_trade_check_dry_run_fn`
-/// the same shape as `perform_pre_trade_check_fn`.
+/// `openpit_create_pretrade_custom_pre_trade_policy`: it takes the same
+/// callbacks plus a dry-run variant for each pre-trade stage, placed right
+/// after its normal counterpart. The dry-run callbacks reuse the SAME
+/// function-pointer types as their normal counterparts -
+/// `check_pre_trade_start_dry_run_fn` has the same shape as
+/// `check_pre_trade_start_fn`, and `perform_pre_trade_check_dry_run_fn` the
+/// same shape as `perform_pre_trade_check_fn`.
 ///
 /// Contract:
 /// - `name` must point to a valid, null-terminated string for the duration of
@@ -817,19 +822,21 @@ unsafe fn build_custom_pre_trade_policy(
 /// - `policy_group_id` is the policy-group tag the engine embeds in every
 ///   account adjustment outcome this policy produces. Use `0` for the default
 ///   group.
-/// - Every callback except `free_user_data_fn` may be null; the null behavior of
-///   the normal callbacks matches `openpit_create_pretrade_custom_pre_trade_policy`.
+/// - Every callback except `free_user_data_fn` may be null; the null behavior
+///   of the normal callbacks matches
+///   `openpit_create_pretrade_custom_pre_trade_policy`.
 /// - A null `retire_account_fn` means this custom policy holds no
 ///   account-scoped state. A custom policy that keeps account-scoped state MUST
 ///   provide it; otherwise that state silently survives retirement and a
 ///   reused account id inherits it.
 /// - A null `check_pre_trade_start_dry_run_fn` or
-///   `perform_pre_trade_check_dry_run_fn` leaves that dry-run hook delegating to
-///   its normal counterpart (`check_pre_trade_start_fn` /
+///   `perform_pre_trade_check_dry_run_fn` leaves that dry-run hook delegating
+///   to its normal counterpart (`check_pre_trade_start_fn` /
 ///   `perform_pre_trade_check_fn` respectively); pass non-null to install an
 ///   explicit read-only dry-run variant.
-/// - Non-null callbacks and `free_user_data_fn` must remain callable for as long
-///   as the policy may still be used by either the caller pointer or the engine.
+/// - Non-null callbacks and `free_user_data_fn` must remain callable for as
+///   long as the policy may still be used by either the caller pointer or the
+///   engine.
 /// - Custom main-stage and account-adjustment callbacks can register
 ///   commit/rollback mutations through their `mutations` pointer.
 /// - The retirement callback and the mutations it registers run under the
@@ -847,15 +854,16 @@ unsafe fn build_custom_pre_trade_policy(
 ///   or frees it; it is forwarded verbatim to the registered callbacks.
 ///   Lifetime, thread-safety, and meaning of the pointed-at state are entirely
 ///   the caller's responsibility. Under `OpenPitSyncPolicy_None` or
-///   `OpenPitSyncPolicy_Account`, the caller serialises per-handle invocation per
-///   the SDK threading contract; under `OpenPitSyncPolicy_Full`, the caller is
-///   responsible for making any state reachable through `user_data` safe under
-///   concurrent invocation.
+///   `OpenPitSyncPolicy_Account`, the caller serialises per-handle invocation
+///   per the SDK threading contract; under `OpenPitSyncPolicy_Full`, the caller
+///   is responsible for making any state reachable through `user_data` safe
+///   under concurrent invocation.
 ///
-/// A dry-run reports the verdict, lock, and account adjustments the order *would*
-/// produce without moving engine state. A policy whose normal hooks mutate
-/// immediately (for example, a rate limiter that spends budget) MUST install
-/// read-only dry-run hooks here so a dry-run leaves engine state untouched.
+/// A dry-run reports the verdict, lock, and account adjustments the order
+/// *would* produce without moving engine state. A policy whose normal hooks
+/// mutate immediately (for example, a rate limiter that spends budget) MUST
+/// install read-only dry-run hooks here so a dry-run leaves engine state
+/// untouched.
 ///
 /// Success:
 /// - returns a new caller-owned policy object.
@@ -909,7 +917,7 @@ pub unsafe extern "C" fn openpit_create_pretrade_custom_pre_trade_policy_with_dr
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -2906,8 +2914,8 @@ mod tests {
 
     #[test]
     fn dry_run_without_hook_delegates_to_normal_main_stage_hook() {
-        // No dry-run hook installed: the dry-run path must delegate to the normal
-        // main-stage hook, which rejects, so the report is a reject.
+        // No dry-run hook installed: the dry-run path must delegate to the
+        // normal main-stage hook, which rejects, so the report is a reject.
         let name = OpenPitStringView::from_utf8("dry.run.delegate");
         let policy = unsafe {
             openpit_create_pretrade_custom_pre_trade_policy(
@@ -2995,8 +3003,8 @@ mod tests {
 
         crate::engine::openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
 
-        // A real execute still rejects: the explicit dry-run hook only affects the
-        // dry-run path, leaving the normal pipeline unchanged.
+        // A real execute still rejects: the explicit dry-run hook only affects
+        // the dry-run path, leaving the normal pipeline unchanged.
         let mut out_reservation = std::ptr::null_mut();
         let mut out_rejects = std::ptr::null_mut();
         let status = crate::engine::openpit_engine_execute_pre_trade(

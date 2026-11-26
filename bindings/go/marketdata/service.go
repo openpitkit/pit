@@ -659,7 +659,8 @@ func (s *Service) get(
 // quote under the given resolution, and ErrQuoteExpired when the selected quote
 // aged past TTL.
 // Policy callbacks use their context's snapshotted account/group instead of
-// resolving public registries again; repeated quote queries share the call cache.
+// resolving public registries again; repeated quote queries share the call
+// cache.
 //
 // When accountInfo cannot answer AccountGroup - it panics or answers with an
 // uninitialized group - the read fails with ErrAccountGroupResolution (an

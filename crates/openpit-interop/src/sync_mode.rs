@@ -25,7 +25,7 @@ use openpit::storage::{
 };
 use openpit::{AccountKey, AccountKeyConstraint, MarketDataSync};
 
-// ─── Engine handle types ──────────────────────────────────────────────────────
+// ─── Engine handle types ─────────────────────────────────────────────────────
 
 /// Strong handle to an engine constructed through the binding layer.
 ///
@@ -157,14 +157,14 @@ impl openpit::SyncMode for EngineLocking {
     }
 }
 
-// ─── MarketDataSync ────────────────────────────────────────────────────────────
+// ─── MarketDataSync ──────────────────────────────────────────────────────────
 
 impl MarketDataSealed for EngineLocking {}
 
-// The market-data service handle is `EngineHandle<T>` (`Arc`-backed, claimed
-// `Send + Sync` under the binding threading contract) and the internal locks
-// are a runtime-branched `RuntimeLock<T>`: a genuine no-op in no-sync mode and
-// a real `parking_lot::RwLock` in `Full`/`Account` mode. This mirrors the
+// The market-data service uses an `Arc`-backed `EngineHandle` that is
+// `Send + Sync` under the binding threading contract. Its `RuntimeLock`
+// is a no-op in no-sync mode and a `parking_lot::RwLock` in
+// `Full`/`Account` mode. This mirrors the
 // `StorageLockingPolicy` runtime dispatch and lets the bindings pick the mode
 // at runtime while the service stays `Send`, so it can be embedded in interop
 // pre-trade policies.
@@ -197,28 +197,28 @@ impl MarketDataSync for EngineLocking {
 /// Runtime selector for the engine's storage synchronization policy.
 ///
 /// In every mode, including Full, account-group membership, all account/group
-/// currency setters and clearers (including default/global currency), Spot Funds
-/// retunes and account retirement are caller-exclusive. The caller ensures no
-/// other engine call is in flight for the entire operation; the engine adds no
-/// synchronization for these transitions.
+/// currency setters and clearers (including default/global currency), Spot
+/// Funds retunes and account retirement are caller-exclusive. The caller
+/// ensures no other engine call is in flight for the entire operation; the
+/// engine adds no synchronization for these transitions.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SyncMode {
     /// The handle stays on the OS thread that created it. Use this for
     /// single-threaded embeddings where synchronization overhead must be zero.
     None = 0,
-    /// Concurrent invocation of ordinary public methods on the same handle is safe.
-    /// Sequential cross-thread access is also safe. Use this when the engine
-    /// is shared across threads.
+    /// Concurrent invocation of ordinary public methods on the same handle is
+    /// safe. Sequential cross-thread access is also safe. Use this when the
+    /// engine is shared across threads.
     Full = 1,
-    /// Ordinary calls for distinct accounts may run concurrently on the same handle;
-    /// the caller pins each account to a single processing chain (one queue
-    /// or one worker at a time), so calls for one account never overlap.
+    /// Ordinary calls for distinct accounts may run concurrently on the same
+    /// handle; the caller pins each account to a single processing chain (one
+    /// queue or one worker at a time), so calls for one account never overlap.
     /// The all-mode caller-exclusive preconditions above still apply.
     Account = 2,
 }
 
-// ─── Guards ───────────────────────────────────────────────────────────────────
+// ─── Guards ──────────────────────────────────────────────────────────────────
 
 type FullPolicyAlias = <FullLocking as LockingPolicyFactory>::Policy;
 type FullIndexShared<'a> = <FullPolicyAlias as LockingPolicy>::IndexSharedGuard<'a>;
@@ -346,7 +346,7 @@ unsafe impl LockingPolicy for StorageLockingPolicy {
     }
 }
 
-// ─── LockingPolicyFactory ─────────────────────────────────────────────────────
+// ─── LockingPolicyFactory ────────────────────────────────────────────────────
 
 /// Factory of `StorageLockingPolicy` instances.
 ///
@@ -398,9 +398,10 @@ impl<Key> openpit::storage::CreateStorageFor<Key> for StorageLockingPolicyFactor
 {
 }
 
-// ─── InteropEngineTrait ───────────────────────────────────────────────────────
+// ─── InteropEngineTrait ──────────────────────────────────────────────────────
 
-/// [`openpit::EngineTrait`] alias for engines constructed through the binding layer.
+/// [`openpit::EngineTrait`] alias for engines constructed through the binding
+/// layer.
 ///
 /// Generic over the binding-supplied order, execution-report, and
 /// account-adjustment types; the synchronization mode is fixed to
@@ -490,7 +491,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ── Market-data MarketDataSync impl ────────────────────────────────────────
+    // ── Market-data MarketDataSync impl ──────────────────────────────────────
 
     use openpit::param::{AccountGroupId, AccountId, Asset, Price};
     use openpit::pretrade::policies::SpotFundsPolicy;

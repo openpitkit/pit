@@ -75,7 +75,7 @@ const ALL_MODES: [RuleMode; 3] = [
     RuleMode::Reject,
 ];
 
-// ── values ────────────────────────────────────────────────────────────────────
+// ── values ───────────────────────────────────────────────────────────────────
 
 fn instrument(underlying: &str, settlement: &str) -> Instrument {
     Instrument::new(
@@ -155,7 +155,7 @@ impl HasAlreadyHeld for FieldOrder {
     }
 }
 
-// ── rules and engines ─────────────────────────────────────────────────────────
+// ── rules and engines ────────────────────────────────────────────────────────
 
 fn all() -> ReviewRuleInstruments {
     ReviewRuleInstruments::All
@@ -368,7 +368,7 @@ fn assert_held(engine: &SpotEngine) {
     assert_balances(engine, HELD.0, HELD.1);
 }
 
-// ── outcomes ──────────────────────────────────────────────────────────────────
+// ── outcomes ─────────────────────────────────────────────────────────────────
 
 fn reserve<Order, Report, Adjustment>(
     engine: &FullSyncEngine<Order, Report, Adjustment>,
@@ -448,7 +448,7 @@ fn marks_of(reviews: &[Reject], mode: RuleMode) -> usize {
     reviews.iter().filter(|mark| mark.mode == mode).count()
 }
 
-// ── reject instance ───────────────────────────────────────────────────────────
+// ── reject instance ──────────────────────────────────────────────────────────
 
 #[test]
 fn reject_instance_rejects_the_matching_order_only() {
@@ -486,7 +486,7 @@ fn reject_does_not_block_the_account() {
     assert_eq!(rejected(&engine, aapl_usd(ACCOUNT)).len(), 1);
 }
 
-// ── review instance ───────────────────────────────────────────────────────────
+// ── review instance ──────────────────────────────────────────────────────────
 
 #[test]
 fn review_instance_marks_the_matching_order_in_its_mode() {
@@ -553,7 +553,7 @@ fn global_exact_rule_covers_only_the_listed_instrument() {
     }
 }
 
-// ── confirmed ─────────────────────────────────────────────────────────────────
+// ── confirmed ────────────────────────────────────────────────────────────────
 
 #[test]
 fn confirmed_order_gets_no_mark_from_a_review_instance() {
@@ -583,7 +583,7 @@ fn confirmed_order_is_still_rejected_by_a_reject_instance() {
     assert_rule_record(&rejects[0], RuleMode::Reject);
 }
 
-// ── field failures ────────────────────────────────────────────────────────────
+// ── field failures ───────────────────────────────────────────────────────────
 
 fn field_order(
     account: Result<u64, &'static str>,
@@ -655,7 +655,7 @@ fn instrument_is_not_read_for_an_account_without_a_rule() {
     }
 }
 
-// ── dry-run ───────────────────────────────────────────────────────────────────
+// ── dry-run ──────────────────────────────────────────────────────────────────
 
 #[test]
 fn full_dry_run_reports_the_live_marks_and_the_start_dry_run_none() {
@@ -724,7 +724,7 @@ fn dry_run_with_spot_funds_leaves_no_state_behind() {
     }
 }
 
-// ── union across levels and instances ─────────────────────────────────────────
+// ── union across levels and instances ────────────────────────────────────────
 
 #[test]
 fn rules_of_different_instances_add_up_and_the_account_rule_does_not_narrow_the_group() {
@@ -848,7 +848,7 @@ fn both_review_instances_matching_one_order_hold_nothing() {
     assert_untouched(&engine);
 }
 
-// ── principle: the review does not change the other checks ────────────────────
+// ── principle: the review does not change the other checks ───────────────────
 
 #[test]
 fn review_rule_does_not_hide_the_funds_check() {
@@ -941,7 +941,7 @@ fn confirming_a_held_review_order_takes_no_second_hold_and_marks_nothing() {
     assert_held(&engine);
 }
 
-// ── retirement ────────────────────────────────────────────────────────────────
+// ── retirement ───────────────────────────────────────────────────────────────
 
 fn refusal_names(error: AccountRetirementError) -> Vec<(String, AccountRetirementRefusal)> {
     match error {
@@ -1010,7 +1010,7 @@ fn group_and_global_rules_alone_do_not_refuse_retirement() {
     assert_eq!(engine.retire_account(account(ACCOUNT)), Ok(()));
 }
 
-// ── build ─────────────────────────────────────────────────────────────────────
+// ── build ────────────────────────────────────────────────────────────────────
 
 #[test]
 fn review_instance_without_order_review_fails_the_build() {
@@ -1039,7 +1039,7 @@ fn review_instance_without_order_review_fails_the_build() {
     }
 }
 
-// ── drop-copy ─────────────────────────────────────────────────────────────────
+// ── drop-copy ────────────────────────────────────────────────────────────────
 
 #[test]
 fn drop_copy_is_not_subject_to_the_rules() {

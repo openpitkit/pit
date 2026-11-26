@@ -129,7 +129,8 @@ func NewFeeOptionFromHandle(v native.ParamFeeOptional) optional.Option[Fee] {
 	return optional.Some(NewFeeFromHandle(native.ParamFeeOptionalGet(v)))
 }
 
-// NewFeeFromStringRounded creates a Fee from a string, rounded to the given scale.
+// NewFeeFromStringRounded creates a Fee from a string, rounded to the given
+// scale.
 func NewFeeFromStringRounded(
 	v string,
 	scale uint32,
@@ -142,7 +143,8 @@ func NewFeeFromStringRounded(
 	return NewFeeFromHandle(nativeValue), nil
 }
 
-// NewFeeFromFloatRounded creates a Fee from a float64, rounded to the given scale.
+// NewFeeFromFloatRounded creates a Fee from a float64, rounded to the given
+// scale.
 func NewFeeFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) (Fee, error) {
 	nativeValue, err := native.CreateParamFeeFromF64Rounded(v, scale, strategy.native())
 	if err != nil {
@@ -199,31 +201,36 @@ func (v Fee) Handle() native.ParamFee {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v Fee) Float() float64 {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamFeeToF64(v.native))
 }
 
 // String returns the decimal string representation of the fee.
 func (v Fee) String() string {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamFeeToString(v.native))
 }
 
 // IsZero reports whether the fee is zero.
 func (v Fee) IsZero() bool {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamFeeIsZero(v.native))
 }
 
 // Equal reports whether v and other are equal.
 func (v Fee) Equal(other Fee) bool {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamFeeCompare(v.native, other.native)) == 0
 }
 
 // Compare returns -1, 0, or 1 comparing v to other.
 func (v Fee) Compare(other Fee) int {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamFeeCompare(v.native, other.native))
 }
 
@@ -281,7 +288,8 @@ func (v Fee) CheckedMulFloat(scalar float64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
-// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
+// CheckedDivInt returns v / divisor or an error on division by zero or
+// overflow.
 func (v Fee) CheckedDivInt(divisor int64) (Fee, error) {
 	result, err := native.ParamFeeCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -299,7 +307,8 @@ func (v Fee) CheckedDivUint(divisor uint64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
-// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
+// CheckedDivFloat returns v / divisor or an error on division by zero or
+// overflow.
 func (v Fee) CheckedDivFloat(divisor float64) (Fee, error) {
 	result, err := native.ParamFeeCheckedDivF64(v.native, divisor)
 	if err != nil {

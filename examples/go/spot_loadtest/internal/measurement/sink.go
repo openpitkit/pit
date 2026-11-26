@@ -92,7 +92,8 @@ func NewSink(w *Windows) *Sink {
 	return &Sink{windows: w}
 }
 
-// RecordSubmit notes one more submitted (in-flight) operation and tracks the peak.
+// RecordSubmit notes one more submitted (in-flight) operation and tracks the
+// peak.
 func (s *Sink) RecordSubmit() {
 	if s.wallStartSet.CompareAndSwap(false, true) {
 		s.mu.Lock()
@@ -217,9 +218,9 @@ func (s *Sink) RecordBackpressure(latency time.Duration) {
 // starvation witness only; engine-await latency (a collector legitimately
 // blocked in fut.Await because the engine is slow) is REAL latency, stays in
 // the headline, and is NEVER recorded here. It only bumps the counter: unlike
-// backpressure there is no in-flight slot to release (the op still resolves) and
-// it is deliberately NOT folded into the anti-DCE checksum, which proves engine
-// DECISIONS were consumed, not that a harness queue overflowed.
+// backpressure there is no in-flight slot to release (the op still resolves)
+// and it is deliberately NOT folded into the anti-DCE checksum, which proves
+// engine DECISIONS were consumed, not that a harness queue overflowed.
 func (s *Sink) RecordHandoffStall() {
 	s.mu.Lock()
 	s.handoffStalls++

@@ -177,9 +177,9 @@ func TestWorkerRetiredLaneDoesNotAbandonQueuedCleanup(t *testing.T) {
 
 // TestShardedMandatoryCleanupFencesOnlyItsRoutingKey proves the ordering fence
 // is scoped to the routing key that owes a handle release. A Sharded queue
-// carries many keys, so fencing the queue would stall keys with nothing pending;
-// the key that owes the release must still stay ordered behind it, and its
-// producers must still honour their own context.
+// carries many keys, so fencing the queue would stall keys with nothing
+// pending; the key that owes the release must still stay ordered behind it, and
+// its producers must still honour their own context.
 func TestShardedMandatoryCleanupFencesOnlyItsRoutingKey(t *testing.T) {
 	s := newShardedStrategy(baseConfig{queueCapacity: 4}, 1)
 	fenced := param.NewAccountIDFromUint64(1)

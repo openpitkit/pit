@@ -72,8 +72,11 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "W505"]
 ignore = ["D102", "D103"]
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 80
 
 [tool.black]
 target-version = ["py313"] # Python 3.13

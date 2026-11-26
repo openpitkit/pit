@@ -67,8 +67,8 @@ type Failure struct {
 func (r *Report) AccountsCount() int { return len(r.Accounts) }
 
 // earlierFailure returns whichever failure sits on the earlier table row, so a
-// mismatch from the verdict loop wins over a later setup-phase failure (and vice
-// versa). A nil argument is treated as "no failure".
+// mismatch from the verdict loop wins over a later setup-phase failure (and
+// vice versa). A nil argument is treated as "no failure".
 func earlierFailure(a, b *Failure) *Failure {
 	switch {
 	case a == nil:
@@ -193,10 +193,10 @@ func buildSpotEngineSync(
 }
 
 // buildSpotEngineAsync builds the Mode B engine: AccountSync wrapped into an
-// asyncengine.AsyncEngine with the Dynamic strategy so each account gets its own
-// serial queue. The spot funds policy reads a Full-sync market-data service that
-// is safe for the concurrent live feed. The caller must Close the feed's service
-// after the async engine has stopped.
+// asyncengine.AsyncEngine with the Dynamic strategy so each account gets its
+// own serial queue. The spot funds policy reads a Full-sync market-data service
+// that is safe for the concurrent live feed. The caller must Close the feed's
+// service after the async engine has stopped.
 func buildSpotEngineAsync(
 	fm Frontmatter, rows []Row,
 ) (*asyncengine.AsyncEngine, *MarketFeed, error) {
@@ -602,8 +602,8 @@ func describeRejects(rejects []reject.Reject) string {
 // different accounts progress in parallel. An addressed TICK is replayed only
 // after the outstanding operations of its target account(s) have executed, so
 // the new quote is visible to those accounts' later rows but never rewrites
-// their earlier ones. Verdict checks then await futures in row order and stop on
-// the first mismatch.
+// their earlier ones. Verdict checks then await futures in row order and stop
+// on the first mismatch.
 func RunAsync(
 	ctx context.Context, fm Frontmatter, rows []Row,
 ) (*Report, error) {
@@ -717,9 +717,9 @@ func registerGroupsAsync(
 // asyncStep is a row submitted to the async engine, paired with the
 // future-await logic specific to its action kind. wait blocks until the step's
 // engine call has executed without finalizing it or scoring its verdict; a TICK
-// barrier uses it to fence target accounts. release, when set, awaits the step's
-// future and finalizes any reservation the verdict loop did not reach; it is
-// safe to call instead of or after await.
+// barrier uses it to fence target accounts. release, when set, awaits the
+// step's future and finalizes any reservation the verdict loop did not reach;
+// it is safe to call instead of or after await.
 type asyncStep struct {
 	row     Row
 	await   func(context.Context) *Failure
@@ -727,11 +727,11 @@ type asyncStep struct {
 	release func(context.Context)
 }
 
-// asyncSubmission threads the per-account barrier bookkeeping through the submit
-// loop so an addressed TICK can fence exactly the accounts it targets. It also
-// owns the per-operation latency timers: each records submit-to-resolve the
-// moment its future resolves (independent of the verdict loop), so a stat is the
-// operation's true round-trip and not an artifact of await ordering.
+// asyncSubmission threads the per-account barrier bookkeeping through the
+// submit loop so an addressed TICK can fence exactly the accounts it targets.
+// It also owns the per-operation latency timers: each records submit-to-resolve
+// the moment its future resolves (independent of the verdict loop), so a stat
+// is the operation's true round-trip and not an artifact of await ordering.
 type asyncSubmission struct {
 	feed     *MarketFeed
 	groups   *groupMembership
@@ -877,8 +877,8 @@ func submitAsyncSeed(
 // submitOrder submits a pre-trade order and starts a latency timer that records
 // the operation's true submit-to-resolve round-trip the moment its future
 // resolves. The first order on an empty per-account queue therefore measures
-// only async dispatch (worker handoff) plus the engine call, with no queue wait;
-// the verdict is scored later by the caller's await loop.
+// only async dispatch (worker handoff) plus the engine call, with no queue
+// wait; the verdict is scored later by the caller's await loop.
 func (s *asyncSubmission) submitOrder(
 	ctx context.Context, engine *asyncengine.AsyncEngine,
 	acc param.AccountID, row Row,

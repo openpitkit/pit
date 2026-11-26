@@ -78,7 +78,8 @@ type Snapshot struct {
 	// own lines so a reader never sees accepts exceed order-checks).
 	TotalAccepts uint64
 	// TotalRejects is the number of order-check decisions that were rejected
-	// (order-check rejects only; settlement/funding outcomes are not counted here).
+	// (order-check rejects only; settlement/funding outcomes are not counted
+	// here).
 	TotalRejects uint64
 	// TotalSettlementAccepts / TotalSettlementBlocks are the settlement-class
 	// outcomes, kept separate from the order-check accept/reject tally.

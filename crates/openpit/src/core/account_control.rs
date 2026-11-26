@@ -56,14 +56,20 @@ pub enum AccountBlockError {
     /// Accounts belong to the default group implicitly, so it cannot be a
     /// target of an explicit group block, unblock, or reason replacement.
     ReservedGroup,
-    /// [`Accounts::replace_block_reason`](crate::Accounts::replace_block_reason)
+    /// [`Accounts::replace_block_reason`]
     /// was called for an account that is not currently blocked.
+    ///
+    /// [`Accounts::replace_block_reason`]:
+    ///     crate::Accounts::replace_block_reason
     AccountNotBlocked {
         /// Account that is not currently blocked.
         account: AccountId,
     },
-    /// [`Accounts::replace_group_block_reason`](crate::Accounts::replace_group_block_reason)
+    /// [`Accounts::replace_group_block_reason`]
     /// was called for a group that is not currently blocked.
+    ///
+    /// [`Accounts::replace_group_block_reason`]:
+    ///     crate::Accounts::replace_group_block_reason
     GroupNotBlocked {
         /// Group that is not currently blocked.
         group: AccountGroupId,
@@ -90,8 +96,13 @@ impl std::error::Error for AccountBlockError {}
 ///
 /// Carries a specific [`AccountId`] so callers invoke [`AccountControl::block`]
 /// without repeating the account argument. Obtained from
-/// [`PreTradeContext::account_control`](crate::pretrade::PreTradeContext::account_control)
-/// or [`AccountAdjustmentContext::account_control`](crate::AccountAdjustmentContext::account_control).
+/// [`PreTradeContext::account_control`]
+/// or [`AccountAdjustmentContext::account_control`].
+///
+/// [`PreTradeContext::account_control`]:
+///     crate::pretrade::PreTradeContext::account_control
+/// [`AccountAdjustmentContext::account_control`]:
+///     crate::AccountAdjustmentContext::account_control
 pub struct AccountControl<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
@@ -280,18 +291,24 @@ impl DeferredAccountOperations {
 /// # Thread-safety
 ///
 /// The handle's auto-traits derive from `StorageFactory::Shared<...>` - the
-/// sync-mode-aware wrapper chosen by [`LockingPolicyFactory::Shared`](crate::storage::LockingPolicyFactory::Shared):
+/// sync-mode-aware wrapper chosen by [`LockingPolicyFactory::Shared`]:
 ///
 /// - Under [`FullSync`](crate::core::FullSync) this is `Arc<...>`:
 ///   `Send + Sync`.
 /// - Under [`LocalSync`](crate::core::LocalSync) this is `Rc<...>`:
 ///   `!Send + !Sync`.
-/// - Under [`AccountSync`](crate::core::AccountSync) this is `IndexShared<...>`:
-///   `Send + !Sync`, matching the account-sharded engine handle.
+/// - Under [`AccountSync`](crate::core::AccountSync) this is
+///   `IndexShared<...>`: `Send + !Sync`, matching the account-sharded engine
+///   handle.
 ///
 /// The factory type parameter mirrors the engine's
-/// [`StorageLockingPolicyFactory`](crate::core::SyncMode::StorageLockingPolicyFactory),
+/// [`StorageLockingPolicyFactory`],
 /// exactly as a policy's `holdings` store does.
+///
+/// [`LockingPolicyFactory::Shared`]:
+///     crate::storage::LockingPolicyFactory::Shared
+/// [`StorageLockingPolicyFactory`]:
+///     crate::core::SyncMode::StorageLockingPolicyFactory
 pub struct AccountBlockHandle<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
@@ -622,11 +639,11 @@ where
 
     /// Records a kill-switch event from an execution report.
     ///
-    /// Uses the operation's single account read and blocks it, storing `cause` as
-    /// the reason returned for all future pre-trade requests on that account.
-    /// If the report carries no account identifier, activates a global block
-    /// instead. The first cause recorded for an account wins; subsequent calls
-    /// for the same account are no-ops.
+    /// Uses the operation's single account read and blocks it, storing `cause`
+    /// as the reason returned for all future pre-trade requests on that
+    /// account. If the report carries no account identifier, activates a global
+    /// block instead. The first cause recorded for an account wins; subsequent
+    /// calls for the same account are no-ops.
     pub(crate) fn record_execution_report(
         &self,
         account: Result<AccountId, crate::core::RequestFieldAccessError>,

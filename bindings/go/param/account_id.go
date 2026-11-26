@@ -33,13 +33,14 @@ type AccountID struct {
 // ErrAccountIDEmpty is returned when an empty account ID string is provided.
 var ErrAccountIDEmpty = native.ErrAccountIdEmpty
 
-// NewAccountIDFromUint64 constructs an account identifier from an integer value.
+// NewAccountIDFromUint64 constructs an account identifier from an integer
+// value.
 func NewAccountIDFromUint64(source uint64) AccountID {
 	return NewAccountIDFromHandle(native.CreateParamAccountIDFromUint64(source))
 }
 
-// NewAccountIDFromString constructs an account identifier by hashing input string with FNV-1a
-// 64-bit.
+// NewAccountIDFromString constructs an account identifier by hashing input
+// string with FNV-1a 64-bit.
 //
 // Collision probability (birthday bound approximation):
 //
@@ -63,7 +64,8 @@ func NewAccountIDFromHandle(source native.ParamAccountID) AccountID {
 	return AccountID{native: source}
 }
 
-// NewAccountIDOptionFromHandle creates an optional AccountID from a native optional handle.
+// NewAccountIDOptionFromHandle creates an optional AccountID from a native
+// optional handle.
 func NewAccountIDOptionFromHandle(
 	source native.ParamAccountIDOptional,
 ) optional.Option[AccountID] {

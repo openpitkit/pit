@@ -28,7 +28,8 @@ import (
 // uninitialized and names no account group. It must stay distinguishable from
 // [DefaultAccountGroup]: handle 0 legally selects the global default currency
 // tier, so an unset value cannot be caught further down. Every constructor
-// initializes its result, including [NewAccountGroupIDFromHandle] when passed 0.
+// initializes its result, including [NewAccountGroupIDFromHandle] when passed
+// 0.
 type AccountGroupID struct {
 	native      native.ParamAccountGroupID
 	initialized bool

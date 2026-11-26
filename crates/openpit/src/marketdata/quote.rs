@@ -79,10 +79,8 @@ impl Quote {
 ///   [`MarketDataBuilder`](super::builder::MarketDataBuilder) it is the lowest
 ///   cascade tier, applied only when no more specific axis is set.
 /// - At registration via
-///   [`register_with_ttl`](super::service::MarketDataService::register_with_ttl)
-///   /
-///   [`register_with_id_and_ttl`](super::service::MarketDataService::register_with_id_and_ttl)
-///   it becomes the instrument-level setting.
+///   [`register_with_ttl`] / [`register_with_id_and_ttl`] it becomes the
+///   instrument-level setting.
 /// - The per-account, per-group, and instrument-qualified setters
 ///   (`set_*_ttl`) pin the matching axis cell.
 ///
@@ -94,6 +92,10 @@ impl Quote {
 /// while that source age plus the elapsed time since publication remains below
 /// the effective lifetime. Expired entries remain stored and are returned in
 /// the expired-quote error.
+///
+/// [`register_with_ttl`]: super::service::MarketDataService::register_with_ttl
+/// [`register_with_id_and_ttl`]:
+///     super::service::MarketDataService::register_with_id_and_ttl
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuoteTtl {
     /// Quotes never expire on their own; only

@@ -75,7 +75,7 @@ fn settlement_balance_and_held(operation: &DropCopyOperation) -> (OutcomeAmount,
     )
 }
 
-// ── TestReport ────────────────────────────────────────────────────────────────
+// ── TestReport ───────────────────────────────────────────────────────────────
 
 struct TestReport {
     instrument: Instrument,
@@ -136,7 +136,7 @@ impl HasPreTradeLock for TestReport {
     }
 }
 
-// ── TestAdjustment ────────────────────────────────────────────────────────────
+// ── TestAdjustment ───────────────────────────────────────────────────────────
 
 struct TestAdjustment {
     asset: Asset,
@@ -229,7 +229,7 @@ impl HasAccountAdjustmentIncomingUpperBound for TestAdjustment {
     }
 }
 
-// ── value helpers ─────────────────────────────────────────────────────────────
+// ── value helpers ────────────────────────────────────────────────────────────
 
 fn asset(s: &str) -> Asset {
     Asset::new(s).expect("valid asset")
@@ -259,7 +259,7 @@ fn account() -> AccountId {
     AccountId::from_u64(ACC)
 }
 
-// ── request builders ──────────────────────────────────────────────────────────
+// ── request builders ─────────────────────────────────────────────────────────
 
 fn make_order(
     side: Side,
@@ -395,7 +395,7 @@ fn bounded_balance_adjustment(
     }
 }
 
-// ── engine builder ────────────────────────────────────────────────────────────
+// ── engine builder ───────────────────────────────────────────────────────────
 
 fn build_engine() -> TestEngine {
     spot_funds_builder(None, SpotFundsLimitMode::Enforce, true)
@@ -576,7 +576,8 @@ fn buy_insufficient_funds_rejects_with_state_unchanged() {
     };
     assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
 
-    // State is unchanged: USD = 10000 is still fully available after the rejection.
+    // State is unchanged: USD = 10000 is still fully available after the
+    // rejection.
     assert!(
         engine
             .execute_pre_trade(make_order(
@@ -632,8 +633,8 @@ fn runtime_limit_mode_switch_toggles_insufficient_funds_gating() {
         .expect("track-only must accept the under-funded buy")
         .commit();
 
-    // Flip back to Enforce: the available balance is now -1000 (held 2000), so a
-    // further buy is rejected on insufficiency once gating is restored.
+    // Flip back to Enforce: the available balance is now -1000 (held 2000), so
+    // a further buy is rejected on insufficiency once gating is restored.
     engine
         .configure()
         .spot_funds(name, |s| {
@@ -864,7 +865,8 @@ fn per_account_limit_mode_overrides_global_and_clears() {
 
 // Verifies that a per-account-group TrackOnly override lets all accounts in
 // the group through while accounts outside the group remain on global Enforce.
-// Clearing the per-group override makes group members fall back to global Enforce.
+// Clearing the per-group override makes group members fall back to global
+// Enforce.
 #[test]
 fn per_account_group_limit_mode_overrides_global_and_clears() {
     let acc1 = AccountId::from_u64(20000001); // will be in group 7
@@ -901,7 +903,8 @@ fn per_account_group_limit_mode_overrides_global_and_clears() {
         "default: acc2",
     );
 
-    // Pin group 7 to TrackOnly; acc2 (outside the group) stays on global Enforce.
+    // Pin group 7 to TrackOnly; acc2 (outside the group) stays on global
+    // Enforce.
     engine
         .configure()
         .spot_funds(name, |s| {
@@ -978,13 +981,14 @@ fn per_account_limit_mode_wins_over_group_limit_mode() {
 }
 
 // Verifies that a partial fill followed by a cancel releases only the unfilled
-// portion from held back to available, and that the filled underlying is credited.
+// portion from held back to available, and that the filled underlying is
+// credited.
 #[test]
 fn cancel_with_leftover_releases_unfilled_held() {
     // Init: USD = 10000.
     // Reserve Buy 10 @ 200 → held = 2000, available = 8000.
-    // Partial fill 4 @ 200: consume 800 from held → held = 1200; AAPL available = 4.
-    // Cancel with remaining reserved quantity 6: release 6 * 200 = 1200,
+    // Partial fill 4 @ 200: consume 800 from held → held = 1200; AAPL available
+    // = 4. Cancel with remaining reserved quantity 6: release 6 * 200 = 1200,
     // leaving held = 0 and available = 8000 + 1200 = 9200.
     let engine = build_engine();
     seed(&engine, "USD", "10000");
@@ -1091,7 +1095,8 @@ fn limits_adjustment_delta_adds_to_available() {
 
     let aapl_usd = instr("AAPL", "USD");
 
-    // USD available = 15000: Buy 75 @ 200 (notional 15000) must pass; 76 must fail.
+    // USD available = 15000: Buy 75 @ 200 (notional 15000) must pass; 76 must
+    // fail.
     assert!(
         engine
             .execute_pre_trade(make_order(
@@ -1131,7 +1136,8 @@ fn limits_adjustment_absolute_creates_entry() {
 
     let aapl_eur = instr("AAPL", "EUR");
 
-    // EUR available = 1000: Buy 5 @ 200 EUR (notional 1000) must pass; 6 must fail.
+    // EUR available = 1000: Buy 5 @ 200 EUR (notional 1000) must pass; 6 must
+    // fail.
     assert!(
         engine
             .execute_pre_trade(make_order(
@@ -1188,7 +1194,7 @@ fn negative_held_blocks_buy_despite_positive_available() {
     assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
 }
 
-// ── pre-trade dry-run idempotency (rate-limit + spot-funds) ────────────────────
+// ── pre-trade dry-run idempotency (rate-limit + spot-funds) ──────────────────
 
 // Engine wiring both an immediate-side-effect start-stage policy (rate limit,
 // broker max 1) and an immediate-side-effect main-stage policy (spot funds).
@@ -1211,8 +1217,8 @@ fn dry_run_does_not_spend_rate_limit_budget_or_reserve_spot_funds() {
     seed_rate_limited(&engine, "USD", "10000");
     let aapl_usd = instr("AAPL", "USD");
 
-    // Many dry-runs of a valid order: every one passes (rate-limit dry-run never
-    // rejects) and none moves engine state.
+    // Many dry-runs of a valid order: every one passes (rate-limit dry-run
+    // never rejects) and none moves engine state.
     for _ in 0..5 {
         let report: PreTradeDryRunReport = engine.execute_pre_trade_dry_run(make_order(
             Side::Buy,
@@ -1229,8 +1235,8 @@ fn dry_run_does_not_spend_rate_limit_budget_or_reserve_spot_funds() {
 
     // The broker limit is 1, so if the five dry-runs had each consumed a slot,
     // this first real order would be the sixth and would be rejected. It must
-    // succeed, proving the dry-runs spent no rate-limit budget. It reserving the
-    // full 10000 notional also proves no spot-funds hold leaked from the
+    // succeed, proving the dry-runs spent no rate-limit budget. It reserving
+    // the full 10000 notional also proves no spot-funds hold leaked from the
     // dry-runs (available is still the seeded 10000).
     let mut reservation = engine
         .execute_pre_trade(make_order(
@@ -1370,8 +1376,8 @@ fn dry_run_insufficient_funds_reports_reject_and_leaves_state_for_real_call() {
     let rejects = report.rejects().expect("dry-run must report rejects");
     assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
 
-    // A real order that fits the untouched 1000 available still succeeds, and is
-    // the first to consume the broker slot.
+    // A real order that fits the untouched 1000 available still succeeds, and
+    // is the first to consume the broker slot.
     let mut reservation = engine
         .execute_pre_trade(make_order(
             Side::Buy,
@@ -1435,7 +1441,7 @@ fn spot_funds_dry_run_same_asset_negative_sell_rejects_like_real_and_leaves_stat
     reservation.commit();
 }
 
-// ── drop-copy reject semantics ────────────────────────────────────────────────
+// ── drop-copy reject semantics ───────────────────────────────────────────────
 
 struct StartStageRejectPolicy;
 
@@ -1617,7 +1623,7 @@ fn drop_copy_clean_order_latches_no_account_block() {
     assert_eq!(result.account_adjustments().len(), 2);
 }
 
-// ── realized PnL / average entry price outcomes (public API) ───────────────────
+// ── realized PnL / average entry price outcomes (public API) ─────────────────
 
 // Happy path: separate average-entry-price and position-PnL operations surface
 // their values in the same batch outcome.
@@ -1666,9 +1672,9 @@ fn adjustment_outcome_surfaces_average_and_realized_pnl() {
     assert_eq!(pnl_outcome.absolute, pnl("50"));
 }
 
-// Boundary: force-setting realized PnL to exactly zero on a previously untracked
-// slot still surfaces a tracked outcome (absolute 0), distinct from the
-// "untracked, no outcome" case.
+// Boundary: force-setting realized PnL to exactly zero on a previously
+// untracked slot still surfaces a tracked outcome (absolute 0), distinct from
+// the "untracked, no outcome" case.
 #[test]
 fn adjustment_outcome_realized_pnl_zero_boundary_is_tracked() {
     let engine = build_engine();
@@ -1725,8 +1731,8 @@ fn rejected_batch_does_not_leak_force_set_pnl_into_first_realization() {
         )
         .expect("seed must succeed");
 
-    // Batch: [force-set AAPL realized to 25, then a USD adjustment that breaches
-    // an upper bound]. The whole batch must reject and roll back.
+    // Batch: [force-set AAPL realized to 25, then a USD adjustment that
+    // breaches an upper bound]. The whole batch must reject and roll back.
     let err = engine
         .apply_account_adjustment(
             account(),
@@ -1776,7 +1782,7 @@ fn rejected_batch_does_not_leak_force_set_pnl_into_first_realization() {
     );
 }
 
-// ── PnL kill-switch (public engine surface) ─────────────────────────────────────
+// ── PnL kill-switch (public engine surface) ──────────────────────────────────
 
 fn money_fee(amount: &str, currency: &str) -> MonetaryAmount {
     MonetaryAmount {
@@ -1858,10 +1864,11 @@ fn pnl_value(s: &str) -> Pnl {
     Pnl::from_str(s).expect("valid pnl")
 }
 
-// End-to-end through the public engine surface: an account in the group breaches
-// the tighter account-group P&L barrier (-10) after cumulative USD fees, while a
-// looser global barrier (-1000) alone would not have triggered. The account is
-// blocked with PnlKillSwitchTriggered and its next order rejects.
+// End-to-end through the public engine surface: an account in the group
+// breaches the tighter account-group P&L barrier (-10) after cumulative USD
+// fees, while a looser global barrier (-1000) alone would not have triggered.
+// The account is blocked with PnlKillSwitchTriggered and its next order
+// rejects.
 #[test]
 fn pnl_killswitch_account_group_barrier_blocks_on_cumulative_fee_loss() {
     let acc = AccountId::from_u64(40000001);
@@ -2318,7 +2325,7 @@ fn repeated_engine_blocks_do_not_displace_the_operators_reason() {
     );
 }
 
-// ── review with hold ──────────────────────────────────────────────────────────
+// ── review with hold ─────────────────────────────────────────────────────────
 
 type ReviewOrder = WithOrderOperation<WithOrderReview<()>>;
 

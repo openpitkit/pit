@@ -23,7 +23,8 @@ use std::ops::Deref;
 /// Asset or currency identifier such as `USD`, `SPX`, `AAPL`, or `BTC`.
 ///
 /// Lightweight wrapper providing type safety for asset codes.
-/// Uses [`SmolStr`](https://docs.rs/smol_str) for efficient inline storage of short strings.
+/// Uses [`SmolStr`](https://docs.rs/smol_str) for efficient inline storage of
+/// short strings.
 ///
 /// Empty and whitespace-only values are rejected by [`Asset::new`], while the
 /// full symbol semantics remain caller-defined.

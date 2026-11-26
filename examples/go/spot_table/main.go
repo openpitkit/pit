@@ -130,8 +130,8 @@ func runOnce(tablePath string, table *Table, timeout time.Duration) error {
 // runRepeat re-runs the scenario on both engines until at least minDuration of
 // wall-clock has elapsed, failing fast on the first mismatch. Every
 // repeatLogInterval it prints a progress block with each engine's running
-// order/report latency (min/avg/max); on completion it prints the platform and a
-// per-engine aggregate summary.
+// order/report latency (min/avg/max); on completion it prints the platform and
+// a per-engine aggregate summary.
 func runRepeat(tablePath string, table *Table, timeout, minDuration time.Duration) error {
 	fmt.Printf("Repeat: %s (%s), running for at least %s ...\n\n",
 		table.FM.Name, filepath.Base(tablePath), minDuration)

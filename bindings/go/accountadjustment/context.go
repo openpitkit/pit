@@ -25,7 +25,8 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-// Context carries the native handle for an account adjustment callback invocation.
+// Context carries the native handle for an account adjustment callback
+// invocation.
 //
 // The context is non-owning and callback-scoped: it borrows engine state that
 // is valid only for the duration of the hook that received it. Retaining the

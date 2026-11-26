@@ -83,9 +83,10 @@ where
 }
 
 // Policy that applies state immediately and registers commit/rollback closures.
-// committed_assets reflects the post-commit state: populated on success, empty after rollback.
-// rollback_order records each asset name in the order its rollback closure ran,
-// allowing tests to verify both that rollback occurred and that it ran in reverse.
+// committed_assets reflects the post-commit state: populated on success, empty
+// after rollback. rollback_order records each asset name in the order its
+// rollback closure ran, allowing tests to verify both that rollback occurred
+// and that it ran in reverse.
 struct MutatingRecordingPolicy {
     name: &'static str,
     committed_assets: Rc<RefCell<Vec<String>>>,
@@ -124,8 +125,9 @@ where
             )));
         }
 
-        // Apply immediately. Safe because account adjustments run within a single
-        // engine borrow and no external system sees intermediate batch state.
+        // Apply immediately. Safe because account adjustments run within a
+        // single engine borrow and no external system sees intermediate batch
+        // state.
         self.committed_assets.borrow_mut().push(asset.clone());
 
         let committed = Rc::clone(&self.committed_assets);
@@ -278,8 +280,9 @@ fn account_adjustment_integration_rollback_commits_on_success() {
 
 #[test]
 fn account_adjustment_integration_rollback_reverts_on_reject_first() {
-    // USD is rejected before any mutation is registered, so rollback_order stays empty.
-    // This distinguishes "nothing was applied" from "something was applied then rolled back".
+    // USD is rejected before any mutation is registered, so rollback_order
+    // stays empty. This distinguishes "nothing was applied" from "something was
+    // applied then rolled back".
     let account_id = AccountId::from_u64(99224416);
     let (engine, committed, rollback_order) = make_rollback_engine(Some("USD"));
 
@@ -298,7 +301,8 @@ fn account_adjustment_integration_rollback_reverts_on_reject_first() {
 
 #[test]
 fn account_adjustment_integration_rollback_reverts_on_reject_last() {
-    // USD and EUR were applied; GBP rejected. Rollback must undo EUR then USD (reverse order).
+    // USD and EUR were applied; GBP rejected. Rollback must undo EUR then USD
+    // (reverse order).
     let account_id = AccountId::from_u64(99224416);
     let (engine, committed, rollback_order) = make_rollback_engine(Some("GBP"));
 
@@ -317,7 +321,8 @@ fn account_adjustment_integration_rollback_reverts_on_reject_last() {
 
 #[test]
 fn account_adjustment_integration_rollback_reverts_on_reject_middle() {
-    // USD was applied; EUR rejected. Rollback must undo USD. GBP was never seen.
+    // USD was applied; EUR rejected. Rollback must undo USD. GBP was never
+    // seen.
     let account_id = AccountId::from_u64(99224416);
     let (engine, committed, rollback_order) = make_rollback_engine(Some("EUR"));
 

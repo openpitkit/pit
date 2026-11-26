@@ -165,7 +165,7 @@ mod reentry {
 /// `Storage` solves that problem once. A policy chooses a
 /// [`LockingPolicyFactory`](super::LockingPolicyFactory) at construction
 /// time and receives a ready-made `Storage` via
-/// [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key). From that
+/// [`StorageBuilder::create_for_bound_key`]. From that
 /// point on the policy reads and mutates its state through the scoped
 /// [`Storage::with`] and [`Storage::with_mut`] methods, without ever
 /// touching a lock primitive directly. If the embedding switches from
@@ -245,6 +245,9 @@ mod reentry {
 ///   `Send + Sync` provided `Key` and `Value` themselves are
 ///   `Send + Sync`. `Sync` is gated on the policy implementing
 ///   [`FullySynchronized`](super::FullySynchronized).
+///
+/// [`StorageBuilder::create_for_bound_key`]:
+///     super::StorageBuilder::create_for_bound_key
 pub struct Storage<Key, Value, LockingPolicy>
 where
     LockingPolicy: super::policy::LockingPolicy,
@@ -478,7 +481,10 @@ where
     /// Unlike [`with_mut`](Self::with_mut), whose hit path holds the index only
     /// in shared mode, this never exposes `&mut Value` while another thread
     /// may hold a shared index lock. Crate-private for the same reason as
-    /// [`with_mut_if_present_exclusive_index`](Self::with_mut_if_present_exclusive_index).
+    /// [`with_mut_if_present_exclusive_index`].
+    ///
+    /// [`with_mut_if_present_exclusive_index`]:
+    ///     Self::with_mut_if_present_exclusive_index
     pub(crate) fn with_mut_exclusive_index<Mutator, Output, Initializer>(
         &self,
         key: Key,
@@ -675,7 +681,8 @@ where
         self.with_mut_or_insert_prune_new_if(key, default, |_| false, mutator)
     }
 
-    /// Like [`with_mut_or_insert`](Self::with_mut_or_insert) but, when the entry was **newly inserted**
+    /// Like [`with_mut_or_insert`](Self::with_mut_or_insert) but, when the
+    /// entry was **newly inserted**
     /// and the mutation returned `Ok`, calls `prune_if` on the current slot
     /// value and removes the entry atomically under the same exclusive-index
     /// lock if `prune_if` returns `true`.

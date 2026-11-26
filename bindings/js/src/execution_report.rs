@@ -597,8 +597,8 @@ impl JsExecutionReportFillDetails {
 
     /// Sets the caller-calculated reservation remainder.
     ///
-    /// See the `remainingReservedQuantity` getter for the unit and what to pass.
-    /// Accepts a value object or `DecimalInput`.
+    /// See the `remainingReservedQuantity` getter for the unit and what to
+    /// pass. Accepts a value object or `DecimalInput`.
     ///
     /// # Errors
     ///

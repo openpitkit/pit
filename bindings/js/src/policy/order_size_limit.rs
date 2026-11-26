@@ -163,7 +163,8 @@ impl JsOrderSizeLimit {
 /// Broker-wide order-size barrier.
 ///
 /// Each present cap applies to every order. An absent cap constrains nothing;
-/// a zero cap rejects positive metric values and admits a value of exactly zero.
+/// a zero cap rejects positive metric values and admits a value of exactly
+/// zero.
 #[wasm_bindgen(js_name = OrderSizeBrokerBarrier)]
 #[derive(Clone, Copy)]
 pub struct JsOrderSizeBrokerBarrier {

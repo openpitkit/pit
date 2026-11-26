@@ -47,7 +47,7 @@ pub const OPENPIT_DEFAULT_ACCOUNT_GROUP: OpenPitParamAccountGroupId = 0;
 const _: () =
     assert!(OPENPIT_DEFAULT_ACCOUNT_GROUP == openpit::param::DEFAULT_ACCOUNT_GROUP.as_u32());
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Constructs an account-group identifier from a 32-bit integer.
@@ -147,7 +147,7 @@ pub unsafe extern "C" fn openpit_create_param_account_group_id_from_string(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

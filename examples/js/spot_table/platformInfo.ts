@@ -22,7 +22,10 @@ import { readFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { arch, platform, version, versions } from "node:process";
 
-/** Host platform summary. Detection is best-effort; unknown fields stay "unknown". */
+/**
+ * Host platform summary. Detection is best-effort; unknown fields stay
+ * "unknown".
+ */
 export interface PlatformInfo {
   hardware: string;
   cpu: string;
@@ -116,7 +119,9 @@ function formatGib(bytes: number): string {
   return `${(bytes / BYTES_PER_GIB).toFixed(1)} GiB`;
 }
 
-/** Run a fixed diagnostic command and return trimmed stdout, or "" on any error. */
+/**
+ * Run a fixed diagnostic command and return trimmed stdout, or "" on any error.
+ */
 function run(cmd: string, args: string[]): string {
   try {
     return execFileSync(cmd, args, {

@@ -76,7 +76,8 @@ fn main() {
         }
     }
 
-    // Keep the embedded values correct when the profile or the rustflags change.
+    // Keep the embedded values correct when the profile or the rustflags
+    // change.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=PROFILE");
     println!("cargo:rerun-if-env-changed=OPT_LEVEL");

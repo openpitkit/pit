@@ -17,7 +17,7 @@
 
 # Text style and hygiene across the whole repository.
 #
-# These rules carry no paths.include on purpose: a generic rule without one
+# The repository-wide rules carry no paths.include: a generic rule without one
 # scans every text file the scanner can read - Rust, Go, Python, C, C++,
 # JS/TS, Markdown, YAML, JSON, the justfiles - which is what "the whole
 # repository" means here. An include list would silently shrink coverage to
@@ -65,6 +65,36 @@ rules:
       (?i)(//|#|\*)[ \t]+(note that|it'?s important to|it is important to|it is
       worth noting|this ensures that|let's |in summary|overall,|as we can
       see|i cannot|i'?m sorry|i apologize)
+
+  - id: comment-width
+    message: Wrap standalone comments at 80 characters, including indentation.
+    severity: ERROR
+    languages: [rust, c, cpp, go, javascript, typescript]
+    paths:
+      exclude: [/checks/semgrep/tests/**]
+    patterns:
+      # A URL-only comment cannot wrap.
+      - pattern-regex: >-
+          (*UTF)(?mx)^(?=[^\r\n]{81})[ \t]*
+          (?:/{2,}+!?+|/\*++)
+          (?![ \t]*(?:(?<angle><)|(?<paren>\())?[A-Za-z][\w+.-]*://\S+
+          (?(angle)>)(?(paren)\))[ \t]*(?:\*/[ \t]*)?\r?$)[^\r\n]*
+      # Go toolchain directives must occupy one line.
+      - pattern-not-regex: '(?m)^[ \t]*//go:'
+
+  - id: comment-width-block-continuation
+    message: Wrap block comment lines at 80 characters, including indentation.
+    severity: ERROR
+    languages: [rust, c, cpp, go, javascript, typescript]
+    paths:
+      exclude: [/checks/semgrep/tests/**]
+    patterns:
+      # A leading star is a comment only inside a block.
+      - pattern-regex: '/\*(?s:.*?)\*/'
+      - pattern-regex: >-
+          (*UTF)(?mx)^(?=[^\r\n]{81})[ \t]*\*(?=[ ]|$)
+          (?![ \t]*(?:(?<angle><)|(?<paren>\())?[A-Za-z][\w+.-]*://\S+
+          (?(angle)>)(?(paren)\))[ \t]*(?:\*/[ \t]*)?\r?$)[^\r\n]*
 
 # The style contract also fixes the vocabulary of log messages (qty, px, sz,
 # pos, acc, ord). That rule has no subject here: the SDK emits no logs - it

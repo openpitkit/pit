@@ -380,7 +380,7 @@ def _is_doxygen_file_reference(text: str, path: Path) -> bool:
 
 
 def discover_page_aliases(section_root: Path) -> dict[str, Path]:
-    """Map the configured Doxygen main-page backing file to the section index."""
+    """Map Doxygen's configured main-page file to the section index."""
     path = section_root / DOXYGEN_MAIN_PAGE_OUTPUT
     if not path.is_file():
         return {}
@@ -703,7 +703,7 @@ def render_llms_txt(provenance: dict[str, str], urls: list[str]) -> str:
 
 
 def stamp_provenance(path: Path, provenance: dict[str, str]) -> None:
-    """Expose the build identity and machine index in each published HTML page."""
+    """Add the build identity and machine index to each published HTML page."""
     text = path.read_text(encoding="utf-8")
     revision = provenance["revision"]
     version = escape(provenance["version"], quote=True)

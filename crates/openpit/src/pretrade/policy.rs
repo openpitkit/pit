@@ -26,15 +26,16 @@ use crate::core::{AccountRetirementRefusal, SyncMode};
 use crate::param::AccountId;
 use crate::{AccountAdjustmentContext, Mutations};
 
-// Note: each built-in policy carries its own `group_id: PolicyGroupId` field plus a
-// `with_policy_group_id` fluent setter and a `fn policy_group_id(&self) -> PolicyGroupId` trait
-// override. A declarative macro was considered to factor out only the getter
-// (the setter cannot be macroified because it returns `Self` and the concrete
-// type varies), but the saving would be three lines per struct while adding
-// the macro definition plus the call site. Furthermore, every policy embeds
-// the getter inside a generic `impl<O, E, A, ...> PreTradePolicy<...>` block,
-// so a macro would either need to wrap the entire impl block or duplicate the
-// generics at each call site. The boilerplate is therefore kept explicit so
+// Note: each built-in policy carries its own `group_id: PolicyGroupId` field
+// plus a `with_policy_group_id` fluent setter and a
+// `fn policy_group_id(&self) -> PolicyGroupId` trait override. A declarative
+// macro was considered to factor out only the getter (the setter cannot be
+// macroified because it returns `Self` and the concrete type varies), but the
+// saving would be three lines per struct while adding the macro definition plus
+// the call site. Furthermore, every policy embeds the getter inside an `impl`
+// block generic over the order, execution report, account adjustment, and sync
+// mode, so a macro would either need to wrap the entire impl block or duplicate
+// the generics at each call site. The boilerplate is therefore kept explicit so
 // every policy structure stays self-contained and trivially inspectable.
 
 /// Pre-trade policy contract.
@@ -44,8 +45,8 @@ use crate::{AccountAdjustmentContext, Mutations};
 /// account-adjustment validation. Stage hooks default to no-op behavior so a
 /// policy can implement only the hooks it needs.
 ///
-/// Start-stage hooks run in [`crate::Engine::start_pre_trade`] before the engine
-/// creates a deferred request. Main-stage hooks run during
+/// Start-stage hooks run in [`crate::Engine::start_pre_trade`] before the
+/// engine creates a deferred request. Main-stage hooks run during
 /// [`crate::pretrade::PreTradeRequest::execute`] after a request has already
 /// passed start-stage checks. Account-adjustment hooks run in
 /// [`crate::Engine::apply_account_adjustment`] and validate each adjustment
@@ -59,10 +60,11 @@ use crate::{AccountAdjustmentContext, Mutations};
 /// [`Engine::apply_drop_copy`](crate::Engine::apply_drop_copy) runs the same
 /// policy hooks for an order that already executed. Ordinary policy rejects do
 /// not enforce a pre-trade refusal there, but a reject whose
-/// [`RejectCode::is_evaluation_failure`](crate::pretrade::RejectCode::is_evaluation_failure)
+/// [`RejectCode::is_evaluation_failure`]
 /// is `true` aborts the whole drop-copy atomically. Custom policies should use
 /// such a standardized code only when they cannot determine or apply the
-/// historical order's effect; caller-defined [`RejectCode::Custom`](crate::pretrade::RejectCode::Custom)
+/// historical order's effect; caller-defined
+/// [`RejectCode::Custom`](crate::pretrade::RejectCode::Custom)
 /// remains an ordinary verdict because the engine cannot infer its semantics.
 /// A custom policy may still attach its own reason and details to a
 /// standardized evaluation-failure code. Mutations registered before an
@@ -82,9 +84,10 @@ use crate::{AccountAdjustmentContext, Mutations};
 /// state is never visible to external systems (venues, risk aggregators), so
 /// rollback by absolute value is safe there.
 ///
-/// `Order` is the order contract type visible in callbacks. `ExecutionReport` is the
-/// execution report contract type used for post-trade updates. `AccountAdjustment` is the
-/// account-adjustment contract type visible to account-adjustment hooks.
+/// `Order` is the order contract type visible in callbacks. `ExecutionReport`
+/// is the execution report contract type used for post-trade updates.
+/// `AccountAdjustment` is the account-adjustment contract type visible to
+/// account-adjustment hooks.
 ///
 /// # Examples
 ///
@@ -95,7 +98,8 @@ use crate::{AccountAdjustmentContext, Mutations};
 /// struct NoopPolicy;
 ///
 /// impl<Order, ExecutionReport, AccountAdjustment, Sync>
-///     PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for NoopPolicy
+///     PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
+///     for NoopPolicy
 /// where
 ///     Sync: SyncMode,
 /// {
@@ -104,6 +108,9 @@ use crate::{AccountAdjustmentContext, Mutations};
 ///     }
 /// }
 /// ```
+///
+/// [`RejectCode::is_evaluation_failure`]:
+///     crate::pretrade::RejectCode::is_evaluation_failure
 pub trait PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
 where
     Sync: SyncMode + ?Sized,
@@ -116,7 +123,8 @@ where
 
     /// Returns the group tag assigned to this policy instance.
     ///
-    /// The engine embeds this value in every [`crate::AccountAdjustmentOutcome`]
+    /// The engine embeds this value in every
+    /// [`crate::AccountAdjustmentOutcome`]
     /// produced by this policy so callers can filter or route outcomes without
     /// inspecting policy names. A single tag may be shared by multiple policies
     /// to form a logical group.
@@ -174,8 +182,8 @@ where
     ///
     /// A dry-run reports the verdict the order *would* receive without moving
     /// any engine state. The engine invokes this hook instead of
-    /// [`Self::check_pre_trade_start`] on the dry-run path and never records the
-    /// account block a real start-stage reject would latch.
+    /// [`Self::check_pre_trade_start`] on the dry-run path and never records
+    /// the account block a real start-stage reject would latch.
     ///
     /// The default implementation delegates to [`Self::check_pre_trade_start`],
     /// which is correct for any policy whose start-stage hook produces no
@@ -260,7 +268,8 @@ where
 
     /// Applies post-trade updates from execution reports.
     ///
-    /// The engine calls this hook from [`crate::Engine::apply_execution_report`]
+    /// The engine calls this hook from
+    /// [`crate::Engine::apply_execution_report`]
     /// so that a main-stage policy can maintain post-trade state. `ctx` exposes
     /// the report account's [`AccountGroupId`](crate::param::AccountGroupId)
     /// through [`PostTradeContext::account_group`].

@@ -52,8 +52,8 @@
 // and one or more consumers share ownership of the resolution state with no
 // defined outlives-the-other ordering, which is exactly
 // std::shared_future's contract.
-// Copyable `T` may be observed by multiple consumers. Move-only `T` is
-// supported for a single consuming `Await()`.
+// A copyable result value supports multiple observers. A move-only result
+// value supports one consuming `Await()`.
 //
 // `Payload<ResultValue>` stores a copyable result inline so the hot resolve
 // path allocates nothing extra. A move-only result is uniquely boxed so a

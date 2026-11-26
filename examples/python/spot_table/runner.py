@@ -67,7 +67,7 @@ class LatencyStats:
         return self.total_ns // self.count
 
     def merge(self, other: LatencyStats) -> None:
-        """Fold another sample set into self, for aggregating repeat iterations."""
+        """Merge another sample set into this one across repeat iterations."""
         if other.count == 0:
             return
         if self.count == 0 or other.min_ns < self.min_ns:
@@ -214,7 +214,7 @@ class GroupMembership:
     rows: list[Row] = field(default_factory=list)
 
     def first_row(self, label: str) -> Row:
-        """Return the first GROUP row that named *label*, to anchor a failure."""
+        """Return the first GROUP row naming *label* to anchor a failure."""
         for row in self.rows:
             if row.group == label:
                 return row
@@ -228,7 +228,7 @@ class GroupMembership:
 
 
 def collect_groups(rows: list[Row]) -> tuple[GroupMembership | None, Failure | None]:
-    """Aggregate every GROUP row into a GroupMembership, preserving row order."""
+    """Build a GroupMembership from every GROUP row in order."""
     groups = GroupMembership()
     for row in rows:
         if row.action != "GROUP":
@@ -381,7 +381,10 @@ def run_sync_seed(
 def run_sync_order(
     engine: openpit.Engine, acc: openpit.param.AccountId, row: Row
 ) -> tuple[Failure | None, int]:
-    """Run one ORDER row through pre-trade, finalize the reservation, and time it."""
+    """Run one ORDER row through pre-trade and time it.
+
+    Then commit or roll back any reservation according to the verdict check.
+    """
     try:
         order = builder.build_order(row, acc)
     except ValueError as exc:
@@ -480,7 +483,7 @@ def check_fill_verdict(row: Row, blocked: bool) -> Failure | None:
 
 
 def seed_fill_verdict_error(row: Row) -> Failure:
-    """Report an expectation that SEED/FILL cannot honor (ACCEPT is ORDER-only)."""
+    """Report an unsupported SEED/FILL expectation (ACCEPT is ORDER-only)."""
     if row.expect == "ACCEPT":
         return Failure(
             row,

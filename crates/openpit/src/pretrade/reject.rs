@@ -26,8 +26,12 @@ use std::fmt::{Display, Formatter};
 ///
 /// let scope = RejectScope::Order;
 /// match scope {
-///     RejectScope::Order => { /* retry is safe; engine remains operational */ }
-///     RejectScope::Account => { /* halt trading until situation is resolved */ }
+///     RejectScope::Order => {
+///         /* retry is safe; engine remains operational */
+///     }
+///     RejectScope::Account => {
+///         /* halt trading until situation is resolved */
+///     }
 /// }
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,7 +288,7 @@ impl RejectCode {
     ///   [`SelfMatchPrevention`](Self::SelfMatchPrevention), and
     ///   [`ShortSaleRestriction`](Self::ShortSaleRestriction) are ordinary
     ///   authorization or compliance verdicts.
-    /// - [`AccountAdjustmentBoundsExceeded`](Self::AccountAdjustmentBoundsExceeded)
+    /// - [`AccountAdjustmentBoundsExceeded`]
     ///   is an ordinary account-adjustment verdict, not failure to evaluate a
     ///   drop-copy order.
     /// - [`Custom`](Self::Custom) is ordinary because the SDK cannot infer its
@@ -292,6 +296,9 @@ impl RejectCode {
     ///   should use a standardized evaluation-failure code.
     /// - [`Other`](Self::Other) is an ordinary fallback with no
     ///   evaluation-failure semantics.
+    ///
+    /// [`AccountAdjustmentBoundsExceeded`]:
+    ///     Self::AccountAdjustmentBoundsExceeded
     pub const fn is_evaluation_failure(self) -> bool {
         match self {
             Self::MissingRequiredField
@@ -414,7 +421,10 @@ impl Display for RejectCode {
 /// );
 /// assert_eq!(reject.code, RejectCode::RateLimitExceeded);
 /// assert_eq!(reject.reason, "rate limit exceeded");
-/// assert_eq!(reject.details, "submitted 3 orders in 1s window, max allowed: 2");
+/// assert_eq!(
+///     reject.details,
+///     "submitted 3 orders in 1s window, max allowed: 2"
+/// );
 /// assert_eq!(reject.policy, "RateLimitPolicy");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -430,8 +440,8 @@ pub struct Reject {
     ///
     /// The SDK never inspects, dereferences, or frees this value. Its meaning,
     /// lifetime, and thread-safety are the caller's responsibility. `0` / null
-    /// means "not set". See the project Threading Contract for the full lifetime
-    /// model.
+    /// means "not set". See the project Threading Contract for the full
+    /// lifetime model.
     ///
     /// The token flows through every reject path the SDK exposes (start-stage,
     /// main-stage, account-adjustment, batch results) and is preserved on
@@ -462,7 +472,8 @@ impl std::error::Error for Reject {}
 ///
 /// Implements `Deref` to `[Reject]` for direct element access. Equality
 /// compares only the reject list and deliberately ignores the attached policy
-/// result, which carries reservation or drop-copy output rather than the verdict.
+/// result, which carries reservation or drop-copy output rather than the
+/// verdict.
 ///
 /// [`PreTradeRequest::execute`]: crate::pretrade::PreTradeRequest::execute
 #[derive(Clone, Debug)]
@@ -490,8 +501,8 @@ impl Rejects {
 
     /// Attaches the policy output computed before these rejects were produced.
     ///
-    /// A marks-only `Err(Rejects)` from a [`RuleMode::Reject`] instance must carry
-    /// this output so the engine retains its lock prices and account
+    /// A marks-only `Err(Rejects)` from a [`RuleMode::Reject`] instance must
+    /// carry this output so the engine retains its lock prices and account
     /// adjustments. Outside drop-copy, for a review-mode instance, the engine
     /// discards the output and rolls back the instance's mutations (dry-run
     /// discards them without callbacks). Unless an evaluation failure occurs,
@@ -622,8 +633,8 @@ pub struct AccountBlock {
     ///
     /// The SDK never inspects, dereferences, or frees this value. Its meaning,
     /// lifetime, and thread-safety are the caller's responsibility. `0` / null
-    /// means "not set". See the project Threading Contract for the full lifetime
-    /// model.
+    /// means "not set". See the project Threading Contract for the full
+    /// lifetime model.
     pub user_data: usize,
     /// Stable machine-readable reject code.
     pub code: RejectCode,
@@ -698,7 +709,8 @@ impl From<AccountBlock> for Reject {
 }
 
 impl Reject {
-    /// Creates a reject with human-readable reason and details in `Reject` mode.
+    /// Creates a reject with human-readable reason and details in `Reject`
+    /// mode.
     pub fn new(
         policy: impl Into<String>,
         scope: RejectScope,

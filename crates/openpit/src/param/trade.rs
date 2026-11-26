@@ -18,8 +18,8 @@
 use crate::param::{Price, Quantity};
 
 /// Represents trade.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Trade {
     /// Actual trade execution price.

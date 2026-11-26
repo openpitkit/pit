@@ -35,8 +35,9 @@ import (
 )
 
 // dispatchStrategy mirrors config.AsyncEngineStrategy in the driver package so
-// the driver layer does not import config (dependency direction: driver -> config
-// is already present via FromAppConfig; this keeps the build graph clean).
+// the driver layer does not import config (dependency direction: driver ->
+// config is already present via FromAppConfig; this keeps the build graph
+// clean).
 type dispatchStrategy int
 
 const (
@@ -67,13 +68,14 @@ type engineDispatch struct {
 
 	// QueueCapacity is the buffered channel size (0 = engine default 1024).
 	QueueCapacity int
-	// SlowSubmitThreshold is the slow-submit observer threshold (0 = engine default 1m).
+	// SlowSubmitThreshold is the slow-submit observer threshold (0 = engine
+	// default 1m).
 	SlowSubmitThreshold time.Duration
 }
 
 // buildEngine constructs the AccountSync engine with the built-in spot funds
-// policy in limit-only mode (v1 drives spot LIMIT orders only, so no market-data
-// service and no MarkPriceProvider are needed), then wraps it in an
+// policy in limit-only mode (v1 drives spot LIMIT orders only, so no
+// market-data service and no MarkPriceProvider are needed), then wraps it in an
 // asyncengine.AsyncEngine with the configured dispatch strategy. All dispatch
 // knobs are RESOURCE limits (like a connection cap), NOT sync semantics: the
 // measured semantics stay per-account AccountSync regardless of strategy.

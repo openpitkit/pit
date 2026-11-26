@@ -59,9 +59,11 @@ const (
 type Run struct {
 	// Seed is the RNG seed for the deterministic event stream.
 	Seed uint64
-	// TotalOps is the number of order-check operations to run (exclusive with Duration).
+	// TotalOps is the number of order-check operations to run (exclusive with
+	// Duration).
 	TotalOps uint64
-	// Duration is a human-readable wall-clock budget (exclusive with TotalOps; Phase 6).
+	// Duration is a human-readable wall-clock budget (exclusive with TotalOps;
+	// Phase 6).
 	Duration string
 	// Window is the sliding-window size.
 	Window uint64
@@ -77,7 +79,8 @@ type Arrival struct {
 	OfferedRate uint64
 }
 
-// ReportDelay models the simulated TS round-trip before report settlement (Phase 2+).
+// ReportDelay models the simulated TS round-trip before report settlement
+// (Phase 2+).
 type ReportDelay struct {
 	Distribution ReportDelayDistribution
 	Mean         string
@@ -128,8 +131,8 @@ const (
 
 // AsyncEngine holds the asyncengine builder knobs exposed by the [async_engine]
 // INI section. These are DISPATCH/RESOURCE limits (like a connection cap), NOT
-// synchronization semantics: the measured semantics stay per-account AccountSync
-// regardless of these values.
+// synchronization semantics: the measured semantics stay per-account
+// AccountSync regardless of these values.
 type AsyncEngine struct {
 	// Strategy selects the dispatch strategy: dynamic (default) or sharded.
 	Strategy AsyncEngineStrategy
@@ -523,9 +526,10 @@ func loadConcurrency(f *ini.File, c *Concurrency, population uint64) error {
 	return nil
 }
 
-// loadAsyncEngine strictly validates the [async_engine] dispatch-sizing section.
-// It exposes the complete asyncengine builder surface: strategy (dynamic|sharded),
-// per-strategy knobs, and shared knobs (queue_capacity, slow_submit_threshold).
+// loadAsyncEngine strictly validates the [async_engine] dispatch-sizing
+// section. It exposes the complete asyncengine builder surface: strategy
+// (dynamic|sharded), per-strategy knobs, and shared knobs (queue_capacity,
+// slow_submit_threshold).
 func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 	sec, err := f.GetSection("async_engine")
 	if err != nil {
@@ -547,7 +551,8 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 			AsyncEngineStrategyDynamic, AsyncEngineStrategySharded, stratKey.String())
 	}
 
-	// max_queues - required key; Dynamic only: active-set constraint; ignored for sharded
+	// max_queues - required key; Dynamic only: active-set constraint; ignored for
+	// sharded
 	mqKey, err := sec.GetKey("max_queues")
 	if err != nil {
 		return fmt.Errorf("key max_queues is required")
@@ -565,7 +570,8 @@ func loadAsyncEngine(f *ini.File, e *AsyncEngine, activeAccounts uint64) error {
 	}
 	e.MaxQueues = mq
 
-	// idle_cleanup - required key; Dynamic only: queue retire delay; ignored for sharded
+	// idle_cleanup - required key; Dynamic only: queue retire delay; ignored for
+	// sharded
 	icKey, err := sec.GetKey("idle_cleanup")
 	if err != nil {
 		return fmt.Errorf("key idle_cleanup is required")

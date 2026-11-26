@@ -74,7 +74,8 @@ pub struct AccountGroupId(u32);
 /// account to its group and finally to this default. It is also reserved: no
 /// constructor can produce it ([`AccountGroupId::from_u32`] rejects it, and
 /// [`AccountGroupId::from_str`] is guaranteed never to hash to it), and it
-/// cannot be passed to [`Accounts::register_group`](crate::Accounts::register_group)
+/// cannot be passed to
+/// [`Accounts::register_group`](crate::Accounts::register_group)
 /// or [`Accounts::unregister_group`](crate::Accounts::unregister_group). The
 /// only way to name it is this constant.
 pub const DEFAULT_ACCOUNT_GROUP: AccountGroupId = AccountGroupId(0);
@@ -152,7 +153,8 @@ impl AccountGroupId {
     ///
     /// If collision risk is unacceptable for your use case, maintain your own
     /// collision-free string→u32 mapping (e.g. a registry or a database
-    /// sequence) and pass the resulting integer to [`AccountGroupId::from_u32`].
+    /// sequence) and pass the resulting integer to
+    /// [`AccountGroupId::from_u32`].
     ///
     /// WARNING:
     /// Do not mix IDs created with this function and IDs created with
@@ -335,7 +337,8 @@ mod tests {
     }
 
     // Directly exercise the remap branch: a hash colliding with the reserved
-    // value is folded to a fixed non-zero group, everything else passes through.
+    // value is folded to a fixed non-zero group, everything else passes
+    // through.
     #[test]
     fn non_default_hash_remaps_reserved_value_only() {
         assert_eq!(non_default_hash(0), 1);

@@ -95,7 +95,8 @@ nitpick_ignore = [
     # Bare names from type annotations resolved by autodoc in description mode.
     ("py:class", "AccountOutcomeEntry"),
     ("py:class", "PostTradeContext"),
-    # Relative module alias used in SpotFundsOverride.instrument type annotation.
+    # Relative module alias used in SpotFundsOverride.instrument type
+    # annotation.
     ("py:class", "marketdata.InstrumentId"),
 ]
 

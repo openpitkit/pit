@@ -47,7 +47,8 @@ func NewAbsoluteAdjustmentAmount(v PositionSize) AdjustmentAmount {
 	)
 }
 
-// NewAdjustmentAmountFromHandle creates an optional AdjustmentAmount from a native handle.
+// NewAdjustmentAmountFromHandle creates an optional AdjustmentAmount from a
+// native handle.
 func NewAdjustmentAmountFromHandle(
 	amount native.ParamAdjustmentAmount,
 ) optional.Option[AdjustmentAmount] {
@@ -82,7 +83,8 @@ func (a AdjustmentAmount) MustDelta() PositionSize {
 	return NewPositionSizeFromHandle(native.ParamAdjustmentAmountGetValue(a.native))
 }
 
-// MustAbsolute returns the absolute value or panics if not an absolute adjustment.
+// MustAbsolute returns the absolute value or panics if not an absolute
+// adjustment.
 //
 // The panic is deliberate fail-fast behavior: callers must check IsAbsolute
 // before reading the absolute variant.

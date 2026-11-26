@@ -102,10 +102,10 @@ pub const DEFAULT_POLICY_GROUP_ID: PolicyGroupId = PolicyGroupId::new(0);
 
 /// Opaque policy-group tag attached to an abstract business entity.
 ///
-/// A single value may be shared across multiple business entity instances so the caller
-/// can associate outcomes with a logical group rather than a specific
-/// implementation. The value is assigned at policy construction time and
-/// carried unchanged through every operation.
+/// A single value may be shared across multiple business entity instances so
+/// the caller can associate outcomes with a logical group rather than a
+/// specific implementation. The value is assigned at policy construction time
+/// and carried unchanged through every operation.
 ///
 /// Use [`DEFAULT_POLICY_GROUP_ID`] when grouping is not needed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

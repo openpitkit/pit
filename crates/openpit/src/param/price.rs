@@ -20,8 +20,8 @@ use super::{define_signed_value_type, Error, ParamKind, PositionSize, Quantity, 
 define_signed_value_type!(
     /// Price per one instrument unit.
     ///
-    /// Can be negative in certain derivative markets (e.g., options, futures with storage costs,
-    /// calendar spreads).
+    /// Can be negative in certain derivative markets (e.g., options, futures
+    /// with storage costs, calendar spreads).
     Price,
     ParamKind::Price
 );
@@ -35,7 +35,8 @@ impl Price {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication overflows.
+    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication
+    /// overflows.
     pub fn calculate_position_size(self, quantity: Quantity) -> Result<PositionSize, Error> {
         self.to_decimal()
             .checked_mul(quantity.to_decimal())
@@ -47,11 +48,13 @@ impl Price {
 
     /// Calculates volume from price and quantity.
     ///
-    /// Uses absolute values of both price and quantity to ensure volume is non-negative.
+    /// Uses absolute values of both price and quantity to ensure volume is
+    /// non-negative.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication overflows.
+    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication
+    /// overflows.
     pub fn calculate_volume(self, quantity: Quantity) -> Result<Volume, Error> {
         let volume_decimal = self
             .to_decimal()

@@ -15,10 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-/// Generates `Has*` request-field trait implementations for a base payload type and its wrapper.
+/// Generates `Has*` request-field trait implementations for a base payload type
+/// and its wrapper.
 ///
-/// This macro is intended for SDK extension points where wrapper composition must preserve access
-/// to request fields through nested `With*` types.
+/// This macro is intended for SDK extension points where wrapper composition
+/// must preserve access to request fields through nested `With*` types.
 ///
 /// Supported form:
 /// ```rust
@@ -64,8 +65,8 @@
 /// - Reference return form (`&T`) borrows the base field as `&self.<field>`.
 ///
 /// Notes:
-/// - For fields that require custom conversion (for example `Option<Asset>` -> `Option<&Asset>`),
-///   provide a manual impl instead of this macro.
+/// - For fields that require custom conversion (for example `Option<Asset>` ->
+///   `Option<&Asset>`), provide a manual impl instead of this macro.
 #[macro_export]
 macro_rules! impl_request_has_field {
     (
@@ -85,6 +86,9 @@ macro_rules! impl_request_has_field {
                 }
             }
 
+            // The generic is in scope for caller tokens. `T` is least likely
+            // to collide with a caller's type name.
+            // nosemgrep: short-generic-parameter-rust
             impl<T> $trait for $wrapper<T> {
                 fn $method(
                     &self,
@@ -112,6 +116,9 @@ macro_rules! impl_request_has_field {
                 }
             }
 
+            // The generic is in scope for caller tokens. `T` is least likely
+            // to collide with a caller's type name.
+            // nosemgrep: short-generic-parameter-rust
             impl<T> $trait for $wrapper<T> {
                 fn $method(
                     &self,
@@ -123,15 +130,17 @@ macro_rules! impl_request_has_field {
     };
 }
 
-/// Generates passthrough `Has*` implementations for a wrapper through its `inner`-like field.
+/// Generates passthrough `Has*` implementations for a wrapper through its
+/// `inner`-like field.
 ///
-/// Use this when a wrapper adds its own fields but must keep all previously available `Has*`
-/// capabilities from the composed inner type.
+/// Use this when a wrapper adds its own fields but must keep all previously
+/// available `Has*` capabilities from the composed inner type.
 ///
 /// Supported form:
 /// ```rust
 /// use openpit::{
-///     HasInstrument, Instrument, RequestFieldAccessError, impl_request_has_field_passthrough,
+///     HasInstrument, Instrument, RequestFieldAccessError,
+///     impl_request_has_field_passthrough,
 /// };
 /// use openpit::param::Asset;
 ///
@@ -183,6 +192,9 @@ macro_rules! impl_request_has_field_passthrough {
         )+
     ) => {
         $(
+            // The generic is in scope for caller tokens. `T` is least likely
+            // to collide with a caller's type name.
+            // nosemgrep: short-generic-parameter-rust
             impl<T> $trait for $wrapper<T>
             where
                 T: $trait,
@@ -204,6 +216,9 @@ macro_rules! impl_request_has_field_passthrough {
         )+
     ) => {
         $(
+            // The generic is in scope for caller tokens. `T` is least likely
+            // to collide with a caller's type name.
+            // nosemgrep: short-generic-parameter-rust
             impl<T> $trait for $wrapper<T>
             where
                 T: $trait,

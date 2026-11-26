@@ -361,8 +361,8 @@ func TestMutationsNativeE2E_FinalizerFailureBlocksEveryAccount(t *testing.T) {
 }
 
 // TestMutationsNativeE2E_UnblockAllKeepsIndividuallyBlockedAccount proves
-// UnblockAll lifts only the engine-wide block: an account blocked by an operator
-// keeps its own recorded cause, which wins over the engine-wide one.
+// UnblockAll lifts only the engine-wide block: an account blocked by an
+// operator keeps its own recorded cause, which wins over the engine-wide one.
 func TestMutationsNativeE2E_UnblockAllKeepsIndividuallyBlockedAccount(t *testing.T) {
 	const heldAccountID uint64 = 2002
 	const untouchedAccountID uint64 = 2003
@@ -679,9 +679,9 @@ func TestMutationsNativeE2E_DropCopyPolicyPanicReturnsFatalReject(t *testing.T) 
 
 // TestMutationsNativeE2E_DropCopyCommitPanicArmsKillSwitch pins the commit-side
 // contract the operation shares with a reservation: a panicking commit callback
-// is recovered at the language boundary and never crosses it, and the failure it
-// reports is not discarded - it arms the engine kill switch, which an operator
-// lifts with UnblockAll.
+// is recovered at the language boundary and never crosses it, and the failure
+// it reports is not discarded - it arms the engine kill switch, which an
+// operator lifts with UnblockAll.
 func TestMutationsNativeE2E_DropCopyCommitPanicArmsKillSwitch(t *testing.T) {
 	policy := &mutationTrackingPolicy{
 		name:             "mutation-drop-copy-commit-panic",
@@ -820,8 +820,8 @@ func TestMutationsNativeE2E_DropCopyReportsAccountAdjustments(t *testing.T) {
 	}
 }
 
-// TestMutationsNativeE2E_DropCopyKeepsGatedBookkeepingUnderBusinessReject proves
-// a policy that registers its mutation and account adjustment only when
+// TestMutationsNativeE2E_DropCopyKeepsGatedBookkeepingUnderBusinessReject
+// proves a policy that registers its mutation and account adjustment only when
 // IsDropCopy is true keeps both under an ordinary reject in drop-copy, while
 // the same reject in ordinary pre-trade registers neither.
 func TestMutationsNativeE2E_DropCopyKeepsGatedBookkeepingUnderBusinessReject(t *testing.T) {

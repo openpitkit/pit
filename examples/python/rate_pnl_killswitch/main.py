@@ -87,10 +87,10 @@ Event = OrderEvent | ReportEvent
 
 
 class Reactor(Protocol):
-    """Engine-verdict consumer. Plug your venue client and strategy book here."""
+    """Consume engine verdicts in your venue client and strategy book."""
 
     def on_accepted(self, order: openpit.Order) -> None:
-        """Pre-trade has reserved and committed the order. Send it to the venue."""
+        """Send the order after pre-trade reserves and commits it."""
 
     def on_rejected(self, order: openpit.Order, rejects: list[pretrade.Reject]) -> None:
         """A policy refused the order. Inspect ``rejects[i].code`` to choose
@@ -137,7 +137,7 @@ class Stats:
 
 @dataclass(frozen=True)
 class Limits:
-    """Killswitch parameters; the call site reads like a risk-policy declaration."""
+    """Kill switch parameters expressed as a risk policy at the call site."""
 
     settlement_asset: str
     pnl_lower_bound: str
@@ -196,7 +196,7 @@ def build_engine(limits: Limits) -> openpit.Engine:
 
 
 def run(engine: openpit.Engine, stream: Iterable[Event], reactor: Reactor) -> Stats:
-    """Drive the engine until ``stream`` is exhausted and return aggregate stats.
+    """Run the engine until ``stream`` ends and return aggregate stats.
 
     The engine is owned by the caller. Exceptions raised here come from
     infrastructure failures, not business rejects (those go to

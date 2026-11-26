@@ -87,14 +87,14 @@ pub(super) struct ExecutionRequestView<'i> {
 ///
 /// A single asset can be touched by both the fill and the cancel phase (and,
 /// for a two-leg order, by both legs), so the deltas accumulate additively and
-/// the snapshot tracks the most recent post-mutation `Holdings`. `final_holdings`
-/// is `None` until the asset has been touched at least once. `pnl_outcome` is
-/// the underlying position-PnL result of this report: a changed PnL amount or
-/// the first halt reason, never a reconstruction from persistent state.
-/// `average_entry_price` is set by a fill that performed position accounting.
-/// `incoming_delta` accumulates the projected inflow consumed on fills or
-/// released on cancels for the acquiring leg (negative as it drains toward
-/// zero).
+/// the snapshot tracks the most recent post-mutation `Holdings`.
+/// `final_holdings` is `None` until the asset has been touched at least once.
+/// `pnl_outcome` is the underlying position-PnL result of this report: a
+/// changed PnL amount or the first halt reason, never a reconstruction from
+/// persistent state. `average_entry_price` is set by a fill that performed
+/// position accounting. `incoming_delta` accumulates the projected inflow
+/// consumed on fills or released on cancels for the acquiring leg (negative as
+/// it drains toward zero).
 #[derive(Clone, Copy)]
 pub(super) struct LegDelta {
     pub(super) held_delta: PositionSize,
@@ -123,7 +123,8 @@ impl LegDelta {
 /// Each leg (underlying, settlement) reconciles independently: a fill consumes
 /// the reserved `held` and credits/debits `balance` in the signed flow
 /// direction; a cancel releases the unfilled reserved remainder. The two
-/// per-asset accumulators feed the final [`crate::core::AccountAdjustmentOutcome`]
+/// per-asset accumulators feed the final
+/// [`crate::core::AccountAdjustmentOutcome`]
 /// entries.
 pub(super) struct FillCancelDeltas {
     pub(super) underlying: LegDelta,

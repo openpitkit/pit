@@ -43,12 +43,12 @@ use crate::param::Price;
 /// # Performance
 ///
 /// In practice the overwhelming majority of orders carry only prices for
-/// [`DEFAULT_POLICY_GROUP_ID`]. The internal storage keeps the default group in a
-/// dedicated inline-capacity slot, so the hot path neither scans nor allocates.
-/// Non-default groups are stored in a second inline-capacity list of sections,
-/// each section grouping prices for one group identifier. Reads, writes, and
-/// lookups for the default group are O(1); operations for non-default groups
-/// scan the small sections list once.
+/// [`DEFAULT_POLICY_GROUP_ID`]. The internal storage keeps the default group in
+/// a dedicated inline-capacity slot, so the hot path neither scans nor
+/// allocates. Non-default groups are stored in a second inline-capacity list of
+/// sections, each section grouping prices for one group identifier. Reads,
+/// writes, and lookups for the default group are O(1); operations for
+/// non-default groups scan the small sections list once.
 ///
 /// The concrete representation is intentionally private. Construct values
 /// through the provided constructors and inspect them through the returned
@@ -145,8 +145,8 @@ impl PreTradeLock {
 
     /// Stores `price` under `policy_group_id`.
     ///
-    /// Prices already stored under the same `policy_group_id` are preserved; the new
-    /// price is appended to the end of that group's list.
+    /// Prices already stored under the same `policy_group_id` are preserved;
+    /// the new price is appended to the end of that group's list.
     pub fn push(&mut self, policy_group_id: PolicyGroupId, price: Price) {
         if policy_group_id == DEFAULT_POLICY_GROUP_ID {
             self.default_prices.push(price);
@@ -166,8 +166,8 @@ impl PreTradeLock {
         });
     }
 
-    /// Stores every `price` under `policy_group_id`, preserving any prices already
-    /// stored under the same group.
+    /// Stores every `price` under `policy_group_id`, preserving any prices
+    /// already stored under the same group.
     ///
     /// Target capacity is computed up-front from the iterator's exact length,
     /// so the destination storage grows at most once regardless of how many
@@ -237,7 +237,8 @@ impl PreTradeLock {
         }
     }
 
-    /// Iterates over every price stored under `policy_group_id`, in insertion order.
+    /// Iterates over every price stored under `policy_group_id`, in insertion
+    /// order.
     ///
     /// Default-group lookups are O(1); non-default lookups scan the section
     /// list once. Both return cheap iterators that walk an inline-storage

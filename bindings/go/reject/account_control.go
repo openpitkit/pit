@@ -39,8 +39,9 @@ type AccountControl struct {
 	handle native.AccountControl
 }
 
-// NewAccountControlFromHandle wraps a native handle into an AccountControl whose
-// release is managed by the garbage collector. Returns nil for a nil handle.
+// NewAccountControlFromHandle wraps a native handle into an AccountControl
+// whose release is managed by the garbage collector. Returns nil for a nil
+// handle.
 func NewAccountControlFromHandle(handle native.AccountControl) *AccountControl {
 	if handle == nil {
 		return nil

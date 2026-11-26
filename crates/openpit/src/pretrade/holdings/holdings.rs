@@ -232,10 +232,11 @@ impl Holdings {
     /// Force-sets `realized_pnl` to an absolute account-currency value.
     ///
     /// Used when a manager adjustment writes a new absolute cumulative realized
-    /// PnL. Like [`Holdings::with_avg_entry_price`], this explicit write re-arms
-    /// a halted slot. Price-based fill realization accrues through
+    /// PnL. Like [`Holdings::with_avg_entry_price`], this explicit write
+    /// re-arms a halted slot. Price-based fill realization accrues through
     /// `realize_position_fill`; execution-report fees accrue through
-    /// `Holdings::add_realized_pnl_contribution` and never re-arm a halted slot.
+    /// `Holdings::add_realized_pnl_contribution` and never re-arm a halted
+    /// slot.
     pub fn with_realized_pnl(&self, realized_pnl: Pnl) -> Self {
         Self {
             realized_pnl: Some(PositionPnlState::Pnl(realized_pnl)),
@@ -263,10 +264,10 @@ impl Holdings {
     /// Force-sets `realized_pnl` to an absolute value or clears tracking.
     ///
     /// Unlike [`Holdings::with_realized_pnl`], which can only set `Some`, this
-    /// accepts the full `Option<Pnl>` so a prior untracked state (`None`) can be
-    /// restored exactly. A new `Some` re-arms calculation; `None` preserves a
-    /// prior halt. Rollback uses `with_realized_pnl_state` when it
-    /// must restore the complete optional outcome.
+    /// accepts the full `Option<Pnl>` so a prior untracked state (`None`) can
+    /// be restored exactly. A new `Some` re-arms calculation; `None` preserves
+    /// a prior halt. Rollback uses `with_realized_pnl_state` when it must
+    /// restore the complete optional outcome.
     pub fn with_realized_pnl_opt(&self, realized_pnl: Option<Pnl>) -> Self {
         Self {
             realized_pnl: match (self.realized_pnl, realized_pnl) {
@@ -280,7 +281,8 @@ impl Holdings {
         }
     }
 
-    /// Restores a complete realized-PnL snapshot for account-adjustment rollback.
+    /// Restores a complete realized-PnL snapshot for account-adjustment
+    /// rollback.
     pub(crate) fn with_realized_pnl_state(&self, realized_pnl: Option<PositionPnlState>) -> Self {
         Self {
             realized_pnl,
@@ -430,8 +432,8 @@ impl Holdings {
     ///
     /// # Errors
     ///
-    /// - [`HoldError::ArithmeticOverflow`] if the underlying decimal addition or
-    ///   subtraction overflows the value range.
+    /// - [`HoldError::ArithmeticOverflow`] if the underlying decimal addition
+    ///   or subtraction overflows the value range.
     pub fn hold_allow_negative(&self, amount: PositionSize) -> Result<Self, HoldError> {
         let available = self
             .available
@@ -458,8 +460,8 @@ impl Holdings {
     ///
     /// # Errors
     ///
-    /// - [`AdjustmentOverflowError::ArithmeticOverflow`] if the underlying decimal
-    ///   addition or subtraction overflows the value range.
+    /// - [`AdjustmentOverflowError::ArithmeticOverflow`] if the underlying
+    ///   decimal addition or subtraction overflows the value range.
     pub fn release(&self, amount: PositionSize) -> Result<Self, AdjustmentOverflowError> {
         let available = self
             .available
@@ -542,9 +544,10 @@ impl Holdings {
     ///
     /// Used by the pre-trade reserve path (a buy's base leg, a priced sell's
     /// quote leg). `incoming` is purely informational and has no solvency gate,
-    /// so this never rejects on insufficiency - the only failure is decimal-range
-    /// overflow, which the pre-trade caller maps to a reject. `available` and
-    /// `held` are untouched, so spendable capacity is unchanged.
+    /// so this never rejects on insufficiency - the only failure is
+    /// decimal-range overflow, which the pre-trade caller maps to a reject.
+    /// `available` and `held` are untouched, so spendable capacity is
+    /// unchanged.
     ///
     /// # Errors
     ///
@@ -567,8 +570,8 @@ impl Holdings {
     /// Subtracts `amount` from `incoming`, draining the projected inflow as a
     /// fill consumes it or a cancel releases the unfilled remainder.
     ///
-    /// `amount` may carry any sign and the result may go negative when the venue
-    /// fill diverges from the reservation estimate (mirroring how
+    /// `amount` may carry any sign and the result may go negative when the
+    /// venue fill diverges from the reservation estimate (mirroring how
     /// [`Holdings::apply_fill_outflow`] allows a negative `held`); the engine
     /// accepts this as informational divergence. `available` and `held` are
     /// untouched, so this never feeds the available credit and never changes
@@ -593,9 +596,9 @@ impl Holdings {
         })
     }
 
-    /// Applies one underlying-leg fill to the average-entry-price / realized-PnL
-    /// state and returns the updated holdings together with this fill's
-    /// position-PnL operation result.
+    /// Applies one underlying-leg fill to the average-entry-price /
+    /// realized-PnL state and returns the updated holdings together with this
+    /// fill's position-PnL operation result.
     ///
     /// This is signed weighted-average-cost accounting with full long/short
     /// support including flips. `signed_qty` is the signed base flow of the
@@ -626,8 +629,8 @@ impl Holdings {
     /// A reduction, close, reversal, or non-zero fee starts numerical tracking
     /// only when the required inputs are available and the slot is not already
     /// halted. A fill that needs an absent average cost basis halts with
-    /// [`PnlHaltReason::MissingCostBasis`]. Force-set a new realized PnL through
-    /// account adjustment to re-arm a halted slot.
+    /// [`PnlHaltReason::MissingCostBasis`]. Force-set a new realized PnL
+    /// through account adjustment to re-arm a halted slot.
     ///
     /// Realized PnL accumulates while tracked:
     /// `realized_pnl_new = realized_pnl + realized`. Sign sanity: a long
@@ -715,9 +718,9 @@ impl Holdings {
                         .checked_sub(avg.to_decimal())
                         .ok_or(AdjustmentOverflowError::ArithmeticOverflow)?;
                     if delta_dec.abs() <= owned_dec.abs() {
-                        // Case 3: reduce or exact close. Realized over the closed
-                        // quantity `-Δ` (sign-correct for both long and short).
-                        // `Decimal` negation is infallible.
+                        // Case 3: reduce or exact close. Realized over the
+                        // closed quantity `-Δ` (sign-correct for both long and
+                        // short). `Decimal` negation is infallible.
                         let closed_qty = -delta_dec;
                         let realized = price_minus_avg
                             .checked_mul(closed_qty)
@@ -797,8 +800,8 @@ impl Holdings {
     ///
     /// Calling this method is the engagement signal. Therefore an exact-zero
     /// converted contribution starts numerical tracking for an unset slot and
-    /// publishes a zero-delta outcome. An absent or exact-zero input fee must be
-    /// filtered before this method is called. A halted slot is unchanged.
+    /// publishes a zero-delta outcome. An absent or exact-zero input fee must
+    /// be filtered before this method is called. A halted slot is unchanged.
     pub(crate) fn add_realized_pnl_contribution(&self, delta: Pnl) -> PositionPnlOperation {
         let current = match self.realized_pnl {
             Some(PositionPnlState::Pnl(current)) => current,
@@ -1178,7 +1181,8 @@ mod tests {
         let value = holdings("1000", "0");
         let updated = value.hold_allow_negative(ps("2000")).expect("must hold");
 
-        // No solvency gate: available goes negative, held records the full hold.
+        // No solvency gate: available goes negative, held records the full
+        // hold.
         assert_eq!(updated.available(), ps("-1000"));
         assert_eq!(updated.held(), ps("2000"));
     }
@@ -1869,7 +1873,8 @@ mod tests {
 
     #[test]
     fn realize_add_to_long_weights_average() {
-        // owned = 10 @ 100, buy 10 more @ 200 → avg = (10*100 + 10*200)/20 = 150.
+        // owned = 10 @ 100, buy 10 more @ 200 → avg = (10*100 + 10*200)/20 =
+        // 150.
         let long = Holdings::new(ps("10"), PositionSize::ZERO)
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(Pnl::ZERO);
@@ -1882,7 +1887,8 @@ mod tests {
 
     #[test]
     fn realize_add_to_short_weights_average() {
-        // owned = -10 @ 100, sell 10 more @ 200 → avg = (-10*100 + -10*200)/-20 = 150.
+        // owned = -10 @ 100, sell 10 more @ 200 → avg = (-10*100 + -10*200)/-20
+        // = 150.
         let short = Holdings::new(ps("-10"), PositionSize::ZERO)
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(Pnl::ZERO);
@@ -1895,7 +1901,8 @@ mod tests {
 
     #[test]
     fn realize_partial_close_long_realizes_positive_when_price_above_avg() {
-        // long 10 @ 100, sell 4 @ 130 → realized = (130-100)*4 = 120, avg unchanged.
+        // long 10 @ 100, sell 4 @ 130 → realized = (130-100)*4 = 120, avg
+        // unchanged.
         let long = Holdings::new(ps("10"), PositionSize::ZERO)
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(Pnl::ZERO);
@@ -1976,7 +1983,8 @@ mod tests {
 
     #[test]
     fn realize_partial_close_short_realizes_positive_when_price_below_avg() {
-        // short -10 @ 100, buy 4 @ 70 → realized = (70-100)*-(4) = 120, avg unchanged.
+        // short -10 @ 100, buy 4 @ 70 → realized = (70-100)*-(4) = 120, avg
+        // unchanged.
         let short = Holdings::new(ps("-10"), PositionSize::ZERO)
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(Pnl::ZERO);
@@ -1989,7 +1997,8 @@ mod tests {
 
     #[test]
     fn realize_exact_close_long_resets_avg_to_none_and_keeps_pnl() {
-        // long 10 @ 100, sell all 10 @ 130 → realized = 300, new_owned = 0 → avg None.
+        // long 10 @ 100, sell all 10 @ 130 → realized = 300, new_owned = 0 →
+        // avg None.
         let long = Holdings::new(ps("10"), PositionSize::ZERO)
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(Pnl::ZERO);
@@ -2003,8 +2012,8 @@ mod tests {
 
     #[test]
     fn realize_flip_long_to_short_closes_then_reopens_at_price() {
-        // long 10 @ 100, sell 15 @ 130 → close 10: realized = (130-100)*10 = 300;
-        // remainder opens short -5 at 130 → avg = 130.
+        // long 10 @ 100, sell 15 @ 130 → close 10: realized = (130-100)*10 =
+        // 300; remainder opens short -5 at 130 → avg = 130.
         let long = Holdings::new(ps("10"), PositionSize::ZERO)
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(Pnl::ZERO);
@@ -2017,8 +2026,8 @@ mod tests {
 
     #[test]
     fn realize_flip_short_to_long_closes_then_reopens_at_price() {
-        // short -10 @ 100, buy 15 @ 70 → close 10: realized = (70-100)*-10 = 300;
-        // remainder opens long +5 at 70 → avg = 70.
+        // short -10 @ 100, buy 15 @ 70 → close 10: realized = (70-100)*-10 =
+        // 300; remainder opens long +5 at 70 → avg = 70.
         let short = Holdings::new(ps("-10"), PositionSize::ZERO)
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(Pnl::ZERO);
@@ -2317,7 +2326,8 @@ mod tests {
     #[test]
     fn apply_delta_rollback_reverses_quantity_deltas() {
         // Reversing the forward quantity deltas subtracts each one from the
-        // current slot, leaving concurrent contributions to other fields intact.
+        // current slot, leaving concurrent contributions to other fields
+        // intact.
         let slot = Holdings::new(ps("10"), ps("2"))
             .with_avg_entry_price(Some(px("100")))
             .with_realized_pnl(pnl("90"));
@@ -2350,8 +2360,8 @@ mod tests {
 
     #[test]
     fn with_realized_pnl_opt_restores_untracked_state() {
-        // A non-flat slot whose realized PnL was force-set can be returned to the
-        // untracked `None` state, exactly as a snapshot rollback would.
+        // A non-flat slot whose realized PnL was force-set can be returned to
+        // the untracked `None` state, exactly as a snapshot rollback would.
         let tracked = Holdings::new(ps("10"), ps("0")).with_realized_pnl(pnl("5"));
         let untracked = tracked.with_realized_pnl_opt(None);
         assert_eq!(untracked.realized_pnl(), None);

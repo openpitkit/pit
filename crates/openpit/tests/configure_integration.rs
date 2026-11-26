@@ -943,7 +943,7 @@ fn custom_policy_needs_no_configuration_plumbing() {
         .expect("custom policy must build without configuration hooks");
 }
 
-// ─── P&L-bounds kill-switch ───────────────────────────────────────────────────
+// ─── P&L-bounds kill-switch ──────────────────────────────────────────────────
 
 // Execution-report type that carries `(instrument, account_id, pnl, fee)`.
 // Used only for the P&L-bounds configure tests.
@@ -1521,7 +1521,7 @@ fn configure_set_account_pnl_type_mismatch_is_reported() {
     );
 }
 
-// ─── Order-size-limit ─────────────────────────────────────────────────────────
+// ─── Order-size-limit ────────────────────────────────────────────────────────
 
 fn order_with_price(account: u64, quantity: &str, price: &str) -> OrderOperation {
     OrderOperation {
@@ -1663,7 +1663,7 @@ fn empty_policy_lifecycle_order_size_untouched_axis_survives_clear() {
     }
 }
 
-// ─── Review-rule ──────────────────────────────────────────────────────────────
+// ─── Review-rule ─────────────────────────────────────────────────────────────
 
 fn review_rule_engine(settings: ReviewRuleSettings) -> FullSyncEngine<OrderOperation> {
     Engine::builder::<OrderOperation, (), ()>()
@@ -2001,7 +2001,7 @@ fn configure_order_size_limit_asset_barrier_added_rejects_matching_underlying() 
     assert_eq!(rejects[0].reason, "order quantity exceeded");
 }
 
-// ─── Spot funds ───────────────────────────────────────────────────────────────
+// ─── Spot funds ──────────────────────────────────────────────────────────────
 
 // Minimal account-adjustment stub for SpotFunds seeding.
 struct SpotAdjustment {

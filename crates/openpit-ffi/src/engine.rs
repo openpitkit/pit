@@ -70,7 +70,7 @@ pub struct OpenPitPolicyInstance {
     pub mode: OpenPitPretradeRuleMode,
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 type EngineTrait = openpit_interop::InteropEngineTrait<Order, ExecutionReport, AccountAdjustment>;
 type Engine = openpit::Engine<EngineTrait>;
@@ -119,7 +119,7 @@ pub(crate) enum BuilderState {
 #[allow(dead_code, unused_imports)]
 pub use openpit_interop::SyncMode as OpenPitSyncPolicy;
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Threading:
 // The SDK never spawns OS threads: each public call executes on the OS thread
 // that invoked it. Full sync permits concurrent public calls on the same
@@ -189,8 +189,8 @@ fn engine_ref_or_error<'a>(
 
 /// Opaque pointer for a deferred pre-trade request.
 ///
-/// This is returned by `openpit_engine_start_pre_trade`. It can be executed once
-/// with `openpit_pretrade_pre_trade_request_execute` or discarded with
+/// This is returned by `openpit_engine_start_pre_trade`. It can be executed
+/// once with `openpit_pretrade_pre_trade_request_execute` or discarded with
 /// `openpit_destroy_pretrade_pre_trade_request`.
 pub struct OpenPitPretradePreTradeRequest {
     inner: Option<openpit::pretrade::PreTradeRequest<Order>>,
@@ -199,8 +199,10 @@ pub struct OpenPitPretradePreTradeRequest {
 /// Opaque reservation pointer returned by a successful pre-trade check.
 ///
 /// A reservation represents resources that have been tentatively locked. The
-/// caller must resolve it exactly once by calling `openpit_pretrade_pre_trade_reservation_commit`,
-/// `openpit_pretrade_pre_trade_reservation_rollback`, or `openpit_destroy_pretrade_pre_trade_reservation`.
+/// caller must resolve it exactly once by calling
+/// `openpit_pretrade_pre_trade_reservation_commit`,
+/// `openpit_pretrade_pre_trade_reservation_rollback`, or
+/// `openpit_destroy_pretrade_pre_trade_reservation`.
 pub struct OpenPitPretradePreTradeReservation {
     inner: openpit::pretrade::PreTradeReservation,
     /// Finalization state of this handle.
@@ -342,7 +344,7 @@ impl OpenPitEngineBuildError {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Registers a pre-trade policy on the builder via `pre_trade_instance`. When
 /// the policy is configurable, registration records its settings cell for the
@@ -408,26 +410,27 @@ fn export_pre_trade_lock(
 /// - returns a non-null caller-owned builder object.
 ///
 /// Error:
-/// - returns null when `sync_policy` is not one of `OpenPitSyncPolicy_None` (0),
-///   `OpenPitSyncPolicy_Full` (1), or `OpenPitSyncPolicy_Account` (2);
+/// - returns null when `sync_policy` is not one of `OpenPitSyncPolicy_None`
+///   (0), `OpenPitSyncPolicy_Full` (1), or `OpenPitSyncPolicy_Account` (2);
 /// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
 ///   error handle that MUST be released with `openpit_destroy_shared_string`.
 ///
 /// Cleanup:
-/// - release the pointer with `openpit_destroy_engine_builder` if you stop before
-///   building;
+/// - release the pointer with `openpit_destroy_engine_builder` if you stop
+///   before building;
 /// - after a successful build the builder is consumed and must still be
 ///   released with `openpit_destroy_engine_builder`.
 pub extern "C" fn openpit_create_engine_builder(
     sync_policy: u8,
     out_error: OpenPitOutError,
 ) -> *mut OpenPitEngineBuilder {
-    // The argument is a raw `u8`, not `OpenPitSyncPolicy`, on purpose. `OpenPitSyncPolicy`
-    // is a `#[repr(u8)] enum` with only 0, 1, 2 valid; passing any other byte in
-    // a variable typed as that enum is undefined behavior at the FFI boundary,
-    // before any Rust statement of this function runs. Validating after the
-    // fact via `if x > 2` would already be too late. We accept the primitive
-    // and translate via `match` here, where the input has no invariants yet.
+    // The argument is a raw `u8`, not `OpenPitSyncPolicy`, on purpose.
+    // `OpenPitSyncPolicy` is a `#[repr(u8)] enum` with only 0, 1, 2 valid;
+    // passing any other byte in a variable typed as that enum is undefined
+    // behavior at the FFI boundary, before any Rust statement of this function
+    // runs. Validating after the fact via `if x > 2` would already be too late.
+    // We accept the primitive and translate via `match` here, where the input
+    // has no invariants yet.
     let mode = match sync_policy {
         0 => openpit_interop::SyncMode::None,
         1 => openpit_interop::SyncMode::Full,
@@ -482,8 +485,8 @@ pub extern "C" fn openpit_destroy_engine_builder(builder: *mut OpenPitEngineBuil
 /// - returns null when the configuration is rejected during building (for
 ///   example, duplicate policy names or duplicate group ids); in that case, if
 ///   `out_build_error` is not null, writes a caller-owned
-///   `OpenPitEngineBuildError` pointer that carries the machine-readable failure
-///   code and the offending value, and MUST be released with
+///   `OpenPitEngineBuildError` pointer that carries the machine-readable
+///   failure code and the offending value, and MUST be released with
 ///   `openpit_destroy_engine_build_error`; `out_error` is left untouched for
 ///   this domain failure.
 ///
@@ -700,7 +703,8 @@ pub extern "C" fn openpit_engine_start_pre_trade(
 ///
 /// Success:
 /// - returns `Passed` when the order passed this stage; read `out_reservation`;
-/// - `Passed` with non-empty `openpit_pretrade_pre_trade_reservation_get_reviews`
+/// - `Passed` with non-empty
+///   `openpit_pretrade_pre_trade_reservation_get_reviews`
 ///   is not permission to send the order;
 /// - returns `Rejected` when the order was rejected is not null; read
 ///   `out_rejects`.
@@ -712,15 +716,16 @@ pub extern "C" fn openpit_engine_start_pre_trade(
 ///   caller-owned `OpenPitSharedString` that MUST be destroyed by the caller.
 ///
 /// Cleanup:
-/// - release a successful reservation with `openpit_pretrade_pre_trade_reservation_commit`,
+/// - release a successful reservation with
+///   `openpit_pretrade_pre_trade_reservation_commit`,
 ///   `openpit_pretrade_pre_trade_reservation_rollback`, or
 ///   `openpit_destroy_pretrade_pre_trade_reservation`.
 ///
 /// Output ownership contract:
 /// - on `Passed`, a non-null reservation pointer is written to
 ///   `out_reservation` if it is not null;
-/// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
-///   `out_rejects` if it is not null;
+/// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+///   to `out_rejects` if it is not null;
 /// - the caller owns either returned object and MUST release it with the
 ///   corresponding destroy function;
 /// - no thread-local state is involved, and returned pointers are safe to read
@@ -787,8 +792,8 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
 /// adjustments, and account blocks. Ordinary rejects are discarded. Any reject
 /// code classified by `openpit_pretrade_reject_code_is_evaluation_failure`
 /// aborts the operation and rolls back all collected mutations; when that
-/// compensation fails, a `SystemUnavailable` reject is appended after the policy
-/// rejects and the engine kill switch is armed. On success the returned
+/// compensation fails, a `SystemUnavailable` reject is appended after the
+/// policy rejects and the engine kill switch is armed. On success the returned
 /// operation retains the prepared mutations exactly like a pre-trade
 /// reservation. Account-control operations and rate-limit attempts are applied
 /// before this call returns and stay outside that finalization boundary.
@@ -797,15 +802,16 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
 /// mutation, so a finalizer of that mutation that fails - while compensating a
 /// fatal exit here or later, when the owner finalizes the returned operation -
 /// blocks EVERY account with reason `"mutation finalizer failed"` until an
-/// operator calls `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
+/// operator calls `openpit_engine_unblock_all_accounts`. See
+/// `OpenPitMutationFn`.
 ///
 /// Success:
 /// - returns `Passed` when the request was applied; read `out_operation`;
 /// - returns `Rejected` when the request was not applied; read `out_rejects`.
 ///
 /// Error:
-/// - returns `Error` when input pointers are invalid or the order payload cannot
-///   be decoded;
+/// - returns `Error` when input pointers are invalid or the order payload
+///   cannot be decoded;
 /// - on `Error`, if `out_error` is not null, it is filled with a caller-owned
 ///   `OpenPitSharedString` that MUST be destroyed by the caller.
 ///
@@ -818,8 +824,8 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
 /// Output ownership contract:
 /// - on `Passed`, a non-null operation pointer is written to `out_operation` if
 ///   it is not null; when it is null, the operation is rolled back immediately;
-/// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
-///   `out_rejects` if it is not null;
+/// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+///   to `out_rejects` if it is not null;
 /// - the caller owns either returned object and MUST release it with the
 ///   corresponding destroy function;
 /// - no thread-local state is involved, and returned pointers are safe to read
@@ -880,11 +886,11 @@ pub extern "C" fn openpit_engine_apply_drop_copy(
 #[no_mangle]
 /// Runs the start stage as a non-mutating pre-trade dry-run.
 ///
-/// A dry-run reports the verdict the start stage *would* return for `order` with
-/// zero effect on engine state: no policy side effect is applied and no account
-/// block is recorded, even when an account-scope reject *would* latch one. The
-/// reported lock and account adjustments are always empty, because they are
-/// produced by the main stage, which this call does not run; see
+/// A dry-run reports the verdict the start stage *would* return for `order`
+/// with zero effect on engine state: no policy side effect is applied and no
+/// account block is recorded, even when an account-scope reject *would* latch
+/// one. The reported lock and account adjustments are always empty, because
+/// they are produced by the main stage, which this call does not run; see
 /// `openpit_engine_execute_pre_trade_dry_run` for a full-pipeline dry-run.
 ///
 /// Success:
@@ -893,8 +899,8 @@ pub extern "C" fn openpit_engine_apply_drop_copy(
 ///   report (a dry-run never rejects the *call*).
 ///
 /// Error:
-/// - returns `false` when input pointers are invalid or the order payload cannot
-///   be decoded;
+/// - returns `false` when input pointers are invalid or the order payload
+///   cannot be decoded;
 /// - on `false`, if `out_error` is not null, it is filled with a caller-owned
 ///   `OpenPitSharedString` that MUST be destroyed by the caller.
 ///
@@ -907,8 +913,8 @@ pub extern "C" fn openpit_engine_apply_drop_copy(
 ///   not null;
 /// - the caller owns the report and MUST release it with the corresponding
 ///   destroy function;
-/// - no thread-local state is involved, and the returned pointer is safe to read
-///   on any thread;
+/// - no thread-local state is involved, and the returned pointer is safe to
+///   read on any thread;
 /// - on `false`, `out_report` is left untouched.
 ///
 /// Order lifetime contract:
@@ -954,10 +960,10 @@ pub extern "C" fn openpit_engine_start_pre_trade_dry_run(
 ///
 /// A dry-run reports the verdict, the lock, and the account adjustments both
 /// stages *would* produce for `order` with zero effect on engine state: no
-/// rate-limit budget is spent, no reservation or hold is applied, and no account
-/// block is recorded. Any mutations a main-stage policy registers on the dry-run
-/// path are dropped - neither committed nor rolled back - so a repeated dry-run
-/// never moves engine state.
+/// rate-limit budget is spent, no reservation or hold is applied, and no
+/// account block is recorded. Any mutations a main-stage policy registers on
+/// the dry-run path are dropped - neither committed nor rolled back - so a
+/// repeated dry-run never moves engine state.
 ///
 /// Success:
 /// - returns `true` on valid input and writes a non-null caller-owned report to
@@ -965,8 +971,8 @@ pub extern "C" fn openpit_engine_start_pre_trade_dry_run(
 ///   report (a dry-run never rejects the *call*).
 ///
 /// Error:
-/// - returns `false` when input pointers are invalid or the order payload cannot
-///   be decoded;
+/// - returns `false` when input pointers are invalid or the order payload
+///   cannot be decoded;
 /// - on `false`, if `out_error` is not null, it is filled with a caller-owned
 ///   `OpenPitSharedString` that MUST be destroyed by the caller.
 ///
@@ -979,8 +985,8 @@ pub extern "C" fn openpit_engine_start_pre_trade_dry_run(
 ///   not null;
 /// - the caller owns the report and MUST release it with the corresponding
 ///   destroy function;
-/// - no thread-local state is involved, and the returned pointer is safe to read
-///   on any thread;
+/// - no thread-local state is involved, and the returned pointer is safe to
+///   read on any thread;
 /// - on `false`, `out_report` is left untouched.
 ///
 /// Order lifetime contract:
@@ -1025,7 +1031,8 @@ pub extern "C" fn openpit_engine_execute_pre_trade_dry_run(
 /// Returns the review marks collected by the start stage.
 ///
 /// Success:
-/// - returns a non-null `OpenPitPretradeRejectList`, empty when there are no marks.
+/// - returns a non-null `OpenPitPretradeRejectList`, empty when there are no
+///   marks.
 ///
 /// Error:
 /// - returns null when `request` is null or its content has been consumed by
@@ -1063,7 +1070,8 @@ pub extern "C" fn openpit_pretrade_pre_trade_request_get_reviews(
 ///
 /// Success:
 /// - returns `Passed` when the order passed this stage; read `out_reservation`;
-/// - `Passed` with non-empty `openpit_pretrade_pre_trade_reservation_get_reviews`
+/// - `Passed` with non-empty
+///   `openpit_pretrade_pre_trade_reservation_get_reviews`
 ///   is not permission to send the order;
 /// - returns `Rejected` when the order was rejected and `out_rejects` is not
 ///   null; read `out_rejects`.
@@ -1077,13 +1085,14 @@ pub extern "C" fn openpit_pretrade_pre_trade_request_get_reviews(
 /// Ownership:
 /// - this call consumes the request object's content exactly once;
 /// - after a successful or failed execute, the object itself may still
-///   be released with `openpit_destroy_pretrade_pre_trade_request`, but it cannot be executed again.
+///   be released with `openpit_destroy_pretrade_pre_trade_request`, but it
+///   cannot be executed again.
 ///
 /// Output ownership contract:
 /// - on `Passed`, a non-null reservation pointer is written to
 ///   `out_reservation` if it is not null;
-/// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
-///   `out_rejects` if it is not null;
+/// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+///   to `out_rejects` if it is not null;
 /// - the caller owns either returned object and MUST release it with the
 ///   corresponding destroy function;
 /// - no thread-local state is involved, and returned pointers are safe to read
@@ -1503,7 +1512,8 @@ pub extern "C" fn openpit_destroy_pretrade_drop_copy_operation(
 /// - this function never fails;
 /// - equivalent to "the rejects list returned by
 ///   `openpit_pretrade_pre_trade_dry_run_report_get_rejects` is empty".
-/// - `true` with non-empty `openpit_pretrade_pre_trade_dry_run_report_get_reviews`
+/// - `true` with non-empty
+///   `openpit_pretrade_pre_trade_dry_run_report_get_reviews`
 ///   is not permission to send the order.
 pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_is_pass(
     report: *const OpenPitPretradePreTradeDryRunReport,
@@ -1516,14 +1526,15 @@ pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_is_pass(
 /// Returns the review marks the order would have collected.
 ///
 /// `is_pass == true` with a non-empty list returned by
-/// `openpit_pretrade_pre_trade_dry_run_report_get_reviews` is not permission to send.
-/// Any without-hold mark leaves the lock and account adjustments empty.
+/// `openpit_pretrade_pre_trade_dry_run_report_get_reviews` is not permission to
+/// send. Any without-hold mark leaves the lock and account adjustments empty.
 ///
 /// Contract:
 /// - `report` must be a valid non-null pointer;
 /// - violating the pointer contract aborts the call;
 /// - always returns a caller-owned `OpenPitPretradeRejectList`, empty when
-///   there are no marks; release it with `openpit_destroy_pretrade_reject_list`.
+///   there are no marks; release it with
+///   `openpit_destroy_pretrade_reject_list`.
 ///
 /// Lifetime contract:
 /// - the returned list is detached from the report state.
@@ -1589,8 +1600,8 @@ pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_get_lock(
 /// - this function never fails;
 /// - always returns a caller-owned `OpenPitAccountAdjustmentOutcomeList`
 ///   (possibly empty); release it with
-///   `openpit_destroy_account_adjustment_outcome_list`. The numbers match what a
-///   real reservation reports for the same order and engine state.
+///   `openpit_destroy_account_adjustment_outcome_list`. The numbers match what
+///   a real reservation reports for the same order and engine state.
 ///
 /// Lifetime contract:
 /// - the returned list is detached from the report state.
@@ -1609,9 +1620,9 @@ pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_get_account_adjustme
 /// - `report` must be a valid non-null pointer;
 /// - violating the pointer contract aborts the call;
 /// - this function never fails;
-/// - always returns a caller-owned `OpenPitPretradeAccountBlockList` carrying the
-///   single would-be block, or empty when no account-scope reject would have
-///   latched one; release it with
+/// - always returns a caller-owned `OpenPitPretradeAccountBlockList` carrying
+///   the single would-be block, or empty when no account-scope reject would
+///   have latched one; release it with
 ///   `openpit_destroy_pretrade_account_block_list`. A real call records this
 ///   block in the engine's blocked-accounts registry; a dry-run reports it here
 ///   without recording it.
@@ -1816,12 +1827,13 @@ pub extern "C" fn openpit_account_adjustment_batch_error_get_rejects(
 /// Success:
 /// - returns `OpenPitAccountAdjustmentApplyStatus::Applied` when the batch was
 ///   accepted and applied;
-/// - returns `OpenPitAccountAdjustmentApplyStatus::Rejected` when the call itself
-///   completed normally but a policy rejected the batch; read `out_reject`.
+/// - returns `OpenPitAccountAdjustmentApplyStatus::Rejected` when the call
+///   itself completed normally but a policy rejected the batch; read
+///   `out_reject`.
 ///
 /// Error:
-/// - returns `OpenPitAccountAdjustmentApplyStatus::Error` when input pointers are
-///   invalid or some adjustment payload cannot be decoded;
+/// - returns `OpenPitAccountAdjustmentApplyStatus::Error` when input pointers
+///   are invalid or some adjustment payload cannot be decoded;
 /// - on `Error`, if `out_error` is not null, it is filled with a
 ///   caller-owned `OpenPitSharedString` that MUST be destroyed by the caller.
 ///
@@ -1839,7 +1851,8 @@ pub extern "C" fn openpit_account_adjustment_batch_error_get_rejects(
 ///   `out_blocks` is left untouched. The engine has already recorded every
 ///   returned block;
 /// - `Rejected` stores batch error details in `out_reject`, the caller must
-///   release a returned object with `openpit_destroy_account_adjustment_batch_error`;
+///   release a returned object with
+///   `openpit_destroy_account_adjustment_batch_error`;
 /// - rejects returned by `openpit_account_adjustment_batch_error_get_rejects`
 ///   contain string views borrowed from the batch error and must not be used
 ///   after the batch error is destroyed;
@@ -1921,7 +1934,7 @@ pub extern "C" fn openpit_engine_apply_account_adjustment(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Discriminant for the variant carried by an account-retirement error.
 #[repr(u32)]
@@ -2312,7 +2325,8 @@ pub extern "C" fn openpit_account_group_error_get_account(
 
 #[no_mangle]
 /// Returns the current group of the offending account from an account-group
-/// error, or returns `false` and leaves `out_group` untouched when no group is set.
+/// error, or returns `false` and leaves `out_group` untouched when no group is
+/// set.
 ///
 /// Contract:
 /// - `err` must be a valid non-null pointer;
@@ -2337,7 +2351,7 @@ pub extern "C" fn openpit_account_group_error_get_current_group(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Atomically registers every account in `accounts` into `group`.
@@ -2563,7 +2577,7 @@ pub extern "C" fn openpit_engine_account_group(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 // Maps a raw u32 group id to `AccountGroupId`, allowing the reserved
 // `DEFAULT_ACCOUNT_GROUP` (0). Any non-zero u32 is a valid group id, so
@@ -2582,12 +2596,13 @@ fn import_account_group_id_allow_default(group: u32) -> Result<AccountGroupId, (
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
-/// Before changing an active account's effective currency, explicitly clear
-/// and zero the account. This includes group moves, group currency, global/default
-/// currency and retirement clearing an explicit account override. The SDK does
-/// not validate activity, reset, convert or recalculate stored state. In-flight
-/// operations retain resolved values; new operations resolve the new currency.
+/// Caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. Before changing an active account's effective
+/// currency, explicitly clear and zero the account. This includes group moves,
+/// group currency, global/default currency and retirement clearing an explicit
+/// account override. The SDK does not validate activity, reset, convert or
+/// recalculate stored state. In-flight operations retain resolved values; new
+/// operations resolve the new currency.
 ///
 /// For an example of good practice in building a control plane on this SDK,
 /// see Pit Officer at <http://officer.openpit.dev/>.
@@ -2629,12 +2644,13 @@ pub extern "C" fn openpit_engine_set_account_currency(
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
-/// Before changing an active account's effective currency, explicitly clear
-/// and zero the account. This includes group moves, group currency, global/default
-/// currency and retirement clearing an explicit account override. The SDK does
-/// not validate activity, reset, convert or recalculate stored state. In-flight
-/// operations retain resolved values; new operations resolve the new currency.
+/// Caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. Before changing an active account's effective
+/// currency, explicitly clear and zero the account. This includes group moves,
+/// group currency, global/default currency and retirement clearing an explicit
+/// account override. The SDK does not validate activity, reset, convert or
+/// recalculate stored state. In-flight operations retain resolved values; new
+/// operations resolve the new currency.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
@@ -2657,12 +2673,13 @@ pub extern "C" fn openpit_engine_clear_account_currency(
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
-/// Before changing an active account's effective currency, explicitly clear
-/// and zero the account. This includes group moves, group currency, global/default
-/// currency and retirement clearing an explicit account override. The SDK does
-/// not validate activity, reset, convert or recalculate stored state. In-flight
-/// operations retain resolved values; new operations resolve the new currency.
+/// Caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. Before changing an active account's effective
+/// currency, explicitly clear and zero the account. This includes group moves,
+/// group currency, global/default currency and retirement clearing an explicit
+/// account override. The SDK does not validate activity, reset, convert or
+/// recalculate stored state. In-flight operations retain resolved values; new
+/// operations resolve the new currency.
 ///
 /// Concurrency: caller-guaranteed exclusive in every mode, including
 /// `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
@@ -2717,12 +2734,13 @@ pub extern "C" fn openpit_engine_set_account_group_currency(
 /// Effective currency resolves from the account, then its group, then
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
 ///
-/// Caller-guaranteed exclusive in every mode, including `OpenPitSyncPolicy_Full`.
-/// Before changing an active account's effective currency, explicitly clear
-/// and zero the account. This includes group moves, group currency, global/default
-/// currency and retirement clearing an explicit account override. The SDK does
-/// not validate activity, reset, convert or recalculate stored state. In-flight
-/// operations retain resolved values; new operations resolve the new currency.
+/// Caller-guaranteed exclusive in every mode, including
+/// `OpenPitSyncPolicy_Full`. Before changing an active account's effective
+/// currency, explicitly clear and zero the account. This includes group moves,
+/// group currency, global/default currency and retirement clearing an explicit
+/// account override. The SDK does not validate activity, reset, convert or
+/// recalculate stored state. In-flight operations retain resolved values; new
+/// operations resolve the new currency.
 ///
 /// Concurrency: caller-guaranteed exclusive in every mode, including
 /// `OpenPitSyncPolicy_Full`. No other engine call may be in flight, including
@@ -2747,7 +2765,7 @@ pub extern "C" fn openpit_engine_clear_account_group_currency(
     engine.inner.accounts().clear_group_currency(group);
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Structured error returned by account block operations.
 ///
@@ -2933,7 +2951,7 @@ pub extern "C" fn openpit_account_block_error_get_group(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Discriminant for the variant carried by an [`OpenPitConfigureError`].
 #[repr(u32)]
@@ -3047,7 +3065,7 @@ pub extern "C" fn openpit_configure_error_get_kind(
     unsafe { &*err }.kind
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Blocks `account` with `reason`.
@@ -4018,7 +4036,8 @@ mod tests {
         crate::reject::openpit_pretrade_reject_list_get_accept_sentinel()
     }
 
-    /// Builds an engine whose single main-stage policy runs `perform_pre_trade_check_fn`.
+    /// Builds an engine whose single main-stage policy runs
+    /// `perform_pre_trade_check_fn`.
     fn build_engine_with_mutation_policy(
         name: &str,
         perform_pre_trade_check_fn: OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,
@@ -5950,8 +5969,8 @@ mod tests {
             core::ptr::NonNull::<super::OpenPitPretradePreTradeDryRunReport>::dangling().as_ptr();
         let mut out_report = report_sentinel;
 
-        // Null engine and null order both take the transport-error path and must
-        // leave the out-pointer untouched.
+        // Null engine and null order both take the transport-error path and
+        // must leave the out-pointer untouched.
         assert!(!openpit_engine_start_pre_trade_dry_run(
             std::ptr::null_mut(),
             std::ptr::null(),
@@ -6089,8 +6108,9 @@ mod tests {
 
     #[test]
     fn start_pre_trade_dry_run_reject_path_reports_account_block() {
-        // A start-stage account-scope reject is reported with a would-be account
-        // block - and a dry-run reports it without recording it in the engine.
+        // A start-stage account-scope reject is reported with a would-be
+        // account block - and a dry-run reports it without recording it in the
+        // engine.
         let engine = build_engine_with_start_account_reject_policy();
         let order = OpenPitOrder::default();
         let mut out_report = std::ptr::null_mut();

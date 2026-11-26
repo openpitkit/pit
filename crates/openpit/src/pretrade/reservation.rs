@@ -20,9 +20,10 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 
 /// Opaque capability object representing reserved state.
 ///
-/// `PreTradeReservation` is the result of successful pre-trade execution. It owns the
-/// commit/rollback capability for the mutations prepared by policies, and it
-/// also carries the [`PreTradeLock`] produced while those mutations were built.
+/// `PreTradeReservation` is the result of successful pre-trade execution. It
+/// owns the commit/rollback capability for the mutations prepared by policies,
+/// and it also carries the [`PreTradeLock`] produced while those mutations were
+/// built.
 ///
 /// The lock is part of the reservation contract. It is the policy context that
 /// describes what was actually locked and which values must survive beyond the
@@ -30,11 +31,11 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// on execution-report details, especially partial fills and final reports.
 ///
 /// If a policy needs trade execution report fill details to finalize reserved
-/// state, the caller must persist [`PreTradeReservation::lock`] together with the order
-/// and keep it until the last execution report for that order has been
-/// processed. A final order state alone is not sufficient if the policy also
-/// needs fill-by-fill data to determine how much of the reservation was truly
-/// consumed and how much must be released.
+/// state, the caller must persist [`PreTradeReservation::lock`] together with
+/// the order and keep it until the last execution report for that order has
+/// been processed. A final order state alone is not sufficient if the policy
+/// also needs fill-by-fill data to determine how much of the reservation was
+/// truly consumed and how much must be released.
 ///
 /// Example: a policy may reserve quote notional using a pre-trade worst price.
 /// When fills arrive, the engine may need that stored reservation context to
@@ -42,15 +43,16 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// post-trade code no longer has the authoritative context produced by
 /// pre-trade validation.
 ///
-/// If dropped without explicit finalization, rollback is executed automatically.
+/// If dropped without explicit finalization, rollback is executed
+/// automatically.
 ///
 /// # Finalization
 ///
 /// Both [`commit`](Self::commit) and [`rollback`](Self::rollback) are void:
 /// the state they finalize was applied eagerly, so there is nothing left for
 /// the owner to decide or compensate. A mutation finalizer that fails anyway is
-/// never ignored - the engine raises a kill switch instead, and the owner learns
-/// about it when its next pre-trade request is rejected with
+/// never ignored - the engine raises a kill switch instead, and the owner
+/// learns about it when its next pre-trade request is rejected with
 /// [`RejectCode::SystemUnavailable`](super::RejectCode::SystemUnavailable). See
 /// the finalizer contract on [`Mutation`](crate::Mutation) for the reach of
 /// that block.
@@ -100,13 +102,13 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// When there are no review marks:
 ///
 /// - Keep the `PreTradeReservation` alive until the order is actually sent.
-/// - Call [`PreTradeReservation::commit`] only after the venue accepted the order and
-///   the reservation must become durable engine state.
+/// - Call [`PreTradeReservation::commit`] only after the venue accepted the
+///   order and the reservation must become durable engine state.
 /// - Call [`PreTradeReservation::rollback`] if submission fails and reserved
 ///   state must be reverted immediately. After a review in which Spot Funds
 ///   kept its hold, also release that hold as described above.
-/// - After commit, persist [`PreTradeReservation::lock`] if later execution-report
-///   processing depends on reservation-time policy context.
+/// - After commit, persist [`PreTradeReservation::lock`] if later
+///   execution-report processing depends on reservation-time policy context.
 ///
 /// # Examples
 ///
@@ -252,11 +254,12 @@ impl PreTradeReservation {
         &self.lock
     }
 
-    /// Returns account position modifications grouped by [`super::PolicyGroupId`].
+    /// Returns account position modifications grouped by
+    /// [`super::PolicyGroupId`].
     ///
-    /// Contains zero or more entries. Policies that share a group tag contribute
-    /// to the same entry; policies that report nothing do not create an entry.
-    /// Order within a group follows policy registration order.
+    /// Contains zero or more entries. Policies that share a group tag
+    /// contribute to the same entry; policies that report nothing do not create
+    /// an entry. Order within a group follows policy registration order.
     pub fn account_adjustments(&self) -> &[AccountAdjustmentOutcome] {
         &self.account_adjustments
     }

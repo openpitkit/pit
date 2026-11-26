@@ -37,16 +37,16 @@ func AccountBlockErrorGetKind(err AccountBlockError) AccountBlockErrorKind {
 	return C.openpit_account_block_error_get_kind(err)
 }
 
-// AccountBlockErrorGetAccount returns the account of the error, and false unless
-// the error kind is AccountNotBlocked.
+// AccountBlockErrorGetAccount returns the account of the error, and false
+// unless the error kind is AccountNotBlocked.
 func AccountBlockErrorGetAccount(err AccountBlockError) (ParamAccountID, bool) {
 	var out ParamAccountID
 	ok := bool(C.openpit_account_block_error_get_account(err, &out))
 	return out, ok
 }
 
-// AccountBlockErrorGetGroup returns the group of the error, and false unless the
-// error kind is GroupNotBlocked.
+// AccountBlockErrorGetGroup returns the group of the error, and false unless
+// the error kind is GroupNotBlocked.
 func AccountBlockErrorGetGroup(err AccountBlockError) (ParamAccountGroupID, bool) {
 	var out ParamAccountGroupID
 	ok := bool(C.openpit_account_block_error_get_group(err, &out))

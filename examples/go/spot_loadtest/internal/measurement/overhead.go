@@ -56,7 +56,8 @@ type OverheadSummary struct {
 // The overhead characterisation is a best-effort estimate of the bare
 // FFI+asyncengine round-trip with no policy work (or trivial policy work). The
 // report discloses it as "harness self-overhead" so readers can subtract it
-// from the headline if they wish. It is NOT subtracted from the headline itself.
+// from the headline if they wish. It is NOT subtracted from the headline
+// itself.
 func MeasureOverhead(ctx context.Context, probeCount int, prober OverheadProber) (OverheadSummary, error) {
 	h := hdrhistogram.New(histMinNs, histMaxNs, histSigFig)
 	var probeErr error

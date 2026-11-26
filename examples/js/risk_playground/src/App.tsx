@@ -652,7 +652,8 @@ export function App() {
                   parsedLimits === null
                     ? undefined
                     : {
-                        // Only a loss uses this one-sided limit; profit uses none.
+                        // Only a loss uses this one-sided limit; profit uses
+                        // none.
                         current:
                           snapshot.pnlAtoms < 0n ? -snapshot.pnlAtoms : 0n,
                         format: formatMoneyAtoms,

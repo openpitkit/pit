@@ -32,7 +32,8 @@ import (
 // a per-operation cost. For ultra-low-latency paths that need many
 // intermediate computations, prefer performing the math on primitive types
 // or a custom representation and cross into PositionSize only once via
-// NewPositionSizeFromString / NewPositionSizeFromDecimal / NewPositionSizeFromHandle.
+// NewPositionSizeFromString / NewPositionSizeFromDecimal /
+// NewPositionSizeFromHandle.
 //
 // This cost exists because the SDK guarantees that the same input produces
 // the same bit-for-bit result: all arithmetic runs inside the native core.
@@ -58,8 +59,9 @@ func newPositionSizeOrPanic(value PositionSize, err error) PositionSize {
 	return value
 }
 
-// newPositionSizeQuantitySideOrPanic returns decoded parts or panics on ABI drift.
-// The panic is deliberate fail-fast behavior: continuing would hide wrong data.
+// newPositionSizeQuantitySideOrPanic returns decoded parts or panics on ABI
+// drift. The panic is deliberate fail-fast behavior: continuing would hide
+// wrong data.
 func newPositionSizeQuantitySideOrPanic(
 	quantity native.ParamQuantity,
 	side native.ParamSide,
@@ -122,9 +124,9 @@ func NewPositionSizeFromUint64(v uint64) (PositionSize, error) {
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
 // DO NOT use for monetary data received from external systems - prefer
-// NewPositionSizeFromString or NewPositionSizeFromDecimal. This constructor is provided
-// for parity and test convenience only; cross-platform determinism is NOT
-// guaranteed when construction goes through float64.
+// NewPositionSizeFromString or NewPositionSizeFromDecimal. This constructor is
+// provided for parity and test convenience only; cross-platform determinism is
+// NOT guaranteed when construction goes through float64.
 func NewPositionSizeFromFloat(v float64) (PositionSize, error) {
 	nativeValue, err := native.CreateParamPositionSizeFromF64(v)
 	if err != nil {
@@ -138,7 +140,8 @@ func NewPositionSizeFromHandle(v native.ParamPositionSize) PositionSize {
 	return PositionSize{native: v}
 }
 
-// NewPositionSizeOptionFromHandle creates an optional PositionSize from a native optional handle.
+// NewPositionSizeOptionFromHandle creates an optional PositionSize from a
+// native optional handle.
 func NewPositionSizeOptionFromHandle(
 	v native.ParamPositionSizeOptional,
 ) optional.Option[PositionSize] {
@@ -148,7 +151,8 @@ func NewPositionSizeOptionFromHandle(
 	return optional.Some(NewPositionSizeFromHandle(native.ParamPositionSizeOptionalGet(v)))
 }
 
-// NewPositionSizeFromStringRounded creates a PositionSize from a string, rounded to the given scale.
+// NewPositionSizeFromStringRounded creates a PositionSize from a string,
+// rounded to the given scale.
 func NewPositionSizeFromStringRounded(
 	v string,
 	scale uint32,
@@ -161,7 +165,8 @@ func NewPositionSizeFromStringRounded(
 	return NewPositionSizeFromHandle(nativeValue), nil
 }
 
-// NewPositionSizeFromFloatRounded creates a PositionSize from a float64, rounded to the given scale.
+// NewPositionSizeFromFloatRounded creates a PositionSize from a float64,
+// rounded to the given scale.
 func NewPositionSizeFromFloatRounded(
 	v float64,
 	scale uint32,
@@ -174,7 +179,8 @@ func NewPositionSizeFromFloatRounded(
 	return NewPositionSizeFromHandle(nativeValue), nil
 }
 
-// NewPositionSizeFromDecimalRounded converts a shopspring decimal to a rounded PositionSize.
+// NewPositionSizeFromDecimalRounded converts a shopspring decimal to a rounded
+// PositionSize.
 //
 // Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
 // a positive exponent folded in - exceeds signed 128-bit range, or v's scale
@@ -218,7 +224,8 @@ func NewPositionSizeFromFee(fee Fee) (PositionSize, error) {
 	return NewPositionSizeFromHandle(nativeValue), nil
 }
 
-// NewPositionSizeFromQuantityAndSide creates a PositionSize from a quantity and trade side.
+// NewPositionSizeFromQuantityAndSide creates a PositionSize from a quantity and
+// trade side.
 func NewPositionSizeFromQuantityAndSide(q Quantity, side Side) (PositionSize, error) {
 	nativeValue, err := native.ParamPositionSizeFromQuantityAndSide(q.native, side.Handle())
 	if err != nil {
@@ -243,35 +250,40 @@ func (v PositionSize) Handle() native.ParamPositionSize {
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
 // DO NOT use for monetary data received from external systems - prefer
-// NewPositionSizeFromString or NewPositionSizeFromDecimal. This constructor is provided
-// for parity and test convenience only; cross-platform determinism is NOT
-// guaranteed when construction goes through float64.
+// NewPositionSizeFromString or NewPositionSizeFromDecimal. This constructor is
+// provided for parity and test convenience only; cross-platform determinism is
+// NOT guaranteed when construction goes through float64.
 func (v PositionSize) Float() float64 {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamPositionSizeToF64(v.native))
 }
 
 // String returns the decimal string representation of the position size.
 func (v PositionSize) String() string {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamPositionSizeToString(v.native))
 }
 
 // IsZero reports whether the position size is zero.
 func (v PositionSize) IsZero() bool {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamPositionSizeIsZero(v.native))
 }
 
 // Equal reports whether v and other are equal.
 func (v PositionSize) Equal(other PositionSize) bool {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamPositionSizeCompare(v.native, other.native)) == 0
 }
 
 // Compare returns -1, 0, or 1 comparing v to other.
 func (v PositionSize) Compare(other PositionSize) int {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamPositionSizeCompare(v.native, other.native))
 }
 
@@ -329,7 +341,8 @@ func (v PositionSize) CheckedMulFloat(scalar float64) (PositionSize, error) {
 	return NewPositionSizeFromHandle(result), nil
 }
 
-// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
+// CheckedDivInt returns v / divisor or an error on division by zero or
+// overflow.
 func (v PositionSize) CheckedDivInt(divisor int64) (PositionSize, error) {
 	result, err := native.ParamPositionSizeCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -347,7 +360,8 @@ func (v PositionSize) CheckedDivUint(divisor uint64) (PositionSize, error) {
 	return NewPositionSizeFromHandle(result), nil
 }
 
-// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
+// CheckedDivFloat returns v / divisor or an error on division by zero or
+// overflow.
 func (v PositionSize) CheckedDivFloat(divisor float64) (PositionSize, error) {
 	result, err := native.ParamPositionSizeCheckedDivF64(v.native, divisor)
 	if err != nil {
@@ -383,18 +397,22 @@ func (v PositionSize) CheckedRemFloat(divisor float64) (PositionSize, error) {
 	return NewPositionSizeFromHandle(result), nil
 }
 
-// OpenQuantity returns the absolute quantity and the side needed to open this position.
+// OpenQuantity returns the absolute quantity and the side needed to open this
+// position.
 func (v PositionSize) OpenQuantity() (Quantity, Side) {
-	// invariant: native value already validated on construction; quantity/side projection cannot fail.
+	// invariant: native value already validated on construction; quantity/side
+	// projection cannot fail.
 	quantity, side := newPositionSizeQuantitySideOrPanic(
 		native.ParamPositionSizeToOpenQuantity(v.native),
 	)
 	return NewQuantityFromHandle(quantity), NewSideFromHandle(side).MustGet()
 }
 
-// CloseQuantity returns the absolute quantity and optional side needed to close this position.
+// CloseQuantity returns the absolute quantity and optional side needed to close
+// this position.
 func (v PositionSize) CloseQuantity() (Quantity, optional.Option[Side]) {
-	// invariant: native value already validated on construction; quantity/side projection cannot fail.
+	// invariant: native value already validated on construction; quantity/side
+	// projection cannot fail.
 	quantity, side := newPositionSizeQuantitySideOrPanic(
 		native.ParamPositionSizeToCloseQuantity(v.native),
 	)
@@ -405,7 +423,8 @@ func (v PositionSize) CloseQuantity() (Quantity, optional.Option[Side]) {
 	return result, NewSideFromHandle(side)
 }
 
-// CheckedAddQuantity adds the given quantity on the given side to the position size.
+// CheckedAddQuantity adds the given quantity on the given side to the position
+// size.
 func (v PositionSize) CheckedAddQuantity(q Quantity, side Side) (PositionSize, error) {
 	result, err := native.ParamPositionSizeCheckedAddQuantity(v.native, q.native, side.Handle())
 	if err != nil {

@@ -17,13 +17,14 @@
 
 //! Public account administration handle for [`Engine`](crate::Engine).
 //!
-//! All membership, retirement and currency setters/clearers are caller-guaranteed
-//! exclusive operations in every mode, including FullSync. Before changing an
-//! active account's effective currency, the caller explicitly clears and zeros
-//! the account. This includes group movement, group currency, the global/default
-//! currency and retirement clearing an explicit account currency. The SDK does
-//! not validate activity, reset, convert or recalculate stored state. In-flight
-//! operations retain resolved values; unrequested optional values remain lazy.
+//! All membership, retirement and currency setters/clearers are
+//! caller-guaranteed exclusive operations in every mode, including FullSync.
+//! Before changing an active account's effective currency, the caller
+//! explicitly clears and zeros the account. This includes group movement, group
+//! currency, the global/default currency and retirement clearing an explicit
+//! account currency. The SDK does not validate activity, reset, convert or
+//! recalculate stored state. In-flight operations retain resolved values;
+//! unrequested optional values remain lazy.
 
 use crate::core::account_control::{AccountBlockError, AccountBlockHandle};
 use crate::core::account_groups::{AccountGroupError, AccountGroupsHandle};
@@ -187,7 +188,8 @@ where
 /// The handle exposes three facilities:
 ///
 /// - **Group membership**: [`register_group`](Self::register_group),
-///   [`unregister_group`](Self::unregister_group), [`group_of`](Self::group_of).
+///   [`unregister_group`](Self::unregister_group),
+///   [`group_of`](Self::group_of).
 /// - **Admin blocking**: [`block`](Self::block),
 ///   [`block_with_cause`](Self::block_with_cause), [`unblock`](Self::unblock),
 ///   [`replace_block_reason`](Self::replace_block_reason), and their group
@@ -210,11 +212,12 @@ where
 ///
 /// `Accounts` inherits the engine's synchronization mode through its inner
 /// handles; see [`Engine`](crate::Engine)'s threading section for the contract.
-/// Group membership (`register_group`, `unregister_group`) and all account/group
-/// currency setters and clearers (`set_currency`, `clear_currency`,
-/// `set_group_currency`, `clear_group_currency`), including default/global currency,
-/// are caller-exclusive in every mode, including [`FullSync`](crate::FullSync).
-/// The caller keeps every other engine call out of flight for the entire operation.
+/// Group membership (`register_group`, `unregister_group`) and all
+/// account/group currency setters and clearers (`set_currency`,
+/// `clear_currency`, `set_group_currency`, `clear_group_currency`), including
+/// default/global currency, are caller-exclusive in every mode, including
+/// [`FullSync`](crate::FullSync). The caller keeps every other engine call out
+/// of flight for the entire operation.
 ///
 /// # Examples
 ///
@@ -232,7 +235,10 @@ where
 ///
 /// let accounts = engine.accounts();
 /// let group = AccountGroupId::from_u32(1)?;
-/// accounts.register_group(&[AccountId::from_u64(10), AccountId::from_u64(11)], group)?;
+/// accounts.register_group(
+///     &[AccountId::from_u64(10), AccountId::from_u64(11)],
+///     group,
+/// )?;
 ///
 /// assert_eq!(accounts.group_of(AccountId::from_u64(10)), Some(group));
 /// assert_eq!(accounts.group_of(AccountId::from_u64(99)), None);
@@ -315,9 +321,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`AccountGroupError::ReservedGroup`] when `group` is the reserved
-    /// default group, or [`AccountGroupError::AlreadyRegistered`] when any
-    /// listed account already belongs to a group.
+    /// Returns [`AccountGroupError::ReservedGroup`] when `group` is the
+    /// reserved default group, or [`AccountGroupError::AlreadyRegistered`] when
+    /// any listed account already belongs to a group.
     pub fn register_group(
         &self,
         accounts: &[AccountId],
@@ -364,9 +370,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`AccountGroupError::ReservedGroup`] when `group` is the reserved
-    /// default group, or [`AccountGroupError::NotInGroup`] when any listed
-    /// account is not currently a member of `group`.
+    /// Returns [`AccountGroupError::ReservedGroup`] when `group` is the
+    /// reserved default group, or [`AccountGroupError::NotInGroup`] when any
+    /// listed account is not currently a member of `group`.
     pub fn unregister_group(
         &self,
         accounts: &[AccountId],
@@ -409,8 +415,9 @@ where
     /// in-flight operation retains its already resolved value.
     ///
     /// # Concurrency
-    /// Caller-guaranteed exclusive in every mode, including full synchronization:
-    /// no other engine call may be in flight for the entire write.
+    /// Caller-guaranteed exclusive in every mode, including full
+    /// synchronization: no other engine call may be in flight for the entire
+    /// write.
     pub fn set_currency(&self, account: AccountId, currency: Asset) {
         #[cfg(debug_assertions)]
         let _call = self.config_registry.engine_calls.enter_exclusive();
@@ -432,8 +439,9 @@ where
     /// in-flight operation retains its already resolved value.
     ///
     /// # Concurrency
-    /// Caller-guaranteed exclusive in every mode, including full synchronization:
-    /// no other engine call may be in flight for the entire write.
+    /// Caller-guaranteed exclusive in every mode, including full
+    /// synchronization: no other engine call may be in flight for the entire
+    /// write.
     pub fn clear_currency(&self, account: AccountId) {
         #[cfg(debug_assertions)]
         let _call = self.config_registry.engine_calls.enter_exclusive();
@@ -495,7 +503,8 @@ where
     }
 
     #[cfg(test)]
-    /// Test-only; production resolves the group, then calls `currency_of_in_group`.
+    /// Test-only; production resolves the group, then calls
+    /// `currency_of_in_group`.
     pub(crate) fn currency_of(&self, account: AccountId) -> Option<Asset> {
         self.currency_of_in_group(account, self.group_of(account))
     }
@@ -532,8 +541,8 @@ where
     /// shares the engine's single blocked-accounts set with kill-switch blocks.
     ///
     /// Idempotent: the first cause for an account wins, so re-blocking an
-    /// already-blocked account (whether by an admin call or a prior kill switch)
-    /// is a no-op and does **not** overwrite the stored reason. Use
+    /// already-blocked account (whether by an admin call or a prior kill
+    /// switch) is a no-op and does **not** overwrite the stored reason. Use
     /// [`replace_block_reason`](Self::replace_block_reason) to change it.
     pub fn block(&self, account: AccountId, reason: String) {
         #[cfg(debug_assertions)]
@@ -570,8 +579,8 @@ where
     /// Unblocks `account`, clearing any block on it.
     ///
     /// Idempotent: a no-op when `account` is not blocked. This clears the block
-    /// regardless of its origin - an admin block or a kill-switch block are both
-    /// removed.
+    /// regardless of its origin - an admin block or a kill-switch block are
+    /// both removed.
     pub fn unblock(&self, account: AccountId) {
         #[cfg(debug_assertions)]
         let _call = self.config_registry.engine_calls.enter_free();
@@ -622,17 +631,18 @@ where
 
     /// Blocks the account group `group` out of band with `reason`.
     ///
-    /// Group blocking is a live predicate: every pre-trade request whose account
-    /// currently belongs to `group` is rejected with
+    /// Group blocking is a live predicate: every pre-trade request whose
+    /// account currently belongs to `group` is rejected with
     /// [`RejectCode::AccountBlocked`] and `reason`, before any policy runs. The
-    /// group is **not** expanded into its members, so an account registered into
-    /// `group` after the block takes effect immediately, and an account that
-    /// leaves `group` is no longer group-blocked unless blocked individually.
+    /// group is **not** expanded into its members, so an account registered
+    /// into `group` after the block takes effect immediately, and an account
+    /// that leaves `group` is no longer group-blocked unless blocked
+    /// individually.
     ///
     /// Idempotent: the first cause for a group wins, so re-blocking an
     /// already-blocked group is a no-op. Use
-    /// [`replace_group_block_reason`](Self::replace_group_block_reason) to change
-    /// the stored reason.
+    /// [`replace_group_block_reason`](Self::replace_group_block_reason) to
+    /// change the stored reason.
     ///
     /// `group` must be an explicit group: the reserved
     /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
@@ -640,8 +650,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the reserved
-    /// default group.
+    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the
+    /// reserved default group.
     pub fn block_group(
         &self,
         group: AccountGroupId,
@@ -663,8 +673,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the reserved
-    /// default group.
+    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the
+    /// reserved default group.
     pub fn unblock_group(&self, group: AccountGroupId) -> Result<(), AccountBlockError> {
         #[cfg(debug_assertions)]
         let _call = self.config_registry.engine_calls.enter_free();
@@ -683,9 +693,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the reserved
-    /// default group, or [`AccountBlockError::GroupNotBlocked`] when `group` is
-    /// not currently blocked; the blocked set is left unchanged.
+    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the
+    /// reserved default group, or [`AccountBlockError::GroupNotBlocked`] when
+    /// `group` is not currently blocked; the blocked set is left unchanged.
     pub fn replace_group_block_reason(
         &self,
         group: AccountGroupId,
@@ -862,8 +872,8 @@ mod tests {
         <NoLocking as LockingPolicyFactory>::Shared<AccountGroups<NoLocking>>,
     );
 
-    /// Builds an [`Accounts`] handle plus the shared blocked-set and registry it
-    /// wraps, so tests can drive the public API and then observe the effect
+    /// Builds an [`Accounts`] handle plus the shared blocked-set and registry
+    /// it wraps, so tests can drive the public API and then observe the effect
     /// through [`BlockedAccounts::check`].
     fn new_accounts() -> TestAccountsHandles {
         let builder = StorageBuilder::new(NoLocking);

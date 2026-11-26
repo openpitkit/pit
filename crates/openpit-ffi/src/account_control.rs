@@ -133,7 +133,7 @@ impl OpenPitAccountControl {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Records a block against the account bound to an account-control handle.
@@ -211,7 +211,7 @@ pub extern "C" fn openpit_destroy_account_control(control: *mut OpenPitAccountCo
     unsafe { drop(Box::from_raw(control)) };
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Returns an account-control handle for a main-stage pre-trade context.
@@ -360,7 +360,7 @@ pub unsafe extern "C" fn openpit_account_adjustment_context_get_account_control(
     OpenPitAccountControl::into_raw(ctx.account_control.clone())
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Returns the account-group for a main-stage pre-trade context.

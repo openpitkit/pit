@@ -545,7 +545,8 @@ fn example_wiki_domain_types_directional_types() -> Result<(), Box<dyn std::erro
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{PositionSide, Side};
 
-    // Directional helpers keep side logic explicit instead of comparing raw strings.
+    // Directional helpers keep side logic explicit instead of comparing raw
+    // strings.
     assert_eq!(Side::Buy.opposite(), Side::Sell);
     assert_eq!(Side::Sell.sign(), -1);
     assert_eq!(PositionSide::Long.opposite(), PositionSide::Short);
@@ -558,7 +559,8 @@ fn example_wiki_domain_types_leverage() -> Result<(), Box<dyn std::error::Error>
     // Keep this example in sync with the matching wiki example.
     use openpit::param::Leverage;
 
-    // Pick the constructor that matches the upstream representation you receive.
+    // Pick the constructor that matches the upstream representation you
+    // receive.
     let from_multiplier = Leverage::from_u16(100).expect("valid leverage");
     let from_float = Leverage::from_f64(100.5).expect("valid leverage");
 
@@ -683,12 +685,12 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
         std::io::Error::other(message)
     })?;
 
-    // 5. Quick, lightweight checks, such as fat-finger scope or enabled killswitch,
-    // were performed during pre-trade request creation. The system state has not
-    // yet changed, except in cases where each request, even rejected ones, must be
-    // considered (for example, to prevent frequent transfers). Before the
-    // heavy-duty checks, other work on the request can be performed simply by
-    // holding the request object.
+    // 5. Quick, lightweight checks, such as fat-finger scope or enabled
+    //    killswitch, were performed during pre-trade request creation. The
+    //    system state has not yet changed, except in cases where each request,
+    //    even rejected ones, must be considered (for example, to prevent
+    //    frequent transfers). Before the heavy-duty checks, other work on the
+    //    request can be performed simply by holding the request object.
 
     // 6. Real pre-trade and risk control.
     let mut reservation = request.execute().map_err(|rejects| {
@@ -717,8 +719,9 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
         return Ok(());
     }
 
-    // 7. If the request is successfully sent to the venue, it must be committed.
-    // The rollback must be called otherwise to revert all performed reservations.
+    // 7. If the request is successfully sent to the venue, it must be
+    //    committed. The rollback must be called otherwise to revert all
+    //    performed reservations.
     reservation.commit();
 
     // 8. The order goes to the venue and returns with an execution report.
@@ -748,9 +751,9 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
         );
     }
 
-    // 9. After each execution report is applied, the system may report that it has
-    // been determined in advance that all subsequent requests will be rejected if
-    // the account status does not change.
+    // 9. After each execution report is applied, the system may report that it
+    //    has been determined in advance that all subsequent requests will be
+    //    rejected if the account status does not change.
     assert!(result.account_blocks.is_empty());
     Ok(())
 }
@@ -769,7 +772,8 @@ fn example_wiki_pipeline_start_stage_reject() -> Result<(), Box<dyn std::error::
     // Start stage returns either a reject or a deferred request handle.
     match engine.start_pre_trade(order) {
         Ok(request) => {
-            // Keep the request object if later code wants to enter the main stage.
+            // Keep the request object if later code wants to enter the main
+            // stage.
             let _request = request;
         }
         Err(rejects) => {
@@ -799,10 +803,12 @@ fn example_wiki_pipeline_main_stage_finalize() -> Result<(), Box<dyn std::error:
         .start_pre_trade(order)
         .expect("start stage must pass");
 
-    // Main stage consumes the deferred request and returns reservation or rejects.
+    // Main stage consumes the deferred request and returns reservation or
+    // rejects.
     match request.execute() {
         Ok(mut reservation) => {
-            // Commit only after the caller knows the reservation should become durable.
+            // Commit only after the caller knows the reservation should become
+            // durable.
             reservation.commit()
         }
         Err(rejects) => {
@@ -874,7 +880,8 @@ fn example_wiki_pipeline_shortcut_start_and_main() -> Result<(), Box<dyn std::er
     // The shortcut runs start stage and main stage as one convenience call.
     match engine.execute_pre_trade(order) {
         Ok(mut reservation) => {
-            // Finalization is still explicit even when the two stages are composed.
+            // Finalization is still explicit even when the two stages are
+            // composed.
             reservation.commit()
         }
         Err(rejects) => {
@@ -946,7 +953,8 @@ fn example_wiki_pipeline_apply_post_trade_feedback() -> Result<(), Box<dyn std::
         .build()?;
     let report = aapl_usd_report("-50", "3.4");
 
-    // Execution reports feed realized outcomes back into cumulative policy state.
+    // Execution reports feed realized outcomes back into cumulative policy
+    // state.
     let result = engine.apply_execution_report(&report);
     for outcome in &result.account_pnls {
         eprintln!("account P&L outcome for {}", outcome.account_id);
@@ -1148,7 +1156,8 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
                 )));
             }
 
-            // Apply immediately so later adjustments in the same batch see the updated total.
+            // Apply immediately so later adjustments in the same batch see the
+            // updated total.
             self.totals.with_mut(
                 asset_id.clone(),
                 || Volume::ZERO,
@@ -1167,7 +1176,8 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
                     // Commit is empty: state was applied eagerly.
                 },
                 move || {
-                    // Rollback: restore absolute value captured before modification.
+                    // Rollback: restore absolute value captured before
+                    // modification.
                     rollback_totals.with_mut(
                         rollback_asset,
                         || Volume::ZERO,
@@ -1690,7 +1700,8 @@ fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>
 
     let account = AccountId::from_u64(99224416);
 
-    // Seed 10000 USD of available funds through the account-adjustment pipeline.
+    // Seed 10000 USD of available funds through the account-adjustment
+    // pipeline.
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
@@ -1788,7 +1799,8 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
     };
     engine.apply_account_adjustment(account, &[seed])?;
 
-    // Market buy (no price): priced at mark 200 + 15% = 230 per unit worst case.
+    // Market buy (no price): priced at mark 200 + 15% = 230 per unit worst
+    // case.
     let order = OrderOperation {
         instrument: aapl,
         account_id: account,
@@ -1913,7 +1925,8 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
     )?;
     assert!(seed.account_blocks.is_empty());
 
-    // Tightening the barrier checks the known account and records the block now.
+    // Tightening the barrier checks the known account and records the block
+    // now.
     let retune = engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
@@ -2120,7 +2133,8 @@ fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn st
     // Second seed: available USD goes from 10000 to 15000.
     let second = engine.apply_account_adjustment(account, &[seed("15000")?])?;
     let usd = second.outcomes[0].entry.balance.expect("balance changed");
-    // delta is the change to add to your own ledger; absolute is just a snapshot.
+    // delta is the change to add to your own ledger; absolute is just a
+    // snapshot.
     assert_eq!(usd.delta, PositionSize::from_str("5000")?);
     assert_eq!(usd.absolute, PositionSize::from_str("15000")?);
     Ok(())
@@ -2308,9 +2322,9 @@ fn example_wiki_account_block_unblock() -> Result<(), Box<dyn std::error::Error>
 fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
     // - Spot Funds: Global Limit Mode
-    // This mirror is intentionally wider than the wiki snippet: it adds the test
-    // harness (the fn -> Result wrapper and seed/order helpers) so the example runs.
-    // Keep the shared user-code flow in sync with the wiki.
+    // This mirror is intentionally wider than the wiki snippet: it adds the
+    // test harness (the fn -> Result wrapper and seed/order helpers) so the
+    // example runs. Keep the shared user-code flow in sync with the wiki.
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
     };
@@ -2339,7 +2353,8 @@ fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error:
     let engine = builder.pre_trade(policy).build()?;
 
     let account = AccountId::from_u64(99224416);
-    // Harness: seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+    // Harness: seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000
+    // notional).
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
@@ -2374,7 +2389,8 @@ fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error:
         .expect("enforce must reject insufficient funds");
     assert_eq!(rejects[0].reason, "spot funds insufficient");
 
-    // Switch to TrackOnly: the same order now passes and reserves against deficit.
+    // Switch to TrackOnly: the same order now passes and reserves against
+    // deficit.
     let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
     engine
         .configure()
@@ -2403,9 +2419,9 @@ fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error:
 fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
     // - Spot Funds: Per-Account Limit Mode
-    // This mirror is intentionally wider than the wiki snippet: it adds the test
-    // harness (the fn -> Result wrapper and seed/order helpers) so the example runs.
-    // Keep the shared user-code flow in sync with the wiki.
+    // This mirror is intentionally wider than the wiki snippet: it adds the
+    // test harness (the fn -> Result wrapper and seed/order helpers) so the
+    // example runs. Keep the shared user-code flow in sync with the wiki.
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
     };
@@ -2434,7 +2450,8 @@ fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::e
     let engine = builder.pre_trade(policy).build()?;
 
     let account = AccountId::from_u64(99224416);
-    // Harness: seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+    // Harness: seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000
+    // notional).
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
@@ -2469,7 +2486,8 @@ fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::e
         .expect("enforce must reject insufficient funds");
     assert_eq!(rejects[0].reason, "spot funds insufficient");
 
-    // Pin this account to TrackOnly: per-account override wins over global Enforce.
+    // Pin this account to TrackOnly: per-account override wins over global
+    // Enforce.
     let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
     engine
         .configure()
@@ -2499,9 +2517,9 @@ fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dy
 {
     // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
     // - Retune a Built-in Policy
-    // This mirror is intentionally wider than the wiki snippet: it adds the test
-    // harness (the fn -> Result wrapper and `order` helper) so the example runs.
-    // Keep this example in sync with the wiki.
+    // This mirror is intentionally wider than the wiki snippet: it adds the
+    // test harness (the fn -> Result wrapper and `order` helper) so the example
+    // runs. Keep this example in sync with the wiki.
     use std::time::Duration;
 
     use openpit::pretrade::policies::{
@@ -2573,9 +2591,10 @@ fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
     // - Force-set Accumulated P&L
-    // This mirror is intentionally wider than the wiki snippet: it adds the test
-    // harness (the fn -> Result wrapper, the `order` helper, and the `account`
-    // binding) so the example runs. Keep this example in sync with the wiki.
+    // This mirror is intentionally wider than the wiki snippet: it adds the
+    // test harness (the fn -> Result wrapper, the `order` helper, and the
+    // `account` binding) so the example runs. Keep this example in sync with
+    // the wiki.
     use openpit::param::{AccountId, Asset, Pnl};
     use openpit::pretrade::policies::{
         PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,
@@ -2613,7 +2632,8 @@ fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
     engine.execute_pre_trade(order())?.commit();
 
     // Force-set the account's accumulated P&L to -150 USD, below the bound.
-    // Built-in policies register under their own name (PnlBoundsKillSwitchPolicy::NAME).
+    // Built-in policies register under their own name
+    // (PnlBoundsKillSwitchPolicy::NAME).
     let name = PnlBoundsKillSwitchPolicy::<NoLocking>::NAME;
     engine.configure().set_account_pnl(
         name,
@@ -2639,9 +2659,9 @@ fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
 fn example_wiki_dry_run_verdict() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
     // - Read the Dry-Run Verdict
-    // This mirror is intentionally wider than the wiki snippet: it adds the test
-    // harness (the fn -> Result wrapper and assertions) so the example runs.
-    // Keep the shared user-code flow in sync with the wiki.
+    // This mirror is intentionally wider than the wiki snippet: it adds the
+    // test harness (the fn -> Result wrapper and assertions) so the example
+    // runs. Keep the shared user-code flow in sync with the wiki.
     use openpit::pretrade::policies::OrderValidationPolicy;
 
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
@@ -2671,9 +2691,9 @@ fn example_wiki_dry_run_verdict() -> Result<(), Box<dyn std::error::Error>> {
 fn example_wiki_dry_run_before_real_call() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
     // - Use the Dry-Run Before a Real Call
-    // This mirror is intentionally wider than the wiki snippet: it adds the test
-    // harness (the fn -> Result wrapper and assertions) so the example runs.
-    // Keep the shared user-code flow in sync with the wiki.
+    // This mirror is intentionally wider than the wiki snippet: it adds the
+    // test harness (the fn -> Result wrapper and assertions) so the example
+    // runs. Keep the shared user-code flow in sync with the wiki.
     use openpit::pretrade::policies::OrderValidationPolicy;
 
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
@@ -2746,10 +2766,11 @@ where
 fn example_wiki_dry_run_custom_policy_hook() -> Result<(), Box<dyn std::error::Error>> {
     // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
     // - Read-Only Custom Start-Stage Hook
-    // This mirror is intentionally wider than the wiki snippet: it defines the full
-    // MyCountingPolicy struct above (the snippet shows only the hook bodies) and
-    // exercises the dry-run and real-call paths to confirm compilation and correct
-    // routing. Keep the shared user-code flow in sync with the wiki.
+    // This mirror is intentionally wider than the wiki snippet: it defines the
+    // full MyCountingPolicy struct above (the snippet shows only the hook
+    // bodies) and exercises the dry-run and real-call paths to confirm
+    // compilation and correct routing. Keep the shared user-code flow in sync
+    // with the wiki.
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(MyCountingPolicy {

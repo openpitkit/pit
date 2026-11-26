@@ -1663,7 +1663,8 @@ class HookProbePolicy(openpit.pretrade.Policy):
 
 
 # Hooks that keep running the rest of the pipeline after one policy raises,
-# paired with an engine entry point that drives them. ``apply_account_adjustment``
+# paired with an engine entry point that drives them.
+# ``apply_account_adjustment``
 # is absent on purpose: a raising policy aborts the batch, so no later Python
 # callback of that operation can run - it is covered on its own below.
 _CALLBACK_HOOKS: tuple[tuple[str, typing.Callable[[openpit.Engine], object]], ...] = (

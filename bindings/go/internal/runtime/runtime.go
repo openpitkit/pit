@@ -24,7 +24,8 @@ import (
 	"runtime"
 )
 
-// GetName returns the name of the embedded FFI runtime library for the current platform.
+// GetName returns the name of the embedded FFI runtime library for the current
+// platform.
 func GetName() (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("unsupported platform %s/%s", runtime.GOOS, runtime.GOARCH)

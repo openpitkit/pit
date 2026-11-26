@@ -32,8 +32,8 @@ import { fileURLToPath } from "node:url";
 
 import { initSync } from "./wasm/openpit_js.js";
 
-// `import.meta.url` points at the emitted entry; the copied `.wasm` sits next to
-// it (see scripts/copy-node-wasm.mjs). tsup `shims: true` rewrites it to a
+// `import.meta.url` points at the emitted entry; the copied `.wasm` sits next
+// to it (see scripts/copy-node-wasm.mjs). tsup `shims: true` rewrites it to a
 // working value where the runtime needs one.
 const wasmPath = fileURLToPath(
   new URL("./openpit_js_bg.wasm", import.meta.url),

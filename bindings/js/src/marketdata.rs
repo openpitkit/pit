@@ -105,8 +105,8 @@ extern "C" {
     )]
     pub type QuoteResolutionLike;
 
-    /// Anything exposing an `accountGroup` getter (the engine contexts qualify);
-    /// `null`/`undefined` means no group.
+    /// Anything exposing an `accountGroup` getter (the engine contexts
+    /// qualify); `null`/`undefined` means no group.
     #[wasm_bindgen(typescript_type = "AccountInfo | null | undefined")]
     pub type AccountInfoLike;
 
@@ -1100,7 +1100,8 @@ impl JsMarketDataService {
         Ok(())
     }
 
-    /// Publishes one quote observation to the default bucket for `instrumentId`.
+    /// Publishes one quote observation to the default bucket for
+    /// `instrumentId`.
     ///
     /// `instrumentId` accepts an `InstrumentId` or a numeric/string identifier;
     /// `quote` accepts a `Quote` object or a plain `QuoteInit` literal. A field

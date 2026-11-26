@@ -15,7 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package openpit provides the Go binding for the OpenPit pre-trade risk engine.
+// Package openpit provides the Go binding for the OpenPit pre-trade risk
+// engine.
 package openpit
 
 import (

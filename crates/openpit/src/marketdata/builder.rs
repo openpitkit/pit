@@ -143,9 +143,9 @@ impl MarketDataSync for FullSync {
 /// argument - either [`QuoteTtl::Infinite`] or [`QuoteTtl::Within`]. The
 /// chosen default applies to every instrument unless overridden at
 /// registration time via
-/// [`MarketDataService::register_with_ttl`](super::service::MarketDataService::register_with_ttl)
+/// [`MarketDataService::register_with_ttl`]
 /// or
-/// [`MarketDataService::register_with_id_and_ttl`](super::service::MarketDataService::register_with_id_and_ttl).
+/// [`MarketDataService::register_with_id_and_ttl`].
 ///
 /// The `Sync` parameter controls both the handle wrapper (`Rc` vs `Arc`) that
 /// distributes the service and the internal lock primitive. Under
@@ -183,7 +183,7 @@ impl<Sync: MarketDataSync> MarketDataBuilder<Sync> {
     ///
     /// The returned service starts with no registered instruments. Register
     /// instruments at any time via
-    /// [`MarketDataService::register`](super::service::MarketDataService::register).
+    /// [`MarketDataService::register`].
     pub fn build(self) -> Sync::Shared<MarketDataService<Sync>> {
         let account_ttl: Sync::Lock<HashMap<AccountId, TtlSetting>> =
             self.sync.new_lock(HashMap::new());

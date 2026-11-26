@@ -98,7 +98,8 @@ export interface AccountAdjustmentPositionOperationInit {
 }
 
 /**
- * Plain-object form of {@link AccountAdjustmentBounds}. Every bound is optional.
+ * Plain-object form of {@link AccountAdjustmentBounds}. Every bound is
+ * optional.
  */
 export interface AccountAdjustmentBoundsInit {
   balanceUpper?: PositionSize | string | number | bigint;

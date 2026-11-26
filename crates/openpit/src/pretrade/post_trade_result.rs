@@ -41,7 +41,8 @@ pub struct PostTradeResult {
     /// neither recorded nor returned.
     /// The engine merges blocks from all policies in registration order.
     ///
-    /// A non-empty value here does **not** mean that [Self::account_adjustments]
+    /// A non-empty value here does **not** mean that
+    /// [Self::account_adjustments]
     /// or [Self::account_pnls] were rolled back - see the type-level atomicity
     /// note.
     pub account_blocks: Vec<AccountBlock>,
@@ -70,7 +71,8 @@ pub struct PostTradeResult {
 }
 
 impl PostTradeResult {
-    /// Returns true when no policy produced account blocks, PnL, or adjustments.
+    /// Returns true when no policy produced account blocks, PnL, or
+    /// adjustments.
     pub fn is_empty(&self) -> bool {
         self.account_blocks.is_empty()
             && self.account_pnls.is_empty()

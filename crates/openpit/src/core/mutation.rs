@@ -263,8 +263,8 @@ pub(crate) fn next_mutation_owner_id() -> u64 {
 ///
 /// A finalizer that fails anyway leaves the engine's own bookkeeping in an
 /// unknown state, so the engine never ignores it. It raises a kill switch with
-/// [`RejectCode::SystemUnavailable`](crate::pretrade::RejectCode::SystemUnavailable)
-/// whose reach follows who registered the mutation:
+/// [`RejectCode::SystemUnavailable`] whose reach follows who registered the
+/// mutation:
 ///
 /// - a mutation registered by engine-owned code (a built-in policy or the
 ///   engine itself) has a known reach, so the account the pipeline ran for is
@@ -284,6 +284,9 @@ pub(crate) fn next_mutation_owner_id() -> u64 {
 /// operation finalization (explicit and on drop), compensation of a fatal
 /// drop-copy evaluation exit, the account-adjustment batch, and account
 /// retirement.
+///
+/// [`RejectCode::SystemUnavailable`]:
+///     crate::pretrade::RejectCode::SystemUnavailable
 ///
 /// # Examples
 ///

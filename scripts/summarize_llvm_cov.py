@@ -279,8 +279,8 @@ def effective_region_metric(
 ) -> MetricSummary:
     raw_uncovered = zero_spans - covered_spans
 
-    # LLVM JSON may include point-sized bookkeeping regions (single-column spans)
-    # that are not meaningful executable regions for thresholding.
+    # LLVM JSON may include point-sized bookkeeping regions (single-column
+    # spans) that are not meaningful executable regions for thresholding.
     def is_point_span(span: Span) -> bool:
         return span[0] == span[2] and (span[3] - span[1]) <= 1
 

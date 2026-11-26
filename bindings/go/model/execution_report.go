@@ -55,7 +55,8 @@ type ExecutionReportValues struct {
 	PositionImpact  optional.Option[ExecutionReportPositionImpact]
 }
 
-// NewExecutionReportFromValues creates an ExecutionReport from the given values.
+// NewExecutionReportFromValues creates an ExecutionReport from the given
+// values.
 func NewExecutionReportFromValues(values ExecutionReportValues) ExecutionReport {
 	report := NewExecutionReport()
 	report.SetValues(values)
@@ -166,7 +167,8 @@ func (r *ExecutionReport) SetFinancialImpact(financialImpact ExecutionReportFina
 	native.ExecutionReportSetFinancialImpact(&r.value, financialImpact.value)
 }
 
-// EnsureFinancialImpactView ensures the financial impact exists and returns a mutable view.
+// EnsureFinancialImpactView ensures the financial impact exists and returns a
+// mutable view.
 func (r *ExecutionReport) EnsureFinancialImpactView() ExecutionReportFinancialImpactView {
 	financialImpact := native.ExecutionReportGetFinancialImpactView(&r.value)
 	if !native.FinancialImpactOptionalIsSet(*financialImpact) {
@@ -241,7 +243,8 @@ func (r *ExecutionReport) SetPositionImpact(positionImpact ExecutionReportPositi
 	native.ExecutionReportSetPositionImpact(&r.value, positionImpact.value)
 }
 
-// EnsurePositionImpactView ensures the position impact exists and returns a mutable view.
+// EnsurePositionImpactView ensures the position impact exists and returns a
+// mutable view.
 func (r *ExecutionReport) EnsurePositionImpactView() ExecutionReportPositionImpactView {
 	positionImpact := native.ExecutionReportGetPositionImpactView(&r.value)
 	if !native.ExecutionReportPositionImpactOptionalIsSet(*positionImpact) {
@@ -291,7 +294,8 @@ type ExecutionReportOperation struct {
 	retainInstrument param.Instrument
 }
 
-// ExecutionReportOperationValues holds the optional fields of an execution report operation.
+// ExecutionReportOperationValues holds the optional fields of an execution
+// report operation.
 type ExecutionReportOperationValues struct {
 	Instrument optional.Option[param.Instrument]
 	AccountID  optional.Option[param.AccountID]
@@ -303,7 +307,8 @@ func NewExecutionReportOperation() ExecutionReportOperation {
 	return newExecutionReportOperation(native.NewExecutionReportOperation())
 }
 
-// NewExecutionReportOperationFromValues creates an ExecutionReportOperation from the given values.
+// NewExecutionReportOperationFromValues creates an ExecutionReportOperation
+// from the given values.
 func NewExecutionReportOperationFromValues(
 	values ExecutionReportOperationValues,
 ) ExecutionReportOperation {
@@ -403,7 +408,8 @@ func (o *ExecutionReportOperation) UnsetSide() {
 	native.ExecutionReportOperationUnsetSide(&o.value)
 }
 
-// ExecutionReportOperationView is a mutable view into an operation owned by an ExecutionReport.
+// ExecutionReportOperationView is a mutable view into an operation owned by an
+// ExecutionReport.
 type ExecutionReportOperationView struct {
 	ref *native.ExecutionReportOperation
 	// retainInstrument points to the owning ExecutionReport's
@@ -477,21 +483,25 @@ func (v *ExecutionReportOperationView) UnsetSide() {
 //------------------------------------------------------------------------------
 // ExecutionReportFinancialImpact
 
-// ExecutionReportFinancialImpact holds the PnL and fee resulting from the execution.
+// ExecutionReportFinancialImpact holds the PnL and fee resulting from the
+// execution.
 type ExecutionReportFinancialImpact struct{ value native.FinancialImpact }
 
-// ExecutionReportFinancialImpactValues holds the optional financial impact fields.
+// ExecutionReportFinancialImpactValues holds the optional financial impact
+// fields.
 type ExecutionReportFinancialImpactValues struct {
 	Pnl optional.Option[param.Pnl]
 	Fee optional.Option[param.Fee]
 }
 
-// NewExecutionReportFinancialImpact creates a new zeroed ExecutionReportFinancialImpact.
+// NewExecutionReportFinancialImpact creates a new zeroed
+// ExecutionReportFinancialImpact.
 func NewExecutionReportFinancialImpact() ExecutionReportFinancialImpact {
 	return newExecutionReportFinancialImpact(native.NewFinancialImpact())
 }
 
-// NewExecutionReportFinancialImpactFromValues creates an ExecutionReportFinancialImpact from values.
+// NewExecutionReportFinancialImpactFromValues creates an
+// ExecutionReportFinancialImpact from values.
 func NewExecutionReportFinancialImpactFromValues(
 	values ExecutionReportFinancialImpactValues,
 ) ExecutionReportFinancialImpact {
@@ -564,7 +574,8 @@ func (i *ExecutionReportFinancialImpact) UnsetFee() {
 	native.FinancialImpactUnsetFee(&i.value)
 }
 
-// ExecutionReportFinancialImpactView is a mutable view into financial impact owned by an ExecutionReport.
+// ExecutionReportFinancialImpactView is a mutable view into financial impact
+// owned by an ExecutionReport.
 type ExecutionReportFinancialImpactView struct{ ref *native.FinancialImpact }
 
 func newExecutionReportFinancialImpactView(
@@ -611,10 +622,12 @@ func (v *ExecutionReportFinancialImpactView) UnsetFee() {
 //------------------------------------------------------------------------------
 // ExecutionReportTrade
 
-// ExecutionReportTrade holds the price and quantity of a single trade execution.
+// ExecutionReportTrade holds the price and quantity of a single trade
+// execution.
 type ExecutionReportTrade struct{ value native.ExecutionReportTrade }
 
-// NewExecutionReportTrade creates a new trade with the given price and quantity.
+// NewExecutionReportTrade creates a new trade with the given price and
+// quantity.
 func NewExecutionReportTrade(price param.Price, quantity param.Quantity) ExecutionReportTrade {
 	trade := ExecutionReportTrade{value: native.NewExecutionReportTrade()}
 	trade.SetPrice(price)
@@ -622,7 +635,8 @@ func NewExecutionReportTrade(price param.Price, quantity param.Quantity) Executi
 	return trade
 }
 
-// NewExecutionReportTradeFromHandle creates an ExecutionReportTrade from a native handle.
+// NewExecutionReportTradeFromHandle creates an ExecutionReportTrade from a
+// native handle.
 func NewExecutionReportTradeFromHandle(value native.ExecutionReportTrade) ExecutionReportTrade {
 	return ExecutionReportTrade{value: value}
 }
@@ -841,8 +855,8 @@ func (f ExecutionReportFill) RemainingReservedQuantity() optional.Option[param.Q
 
 // SetRemainingReservedQuantity sets the caller-calculated reservation remainder
 // that the engine releases on finalization.
-// See [ExecutionReportFillValues] for the unit and what to pass on a partial fill
-// and on a cancel.
+// See [ExecutionReportFillValues] for the unit and what to pass on a partial
+// fill and on a cancel.
 func (f *ExecutionReportFill) SetRemainingReservedQuantity(quantity param.Quantity) {
 	native.ExecutionReportFillSetRemainingReservedQuantity(&f.value, quantity.Handle())
 }
@@ -854,8 +868,9 @@ func (f *ExecutionReportFill) UnsetRemainingReservedQuantity() {
 }
 
 // Lock returns the raw pre-trade lock attached to the fill, or nil when none is
-// set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes and
-// Lock.Bytes. A Go-owned native lock remains alive until the read completes.
+// set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes
+// and Lock.Bytes. A Go-owned native lock remains alive until the read
+// completes.
 func (f ExecutionReportFill) Lock() []byte {
 	value := executionReportFillLockBytes(native.ExecutionReportFillGetLock(f.value))
 	runtime.KeepAlive(f.retainLock)
@@ -865,9 +880,9 @@ func (f ExecutionReportFill) Lock() []byte {
 // SetLock attaches a pre-trade lock to the fill from its raw bytes. The bytes
 // must come from pretrade.Lock.Bytes within the same library build; an empty or
 // nil slice clears this fill's lock. A non-empty lock is owned by a Go object
-// shared by copies of the fill and is destroyed after that owner is unreachable.
-// It returns an error when the bytes cannot be decoded as a pre-trade lock; the
-// fill, including its current lock, is then left unchanged.
+// shared by copies of the fill and is destroyed after that owner is
+// unreachable. It returns an error when the bytes cannot be decoded as a
+// pre-trade lock; the fill, including its current lock, is then left unchanged.
 func (f *ExecutionReportFill) SetLock(lock []byte) error {
 	return setExecutionReportFillLock(&f.value, &f.retainLock, lock)
 }
@@ -894,7 +909,8 @@ func (f *ExecutionReportFill) UnsetIsFinal() {
 	native.ExecutionReportFillUnsetFinal(&f.value)
 }
 
-// ExecutionReportFillView is a mutable view into a fill owned by an ExecutionReport.
+// ExecutionReportFillView is a mutable view into a fill owned by an
+// ExecutionReport.
 type ExecutionReportFillView struct {
 	ref               *native.ExecutionReportFill
 	retainFeeCurrency *param.Asset
@@ -966,8 +982,8 @@ func (v ExecutionReportFillView) RemainingReservedQuantity() optional.Option[par
 
 // SetRemainingReservedQuantity sets the caller-calculated reservation remainder
 // on the view that the engine releases on finalization.
-// See [ExecutionReportFillValues] for the unit and what to pass on a partial fill
-// and on a cancel.
+// See [ExecutionReportFillValues] for the unit and what to pass on a partial
+// fill and on a cancel.
 func (v *ExecutionReportFillView) SetRemainingReservedQuantity(quantity param.Quantity) {
 	native.ExecutionReportFillSetRemainingReservedQuantity(v.ref, quantity.Handle())
 }
@@ -979,8 +995,9 @@ func (v *ExecutionReportFillView) UnsetRemainingReservedQuantity() {
 }
 
 // Lock returns the raw pre-trade lock attached to the view, or nil when none is
-// set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes and
-// Lock.Bytes. A Go-owned native lock remains alive until the read completes.
+// set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes
+// and Lock.Bytes. A Go-owned native lock remains alive until the read
+// completes.
 func (v ExecutionReportFillView) Lock() []byte {
 	value := executionReportFillLockBytes(native.ExecutionReportFillGetLock(*v.ref))
 	runtime.KeepAlive(*v.retainLock)
@@ -1027,8 +1044,8 @@ func executionReportIsFinalOption(value native.ExecutionReportIsFinalOptional) o
 	return optional.BoolSome(native.ExecutionReportIsFinalOptionalGet(value))
 }
 
-// executionReportFillLockBytes converts the fill's stored lock handle to its raw
-// byte representation, returning nil when no lock is attached.
+// executionReportFillLockBytes converts the fill's stored lock handle to its
+// raw byte representation, returning nil when no lock is attached.
 func executionReportFillLockBytes(lock native.PretradePreTradeLock) []byte {
 	if lock == nil {
 		return nil
@@ -1078,23 +1095,27 @@ func unsetExecutionReportFillLock(fill *native.ExecutionReportFill) {
 //------------------------------------------------------------------------------
 // ExecutionReportPositionImpact
 
-// ExecutionReportPositionImpact holds the position effect and side resulting from the execution.
+// ExecutionReportPositionImpact holds the position effect and side resulting
+// from the execution.
 type ExecutionReportPositionImpact struct {
 	value native.ExecutionReportPositionImpact
 }
 
-// ExecutionReportPositionImpactValues holds the optional position impact fields.
+// ExecutionReportPositionImpactValues holds the optional position impact
+// fields.
 type ExecutionReportPositionImpactValues struct {
 	PositionEffect optional.Option[param.PositionEffect]
 	PositionSide   optional.Option[param.PositionSide]
 }
 
-// NewExecutionReportPositionImpact creates a new zeroed ExecutionReportPositionImpact.
+// NewExecutionReportPositionImpact creates a new zeroed
+// ExecutionReportPositionImpact.
 func NewExecutionReportPositionImpact() ExecutionReportPositionImpact {
 	return newExecutionReportPositionImpact(native.NewExecutionReportPositionImpact())
 }
 
-// NewExecutionReportPositionImpactFromValues creates an ExecutionReportPositionImpact from values.
+// NewExecutionReportPositionImpactFromValues creates an
+// ExecutionReportPositionImpact from values.
 func NewExecutionReportPositionImpactFromValues(
 	values ExecutionReportPositionImpactValues,
 ) ExecutionReportPositionImpact {
@@ -1175,7 +1196,8 @@ func (p *ExecutionReportPositionImpact) UnsetPositionSide() {
 	native.ExecutionReportPositionImpactUnsetPositionSide(&p.value)
 }
 
-// ExecutionReportPositionImpactView is a mutable view into position impact owned by an ExecutionReport.
+// ExecutionReportPositionImpactView is a mutable view into position impact
+// owned by an ExecutionReport.
 type ExecutionReportPositionImpactView struct {
 	ref *native.ExecutionReportPositionImpact
 }

@@ -123,7 +123,8 @@ func TestFormatLineZeroDecided(t *testing.T) {
 	}
 }
 
-// TestFormatLineDurationRender verifies that elapsed duration renders compactly.
+// TestFormatLineDurationRender verifies that elapsed duration renders
+// compactly.
 func TestFormatLineDurationRender(t *testing.T) {
 	c := measurement.LiveCounters{Decided: 1000}
 	// 2 minutes 5 seconds

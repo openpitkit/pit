@@ -574,15 +574,16 @@ pub unsafe extern "C" fn openpit_account_pnl_outcome_list_get(
     true
 }
 
-//--------------------------------------------------------------------------------------------------
-// Callback-scoped result collectors filled by custom pre-trade policy callbacks.
+// -----------------------------------------------------------------------------
+// Callback-scoped result collectors filled by custom pre-trade policy
+// callbacks.
 //
 // Each type is a callback-scoped, non-owning out-parameter the engine creates,
 // passes to the callback, and drains after the callback returns. The callback
 // must not store or use the pointer after it returns. Push helpers validate the
 // pushed payload (asset parse, decimal parse) and report failures through
 // `out_error`, mirroring the `openpit_pretrade_pre_trade_lock_push` idiom.
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Callback-scoped collector for the per-policy main-stage pre-trade result.
 ///
@@ -678,12 +679,13 @@ pub unsafe extern "C" fn openpit_pretrade_pre_trade_result_push_account_adjustme
     true
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Callback-scoped collector for post-trade account-adjustment outcomes.
 ///
 /// Holds the group-tagged account-adjustment outcomes a policy produces after
-/// an execution report. Each push carries the producing policy's `policy_group_id`.
+/// an execution report. Each push carries the producing policy's
+/// `policy_group_id`.
 pub struct OpenPitPostTradeAdjustmentList {
     pub(crate) items: Vec<AccountAdjustmentOutcome>,
 }
@@ -782,7 +784,7 @@ pub unsafe extern "C" fn openpit_pretrade_post_trade_account_pnl_list_push(
     true
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Stored account-adjustment outcome entries within a callback result.
 ///

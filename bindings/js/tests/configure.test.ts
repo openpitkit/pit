@@ -971,13 +971,14 @@ describe("runtime configurator", () => {
     expect(zeroAccountAsset.rejects[0]?.code).toBe("OrderNotionalExceedsLimit");
   });
 
-  // These two look like tautologies - the order is under every visible cap - and
-  // they are not. Quantity resolves by the instrument's underlying asset (AAPL)
-  // and notional by its settlement asset (USD), so the quantity-only USD barrier
-  // and the notional-only AAPL barrier each leave absent exactly the cap its own
-  // key would make the engine consult. An absent cap turned into a zero cap
-  // would land on that live chain and reject. Keep the asymmetry: one barrier
-  // carrying both caps, or both keyed on one asset, silently removes the check.
+  // These two look like tautologies - the order is under every visible cap -
+  // and they are not. Quantity resolves by the instrument's underlying asset
+  // (AAPL) and notional by its settlement asset (USD), so the quantity-only USD
+  // barrier and the notional-only AAPL barrier each leave absent exactly the
+  // cap its own key would make the engine consult. An absent cap turned into a
+  // zero cap would land on that live chain and reject. Keep the asymmetry: one
+  // barrier carrying both caps, or both keyed on one asset, silently removes
+  // the check.
   it("preserves absent caps on the chains fed by configured asset keys", () => {
     const engine = Engine.builder()
       .builtin(
@@ -1068,7 +1069,8 @@ describe("runtime configurator", () => {
     firstReservation.commit();
 
     // Force-set the account's accumulated P&L to -150 USD, below the bound.
-    // Built-in policies register under their type name (PnlBoundsKillswitchBuilder.NAME).
+    // Built-in policies register under their type name
+    // (PnlBoundsKillswitchBuilder.NAME).
     engine.configure().setAccountPnl(PnlBoundsKillswitchBuilder.NAME, {
       account: accountId,
       settlementAsset: "USD",
@@ -1191,7 +1193,8 @@ describe("runtime configurator", () => {
     let result = engine.executePreTrade(order());
     console.log(result.rejects[0]!.reason); // "spot funds insufficient"
 
-    // Switch to TrackOnly: the same order now passes and reserves against deficit.
+    // Switch to TrackOnly: the same order now passes and reserves against
+    // deficit.
     engine.configure().spotFunds(SpotFundsBuilder.NAME, {
       globalLimitMode: SpotFundsLimitMode.TrackOnly,
     });
@@ -1245,7 +1248,8 @@ describe("runtime configurator", () => {
     let result = engine.executePreTrade(order());
     console.log(result.rejects[0]!.reason); // "spot funds insufficient"
 
-    // Pin this account to TrackOnly: per-account override wins over global Enforce.
+    // Pin this account to TrackOnly: per-account override wins over global
+    // Enforce.
     engine.configure().spotFunds(SpotFundsBuilder.NAME, {
       accountLimitModes: [{ accountId, mode: SpotFundsLimitMode.TrackOnly }],
     });
@@ -1689,7 +1693,8 @@ describe("runtime configurator", () => {
       },
     ]);
 
-    // A plain Spot Funds policy has no P&L control, but funded orders still run.
+    // A plain Spot Funds policy has no P&L control, but funded orders still
+    // run.
     const ordinary = engine.executePreTrade({
       operation: {
         underlyingAsset: "AAPL",
@@ -1830,7 +1835,8 @@ describe("runtime configurator", () => {
       });
     expect(seed.accountBlocks).toHaveLength(0);
 
-    // Tightening the barrier checks the known account and records the block now.
+    // Tightening the barrier checks the known account and records the block
+    // now.
     const retune = engine
       .configure()
       .spotFundsPnlBoundsKillswitch(SpotFundsPnlBoundsKillswitchBuilder.NAME, {

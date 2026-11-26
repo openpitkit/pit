@@ -125,7 +125,8 @@ func NewCashFlowFromHandle(v native.ParamCashFlow) CashFlow {
 	return CashFlow{native: v}
 }
 
-// NewCashFlowOptionFromHandle creates an optional CashFlow from a native optional handle.
+// NewCashFlowOptionFromHandle creates an optional CashFlow from a native
+// optional handle.
 func NewCashFlowOptionFromHandle(
 	v native.ParamCashFlowOptional,
 ) optional.Option[CashFlow] {
@@ -135,7 +136,8 @@ func NewCashFlowOptionFromHandle(
 	return optional.Some(NewCashFlowFromHandle(native.ParamCashFlowOptionalGet(v)))
 }
 
-// NewCashFlowFromStringRounded creates a CashFlow from a string, rounded to the given scale.
+// NewCashFlowFromStringRounded creates a CashFlow from a string, rounded to the
+// given scale.
 func NewCashFlowFromStringRounded(
 	v string,
 	scale uint32,
@@ -148,7 +150,8 @@ func NewCashFlowFromStringRounded(
 	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-// NewCashFlowFromFloatRounded creates a CashFlow from a float64, rounded to the given scale.
+// NewCashFlowFromFloatRounded creates a CashFlow from a float64, rounded to the
+// given scale.
 func NewCashFlowFromFloatRounded(
 	v float64,
 	scale uint32,
@@ -161,7 +164,8 @@ func NewCashFlowFromFloatRounded(
 	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-// NewCashFlowFromDecimalRounded converts a shopspring decimal to a rounded CashFlow.
+// NewCashFlowFromDecimalRounded converts a shopspring decimal to a rounded
+// CashFlow.
 //
 // Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
 // a positive exponent folded in - exceeds signed 128-bit range, or v's scale
@@ -214,7 +218,8 @@ func NewCashFlowFromVolumeInflow(volume Volume) (CashFlow, error) {
 	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-// NewCashFlowFromVolumeOutflow converts a Volume to a negative outflow CashFlow.
+// NewCashFlowFromVolumeOutflow converts a Volume to a negative outflow
+// CashFlow.
 func NewCashFlowFromVolumeOutflow(volume Volume) (CashFlow, error) {
 	nativeValue, err := native.ParamCashFlowFromVolumeOutflow(volume.native)
 	if err != nil {
@@ -245,31 +250,36 @@ func (v CashFlow) Handle() native.ParamCashFlow {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v CashFlow) Float() float64 {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamCashFlowToF64(v.native))
 }
 
 // String returns the decimal string representation of the cash flow.
 func (v CashFlow) String() string {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamCashFlowToString(v.native))
 }
 
 // IsZero reports whether the cash flow is zero.
 func (v CashFlow) IsZero() bool {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamCashFlowIsZero(v.native))
 }
 
 // Equal reports whether v and other are equal.
 func (v CashFlow) Equal(other CashFlow) bool {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamCashFlowCompare(v.native, other.native)) == 0
 }
 
 // Compare returns -1, 0, or 1 comparing v to other.
 func (v CashFlow) Compare(other CashFlow) int {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamCashFlowCompare(v.native, other.native))
 }
 
@@ -327,7 +337,8 @@ func (v CashFlow) CheckedMulFloat(scalar float64) (CashFlow, error) {
 	return NewCashFlowFromHandle(result), nil
 }
 
-// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
+// CheckedDivInt returns v / divisor or an error on division by zero or
+// overflow.
 func (v CashFlow) CheckedDivInt(divisor int64) (CashFlow, error) {
 	result, err := native.ParamCashFlowCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -345,7 +356,8 @@ func (v CashFlow) CheckedDivUint(divisor uint64) (CashFlow, error) {
 	return NewCashFlowFromHandle(result), nil
 }
 
-// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
+// CheckedDivFloat returns v / divisor or an error on division by zero or
+// overflow.
 func (v CashFlow) CheckedDivFloat(divisor float64) (CashFlow, error) {
 	result, err := native.ParamCashFlowCheckedDivF64(v.native, divisor)
 	if err != nil {

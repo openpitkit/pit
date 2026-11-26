@@ -16,9 +16,9 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 //
 // Published market-data snippets and these executable mirrors are one entity
-// and must stay in lockstep. Each test starts with a `// Source:` comment naming
-// the public wiki page and section; imports, harness, and assertions remain
-// test-only.
+// and must stay in lockstep. Each test starts with a `// Source:` comment
+// naming the public wiki page and section; imports, harness, and assertions
+// remain test-only.
 //
 // Public wiki pages covered here:
 // - https://wiki.openpit.dev/Market-Data/
@@ -59,8 +59,8 @@ describe("Market-Data.md wiki examples", () => {
     // See Threading-Contract for the full model.
     const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
 
-    // register returns an InstrumentId; read its numeric value so the same id can
-    // be reused across calls (the id reads on every push and get below).
+    // register returns an InstrumentId; read its numeric value so the same id
+    // can be reused across calls (the id reads on every push and get below).
     const aaplId = service.register(new Instrument("AAPL", "USD")).value;
 
     // Publish a full snapshot into the default ("everyone-else") bucket.
@@ -72,10 +72,10 @@ describe("Market-Data.md wiki examples", () => {
       quoteSourceAgeMs,
     );
 
-    // Read for an account with no group: the lookup falls through to the default
-    // bucket. accountInfo is any object exposing an `accountGroup` getter; in
-    // policy code this is usually the pre-trade context. Here we use a plain
-    // stand-in. The resolution accepts a wire string.
+    // Read for an account with no group: the lookup falls through to the
+    // default bucket. accountInfo is any object exposing an `accountGroup`
+    // getter; in policy code this is usually the pre-trade context. Here we use
+    // a plain stand-in. The resolution accepts a wire string.
     const accountId = 1;
     const accountInfo = { accountGroup: null };
     const quote = service.get(
@@ -115,7 +115,8 @@ describe("Market-Data.md wiki examples", () => {
     // Fan out to two accounts and one group simultaneously.
     service.pushFor(aaplId, new Quote({ mark: "150" }), 0, [10, 11], [groupId]);
 
-    // Read back for account 10 under ACCOUNT_ONLY - hits the per-account bucket.
+    // Read back for account 10 under ACCOUNT_ONLY - hits the per-account
+    // bucket.
     const accountInfo = { accountGroup: null };
     const quote = service.get(aaplId, 10, accountInfo, "ACCOUNT_ONLY");
     if (quote === undefined) {
@@ -198,7 +199,8 @@ describe("Market-Data-TTL.md wiki examples", () => {
     }).value;
 
     const accountId = 1;
-    // A reading account with no group: any object exposing an `accountGroup` getter.
+    // A reading account with no group: any object exposing an `accountGroup`
+    // getter.
     const accountInfo = { accountGroup: null };
 
     const read = () =>

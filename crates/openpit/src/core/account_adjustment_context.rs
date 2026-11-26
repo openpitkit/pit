@@ -69,7 +69,8 @@ where
     /// account-adjustment hook outside an engine.
     ///
     /// `account` is the adjusted account. The context is backed by an empty,
-    /// private account-group registry, so [`account_group`](Self::account_group)
+    /// private account-group registry, so
+    /// [`account_group`](Self::account_group)
     /// returns `None`. Inside the engine the registry is the engine's shared
     /// one; this constructor exists so policy authors can drive a policy's hook
     /// directly in unit tests.
@@ -101,7 +102,8 @@ where
         self.group_lookup.account_currency()
     }
 
-    /// Returns an owned read-only reader sharing this operation's first-use snapshot.
+    /// Returns an owned read-only reader sharing this operation's first-use
+    /// snapshot.
     pub fn operation_snapshot(&self) -> OperationSnapshot<StorageFactory> {
         self.group_lookup.clone()
     }

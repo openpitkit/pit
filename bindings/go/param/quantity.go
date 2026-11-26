@@ -125,7 +125,8 @@ func NewQuantityFromHandle(v native.ParamQuantity) Quantity {
 	return Quantity{native: v}
 }
 
-// NewQuantityOptionFromHandle creates an optional Quantity from a native optional handle.
+// NewQuantityOptionFromHandle creates an optional Quantity from a native
+// optional handle.
 func NewQuantityOptionFromHandle(v native.ParamQuantityOptional) optional.Option[Quantity] {
 	if !native.ParamQuantityOptionalIsSet(v) {
 		return optional.None[Quantity]()
@@ -133,7 +134,8 @@ func NewQuantityOptionFromHandle(v native.ParamQuantityOptional) optional.Option
 	return optional.Some(NewQuantityFromHandle(native.ParamQuantityOptionalGet(v)))
 }
 
-// NewQuantityFromStringRounded creates a Quantity from a string, rounded to the given scale.
+// NewQuantityFromStringRounded creates a Quantity from a string, rounded to the
+// given scale.
 func NewQuantityFromStringRounded(
 	v string,
 	scale uint32,
@@ -146,7 +148,8 @@ func NewQuantityFromStringRounded(
 	return NewQuantityFromHandle(nativeValue), nil
 }
 
-// NewQuantityFromFloatRounded creates a Quantity from a float64, rounded to the given scale.
+// NewQuantityFromFloatRounded creates a Quantity from a float64, rounded to the
+// given scale.
 func NewQuantityFromFloatRounded(
 	v float64,
 	scale uint32,
@@ -159,7 +162,8 @@ func NewQuantityFromFloatRounded(
 	return NewQuantityFromHandle(nativeValue), nil
 }
 
-// NewQuantityFromDecimalRounded converts a shopspring decimal to a rounded Quantity.
+// NewQuantityFromDecimalRounded converts a shopspring decimal to a rounded
+// Quantity.
 //
 // Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
 // a positive exponent folded in - exceeds signed 128-bit range, or v's scale
@@ -207,31 +211,36 @@ func (v Quantity) Handle() native.ParamQuantity {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v Quantity) Float() float64 {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamQuantityToF64(v.native))
 }
 
 // String returns the decimal string representation of the quantity.
 func (v Quantity) String() string {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamQuantityToString(v.native))
 }
 
 // IsZero reports whether the quantity is zero.
 func (v Quantity) IsZero() bool {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamQuantityIsZero(v.native))
 }
 
 // Equal reports whether v and other are equal.
 func (v Quantity) Equal(other Quantity) bool {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamQuantityCompare(v.native, other.native)) == 0
 }
 
 // Compare returns -1, 0, or 1 comparing v to other.
 func (v Quantity) Compare(other Quantity) int {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamQuantityCompare(v.native, other.native))
 }
 
@@ -280,7 +289,8 @@ func (v Quantity) CheckedMulFloat(scalar float64) (Quantity, error) {
 	return NewQuantityFromHandle(result), nil
 }
 
-// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
+// CheckedDivInt returns v / divisor or an error on division by zero or
+// overflow.
 func (v Quantity) CheckedDivInt(divisor int64) (Quantity, error) {
 	result, err := native.ParamQuantityCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -298,7 +308,8 @@ func (v Quantity) CheckedDivUint(divisor uint64) (Quantity, error) {
 	return NewQuantityFromHandle(result), nil
 }
 
-// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
+// CheckedDivFloat returns v / divisor or an error on division by zero or
+// overflow.
 func (v Quantity) CheckedDivFloat(divisor float64) (Quantity, error) {
 	result, err := native.ParamQuantityCheckedDivF64(v.native, divisor)
 	if err != nil {
@@ -345,6 +356,7 @@ func (v Quantity) CalculateVolume(price Price) (Volume, error) {
 
 // ToPositionSize returns the quantity as a PositionSize.
 func (v Quantity) ToPositionSize() PositionSize {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return NewPositionSizeFromHandle(newParamValueOrPanic(native.ParamQuantityToPositionSize(v.native)))
 }

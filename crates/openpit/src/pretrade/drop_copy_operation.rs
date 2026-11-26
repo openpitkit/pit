@@ -118,7 +118,8 @@ impl DropCopyOperation {
     ///
     /// Panics with `"drop-copy operation already consumed"` when `commit`
     /// is called after any finalization has consumed the operation. This
-    /// mirrors [`PreTradeReservation::commit`](super::PreTradeReservation::commit).
+    /// mirrors
+    /// [`PreTradeReservation::commit`](super::PreTradeReservation::commit).
     ///
     /// FFI carries a finalized flag and makes repeated pointer-level
     /// finalization a no-op, so bindings cannot reach this panic. Native double
@@ -161,11 +162,12 @@ impl DropCopyOperation {
         &self.lock
     }
 
-    /// Returns account position modifications grouped by [`super::PolicyGroupId`].
+    /// Returns account position modifications grouped by
+    /// [`super::PolicyGroupId`].
     ///
-    /// Contains zero or more entries. Policies that share a group tag contribute
-    /// to the same entry; policies that report nothing do not create an entry.
-    /// Order within a group follows policy registration order.
+    /// Contains zero or more entries. Policies that share a group tag
+    /// contribute to the same entry; policies that report nothing do not create
+    /// an entry. Order within a group follows policy registration order.
     pub fn account_adjustments(&self) -> &[AccountAdjustmentOutcome] {
         &self.account_adjustments
     }

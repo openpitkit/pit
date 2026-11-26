@@ -155,7 +155,9 @@ function avgPreTradeNs(stats: Stats): bigint {
 // risk tolerance.
 // =============================================================================
 
-/** Killswitch parameters; the call site reads like a risk-policy declaration. */
+/**
+ * Killswitch parameters; the call site reads like a risk-policy declaration.
+ */
 interface Limits {
   readonly settlementAsset: string;
   readonly pnlLowerBound: string; // loss floor as a signed decimal, e.g. "-500"
@@ -324,9 +326,9 @@ export const SCENARIO_ASSET_TRADED = "AAPL";
 export const SCENARIO_ASSET_SETTLE = "USD";
 
 /**
- * Build a buy-AAPL order intent as a plain object. Scalars cross as plain values
- * (the account id as a bigint, the price as a decimal string); a real strategy
- * assembles this from a signal and current market data.
+ * Build a buy-AAPL order intent as a plain object. Scalars cross as plain
+ * values (the account id as a bigint, the price as a decimal string); a real
+ * strategy assembles this from a signal and current market data.
  */
 export function buildOrder(): OrderInit {
   return {
@@ -342,9 +344,9 @@ export function buildOrder(): OrderInit {
 }
 
 /**
- * Build a combined-mode execution report as a plain object. "Combined" means the
- * fee is embedded in pnl, so the fee field is set to zero; see the Policies wiki
- * page for the alternative "separate" convention.
+ * Build a combined-mode execution report as a plain object. "Combined" means
+ * the fee is embedded in pnl, so the fee field is set to zero; see the Policies
+ * wiki page for the alternative "separate" convention.
  */
 export function buildReport(pnl: string): ExecutionReportInit {
   return {

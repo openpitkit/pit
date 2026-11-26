@@ -80,7 +80,8 @@ func AccountGroupErrorGetAccount(err AccountGroupError) ParamAccountID {
 }
 
 // AccountGroupErrorGetCurrentGroup returns the current group of the conflicting
-// account, and false when the account is not in any group (unregister conflict).
+// account, and false when the account is not in any group (unregister
+// conflict).
 func AccountGroupErrorGetCurrentGroup(err AccountGroupError) (ParamAccountGroupID, bool) {
 	var out ParamAccountGroupID
 	ok := bool(C.openpit_account_group_error_get_current_group(err, &out))

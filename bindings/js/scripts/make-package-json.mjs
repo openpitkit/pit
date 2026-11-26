@@ -69,8 +69,9 @@ const version = resolveVersion();
 //
 // `imports` is re-declared (not copied) for the published layout: the source
 // manifest maps `#runtime` to the TS initializer for the build, but the barrel
-// `.d.ts` files reference `#runtime`, so consumers need it mapped to the emitted
-// `runtime` entry (Node or browser). `scripts`/`devDependencies` are dropped.
+// `.d.ts` files reference `#runtime`, so consumers need it mapped to the
+// emitted `runtime` entry (Node or browser). `scripts`/`devDependencies` are
+// dropped.
 const publishedImports = {
   "#runtime": {
     browser: {

@@ -1744,8 +1744,8 @@ struct OpenPitOrderReview {
      */
     OpenPitTriBool confirmed;
     /**
-     * Whether the caller asserts that Spot Funds already holds this order's funds
-     * from an earlier committed review. `NOT_SET` means not held.
+     * Whether the caller asserts that Spot Funds already holds this order's
+     * funds from an earlier committed review. `NOT_SET` means not held.
      */
     OpenPitTriBool already_held;
 };
@@ -1998,15 +1998,18 @@ struct OpenPitPretradePoliciesRateLimitAccountBarrier {
  */
 struct OpenPitPretradePoliciesReviewRuleGlobalRule {
     /**
-     * Exact instrument pairs, borrowed for the call; ignored for all instruments.
+     * Exact instrument pairs, borrowed for the call; ignored for all
+     * instruments.
      */
     const OpenPitInstrument * instruments;
     /**
-     * Number of exact instruments; must be nonzero when `has_instruments` is true.
+     * Number of exact instruments; must be nonzero when `has_instruments` is
+     * true.
      */
     size_t instruments_len;
     /**
-     * False covers all instruments; true selects a nonempty, distinct exact list.
+     * False covers all instruments; true selects a nonempty, distinct exact
+     * list.
      */
     bool has_instruments;
 };
@@ -2020,15 +2023,18 @@ struct OpenPitPretradePoliciesReviewRuleAccountGroupRule {
      */
     OpenPitParamAccountGroupId account_group_id;
     /**
-     * Exact instrument pairs, borrowed for the call; ignored for all instruments.
+     * Exact instrument pairs, borrowed for the call; ignored for all
+     * instruments.
      */
     const OpenPitInstrument * instruments;
     /**
-     * Number of exact instruments; must be nonzero when `has_instruments` is true.
+     * Number of exact instruments; must be nonzero when `has_instruments` is
+     * true.
      */
     size_t instruments_len;
     /**
-     * False covers all instruments; true selects a nonempty, distinct exact list.
+     * False covers all instruments; true selects a nonempty, distinct exact
+     * list.
      */
     bool has_instruments;
 };
@@ -2042,15 +2048,18 @@ struct OpenPitPretradePoliciesReviewRuleAccountRule {
      */
     OpenPitParamAccountId account_id;
     /**
-     * Exact instrument pairs, borrowed for the call; ignored for all instruments.
+     * Exact instrument pairs, borrowed for the call; ignored for all
+     * instruments.
      */
     const OpenPitInstrument * instruments;
     /**
-     * Number of exact instruments; must be nonzero when `has_instruments` is true.
+     * Number of exact instruments; must be nonzero when `has_instruments` is
+     * true.
      */
     size_t instruments_len;
     /**
-     * False covers all instruments; true selects a nonempty, distinct exact list.
+     * False covers all instruments; true selects a nonempty, distinct exact
+     * list.
      */
     bool has_instruments;
 };
@@ -2171,8 +2180,8 @@ struct OpenPitOutcomeAmount {
      */
     OpenPitParamPositionSize delta;
     /**
-     * Field value at the moment the policy returned, before deferred commit. Treat
-     * as a convenience hint only; prefer `delta`.
+     * Field value at the moment the policy returned, before deferred commit.
+     * Treat as a convenience hint only; prefer `delta`.
      */
     OpenPitParamPositionSize absolute;
 };
@@ -2323,7 +2332,8 @@ struct OpenPitMarketDataQuoteTtl {
      */
     uint64_t secs;
     /**
-     * Sub-second nanoseconds part of the finite lifetime (ignored when infinite).
+     * Sub-second nanoseconds part of the finite lifetime (ignored when
+     * infinite).
      */
     uint32_t nanos;
     /**
@@ -2482,21 +2492,22 @@ struct OpenPitExecutionReportFill {
     /**
      * Caller-calculated remainder of the order's pre-trade reservation.
      *
-     * The engine releases this remainder when the order's final execution report
-     * arrives. It is not the venue-reported remaining order quantity (FIX
-     * `LeavesQty`): never copy venue leaves into it, since a money-sized order's
-     * venue leaves may be a money amount.
+     * The engine releases this remainder when the order's final execution
+     * report arrives. It is not the venue-reported remaining order quantity
+     * (FIX `LeavesQty`): never copy venue leaves into it, since a money-sized
+     * order's venue leaves may be a money amount.
      *
      * It is always a quantity of the instrument's underlying (base) asset, even
      * for an order sized by volume (money), never a settlement or money amount.
      *
      * For an order sized by volume (money), the reserved quantity is what the
      * engine sized during pre-trade: volume divided by the absolute lock price,
-     * using the engine's decimal division (zero for a drop-copy order recorded at
-     * a zero price). Do not re-derive it from unspent volume at fill prices.
+     * using the engine's decimal division (zero for a drop-copy order recorded
+     * at a zero price). Do not re-derive it from unspent volume at fill prices.
      *
-     * On every execution report, pass max(0, reserved quantity - sum of all fill
-     * quantities recorded for the order so far, including this report's fill).
+     * On every execution report, pass max(0, reserved quantity - sum of all
+     * fill quantities recorded for the order so far, including this report's
+     * fill).
      *
      * - On a non-final report, such as a partial fill, pass the remainder after
      *   this fill. The engine releases nothing.
@@ -2507,21 +2518,21 @@ struct OpenPitExecutionReportFill {
      * - On a final report of an order the venue reports fully filled, pass the
      *   remainder too. It is zero only once the recorded fills reach or exceed
      *   the reserved quantity; an order sized by volume can be fully filled
-     *   while its recorded fills stay below the reserved quantity, and the final
-     *   report must carry that remainder for the engine to release it.
+     *   while its recorded fills stay below the reserved quantity, and the
+     *   final report must carry that remainder for the engine to release it.
      *
-     * For example, a buy sized at 1000 USD by volume with lock price 100 reserves
-     * 10 units. A partial fill of 6 passes 4 and releases nothing; a later cancel
-     * passes 4 and releases the rest of the reservation (400 USD at the lock
-     * price).
+     * For example, a buy sized at 1000 USD by volume with lock price 100
+     * reserves 10 units. A partial fill of 6 passes 4 and releases nothing; a
+     * later cancel passes 4 and releases the rest of the reservation (400 USD
+     * at the lock price).
      */
     OpenPitParamQuantityOptional remaining_reserved_quantity;
     /**
      * Pre-trade lock attached to the order.
      *
-     * Optional field: null means the lock is absent (maps to `None`), not an empty
-     * lock. No lock record is fabricated on import for a null pointer, and an
-     * absent lock is exported as null.
+     * Optional field: null means the lock is absent (maps to `None`), not an
+     * empty lock. No lock record is fabricated on import for a null pointer,
+     * and an absent lock is exported as null.
      *
      * Ownership contract:
      * - the caller owns the pointer when present (build it through
@@ -2530,8 +2541,8 @@ struct OpenPitExecutionReportFill {
      */
     const OpenPitPretradePreTradeLock * lock;
     /**
-     * Whether this report closes the order's report stream. The order is filled,
-     * cancelled, or rejected.
+     * Whether this report closes the order's report stream. The order is
+     * filled, cancelled, or rejected.
      */
     OpenPitExecutionReportIsFinalOptional is_final;
 };
@@ -2576,11 +2587,13 @@ struct OpenPitPretradeReject {
      * Opaque caller-defined integer token.
      *
      * The SDK never inspects, dereferences, or frees this value. Its meaning,
-     * lifetime, and thread-safety are the caller's responsibility. `0` means "not
-     * set". See the project Threading Contract for the full lifetime model.
+     * lifetime, and thread-safety are the caller's responsibility. `0` means
+     * "not set". See the project Threading Contract for the full lifetime
+     * model.
      *
      * The token flows through every reject path the SDK exposes (start-stage,
-     * main-stage, account-adjustment, batch results) and is preserved on `Clone`.
+     * main-stage, account-adjustment, batch results) and is preserved on
+     * `Clone`.
      */
     size_t user_data;
     /**
@@ -2618,8 +2631,9 @@ struct OpenPitPretradeAccountBlock {
      * Opaque caller-defined integer token.
      *
      * The SDK never inspects, dereferences, or frees this value. Its meaning,
-     * lifetime, and thread-safety are the caller's responsibility. `0` means "not
-     * set". See the project Threading Contract for the full lifetime model.
+     * lifetime, and thread-safety are the caller's responsibility. `0` means
+     * "not set". See the project Threading Contract for the full lifetime
+     * model.
      */
     size_t user_data;
     /**
@@ -2657,18 +2671,19 @@ struct OpenPitPolicyInstance {
      * A policy that keeps its own state - Spot Funds, the rate limit, the P&L
      * bounds kill switch, or a custom policy that holds funds or counts - is
      * registered in `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; a custom one that
-     * needs review sets a review mode in \ref OpenPitPretradeReject::mode on the
-     * reject records it returns. Registered in a review mode, the changes it
-     * records as main-stage mutations for an order it marks in pre-trade are
-     * rolled back, also after the reviewer confirms that order; changes it makes
-     * at once, such as rate-limit counters, stay. For Spot Funds this means
-     * nothing is held, no lock price is recorded, balances and positions are not
-     * updated, and a later fill or cancel of that order can block the account for
-     * a missing lock price. The rejects and account blocks it returns become marks
-     * or are dropped unless their code is an evaluation failure, so a P&L kill
-     * switch registered this way does not block the account on a fill; a block it
-     * writes directly through \ref OpenPitAccountControl and a block from an
-     * accepted account adjustment latch in any mode.
+     * needs review sets a review mode in \ref OpenPitPretradeReject::mode on
+     * the reject records it returns. Registered in a review mode, the changes
+     * it records as main-stage mutations for an order it marks in pre-trade are
+     * rolled back, also after the reviewer confirms that order; changes it
+     * makes at once, such as rate-limit counters, stay. For Spot Funds this
+     * means nothing is held, no lock price is recorded, balances and positions
+     * are not updated, and a later fill or cancel of that order can block the
+     * account for a missing lock price. The rejects and account blocks it
+     * returns become marks or are dropped unless their code is an evaluation
+     * failure, so a P&L kill switch registered this way does not block the
+     * account on a fill; a block it writes directly through \ref
+     * OpenPitAccountControl and a block from an accepted account adjustment
+     * latch in any mode.
      */
     OpenPitPretradeRuleMode mode;
 };
@@ -2685,8 +2700,8 @@ struct OpenPitPretradePoliciesOrderSizeAssetBarrier {
      */
     OpenPitPretradePoliciesOrderSizeLimit limit;
     /**
-     * Asset key: `max_quantity` matches the instrument's underlying asset, while
-     * `max_notional` matches its settlement asset.
+     * Asset key: `max_quantity` matches the instrument's underlying asset,
+     * while `max_notional` matches its settlement asset.
      */
     OpenPitStringView asset;
 };
@@ -2708,8 +2723,8 @@ struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
      */
     OpenPitParamAccountId account_id;
     /**
-     * Asset key: `max_quantity` matches the instrument's underlying asset, while
-     * `max_notional` matches its settlement asset.
+     * Asset key: `max_quantity` matches the instrument's underlying asset,
+     * while `max_notional` matches its settlement asset.
      */
     OpenPitStringView asset;
 };
@@ -2736,8 +2751,8 @@ struct OpenPitPretradePoliciesPnlBoundsBarrier {
     OpenPitStringView settlement_asset;
     /**
      * Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject, 2
-     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail the
-     * call.
+     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail
+     * the call.
      */
     OpenPitPretradeRuleMode mode;
     /**
@@ -2780,8 +2795,8 @@ struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
     OpenPitStringView settlement_asset;
     /**
      * Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject, 2
-     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail the
-     * call.
+     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail
+     * the call.
      */
     OpenPitPretradeRuleMode mode;
     /**
@@ -2820,8 +2835,8 @@ struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
     OpenPitStringView settlement_asset;
     /**
      * Rule mode of this barrier, part of its key. Both 0 and 1 mean Reject, 2
-     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail the
-     * call.
+     * means ReviewWithHold, and 3 means ReviewWithoutHold. Values above 3 fail
+     * the call.
      */
     OpenPitPretradeRuleMode mode;
     /**
@@ -2965,22 +2980,23 @@ struct OpenPitAccountOutcomeEntry {
      */
     OpenPitOutcomeAmountOptional incoming;
     /**
-     * Optional position realized-PnL result in the account currency. It is absent
-     * for reservations, cancels, settlement legs, opening, same-direction, and
-     * zero-quantity fills without a non-zero fee, and for non-PnL adjustments. A
-     * realizing fill reports an authoritative amount even when its exact
-     * contribution is zero. A non-zero fee reports the underlying asset even when
-     * the account never held it. The operation that first fails reports its halt
-     * reason; later operations omit the field until an asset-scoped balance
-     * adjustment force-sets a new realized PnL. Position and account PnL halt
-     * independently; this field never drives the account kill switch.
+     * Optional position realized-PnL result in the account currency. It is
+     * absent for reservations, cancels, settlement legs, opening,
+     * same-direction, and zero-quantity fills without a non-zero fee, and for
+     * non-PnL adjustments. A realizing fill reports an authoritative amount
+     * even when its exact contribution is zero. A non-zero fee reports the
+     * underlying asset even when the account never held it. The operation that
+     * first fails reports its halt reason; later operations omit the field
+     * until an asset-scoped balance adjustment force-sets a new realized PnL.
+     * Position and account PnL halt independently; this field never drives the
+     * account kill switch.
      */
     OpenPitPnlOutcomeOptional realized_pnl;
     /**
-     * Current account-currency average entry price (absolute) for the `(account,
-     * asset)` holdings slot. The underlying asset identifies one slot even when it
-     * is traded against multiple quote currencies. Unset means the average was not
-     * tracked or not emitted.
+     * Current account-currency average entry price (absolute) for the
+     * `(account, asset)` holdings slot. The underlying asset identifies one
+     * slot even when it is traded against multiple quote currencies. Unset
+     * means the average was not tracked or not emitted.
      */
     OpenPitParamPriceOptional average_entry_price;
 };
@@ -3105,8 +3121,9 @@ struct OpenPitExecutionReport {
      * means "not set". See the project Threading Contract for the full lifetime
      * model.
      *
-     * The token is preserved unchanged across every engine callback that receives
-     * the carrying value, including policy callbacks and adjustment callbacks.
+     * The token is preserved unchanged across every engine callback that
+     * receives the carrying value, including policy callbacks and adjustment
+     * callbacks.
      */
     void * user_data;
 };
@@ -3120,8 +3137,8 @@ struct OpenPitAccountAdjustmentBalanceOperation {
      */
     OpenPitStringView asset;
     /**
-     * Optional force-set of the average entry price in account currency. No FX is
-     * applied by this adjustment.
+     * Optional force-set of the average entry price in account currency. No FX
+     * is applied by this adjustment.
      */
     OpenPitParamPriceOptional average_entry_price;
     /**
@@ -3144,8 +3161,8 @@ struct OpenPitAccountAdjustmentPositionOperation {
      */
     OpenPitStringView collateral_asset;
     /**
-     * Optional force-set of the average entry price in account currency. No FX is
-     * applied by this adjustment.
+     * Optional force-set of the average entry price in account currency. No FX
+     * is applied by this adjustment.
      */
     OpenPitParamPriceOptional average_entry_price;
     /**
@@ -3168,8 +3185,8 @@ struct OpenPitAccountAdjustmentPositionOperation {
  */
 struct OpenPitAccountAdjustmentOperation {
     /**
-     * Raw selector for the meaningful payload below. Unknown values are rejected
-     * during import.
+     * Raw selector for the meaningful payload below. Unknown values are
+     * rejected during import.
      */
     OpenPitAccountAdjustmentOperationKind kind;
     /**
@@ -3210,8 +3227,9 @@ struct OpenPitAccountAdjustment {
      * means "not set". See the project Threading Contract for the full lifetime
      * model.
      *
-     * The token is preserved unchanged across every engine callback that receives
-     * the carrying value, including policy callbacks and adjustment callbacks.
+     * The token is preserved unchanged across every engine callback that
+     * receives the carrying value, including policy callbacks and adjustment
+     * callbacks.
      */
     void * user_data;
 };
@@ -3240,8 +3258,9 @@ struct OpenPitOrder {
      * means "not set". See the project Threading Contract for the full lifetime
      * model.
      *
-     * The token is preserved unchanged across every engine callback that receives
-     * the carrying value, including policy callbacks and adjustment callbacks.
+     * The token is preserved unchanged across every engine callback that
+     * receives the carrying value, including policy callbacks and adjustment
+     * callbacks.
      */
     void * user_data;
     /**

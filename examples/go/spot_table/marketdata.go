@@ -28,9 +28,9 @@ import (
 //
 // Each execution mode owns one feed over its own service: the runner registers
 // every instrument that any TICK row mentions up front, then pushes quotes live
-// at each TICK's row position. The feed also remembers the last price pushed per
-// instrument so a FILL row may omit its price and reuse the latest quote as the
-// lock price.
+// at each TICK's row position. The feed also remembers the last price pushed
+// per instrument so a FILL row may omit its price and reuse the latest quote as
+// the lock price.
 type MarketFeed struct {
 	service *marketdata.Service
 	ids     map[string]marketdata.InstrumentID

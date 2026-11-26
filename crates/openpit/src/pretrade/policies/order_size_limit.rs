@@ -62,8 +62,8 @@ pub struct OrderSizeBrokerBarrier {
 /// asset matches [`Self::asset`]. [`OrderSizeLimit::max_notional`] applies when
 /// the instrument's settlement asset matches it. The barrier is shared across
 /// all accounts. A missing cap constrains nothing. This asset level is the last
-/// level of the resolution chain, so a cap absent here leaves the metric with no
-/// asset-chain cap; only an additive broker barrier can still constrain it.
+/// level of the resolution chain, so a cap absent here leaves the metric with
+/// no asset-chain cap; only an additive broker barrier can still constrain it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderSizeAssetBarrier {
     /// Size limit for this asset barrier.
@@ -311,7 +311,8 @@ impl OrderSizeLimitSettings {
 /// - every limit must carry `max_quantity`, `max_notional`, or both;
 /// - a limit carrying neither returns
 ///   [`OrderSizeLimitPolicyError::NoCapsConfigured`];
-/// - duplicate keys within an axis return the corresponding duplicate-key error.
+/// - duplicate keys within an axis return the corresponding duplicate-key
+///   error.
 ///
 /// # Account retirement
 ///
@@ -521,8 +522,8 @@ where
             }
 
             // Read the trade amount only after resolving the caps, so an
-            // unconstrained order is never rejected for inaccessible trade amount.
-            // Keep this read below the early return.
+            // unconstrained order is never rejected for inaccessible trade
+            // amount. Keep this read below the early return.
             let trade_amount = order.trade_amount().map_err(|e| {
                 Rejects::from(missing_required_field_reject(self, "trade amount", &e))
             })?;
@@ -1477,7 +1478,8 @@ mod tests {
     #[test]
     fn account_asset_barrier_overrides_asset_barrier() {
         // Asset barrier allows 10, account+asset barrier allows 5.
-        // The matching account should use the AAPL account+asset quantity limit.
+        // The matching account should use the AAPL account+asset quantity
+        // limit.
         let p = policy(
             None,
             [asset_quantity_barrier("AAPL", "10")],

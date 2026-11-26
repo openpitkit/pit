@@ -26,17 +26,18 @@ use crate::{
     HasRemainingReservedQuantity, HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
-/// Data: main operation parameters that describe side, instrument, price, and amount.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// Data: main operation parameters that describe side, instrument, price, and
+/// amount. No `#[non_exhaustive]`: these are client-facing convenience structs
+/// meant to be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderOperation {
     pub instrument: Instrument,
     pub account_id: AccountId,
     pub trade_amount: TradeAmount,
-    /// Requested worst execution price used for size translation and price-sensitive checks.
+    /// Requested worst execution price used for size translation and
+    /// price-sensitive checks.
     ///
     /// `None` means the order should execute at market price.
     pub price: Option<Price>,
@@ -59,9 +60,9 @@ impl HasAlreadyHeld for OrderOperation {
     }
 }
 
-/// Adds main operation parameters that describe side, instrument, price, and amount.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// Adds main operation parameters that describe side, instrument, price, and
+/// amount. No `#[non_exhaustive]`: these are client-facing convenience structs
+/// meant to be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithOrderOperation<InnerOrder> {
     pub inner: InnerOrder,
@@ -130,26 +131,28 @@ impl_request_has_field_passthrough!(
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Data: position management parameters.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OrderPosition {
     /// Hedge-mode leg targeted by the order.
     ///
-    /// `Some(...)` selects an explicit long/short leg; `None` uses one-way mode semantics.
+    /// `Some(...)` selects an explicit long/short leg; `None` uses one-way mode
+    /// semantics.
     pub position_side: Option<PositionSide>,
     /// Restricts the order to exposure-reducing execution only.
     pub reduce_only: bool,
-    /// Marks intent to close the entire open position for the targeted leg/symbol.
+    /// Marks intent to close the entire open position for the targeted
+    /// leg/symbol.
     pub close_position: bool,
 }
 
 /// Adds position management parameters.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithOrderPosition<InnerOrder> {
     pub inner: InnerOrder,
@@ -165,11 +168,11 @@ impl_request_has_field!(
     HasClosePosition, close_position, bool, close_position;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Data: margin configuration parameters.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OrderMargin {
     /// Per-order leverage target used for margin requirement calculation.
@@ -187,8 +190,8 @@ pub struct OrderMargin {
 }
 
 /// Adds margin configuration parameters.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithOrderMargin<InnerOrder> {
     pub inner: InnerOrder,
@@ -241,11 +244,11 @@ impl_request_has_field_passthrough!(
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Data: pre-trade review parameters for an order.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OrderReview {
     /// Whether the caller has already confirmed the order for pre-trade review.
@@ -256,8 +259,8 @@ pub struct OrderReview {
 }
 
 /// Adds pre-trade review parameters to an order.
-/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
-/// struct literals from external crates.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to
+/// be constructed via struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WithOrderReview<Inner> {
     /// Order data that provides the other request fields.
@@ -301,7 +304,7 @@ impl_request_has_field_passthrough!(
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

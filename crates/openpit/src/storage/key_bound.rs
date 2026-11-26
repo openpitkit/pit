@@ -30,7 +30,10 @@
 //! * [`CreateStorageFor`] is a permission marker on
 //!   [`LockingPolicyFactory`](super::LockingPolicyFactory) that controls
 //!   which key types a factory can produce storages for through
-//!   [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key).
+//!   [`StorageBuilder::create_for_bound_key`].
+//!
+//! [`StorageBuilder::create_for_bound_key`]:
+//!     super::StorageBuilder::create_for_bound_key
 
 use super::policies::{FullLocking, IndexLocking, NoLocking};
 use super::policy::LockingPolicyFactory;
@@ -47,10 +50,13 @@ use super::policy::LockingPolicyFactory;
 /// The `'static` super-bound mirrors the lifetime requirements of the
 /// keys actually stored in the [`Storage`](super::Storage) and lets the
 /// marker types live in the
-/// [`StorageLockingPolicyFactory`](crate::SyncMode::StorageLockingPolicyFactory)
+/// [`StorageLockingPolicyFactory`]
 /// associated type without dangling lifetime parameters.
 ///
 /// [`IndexLocking`]: super::IndexLocking
+///
+/// [`StorageLockingPolicyFactory`]:
+///     crate::SyncMode::StorageLockingPolicyFactory
 pub trait IndexKeyBound<Key>: 'static {}
 
 /// Default key bound: imposes no requirement and is satisfied by every key.
@@ -65,8 +71,8 @@ impl<Key> IndexKeyBound<Key> for AnyKey {}
 
 /// Permission marker: locking-policy factories that implement this trait can
 /// produce [`Storage`](super::Storage) instances with the given key type via
-/// [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key) and
-/// [`StorageBuilder::create_with_capacity`](super::StorageBuilder::create_with_capacity).
+/// [`StorageBuilder::create_for_bound_key`] and
+/// [`StorageBuilder::create_with_capacity`].
 ///
 /// The trait is the compile-time gate that surfaces a key-bound mismatch as
 /// an error on `StorageBuilder::create_for_bound_key`, with a domain-specific
@@ -88,6 +94,11 @@ impl<Key> IndexKeyBound<Key> for AnyKey {}
 /// ```ignore
 /// impl<Key> openpit::storage::CreateStorageFor<Key> for MyCustomFactory {}
 /// ```
+///
+/// [`StorageBuilder::create_for_bound_key`]:
+///     super::StorageBuilder::create_for_bound_key
+/// [`StorageBuilder::create_with_capacity`]:
+///     super::StorageBuilder::create_with_capacity
 pub trait CreateStorageFor<Key>: LockingPolicyFactory {}
 
 impl<Key> CreateStorageFor<Key> for NoLocking {}

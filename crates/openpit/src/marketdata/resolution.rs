@@ -19,7 +19,7 @@
 
 use crate::param::AccountGroupId;
 
-// ─── QuoteResolution ──────────────────────────────────────────────────────────
+// ─── QuoteResolution ─────────────────────────────────────────────────────────
 
 /// Selects how a read resolves a quote across the per-account,
 /// per-account-group, and default ("everyone-else") buckets.

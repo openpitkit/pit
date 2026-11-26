@@ -18,11 +18,11 @@
 //! Builtin P&L-bounds kill-switch policy builder and its barrier data types.
 //!
 //! `buildPnlBoundsKillswitch()` returns a configuring builder. Calling either
-//! barrier setter (`brokerBarriers`, `accountBarriers`) produces a ready-builder
-//! token that can be passed to `builder.builtin(token)`. `withPolicyGroupId`
-//! preserves the current stage. Each barrier carries optional
-//! `lowerBound`/`upperBound` P&L bounds (at least one per barrier); decimals
-//! cross as `Pnl` value objects or `DecimalInput`.
+//! barrier setter (`brokerBarriers`, `accountBarriers`) produces a
+//! ready-builder token that can be passed to `builder.builtin(token)`.
+//! `withPolicyGroupId` preserves the current stage. Each barrier carries
+//! optional `lowerBound`/`upperBound` P&L bounds (at least one per barrier);
+//! decimals cross as `Pnl` value objects or `DecimalInput`.
 
 use openpit::param::{Asset, Pnl};
 use openpit::pretrade::policies::{

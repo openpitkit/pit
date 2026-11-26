@@ -16,16 +16,10 @@ installing `requirements.txt` as described in the
 ```sh
 .venv/bin/semgrep scan --config checks/semgrep --error --quiet \
   --metrics=off --disable-version-check .
-.venv/bin/semgrep --test --config checks/semgrep/financial-types-rust.yml \
-  --metrics=off --disable-version-check checks/semgrep/tests/financial-types-rust.rs
-.venv/bin/semgrep --test --config checks/semgrep/fallbacks-rust.yml \
-  --metrics=off --disable-version-check checks/semgrep/tests/fallbacks-rust.rs
-.venv/bin/semgrep --test --config checks/semgrep/async-exceptions-cpp.yml \
-  --metrics=off --disable-version-check checks/semgrep/tests/async-exceptions-cpp.cpp
 ```
 
-With optional [Just](https://just.systems/), `just check-semgrep` runs the same
-scan and rule tests.
+The [justfile](../justfile) defines all fixture runs in the
+`check-semgrep` recipe. Run `just check-semgrep` for the scan and fixtures.
 
 The target is a prerequisite of `lint-all`, so `check-debug`, `check-release`
 and `check-full` run it too. In CI it is the `Invariant checks` job of the
@@ -56,7 +50,16 @@ a test is the message a user sees.
 ## Rules
 
 - `semgrep/text-style.yml` - ASCII punctuation, no invisible characters, no
-  emoji, no narrating comments.
+  emoji, no narrating comments, and an 80-character limit on standalone
+  code comments and starred block continuations, including indentation.
+  URL-only lines with a scheme are exempt, including URLs in angle brackets
+  or parentheses. Standalone lines starting with `//go:` after indentation
+  are also exempt. The regex skips unstarred block continuation lines and
+  can interpret `/*` or `*/` inside a string as a comment delimiter. For
+  Python comments and docstrings, Ruff W505 exempts
+  single-word lines and lines ending in a URL or pragma when that URL or
+  pragma starts before the length limit. Configured task tags are exempt
+  when Ruff's `ignore-overlong-task-comments` is enabled (off here).
 - `semgrep/isolation.yml` - no reference to unpublished material, no tracker
   identifiers or tracker links, no absolute paths into a home directory, no
   binding documenting itself by pointing at a sibling.

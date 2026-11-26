@@ -39,26 +39,36 @@
 //!
 //! # Type categories
 //!
-//! - **Unsigned types** ([`Quantity`], [`Volume`], [`Notional`]) - cannot be negative.
-//! - **Signed types** ([`Price`], [`Pnl`], [`CashFlow`], [`PositionSize`], [`Fee`]) - can be negative.
+//! - **Unsigned types** ([`Quantity`], [`Volume`], [`Notional`]) - cannot be
+//!   negative.
+//! - **Signed types** ([`Price`], [`Pnl`], [`CashFlow`], [`PositionSize`],
+//!   [`Fee`]) - can be negative.
 //! - **Fixed-point types** ([`Leverage`]) - scaled integer domain values.
-//! - **Identifiers** ([`Asset`], [`AccountId`], [`Side`], [`PositionSide`]) - non-numeric types.
+//! - **Identifiers** ([`Asset`], [`AccountId`], [`Side`], [`PositionSide`]) -
+//!   non-numeric types.
 //!
 //! # Rounding
 //!
 //! Value types support rounding during construction via [`RoundingStrategy`].
-//! Scale and rounding strategy must be explicitly provided when using rounded constructors.
+//! Scale and rounding strategy must be explicitly provided when using rounded
+//! constructors.
 //!
 //! ```
 //! use openpit::param::{Price, RoundingStrategy};
 //!
-//! let price = Price::from_str_rounded("100.126", 2, RoundingStrategy::DEFAULT)?;
+//! let price =
+//!     Price::from_str_rounded("100.126", 2, RoundingStrategy::DEFAULT)?;
 //! assert_eq!(price.to_string(), "100.13");
 //!
-//! let price = Price::from_str_rounded("100.125", 2, RoundingStrategy::BANKER)?;
+//! let price =
+//!     Price::from_str_rounded("100.125", 2, RoundingStrategy::BANKER)?;
 //! assert_eq!(price.to_string(), "100.12");
 //!
-//! let profit = Price::from_str_rounded("123.456", 2, RoundingStrategy::CONSERVATIVE_PROFIT)?;
+//! let profit = Price::from_str_rounded(
+//!     "123.456",
+//!     2,
+//!     RoundingStrategy::CONSERVATIVE_PROFIT,
+//! )?;
 //! assert_eq!(profit.to_string(), "123.45");
 //! # Ok::<(), openpit::param::Error>(())
 //! ```
@@ -105,7 +115,8 @@
 //! let volume = price.calculate_volume(qty)?;
 //! assert_eq!(volume.to_string(), "1000");
 //!
-//! let err = Quantity::from_str("-1").expect_err("negative quantity must be rejected");
+//! let err = Quantity::from_str("-1")
+//!     .expect_err("negative quantity must be rejected");
 //! assert_eq!(err, Error::Negative { param: ParamKind::Quantity });
 //! # Ok::<(), Error>(())
 //! ```
@@ -195,8 +206,9 @@ impl Display for ParamKind {
 pub enum RoundingStrategy {
     /// Round half to nearest even number.
     ///
-    /// When the value is exactly halfway between two numbers, rounds to the nearest even number.
-    /// This minimizes systematic bias in repeated calculations and is the IEEE 754 default.
+    /// When the value is exactly halfway between two numbers, rounds to the
+    /// nearest even number. This minimizes systematic bias in repeated
+    /// calculations and is the IEEE 754 default.
     ///
     /// Also known as banker's rounding or round-half-to-even.
     ///
@@ -208,8 +220,8 @@ pub enum RoundingStrategy {
     MidpointNearestEven,
     /// Round half away from zero.
     ///
-    /// When the value is exactly halfway between two numbers, rounds away from zero.
-    /// This is the traditional "round half up" for positive numbers.
+    /// When the value is exactly halfway between two numbers, rounds away from
+    /// zero. This is the traditional "round half up" for positive numbers.
     ///
     /// # Examples
     ///
@@ -265,7 +277,11 @@ impl RoundingStrategy {
     /// use openpit::param::{Pnl, RoundingStrategy};
     ///
     /// // Profit of 123.456 rounds down to 123.45
-    /// let profit = Pnl::from_str_rounded("123.456", 2, RoundingStrategy::CONSERVATIVE_PROFIT)?;
+    /// let profit = Pnl::from_str_rounded(
+    ///     "123.456",
+    ///     2,
+    ///     RoundingStrategy::CONSERVATIVE_PROFIT,
+    /// )?;
     /// assert_eq!(profit.to_string(), "123.45");
     /// # Ok::<(), openpit::param::Error>(())
     /// ```
@@ -284,7 +300,11 @@ impl RoundingStrategy {
     /// use openpit::param::{Pnl, RoundingStrategy};
     ///
     /// // Loss of -123.456 rounds to -123.46 (more negative)
-    /// let loss = Pnl::from_str_rounded("-123.456", 2, RoundingStrategy::CONSERVATIVE_LOSS)?;
+    /// let loss = Pnl::from_str_rounded(
+    ///     "-123.456",
+    ///     2,
+    ///     RoundingStrategy::CONSERVATIVE_LOSS,
+    /// )?;
     /// assert_eq!(loss.to_string(), "-123.46");
     /// # Ok::<(), openpit::param::Error>(())
     /// ```
@@ -449,8 +469,10 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when value is NaN or infinite.
-            /// Returns [`Error::Negative`](super::Error::Negative) when value is negative.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// value is NaN or infinite. Returns
+            /// [`Error::Negative`](super::Error::Negative) when value is
+            /// negative.
             pub fn from_f64(value: f64) -> Result<Self, super::Error> {
                 let decimal = super::decimal_from_f64(value)?;
                 Self::new(decimal)
@@ -476,8 +498,10 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat) when string cannot be parsed.
-            /// Returns [`Error::Negative`](super::Error::Negative) when parsed value is negative.
+            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat)
+            /// when string cannot be parsed.
+            /// Returns [`Error::Negative`](super::Error::Negative) when parsed
+            /// value is negative.
             #[allow(clippy::should_implement_trait)]
             pub fn from_str(s: &str) -> Result<Self, super::Error> {
                 let decimal = rust_decimal::Decimal::from_str_exact(s).map_err(|_| {
@@ -491,7 +515,8 @@ macro_rules! define_non_negative_value_type {
 
             /// Creates a value from a string representation with rounding.
             ///
-            /// The value is rounded to the specified scale using the provided rounding strategy.
+            /// The value is rounded to the specified scale using the provided
+            /// rounding strategy.
             ///
             /// # Examples
             ///
@@ -516,8 +541,10 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat) when string cannot be parsed.
-            /// Returns [`Error::Negative`](super::Error::Negative) when parsed value is negative after rounding.
+            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat)
+            /// when string cannot be parsed.
+            /// Returns [`Error::Negative`](super::Error::Negative) when parsed
+            /// value is negative after rounding.
             pub fn from_str_rounded(
                 s: &str,
                 scale: u32,
@@ -535,14 +562,18 @@ macro_rules! define_non_negative_value_type {
                 Self::new(decimal)
             }
 
-            /// Creates a value from a 64-bit floating-point number with rounding.
+            /// Creates a value from a 64-bit floating-point number with
+            /// rounding.
             ///
-            /// The value is rounded to the specified scale using the provided rounding strategy.
+            /// The value is rounded to the specified scale using the provided
+            /// rounding strategy.
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when value is NaN or infinite.
-            /// Returns [`Error::Negative`](super::Error::Negative) when value is negative after rounding.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// value is NaN or infinite. Returns
+            /// [`Error::Negative`](super::Error::Negative) when value is
+            /// negative after rounding.
             pub fn from_f64_rounded(
                 value: f64,
                 scale: u32,
@@ -557,11 +588,13 @@ macro_rules! define_non_negative_value_type {
 
             /// Creates a value from a [`rust_decimal::Decimal`] with rounding.
             ///
-            /// The value is rounded to the specified scale using the provided rounding strategy.
+            /// The value is rounded to the specified scale using the provided
+            /// rounding strategy.
             ///
             /// # Errors
             ///
-            /// Returns [`Error::Negative`](super::Error::Negative) when value is negative after rounding.
+            /// Returns [`Error::Negative`](super::Error::Negative) when value
+            /// is negative after rounding.
             pub fn from_decimal_rounded(
                 mut decimal: rust_decimal::Decimal,
                 scale: u32,
@@ -604,7 +637,8 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::Underflow`](super::Error::Underflow) when result would be negative.
+            /// Returns [`Error::Underflow`](super::Error::Underflow) when
+            /// result would be negative.
             pub fn checked_sub(self, other: Self) -> Result<Self, super::Error> {
                 let result = self
                     .0
@@ -617,8 +651,9 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::Negative`](super::Error::Negative) when scalar is negative.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::Negative`](super::Error::Negative) when scalar
+            /// is negative. Returns [`Error::Overflow`](super::Error::Overflow)
+            /// on overflow.
             pub fn checked_mul_i64(self, scalar: i64) -> Result<Self, super::Error> {
                 if scalar < 0 {
                     return Err(super::Error::Negative { param: Self::KIND });
@@ -645,9 +680,11 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when factor is NaN or infinite.
-            /// Returns [`Error::Negative`](super::Error::Negative) when factor is negative.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// factor is NaN or infinite. Returns
+            /// [`Error::Negative`](super::Error::Negative) when factor is
+            /// negative. Returns [`Error::Overflow`](super::Error::Overflow) on
+            /// overflow.
             pub fn checked_mul_f64(self, factor: f64) -> Result<Self, super::Error> {
                 let factor = super::decimal_from_f64(factor)?;
                 if factor < rust_decimal::Decimal::ZERO {
@@ -663,9 +700,11 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Negative`](super::Error::Negative) when divisor is negative.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Negative`](super::Error::Negative) when divisor is
+            /// negative. Returns [`Error::Overflow`](super::Error::Overflow) on
+            /// overflow.
             pub fn checked_div_i64(self, divisor: i64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -683,8 +722,9 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_div_u64(self, divisor: u64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -699,10 +739,13 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when divisor is NaN or infinite.
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Negative`](super::Error::Negative) when divisor is negative.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// divisor is NaN or infinite.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Negative`](super::Error::Negative) when divisor is
+            /// negative. Returns [`Error::Overflow`](super::Error::Overflow) on
+            /// overflow.
             pub fn checked_div_f64(self, divisor: f64) -> Result<Self, super::Error> {
                 let divisor = super::decimal_from_f64(divisor)?;
                 if divisor == rust_decimal::Decimal::ZERO {
@@ -721,9 +764,11 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Negative`](super::Error::Negative) when divisor is negative.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Negative`](super::Error::Negative) when divisor is
+            /// negative. Returns [`Error::Overflow`](super::Error::Overflow) on
+            /// overflow.
             pub fn checked_rem_i64(self, divisor: i64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -741,8 +786,9 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_rem_u64(self, divisor: u64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -757,10 +803,13 @@ macro_rules! define_non_negative_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when divisor is NaN or infinite.
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Negative`](super::Error::Negative) when divisor is negative.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// divisor is NaN or infinite.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Negative`](super::Error::Negative) when divisor is
+            /// negative. Returns [`Error::Overflow`](super::Error::Overflow) on
+            /// overflow.
             pub fn checked_rem_f64(self, divisor: f64) -> Result<Self, super::Error> {
                 let divisor = super::decimal_from_f64(divisor)?;
                 if divisor == rust_decimal::Decimal::ZERO {
@@ -805,7 +854,8 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when value is NaN or infinite.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// value is NaN or infinite.
             pub fn from_f64(value: f64) -> Result<Self, super::Error> {
                 let decimal = super::decimal_from_f64(value)?;
                 Ok(Self::new(decimal))
@@ -834,7 +884,8 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat) when string cannot be parsed.
+            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat)
+            /// when string cannot be parsed.
             #[allow(clippy::should_implement_trait)]
             pub fn from_str(s: &str) -> Result<Self, super::Error> {
                 let decimal = rust_decimal::Decimal::from_str_exact(s).map_err(|_| {
@@ -848,11 +899,13 @@ macro_rules! define_signed_value_type {
 
             /// Creates a value from a string representation with rounding.
             ///
-            /// The value is rounded to the specified scale using the provided rounding strategy.
+            /// The value is rounded to the specified scale using the provided
+            /// rounding strategy.
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat) when string cannot be parsed.
+            /// Returns [`Error::InvalidFormat`](super::Error::InvalidFormat)
+            /// when string cannot be parsed.
             pub fn from_str_rounded(
                 s: &str,
                 scale: u32,
@@ -870,13 +923,16 @@ macro_rules! define_signed_value_type {
                 Ok(Self::new(decimal))
             }
 
-            /// Creates a value from a 64-bit floating-point number with rounding.
+            /// Creates a value from a 64-bit floating-point number with
+            /// rounding.
             ///
-            /// The value is rounded to the specified scale using the provided rounding strategy.
+            /// The value is rounded to the specified scale using the provided
+            /// rounding strategy.
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when value is NaN or infinite.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// value is NaN or infinite.
             pub fn from_f64_rounded(
                 value: f64,
                 scale: u32,
@@ -891,11 +947,13 @@ macro_rules! define_signed_value_type {
 
             /// Creates a value from a [`rust_decimal::Decimal`] with rounding.
             ///
-            /// The value is rounded to the specified scale using the provided rounding strategy.
+            /// The value is rounded to the specified scale using the provided
+            /// rounding strategy.
             ///
             /// # Errors
             ///
-            /// This method is infallible for signed types as rounding cannot produce errors.
+            /// This method is infallible for signed types as rounding cannot
+            /// produce errors.
             pub fn from_decimal_rounded(
                 mut decimal: rust_decimal::Decimal,
                 scale: u32,
@@ -932,7 +990,8 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow or underflow.
+            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow
+            /// or underflow.
             pub fn checked_sub(self, other: Self) -> Result<Self, super::Error> {
                 self.0
                     .checked_sub(other.0)
@@ -944,7 +1003,8 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::Overflow`](super::Error::Overflow) if negation would overflow.
+            /// Returns [`Error::Overflow`](super::Error::Overflow) if negation
+            /// would overflow.
             pub fn checked_neg(self) -> Result<Self, super::Error> {
                 rust_decimal::Decimal::ZERO
                     .checked_sub(self.0)
@@ -980,8 +1040,9 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when factor is NaN or infinite.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// factor is NaN or infinite. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_mul_f64(self, factor: f64) -> Result<Self, super::Error> {
                 let factor = super::decimal_from_f64(factor)?;
                 self.0
@@ -994,8 +1055,9 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_div_i64(self, divisor: i64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -1010,8 +1072,9 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_div_u64(self, divisor: u64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -1026,9 +1089,11 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when divisor is NaN or infinite.
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// divisor is NaN or infinite.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_div_f64(self, divisor: f64) -> Result<Self, super::Error> {
                 let divisor = super::decimal_from_f64(divisor)?;
                 if divisor == rust_decimal::Decimal::ZERO {
@@ -1044,8 +1109,9 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_rem_i64(self, divisor: i64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -1060,8 +1126,9 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_rem_u64(self, divisor: u64) -> Result<Self, super::Error> {
                 if divisor == 0 {
                     return Err(super::Error::DivisionByZero { param: Self::KIND });
@@ -1076,9 +1143,11 @@ macro_rules! define_signed_value_type {
             ///
             /// # Errors
             ///
-            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when divisor is NaN or infinite.
-            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero) when divisor is zero.
-            /// Returns [`Error::Overflow`](super::Error::Overflow) on overflow.
+            /// Returns [`Error::InvalidFloat`](super::Error::InvalidFloat) when
+            /// divisor is NaN or infinite.
+            /// Returns [`Error::DivisionByZero`](super::Error::DivisionByZero)
+            /// when divisor is zero. Returns
+            /// [`Error::Overflow`](super::Error::Overflow) on overflow.
             pub fn checked_rem_f64(self, divisor: f64) -> Result<Self, super::Error> {
                 let divisor = super::decimal_from_f64(divisor)?;
                 if divisor == rust_decimal::Decimal::ZERO {

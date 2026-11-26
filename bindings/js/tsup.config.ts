@@ -30,8 +30,8 @@
 //
 // Declarations are emitted separately by `tsc` (build:dts -> dist/types): the
 // Node runtime uses `import.meta.url`, which tsup's declaration bundler cannot
-// parse, while tsc handles it natively and the per-file `.d.ts` map cleanly onto
-// the subpath `exports`.
+// parse, while tsc handles it natively and the per-file `.d.ts` map cleanly
+// onto the subpath `exports`.
 
 import { defineConfig } from "tsup";
 

@@ -45,7 +45,8 @@ type Policy interface {
 	// Return rejects or review marks. Each item's Mode is optional; its zero
 	// value means Reject.
 	// All registered policies are evaluated in registration order. Effective
-	// rejects stop the order. Review marks alone are available via Request.Reviews.
+	// rejects stop the order. Review marks alone are available via
+	// Request.Reviews.
 	//
 	// The order is a view of engine memory and is valid only during this hook.
 	// Its string fields and model values derived from it, including nested

@@ -58,7 +58,7 @@ class BalanceOperation:
 
     @property
     def realized_pnl(self) -> Pnl | PnlHaltReason | None:
-        """Optional account-currency realized PnL replacement or explicit halt."""
+        """Optional account-currency realized PnL replacement or halt."""
 
 class PositionOperation:
     """Direct derivatives-like position adjustment."""
@@ -89,7 +89,7 @@ class PositionOperation:
 
     @property
     def leverage(self) -> Leverage | None:
-        """Optional leverage snapshot/setting carried with the position adjustment."""
+        """Optional leverage snapshot or setting for the adjustment."""
 
 class AccountPnlOperation:
     """Direct account-wide PnL state adjustment."""

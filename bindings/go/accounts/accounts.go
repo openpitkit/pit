@@ -36,7 +36,8 @@ import (
 // RegisterGroup, UnregisterGroup, SetGroupCurrency, and ClearGroupCurrency are
 // exclusive operations in every mode, including FullSync: run each with no
 // other engine call in flight, as asyncengine.AsyncEngine.Exclusive does.
-// This also applies to SetCurrency and ClearCurrency. Moving an account between groups is UnregisterGroup followed by
+// This also applies to SetCurrency and ClearCurrency. Moving an account between
+// groups is UnregisterGroup followed by
 // RegisterGroup; run both in one exclusive stretch so no other call observes
 // the account in the default group between them.
 // Before effective currency changes, the caller explicitly clears and zeros

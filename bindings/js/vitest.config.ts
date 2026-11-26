@@ -22,10 +22,11 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     // Tests import the package by name (root and subpaths); each alias resolves
-    // to the built Node entry so they exercise the real disk-loaded wasm and the
-    // single shared instance. Longer specifiers come first so `@openpit/engine`
-    // does not shadow `@openpit/engine/param` etc. Types come from the source
-    // barrels via the tsconfig `paths` mapping (see tsconfig.json).
+    // to the built Node entry so they exercise the real disk-loaded wasm and
+    // the single shared instance. Longer specifiers come first so
+    // `@openpit/engine` does not shadow `@openpit/engine/param` etc. Types come
+    // from the source barrels via the tsconfig `paths` mapping (see
+    // tsconfig.json).
     alias: [
       {
         find: "npm:@openpit/engine",

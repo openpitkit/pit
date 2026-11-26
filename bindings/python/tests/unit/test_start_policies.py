@@ -1434,8 +1434,8 @@ def test_spot_funds_insufficient_funds_reject_does_not_leak_account_id() -> None
         openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
     )
 
-    # Buy 10 AAPL @ 200 = 2000 notional against an unfunded account: rejects with
-    # insufficient funds.
+    # Buy 10 AAPL @ 200 = 2000 notional against an unfunded account: rejects
+    # with insufficient funds.
     result = engine.execute_pre_trade(
         order=conftest.make_order(
             account_id=account_id,
@@ -1548,7 +1548,8 @@ def test_spot_funds_full_engine_with_local_md_service_is_rejected() -> None:
 @pytest.mark.unit
 def test_spot_funds_local_engine_with_full_md_service_is_accepted() -> None:
     policies = openpit.pretrade.policies
-    # Full MD service: derived from a no_sync() builder then upgraded via full_sync().
+    # Full MD service: derived from a no_sync() builder then upgraded via
+    # full_sync().
     full_service = (
         openpit.Engine.builder()
         .no_sync()

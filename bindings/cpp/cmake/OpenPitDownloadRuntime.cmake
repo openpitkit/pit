@@ -19,8 +19,8 @@
 # IMPORTED target `OpenPit::runtime`. Consumers need no Rust toolchain.
 #
 # Resolution order:
-#   1. OPENPIT_RUNTIME_LIBRARY  - absolute path to a prebuilt library file
-#                                 (e.g. target/<triple>/release/libopenpit_ffi.so).
+#   1. OPENPIT_RUNTIME_LIBRARY  - absolute path to a prebuilt library file (e.g.
+#                                 target/<triple>/release/libopenpit_ffi.so).
 #   2. OPENPIT_RUNTIME_DIR       - directory holding the host library file under
 #                                 its platform-default name.
 #   3. Download the matching release asset from GitHub and verify its .sha256
@@ -84,8 +84,8 @@ function(_openpit_runtime_resolve_windows_implib lib_path out_implib_path)
   set(${out_implib_path} "${candidate}" PARENT_SCOPE)
 endfunction()
 
-# Creates the IMPORTED target for a resolved library file. Windows consumers link
-# through the MSVC import library and load the DLL at runtime; the import
+# Creates the IMPORTED target for a resolved library file. Windows consumers
+# link through the MSVC import library and load the DLL at runtime; the import
 # library is the optional second argument, otherwise it is resolved from the
 # DLL path.
 function(_openpit_runtime_define_target lib_path)
@@ -206,8 +206,9 @@ function(openpit_resolve_runtime)
       _openpit_runtime_download_asset("${base_url}" "${implib_asset}"
         "${implib_path}")
     endif()
-    # `_openpit_runtime_define_target` re-derives the implib as "${lib_path}.lib"
-    # (== "${implib_path}"), so no explicit hand-off is needed here.
+    # `_openpit_runtime_define_target` re-derives the implib as
+    # "${lib_path}.lib" (== "${implib_path}"), so no explicit hand-off is
+    # needed here.
   endif()
 
   _openpit_runtime_define_target("${lib_path}")

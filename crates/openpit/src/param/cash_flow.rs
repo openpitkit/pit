@@ -39,7 +39,8 @@ impl CashFlow {
         Self::new(volume.to_decimal())
     }
 
-    /// Creates a cash flow contribution from a volume outflow (negates the volume amount).
+    /// Creates a cash flow contribution from a volume outflow (negates the
+    /// volume amount).
     pub fn from_volume_outflow(volume: Volume) -> Self {
         Self::new(-volume.to_decimal())
     }

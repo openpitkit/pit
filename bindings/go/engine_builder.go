@@ -53,8 +53,8 @@ func InstanceName(name string) InstanceOption {
 // recorded, balances and positions are not updated, and a later fill or cancel
 // of that order can block the account for a missing lock price. The rejects and
 // account blocks it returns become marks or are dropped unless their code is
-// an evaluation failure, so a P&L kill switch registered this way does not block
-// the account on a fill; a block it writes directly through
+// an evaluation failure, so a P&L kill switch registered this way does not
+// block the account on a fill; a block it writes directly through
 // [reject.AccountControl] and a block from an accepted account adjustment latch
 // in any mode.
 func InstanceMode(mode reject.RuleMode) InstanceOption {

@@ -38,8 +38,8 @@ impl Notional {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] when multiplication
-    /// overflows.
+    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] when
+    /// multiplication overflows.
     pub fn from_price_quantity(price: Price, quantity: Quantity) -> Result<Self, Error> {
         let notional = price
             .to_decimal()
@@ -67,7 +67,8 @@ impl Notional {
         Volume::new_unchecked(self.to_decimal())
     }
 
-    /// Computes the margin required to hold this position at the given leverage.
+    /// Computes the margin required to hold this position at the given
+    /// leverage.
     ///
     /// Formula: `margin = notional / leverage`.
     ///

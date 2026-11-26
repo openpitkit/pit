@@ -92,9 +92,9 @@ fn export_price(price: openpit::param::Price) -> OpenPitParamPrice {
     OpenPitParamPrice(OpenPitParamDecimal::from_decimal(price.to_decimal()))
 }
 
-/// Validates an input entry array and returns the parsed `(PolicyGroupId, Price)`
-/// records, writing the first validation error to `out_error` and returning
-/// `false` on failure.
+/// Validates an input entry array and returns the parsed
+/// `(PolicyGroupId, Price)` records, writing the first validation error to
+/// `out_error` and returning `false` on failure.
 fn parse_entries(
     entries_ptr: *const OpenPitPretradePreTradeLockEntry,
     entries_len: usize,
@@ -265,7 +265,8 @@ pub extern "C" fn openpit_pretrade_pre_trade_lock_push_many(
     true
 }
 
-/// Builds a new lock populated from the given `(policy_group_id, price)` records.
+/// Builds a new lock populated from the given `(policy_group_id, price)`
+/// records.
 ///
 /// `entries_ptr`/`entries_len` describe an array of
 /// `OpenPitPretradePreTradeLockEntry`. A zero length is allowed and yields an
@@ -784,7 +785,7 @@ pub extern "C" fn openpit_create_pretrade_pre_trade_lock_from_raw(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Raw encoder/decoder (in-process binary-stable layout)
 
 const SERIALIZED_DECIMAL_SIZE: usize = 16;

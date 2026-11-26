@@ -63,10 +63,11 @@ func DestroyEngineBuilder(builder EngineBuilder) {
 
 // EngineBuilderBuild constructs the engine from the builder.
 //
-// On a domain build failure it surfaces a non-nil EngineBuildError handle, which
-// the caller owns and must release with DestroyEngineBuildError. On a boundary
-// failure it surfaces the error from the string out-error. A null engine is
-// treated as failure; on success both the handle and the error are nil.
+// On a domain build failure it surfaces a non-nil EngineBuildError handle,
+// which the caller owns and must release with DestroyEngineBuildError. On a
+// boundary failure it surfaces the error from the string out-error. A null
+// engine is treated as failure; on success both the handle and the error are
+// nil.
 func EngineBuilderBuild(builder EngineBuilder) (Engine, EngineBuildError, error) {
 	var outBuildError EngineBuildError
 	var outError SharedString

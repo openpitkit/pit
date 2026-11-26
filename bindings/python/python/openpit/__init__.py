@@ -25,7 +25,8 @@ before they leave the application. The package provides:
   with exact decimal arithmetic.
 - :mod:`~openpit.pretrade` - pluggable policy interfaces, standard reject
   codes, deferred requests, and reservations.
-- :mod:`~openpit.core` - order, execution-report, and account-adjustment group models.
+- :mod:`~openpit.core` - order, execution-report, and account-adjustment group
+  models.
 
 Quickstart::
 
@@ -59,14 +60,15 @@ selected at builder time:
   sequential cross-thread invocation is also safe.
 - `no_sync()` - the handle stays on the OS thread that created the
   engine.
-- `account_sync()` - concurrent ordinary invocation on the same handle is safe when
-  the caller pins each account to a single chain (one queue or one worker at a
-  time), so calls for the same account are never concurrent.
+- `account_sync()` - concurrent ordinary invocation on the same handle is safe
+  when the caller pins each account to a single chain (one queue or one worker
+  at a time), so calls for the same account are never concurrent.
 
-In every mode, including `full_sync()`, account-group membership, all account/group
-currency setters and clearers (including default/global currency), and Spot Funds
-retunes are caller-exclusive. The caller ensures no other engine call is in flight
-for the entire operation; the SDK adds no synchronization for these transitions.
+In every mode, including `full_sync()`, account-group membership, all
+account/group currency setters and clearers (including default/global currency),
+and Spot Funds retunes are caller-exclusive. The caller ensures no other engine
+call is in flight for the entire operation; the SDK adds no synchronization
+for these transitions.
 """
 
 from contextlib import suppress

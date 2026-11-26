@@ -30,7 +30,8 @@ impl PositionSize {
     /// - Positive value for [`Side::Buy`] (long position)
     /// - Negative value for [`Side::Sell`] (short position)
     ///
-    /// This is the canonical way to construct a position from a trade execution.
+    /// This is the canonical way to construct a position from a trade
+    /// execution.
     ///
     /// # Examples
     ///
@@ -63,8 +64,8 @@ impl PositionSize {
         Self::new(-fee.to_decimal())
     }
 
-    /// Converts this position size into the quantity required to open it and the corresponding
-    /// opening side.
+    /// Converts this position size into the quantity required to open it and
+    /// the corresponding opening side.
     ///
     /// Semantics:
     ///
@@ -89,13 +90,15 @@ impl PositionSize {
         (Quantity::new_unchecked(self.to_decimal().abs()), side)
     }
 
-    /// Converts this position size into the quantity required to close it and the corresponding
-    /// closing side.
+    /// Converts this position size into the quantity required to close it and
+    /// the corresponding closing side.
     ///
     /// Semantics:
     ///
-    /// - If the position is positive (long), the closing side is [`Side::Sell`].
-    /// - If the position is negative (short), the closing side is [`Side::Buy`].
+    /// - If the position is positive (long), the closing side is
+    ///   [`Side::Sell`].
+    /// - If the position is negative (short), the closing side is
+    ///   [`Side::Buy`].
     /// - If the position is zero, no action is required and `None` is returned
     ///   as the side together with [`Quantity::ZERO`].
     ///
@@ -124,8 +127,8 @@ impl PositionSize {
     /// - `Quantity` must be non-negative.
     /// - The result may flip sign if the trade over-closes the position.
     ///
-    /// This operation is purely arithmetic and does not perform validation beyond relying on
-    /// [`Quantity`] invariants.
+    /// This operation is purely arithmetic and does not perform validation
+    /// beyond relying on [`Quantity`] invariants.
     ///
     /// # Examples
     ///

@@ -218,7 +218,8 @@ func captureCore() CoreBuildProfile {
 	p.TargetCPU = unknown
 	p.LTO = unknown
 
-	// Parse key=value; pairs. The format is stable and documented in engine_builder.go.
+	// Parse key=value; pairs. The format is stable and documented in
+	// engine_builder.go.
 	for _, pair := range strings.Split(raw, ";") {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {

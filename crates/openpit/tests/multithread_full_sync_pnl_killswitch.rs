@@ -15,8 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Verifies concurrent correctness of PnlBoundsKillSwitchPolicy<FullLocking> under
-// two scenarios:
+// Verifies concurrent correctness of PnlBoundsKillSwitchPolicy<FullLocking>
+// under two scenarios:
 //
 // 1. No lost updates: multiple threads interleave apply_execution_report and
 //    check_pre_trade_start on the same (account, settlement) pair.  The total
@@ -127,21 +127,25 @@ fn apply_report(policy: &TestEngine, report: &TestReport) -> bool {
 // Strategy: set the account+asset upper bound equal to the deterministic total
 // (TOTAL_THREADS * PER_THREAD_REPORTS * PNL_PER_REPORT = 400).
 //
-// During the test, FullLocking serializes writes so realized grows from 0 to 400
-// in steps of 10; the bound is never exceeded (400 > 400 is false) and all
+// During the test, FullLocking serializes writes so realized grows from 0 to
+// 400 in steps of 10; the bound is never exceeded (400 > 400 is false) and all
 // intermediate checks pass.
 //
-// After joining, a probe of +1 is applied.  The breach condition is "realized > 400".
+// After joining, a probe of +1 is applied.  The breach condition is "realized >
+// 400".
 //
-// - If no updates were lost: realized = 400 → after probe: 401 > 400 → triggers.
-// - If N ≥ 1 updates lost:   realized ≤ 390 → after probe: ≤ 391 ≤ 400 → no trigger.
+// - If no updates were lost: realized = 400 → after probe: 401 > 400 →
+//   triggers.
+// - If N ≥ 1 updates lost:   realized ≤ 390 → after probe: ≤ 391 ≤ 400 → no
+//   trigger.
 //
 // The probe therefore distinguishes the two cases exactly.
 #[test]
 fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
     let expected_total = TOTAL_THREADS * PER_THREAD_REPORTS * (PNL_PER_REPORT as usize);
-    // Upper bound equal to the expected total: realized == 400 does NOT trigger;
-    // realized == 401 DOES.  This lets all 40 reports pass, then the probe fires.
+    // Upper bound equal to the expected total: realized == 400 does NOT
+    // trigger; realized == 401 DOES.  This lets all 40 reports pass, then the
+    // probe fires.
     let upper_bound_str = expected_total.to_string();
 
     let builder = Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
@@ -247,9 +251,10 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
             s.spawn(move || {
                 for _ in 0..PER_THREAD_REPORTS {
                     apply_report(&policy, &build_report(account(1), pnl_delta));
-                    // Intermediate checks may succeed (before breach) or fail (after breach);
-                    // the result is intentionally not asserted here - the post-join assertion
-                    // below verifies the permanent latched state.
+                    // Intermediate checks may succeed (before breach) or fail
+                    // (after breach); the result is intentionally not asserted
+                    // here - the post-join assertion below verifies the
+                    // permanent latched state.
                     let _ = check_start(&policy, &build_order(account(1)));
                 }
             });
@@ -264,8 +269,9 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
         "the engine must preserve the cause of its latched account block"
     );
 
-    // Account 2 has no account+asset barrier and its PnL is 0 (no reports applied);
-    // the broker barrier is wide, so account 2 must continue to accept.
+    // Account 2 has no account+asset barrier and its PnL is 0 (no reports
+    // applied); the broker barrier is wide, so account 2 must continue to
+    // accept.
     check_start(&policy, &build_order(account(2)))
         .expect("account without triggered barrier must still accept");
 }

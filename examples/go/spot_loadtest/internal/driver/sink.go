@@ -55,10 +55,10 @@ func (s *resultSink) recordSubmit() {
 }
 
 // recordResolve records a resolved operation into the appropriate measurement
-// stream. The latency value is the open-loop resolve - VirtualT0 computed by the
-// collector (never recomputed here): for an order-check this is the HEADLINE
-// open-loop latency-under-load, for a settlement the settlement open-loop
-// latency.
+// stream. The latency value is the open-loop resolve - VirtualT0 computed by
+// the collector (never recomputed here): for an order-check this is the
+// HEADLINE open-loop latency-under-load, for a settlement the settlement
+// open-loop latency.
 func (s *resultSink) recordResolve(class opClass, latency time.Duration, accepted bool) {
 	switch class {
 	case opOrderCheck:

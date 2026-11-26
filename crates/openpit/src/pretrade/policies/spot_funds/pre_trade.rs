@@ -261,17 +261,17 @@ where
     /// - `Buy`:  underlying owed `0`; settlement owed `max(0, p*q)`.
     /// - `Sell`: underlying owed `q`; settlement owed `max(0, -p*q)`.
     ///
-    /// In parallel with the `held` outflow legs the order projects the acquiring
-    /// leg's expected inflow into `incoming` (purely informational, never
-    /// gating): a buy projects `base_incoming = q` base units, a priced sell
-    /// projects `settlement_incoming = max(0, p*q)` quote proceeds.
+    /// In parallel with the `held` outflow legs the order projects the
+    /// acquiring leg's expected inflow into `incoming` (purely informational,
+    /// never gating): a buy projects `base_incoming = q` base units, a priced
+    /// sell projects `settlement_incoming = max(0, p*q)` quote proceeds.
     ///
     /// The returned [`ReservationLegs::lock_price`] is the effective settlement
     /// price the execution path must persist to reconcile the settlement `held`
-    /// or `incoming` later. It is always `Some`: every accepted order resolves a
-    /// price (buys and sells alike), so a dropped lock on a later fill/cancel is
-    /// always caught as an account block. A Quantity sell with no order price and
-    /// no market-data price is unpriceable and rejected here with
+    /// or `incoming` later. It is always `Some`: every accepted order resolves
+    /// a price (buys and sells alike), so a dropped lock on a later fill/cancel
+    /// is always caught as an account block. A Quantity sell with no order
+    /// price and no market-data price is unpriceable and rejected here with
     /// [`RejectCode::MarkPriceUnavailable`], never accepted without a lock.
     pub(super) fn compute_reservation_legs(
         &self,
@@ -337,13 +337,14 @@ where
                 })
             }
             Side::Sell => {
-                // Every accepted sell must resolve a price: a Quantity sell uses
-                // its order price or the market-data bundle, rejecting as
-                // unpriceable when neither is present (exactly like the buy path);
-                // a Volume sell needs a price to size the quantity. This
+                // Every accepted sell must resolve a price: a Quantity sell
+                // uses its order price or the market-data bundle, rejecting as
+                // unpriceable when neither is present (exactly like the buy
+                // path); a Volume sell needs a price to size the quantity. This
                 // guarantees a recorded lock price the settlement leg can
                 // reconcile against later, and a missing lock on a later
-                // fill/cancel is then a reconciliation error, not a valid order.
+                // fill/cancel is then a reconciliation error, not a valid
+                // order.
                 let sell_price = match request.price {
                     Some(p) => p,
                     None => self.compute_sell_with_md(
@@ -383,10 +384,10 @@ where
                     .calculate_position_size(quantity)
                     .map_err(|_| order_value_calculation_failed_reject(Self::NAME, ""))?;
                 // Settlement owed = max(0, -p*q): positive only when the sell
-                // price is negative (paying to dispose of the asset). The mirror
-                // projection settlement incoming = max(0, p*q) is the expected
-                // proceeds, positive only for a non-negative price. The two are
-                // mutually exclusive by the price sign.
+                // price is negative (paying to dispose of the asset). The
+                // mirror projection settlement incoming = max(0, p*q) is the
+                // expected proceeds, positive only for a non-negative price.
+                // The two are mutually exclusive by the price sign.
                 let settlement_owed = non_negative(neg(notional));
                 let settlement_incoming = non_negative(notional);
                 Ok(ReservationLegs {
@@ -397,8 +398,8 @@ where
                     // Every accepted sell records its resolved price so the
                     // fill/cancel path can reconcile the settlement leg. A sell
                     // execution report arriving without this lock is a
-                    // reconciliation error and blocks the account, symmetric to a
-                    // buy.
+                    // reconciliation error and blocks the account, symmetric to
+                    // a buy.
                     lock_price: Some(sell_price),
                 })
             }
@@ -474,10 +475,10 @@ where
         let settlement_asset = request.instrument.settlement_asset().clone();
         let steps = reservation_steps(&legs, &underlying_asset, &settlement_asset, request.side);
 
-        // The funds limit mode resolves once per order along the account-centric
-        // cascade (account -> account group -> global). From a short
-        // `ReviewWithoutHold` leg on, nothing is written: that leg and every
-        // later one go through `reserve_asset_dry_run`.
+        // The funds limit mode resolves once per order along the
+        // account-centric cascade (account -> account group -> global). From a
+        // short `ReviewWithoutHold` leg on, nothing is written: that leg and
+        // every later one go through `reserve_asset_dry_run`.
         let (limit_mode, position_limits) =
             self.reservation_controls(settings, request.account_id, &account_group, ctx, &steps)?;
 
@@ -486,9 +487,9 @@ where
 
         // Each reserved asset is held independently and registers its own
         // delta-based rollback. If a later step's hold fails the engine rolls
-        // back every mutation pushed so far (see the pre-trade pipeline), undoing
-        // earlier steps, so partial reservations never escape. The step order is
-        // shared with the dry-run twin so emission order cannot drift.
+        // back every mutation pushed so far (see the pre-trade pipeline),
+        // undoing earlier steps, so partial reservations never escape. The step
+        // order is shared with the dry-run twin so emission order cannot drift.
         let mut pure_path = false;
         let mut previous = None;
         for (step, position_limit) in steps.into_iter().zip(position_limits) {
@@ -592,7 +593,8 @@ where
         let steps = reservation_steps(&legs, &underlying_asset, &settlement_asset, request.side);
 
         // Resolve the funds limit mode once, exactly as the mutating path does,
-        // so a track-only dry-run mirrors a track-only reservation byte for byte.
+        // so a track-only dry-run mirrors a track-only reservation byte for
+        // byte.
         let (limit_mode, position_limits) =
             self.reservation_controls(settings, request.account_id, &account_group, ctx, &steps)?;
 
@@ -742,10 +744,10 @@ where
     ///
     /// `limit_mode` selects the hold semantics exactly as the mutating path:
     /// [`SpotFundsLimitMode::Enforce`] gates on available funds through
-    /// [`Holdings::try_hold`]; [`SpotFundsLimitMode::TrackOnly`] records the hold
-    /// even when it drives `available` negative. Both review modes compute that
-    /// same would-be hold on a shortfall and collect the corresponding mark.
-    /// Arithmetic overflow remains a reject in every mode.
+    /// [`Holdings::try_hold`]; [`SpotFundsLimitMode::TrackOnly`] records the
+    /// hold even when it drives `available` negative. Both review modes compute
+    /// that same would-be hold on a shortfall and collect the corresponding
+    /// mark. Arithmetic overflow remains a reject in every mode.
     #[allow(clippy::too_many_arguments)]
     fn reserve_asset_dry_run(
         &self,
@@ -775,8 +777,8 @@ where
                 .map_err(|err| reserve_hold_reject(Self::NAME, err, asset, held_amount))?
                 .0
         };
-        // `reserve_incoming` has no solvency gate; the only failure is overflow,
-        // mapped to a pre-trade reject like the hold overflow.
+        // `reserve_incoming` has no solvency gate; the only failure is
+        // overflow, mapped to a pre-trade reject like the hold overflow.
         let new_holdings = new_holdings
             .reserve_incoming(incoming_amount)
             .map_err(|_| {
@@ -809,8 +811,8 @@ where
     }
 
     /// Holds `held_amount` from `available` to `held` and projects
-    /// `incoming_amount` into `incoming` for one asset, pushes the matching delta
-    /// rollback, and appends the asset's outcome entry.
+    /// `incoming_amount` into `incoming` for one asset, pushes the matching
+    /// delta rollback, and appends the asset's outcome entry.
     ///
     /// A step with both amounts zero is a clean no-op: no slot is created, no
     /// rollback is registered, and no outcome entry is emitted.
@@ -874,9 +876,9 @@ where
                         ))
                     })
                     .and_then(|new| {
-                        // Keep verification inside this slot mutation, after the
-                        // hold and before the write: same-account pre-trades run
-                        // concurrently under a shared lock.
+                        // Keep verification inside this slot mutation, after
+                        // the hold and before the write: same-account
+                        // pre-trades run concurrently under a shared lock.
                         super::position_limit::verify(
                             position_limit,
                             asset,
@@ -1038,11 +1040,11 @@ fn reservation_outcome_entry(
 /// `underlying` and `settlement` are each `max(0, amount_owed)` in their
 /// respective asset units, so a held leg with no outflow reserves zero.
 /// `base_incoming` and `settlement_incoming` project the expected inflow of the
-/// acquiring leg: a buy acquires base units (`base_incoming = q`), a priced sell
-/// acquires quote proceeds (`settlement_incoming = max(0, p*q)`). They never
-/// gate the order - `incoming` is informational. `lock_price` is the effective
-/// settlement price persisted for later `held` / `incoming` reconciliation (see
-/// [`SpotFundsPolicy::compute_reservation_legs`]).
+/// acquiring leg: a buy acquires base units (`base_incoming = q`), a priced
+/// sell acquires quote proceeds (`settlement_incoming = max(0, p*q)`). They
+/// never gate the order - `incoming` is informational. `lock_price` is the
+/// effective settlement price persisted for later `held` / `incoming`
+/// reconciliation (see [`SpotFundsPolicy::compute_reservation_legs`]).
 pub(super) struct ReservationLegs {
     pub(super) underlying: PositionSize,
     pub(super) settlement: PositionSize,
@@ -1055,8 +1057,8 @@ pub(super) struct ReservationLegs {
 ///
 /// In this policy a single asset never carries both a non-zero `held` and a
 /// non-zero `incoming` at once (a buy's quote leg holds, its base leg projects
-/// incoming; a sell's underlying leg holds, its settlement leg either holds on a
-/// negative price or projects incoming on a non-negative price). The combined
+/// incoming; a sell's underlying leg holds, its settlement leg either holds on
+/// a negative price or projects incoming on a non-negative price). The combined
 /// shape is kept so the reserve helper stays uniform.
 #[derive(Clone)]
 pub(super) struct ReservationStep {

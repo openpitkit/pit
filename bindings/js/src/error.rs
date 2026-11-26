@@ -23,8 +23,9 @@
 //! stable `name` discriminator and constructs the matching subclass directly.
 //! Because that factory is the same module the public surface re-exports,
 //! `instanceof` works in both the Node and browser builds. For value-validation
-//! failures the `code` field carries a stable [`openpit::param::ErrorCode`]; for
-//! account-block failures it carries the `AccountBlockErrorKind` discriminant.
+//! failures the `code` field carries a stable [`openpit::param::ErrorCode`];
+//! for account-block failures it carries the `AccountBlockErrorKind`
+//! discriminant.
 //!
 //! Expected failures flow out as a `JsValue` from a `Result`. A native panic in
 //! the Rust/WASM module is not an expected failure but is still possible, so

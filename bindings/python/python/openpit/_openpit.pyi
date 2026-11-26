@@ -231,7 +231,10 @@ class QuoteResolution:
     ACCOUNT_THEN_GROUP: typing.ClassVar[QuoteResolution]
     """Consult the per-account bucket, then the account's group bucket."""
     ACCOUNT_THEN_GROUP_THEN_DEFAULT: typing.ClassVar[QuoteResolution]
-    """Consult per-account, then group, then the default ("everyone-else") bucket."""
+    """Consult the account, group, and default buckets in that order.
+
+    The default bucket holds "everyone-else" quotes.
+    """
 
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
@@ -321,7 +324,7 @@ class MarketDataService:
         quote: Quote,
         source_age: datetime.timedelta,
     ) -> None:
-        """Publish one quote observation; negative source_age is clamped to zero."""
+        """Publish a quote and clamp negative source_age to zero."""
 
     def push_by_instrument(
         self,
@@ -385,7 +388,7 @@ class MarketDataBuilder:
         ...
 
     def full_sync(self) -> MarketDataBuilder:
-        """Upgrade to Full synchronization (real locks, safe for a concurrent feed).
+        """Enable full synchronization with locks for concurrent feeds.
 
         No-op when already Full. Returns ``self`` for chaining.
         """
@@ -430,7 +433,8 @@ class Reject:
 
     @property
     def user_data(self) -> int:
-        """Opaque caller-defined integer token. ``0`` means "not set". The SDK never
+        """Opaque caller-defined integer token. ``0`` means "not set". The SDK
+        never
         inspects, dereferences, or frees it."""
 
 class Leverage:
@@ -481,8 +485,10 @@ class AccountGroupId:
 
     @staticmethod
     def from_int(value: int) -> AccountGroupId:
-        """Raises ``ValueError`` when ``value`` is the reserved default group (0).
-        Raises ``OverflowError`` for values outside ``1..=4294967295``."""
+        """Raise ``ValueError`` for the reserved default group (0).
+
+        Raise ``OverflowError`` for values outside ``1..=4294967295``.
+        """
 
     @staticmethod
     def from_string(value: str) -> AccountGroupId: ...
@@ -1484,7 +1490,7 @@ class AccountAdjustmentBalanceOperation:
     def average_entry_price(self, value: param.Price | None) -> None: ...
     @property
     def realized_pnl(self) -> param.Pnl | PnlHaltReason | None:
-        """Optional account-currency realized PnL replacement or explicit halt."""
+        """Optional account-currency realized PnL replacement or halt."""
 
     @realized_pnl.setter
     def realized_pnl(self, value: param.Pnl | PnlHaltReason | None) -> None: ...
@@ -1666,13 +1672,16 @@ class Request:
             TypeError: If a policy return value has a non-iterable collection
                 or an incompatible field type.
             ValueError: If a policy return value has an invalid field.
-            openpit.param.ParamError: If a numeric field in a policy return value fails
+            openpit.param.ParamError: If a numeric field in a policy return
+            value fails
                 domain parsing or exceeds the supported decimal range.
             AttributeError: If a policy return value lacks a required attribute.
-            OverflowError: If a policy return value has a ``user_data`` token that
+            OverflowError: If a policy return value has a ``user_data`` token
+            that
                 fits in 64 bits but exceeds the platform's word size.
             Exception: Exceptions from policy callbacks, from mutation rollback
-                callbacks, or from Python code invoked while reading policy return
+                callbacks, or from Python code invoked while reading policy
+                return
                 values keep their original type.
         """
 
@@ -1871,7 +1880,8 @@ class DropCopyOperation:
         """First account block requested by this operation.
 
         This is request-local history; ``is_account_blocked`` reports the
-        apply-time registry snapshot captured before ``apply_drop_copy`` returned.
+        apply-time registry snapshot captured before ``apply_drop_copy``
+        returned.
 
         Raises:
             RuntimeError: The operation has already been finalized.
@@ -1994,7 +2004,10 @@ class DryRunReport:
 
     @property
     def is_pass(self) -> bool:
-        """Whether the evaluated stages would find no rejects. Check ``reviews``."""
+        """Whether the evaluated stages would find no rejects.
+
+        Check ``reviews``.
+        """
 
     @property
     def rejects(self) -> list[Reject] | None:
@@ -2002,9 +2015,10 @@ class DryRunReport:
 
     @property
     def reviews(self) -> list[Reject]:
-        """Marks a live run would return, requiring a decision before submission.
+        """Review marks a live run would return.
 
-        See ``Reservation`` for the live review lifecycle.
+        These marks require a decision before submission. See ``Reservation``
+        for the live review lifecycle.
         """
 
     @property
@@ -2090,7 +2104,7 @@ class PnlOutcome:
 
     @property
     def halt_reason(self) -> PnlHaltReason | None:
-        """Reason why PnL could not be calculated, or ``None`` when available."""
+        """Why PnL is unavailable, or ``None`` when available."""
 
 class AccountPnlOutcome:
     """Account-level realized-PnL outcome reported by one policy.
@@ -2129,7 +2143,7 @@ class AccountPnlOutcome:
 
     @property
     def halt_reason(self) -> PnlHaltReason | None:
-        """Reason why PnL could not be calculated, or ``None`` when available."""
+        """Why PnL is unavailable, or ``None`` when available."""
 
 class AccountOutcomeEntry:
     """Account position outcome for one asset."""
@@ -2316,7 +2330,10 @@ class PostTradeResult:
     ) -> None: ...
     @property
     def account_blocks(self) -> list[AccountBlock]:
-        """Account blocks reported by policies. Non-empty when a kill switch fired."""
+        """Account blocks reported by policies.
+
+        Non-empty when a kill switch fired.
+        """
 
     @property
     def account_pnls(self) -> list[AccountPnlOutcome]:
@@ -2336,7 +2353,7 @@ class PostTradeResult:
 
     @property
     def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
-        """Per-asset position outcomes reported by policies, in registration order."""
+        """Per-asset policy position outcomes in registration order."""
 
 class AccountControl:
     """Per-account handle to the engine's account-block facility.
@@ -2362,7 +2379,10 @@ class Context:
 
     @property
     def account_id(self) -> AccountId:
-        """Account read once at engine entry; raises ValueError if unreadable."""
+        """Account read at engine entry; ValueError if unreadable.
+
+        The engine reads the account once.
+        """
 
     @property
     def is_drop_copy(self) -> bool: ...
@@ -2385,7 +2405,10 @@ class PostTradeContext:
 
     @property
     def account_id(self) -> AccountId:
-        """Account read once at engine entry; raises ValueError if unreadable."""
+        """Account read at engine entry; ValueError if unreadable.
+
+        The engine reads the account once.
+        """
 
     @property
     def account_group(self) -> AccountGroupId | None: ...
@@ -2412,7 +2435,8 @@ class OrderSizeLimit:
         _ = (max_quantity, max_notional)
 
 class SyncedEngineBuilder:
-    """Second stage of the engine builder (sync policy already chosen). Add at least one
+    """Second stage of the engine builder (sync policy already chosen). Add at
+    least one
     policy to obtain a ReadyEngineBuilder."""
 
     def pre_trade(
@@ -2483,7 +2507,8 @@ class SyncedEngineBuilder:
         """Create a market-data service builder."""
 
 class ReadyEngineBuilder:
-    """Third stage of the engine builder (at least one policy registered). Accepts more
+    """Third stage of the engine builder (at least one policy registered).
+    Accepts more
     policies and builds the engine."""
 
     def pre_trade(
@@ -2575,10 +2600,13 @@ class Engine:
             TypeError: If ``order`` is not an order object or a policy returns
                 a non-iterable value other than ``None``.
             ValueError: If a policy return value has an invalid reject field.
-            AttributeError: If a policy return value lacks a required reject field.
-            OverflowError: If a policy return value has a ``user_data`` token that
+            AttributeError: If a policy return value lacks a required reject
+            field.
+            OverflowError: If a policy return value has a ``user_data`` token
+            that
                 fits in 64 bits but exceeds the platform's word size.
-            Exception: Exceptions from policy callbacks or from Python code invoked
+            Exception: Exceptions from policy callbacks or from Python code
+            invoked
                 while reading their return values keep their original type.
         """
 
@@ -2615,16 +2643,22 @@ class Engine:
         """Run a non-mutating simulation of the pre-trade start and main stages.
 
         Raises:
-            TypeError: If ``order`` is not an order object, a start-stage policy returns
-                a non-iterable value other than ``None``, or a main-stage policy return
-                value has a non-iterable collection or an incompatible field type.
+            TypeError: If ``order`` is not an order object, a start-stage policy
+            returns
+                a non-iterable value other than ``None``, or a main-stage policy
+                return
+                value has a non-iterable collection or an incompatible field
+                type.
             ValueError: If a policy return value has an invalid field.
-            openpit.param.ParamError: If a numeric field in a policy return value fails
+            openpit.param.ParamError: If a numeric field in a policy return
+            value fails
                 domain parsing or exceeds the supported decimal range.
             AttributeError: If a policy return value lacks a required attribute.
-            OverflowError: If a policy return value has a ``user_data`` token that
+            OverflowError: If a policy return value has a ``user_data`` token
+            that
                 fits in 64 bits but exceeds the platform's word size.
-            Exception: Exceptions from policy callbacks or from Python code invoked
+            Exception: Exceptions from policy callbacks or from Python code
+            invoked
                 while reading their return values keep their original type.
         """
 
@@ -2866,7 +2900,8 @@ class Configurator:
     ) -> None:
         """Force-set the live accumulated P&L for one account entry.
 
-        ``name`` must match the name given to the P&L bounds kill-switch policy at
+        ``name`` must match the name given to the P&L bounds kill-switch policy
+        at
         registration time.
 
         Unlike :meth:`pnl_bounds_killswitch`, which retunes bounds and never
@@ -3025,7 +3060,8 @@ class Configurator:
         *name* must match the name given to the spot-funds policy at
         registration time.
 
-        Omitted lists or ``None`` stay unchanged. A supplied global list replaces
+        Omitted lists or ``None`` stay unchanged. A supplied global list
+        replaces
         every mode of the global slot. A supplied group or account list replaces
         that tier wholesale: every group or account, every mode. An empty list
         clears the corresponding tier or global slot.
@@ -3043,7 +3079,8 @@ class Configurator:
 
         An account whose effective barrier changed is evaluated against its
         stored account P&L before this call returns: an already halted account,
-        or one already beyond the new Reject-mode barrier, is blocked here before
+        or one already beyond the new Reject-mode barrier, is blocked here
+        before
         its next fill, and the result carries the block the engine has already
         recorded. Each ``AccountBlockOutcome`` identifies the affected account
         together with its newly inserted block. Removing the last effective
@@ -3092,8 +3129,13 @@ class EngineBuilder:
         """Use full synchronization (concurrent cross-thread calls safe)."""
 
     def no_sync(self) -> SyncedEngineBuilder:
-        """Use no synchronization (zero overhead; handle stays on creating thread)."""
+        """Keep the handle on its creating thread with no synchronization.
+
+        This mode adds no synchronization overhead.
+        """
 
     def account_sync(self) -> SyncedEngineBuilder:
-        """Use account synchronization (concurrent when caller pins each account to one
-        chain)."""
+        """Use account synchronization.
+
+        Concurrent use is safe when the caller pins each account to one chain.
+        """

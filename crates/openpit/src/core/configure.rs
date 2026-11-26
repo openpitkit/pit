@@ -435,7 +435,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         &self.inner.config_registry
     }
 
-    /// Retunes the [`RateLimitPolicy`](crate::pretrade::policies::RateLimitPolicy)
+    /// Retunes the
+    /// [`RateLimitPolicy`](crate::pretrade::policies::RateLimitPolicy)
     /// registered under `name`.
     ///
     /// # Errors
@@ -462,13 +463,14 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         }
     }
 
-    /// Retunes the
-    /// [`PnlBoundsKillSwitchPolicy`](crate::pretrade::policies::PnlBoundsKillSwitchPolicy)
-    /// registered under `name`.
+    /// Retunes the [`PnlBoundsKillSwitchPolicy`] registered under `name`.
     ///
     /// # Errors
     ///
     /// Returns the same error variants as [`Self::rate_limit`].
+    ///
+    /// [`PnlBoundsKillSwitchPolicy`]:
+    ///     crate::pretrade::policies::PnlBoundsKillSwitchPolicy
     pub fn pnl_bounds_killswitch<Error: std::fmt::Display>(
         &self,
         name: &str,
@@ -488,9 +490,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     }
 
     /// Force-sets the live accumulated P&L for a `(account, settlement_asset)`
-    /// entry of the
-    /// [`PnlBoundsKillSwitchPolicy`](crate::pretrade::policies::PnlBoundsKillSwitchPolicy)
-    /// registered under `name`.
+    /// entry of the [`PnlBoundsKillSwitchPolicy`] registered under `name`.
     ///
     /// This is an absolute assignment (upsert): the entry is created if it does
     /// not exist yet, exactly as a construction-time seed would. It is distinct
@@ -508,6 +508,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// [`ConfigureError::PolicyTypeMismatch`] when the name belongs to another
     /// built-in policy type. The operation is otherwise infallible: an absolute
     /// assignment performs no validation and cannot overflow.
+    ///
+    /// [`PnlBoundsKillSwitchPolicy`]:
+    ///     crate::pretrade::policies::PnlBoundsKillSwitchPolicy
     pub fn set_account_pnl(
         &self,
         name: &str,
@@ -535,7 +538,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         }
     }
 
-    /// Retunes the [`SpotFundsPolicy`](crate::pretrade::policies::SpotFundsPolicy)
+    /// Retunes the
+    /// [`SpotFundsPolicy`](crate::pretrade::policies::SpotFundsPolicy)
     /// registered under `name`.
     ///
     /// An update that arms, narrows, or otherwise changes an account's
@@ -718,7 +722,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
             })
     }
 
-    /// Force-sets the live accumulated account P&L state for a spot-funds policy.
+    /// Force-sets the live accumulated account P&L state for a spot-funds
+    /// policy.
     ///
     /// This updates only the account-scoped current P&L ledger. It does not
     /// retune bounds and does not reset any other accumulator. The policy
@@ -788,13 +793,14 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         }
     }
 
-    /// Retunes the
-    /// [`OrderSizeLimitPolicy`](crate::pretrade::policies::OrderSizeLimitPolicy)
-    /// registered under `name`.
+    /// Retunes the [`OrderSizeLimitPolicy`] registered under `name`.
     ///
     /// # Errors
     ///
     /// Returns the same error variants as [`Self::rate_limit`].
+    ///
+    /// [`OrderSizeLimitPolicy`]:
+    ///     crate::pretrade::policies::OrderSizeLimitPolicy
     pub fn order_size_limit<Error: std::fmt::Display>(
         &self,
         name: &str,
@@ -811,7 +817,8 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         }
     }
 
-    /// Retunes the [`ReviewRulePolicy`](crate::pretrade::policies::ReviewRulePolicy)
+    /// Retunes the
+    /// [`ReviewRulePolicy`](crate::pretrade::policies::ReviewRulePolicy)
     /// registered under `name`.
     ///
     /// # Errors

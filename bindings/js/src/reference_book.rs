@@ -120,7 +120,8 @@ pub struct JsSettlementScheme {
 
 #[wasm_bindgen(js_class = SettlementScheme)]
 impl JsSettlementScheme {
-    /// Creates a scheme with independently configured delivery and payment legs.
+    /// Creates a scheme with independently configured delivery and payment
+    /// legs.
     #[wasm_bindgen(constructor)]
     pub fn new(delivery: &JsSettlementLag, payment: &JsSettlementLag) -> Self {
         Self {

@@ -84,7 +84,8 @@ type AccountAdjustmentBatchError struct {
 	FailedAdjustmentIndex int
 }
 
-// NewAccountAdjustmentBatchErrorFromHandle creates an AccountAdjustmentBatchError from a native handle.
+// NewAccountAdjustmentBatchErrorFromHandle creates an
+// AccountAdjustmentBatchError from a native handle.
 func NewAccountAdjustmentBatchErrorFromHandle(
 	reject native.AccountAdjustmentBatchError,
 ) (AccountAdjustmentBatchError, error) {
@@ -153,7 +154,8 @@ const (
 	AccountBlockErrorKindGroupNotBlocked AccountBlockErrorKind = native.AccountBlockErrorKindGroupNotBlocked
 )
 
-// AccountBlockError is returned when an account- or group-block operation fails.
+// AccountBlockError is returned when an account- or group-block operation
+// fails.
 //
 // Block and Unblock are infallible; only ReplaceBlockReason, BlockGroup,
 // UnblockGroup, and ReplaceGroupBlockReason can produce it. Kind tells the

@@ -33,7 +33,7 @@ use crate::last_error::{
 use crate::string::OpenPitSharedString;
 use crate::OpenPitStringView;
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Leverage multiplier for FFI payloads.
 ///
@@ -77,7 +77,8 @@ pub(crate) fn export_leverage(value: Option<Leverage>) -> OpenPitParamLeverage {
 /// WARNING:
 /// Use exactly one account-id source model per runtime:
 /// - either purely numeric IDs (`openpit_create_param_account_id_from_uint64`),
-/// - or purely string-derived IDs (`openpit_create_param_account_id_from_string`).
+/// - or purely string-derived IDs
+///   (`openpit_create_param_account_id_from_string`).
 ///
 /// Do not mix both models in the same runtime state. A hashed string value can
 /// coincide with a direct numeric ID, and then two distinct accounts become one
@@ -345,7 +346,7 @@ pub const OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA: OpenPitParamAdjustmentAmou
 /// Set current state to the supplied signed amount.
 pub const OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE: OpenPitParamAdjustmentAmountKind = 2;
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Decimal value represented as `mantissa * 10^-scale`.
 #[repr(C)]
@@ -526,9 +527,9 @@ macro_rules! define_decimal_param_wrapper {
                                                                 "` wrapper into the semantic value, preserving the typed SDK error."
                                                             )]
             ///
-            /// A decimal transport failure has no SDK `Error` counterpart, so it
-            /// is reported as `Err(None)`; an SDK validation failure is reported
-            /// as `Err(Some(error))`.
+            /// A decimal transport failure has no SDK `Error` counterpart, so
+            /// it is reported as `Err(None)`; an SDK validation failure is
+            /// reported as `Err(Some(error))`.
             pub(crate) fn to_param_typed(
                 self,
             ) -> Result<$domain, Option<openpit::param::Error>> {
@@ -1657,7 +1658,7 @@ pub(crate) fn export_trade_amount(value: Option<TradeAmount>) -> OpenPitParamTra
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 pub unsafe extern "C" fn openpit_param_leverage_calculate_margin_required(
@@ -2490,7 +2491,7 @@ pub unsafe extern "C" fn openpit_param_volume_from_notional(
     )
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[no_mangle]
 /// Constructs an account identifier from a 64-bit integer.
@@ -2519,7 +2520,8 @@ pub extern "C" fn openpit_create_param_account_id_from_uint64(value: u64) -> Ope
 /// - for `n` distinct account strings the probability of at least one collision
 ///   is approximately `n^2 / 2^65`.
 /// - if collision risk is unacceptable, keep your own collision-free
-///   string-to-integer mapping and use `openpit_create_param_account_id_from_uint64`.
+///   string-to-integer mapping and use
+///   `openpit_create_param_account_id_from_uint64`.
 ///
 /// The previous sentence is why this helper is suitable for stable adapter-side
 /// mapping, but not for workflows that require guaranteed uniqueness.
@@ -2530,7 +2532,8 @@ pub extern "C" fn openpit_create_param_account_id_from_uint64(value: u64) -> Ope
 ///
 /// Contract:
 /// - returns `true` and writes a stable account identifier to `out` on success;
-/// - returns `false` on invalid input and optionally writes `OpenPitParamError`.
+/// - returns `false` on invalid input and optionally writes
+///   `OpenPitParamError`.
 ///
 /// # Safety
 ///
@@ -2558,7 +2561,8 @@ pub unsafe extern "C" fn openpit_create_param_account_id_from_string(
 }
 
 #[no_mangle]
-/// Validates and copies an asset identifier into a caller-owned shared-string handle.
+/// Validates and copies an asset identifier into a caller-owned shared-string
+/// handle.
 ///
 /// The asset handle is an `OpenPitSharedString`. Release it exactly once with
 /// either `openpit_destroy_param_asset` or `openpit_destroy_shared_string`;
@@ -2593,7 +2597,7 @@ pub extern "C" fn openpit_destroy_param_asset(handle: *mut OpenPitSharedString) 
     crate::string::openpit_destroy_shared_string(handle);
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Renders an order side into a caller-owned shared string.
 ///
@@ -2709,7 +2713,7 @@ pub unsafe extern "C" fn openpit_param_trade_amount_to_string(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -3045,8 +3049,9 @@ mod tests {
 
     #[test]
     fn import_monetary_amount_rejects_missing_currency() {
-        // The amount is a valid fee, but the currency view is unset: a partially
-        // set C struct must be rejected rather than importing a defaulted asset.
+        // The amount is a valid fee, but the currency view is unset: a
+        // partially set C struct must be rejected rather than importing a
+        // defaulted asset.
         let partial = OpenPitParamMonetaryAmount {
             amount: OpenPitParamFee(OpenPitParamDecimal {
                 mantissa_lo: 100,

@@ -72,7 +72,8 @@ impl LockingPolicyFactory for FullLocking {
     }
 }
 
-/// Concrete full-locking policy installed in storages built from [`FullLocking`].
+/// Concrete full-locking policy installed in storages built from
+/// [`FullLocking`].
 ///
 /// Not re-exported from the crate; name it via the associated type if
 /// needed: `<FullLocking as LockingPolicyFactory>::Policy`.

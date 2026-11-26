@@ -17,9 +17,9 @@
 
 //! Engine handle, account registry, and the staged engine builder.
 //!
-//! The engine always uses `no_sync`: on `wasm32` the runtime is single-threaded,
-//! so the staged builder does not expose a sync-mode choice. The resulting
-//! engine and its `Rc`-based, `!Send` handles are correct for the
+//! The engine always uses `no_sync`: on `wasm32` the runtime is
+//! single-threaded, so the staged builder does not expose a sync-mode choice.
+//! The resulting engine and its `Rc`-based, `!Send` handles are correct for the
 //! single-threaded WASM model.
 //!
 //! Policy registration (`preTrade`/`builtin`) resolves eagerly: `preTrade`
@@ -111,14 +111,14 @@ export interface PolicyInstance {
    * Registered in a review mode, the changes it records as main-stage
    * {@link PolicyPreTradeResult.mutations} for an order it marks in pre-trade
    * are rolled back, also after the reviewer confirms that order; changes it
-   * makes at once, such as rate-limit counters, stay. For Spot Funds this
-   * means nothing is held, no lock price is recorded, balances and positions
-   * are not updated, and a later fill or cancel of that order can block the
-   * account for a missing lock price. The rejects and account blocks it
-   * returns become marks or are dropped unless their code is an evaluation
-   * failure, so a P&L kill switch registered this way does not block the
-   * account on a fill; a block it writes directly through {@link AccountControl}
-   * and a block from an accepted account adjustment latch in any mode.
+   * makes at once, such as rate-limit counters, stay. For Spot Funds this means
+   * nothing is held, no lock price is recorded, balances and positions are not
+   * updated, and a later fill or cancel of that order can block the account for
+   * a missing lock price. The rejects and account blocks it returns become
+   * marks or are dropped unless their code is an evaluation failure, so a P&L
+   * kill switch registered this way does not block the account on a fill; a
+   * block it writes directly through {@link AccountControl} and a block from an
+   * accepted account adjustment latch in any mode.
    */
   mode?: import("../types.js").RuleMode | null;
 }
@@ -617,8 +617,8 @@ impl JsEngine {
     /// engine is re-entered synchronously from one of its policy callbacks.
     /// Throws `PolicyCallbackError` on callback failure. A malformed start-hook
     /// return has a `TypeError` cause for a missing field or wrong type,
-    /// `RangeError` for an invalid scope, mode, or token value, or
-    /// `ParamError` for an unknown reject code.
+    /// `RangeError` for an invalid scope, mode, or token value, or `ParamError`
+    /// for an unknown reject code.
     #[wasm_bindgen(js_name = startPreTrade)]
     pub fn start_pre_trade(&self, order: OrderLike) -> Result<JsStartResult, JsValue> {
         let original: JsValue = order.into();
@@ -650,10 +650,10 @@ impl JsEngine {
     /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
     /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Throws `PolicyCallbackError` on callback failure. A malformed return
-    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
-    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
-    /// invalid domain value, or `AssetError` for an invalid asset.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return has
+    /// a `TypeError` cause for a missing field or wrong type, `RangeError` for
+    /// an invalid scope, mode, or numeric bound, `ParamError` for an invalid
+    /// domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = executePreTrade)]
     pub fn execute_pre_trade(&self, order: OrderLike) -> Result<JsExecuteResult, JsValue> {
         let original: JsValue = order.into();
@@ -691,10 +691,10 @@ impl JsEngine {
     /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
     /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Throws `PolicyCallbackError` on callback failure. A malformed return
-    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
-    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
-    /// invalid domain value, or `AssetError` for an invalid asset.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return has
+    /// a `TypeError` cause for a missing field or wrong type, `RangeError` for
+    /// an invalid scope, mode, or numeric bound, `ParamError` for an invalid
+    /// domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = applyDropCopy)]
     pub fn apply_drop_copy(&self, order: OrderLike) -> Result<JsDropCopyResult, JsValue> {
         let original: JsValue = order.into();
@@ -727,8 +727,8 @@ impl JsEngine {
     /// engine is re-entered synchronously from one of its policy callbacks.
     /// Throws `PolicyCallbackError` on callback failure. A malformed start-hook
     /// return has a `TypeError` cause for a missing field or wrong type,
-    /// `RangeError` for an invalid scope, mode, or token value, or
-    /// `ParamError` for an unknown reject code.
+    /// `RangeError` for an invalid scope, mode, or token value, or `ParamError`
+    /// for an unknown reject code.
     #[wasm_bindgen(js_name = startPreTradeDryRun)]
     pub fn start_pre_trade_dry_run(&self, order: OrderLike) -> Result<JsDryRunReport, JsValue> {
         let original: JsValue = order.into();
@@ -754,10 +754,10 @@ impl JsEngine {
     /// value, `AssetError` for an invalid asset, or `AccountIdError` for an
     /// invalid account identifier. Throws `LifecycleError` when this same
     /// engine is re-entered synchronously from one of its policy callbacks.
-    /// Throws `PolicyCallbackError` on callback failure. A malformed return
-    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
-    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
-    /// invalid domain value, or `AssetError` for an invalid asset.
+    /// Throws `PolicyCallbackError` on callback failure. A malformed return has
+    /// a `TypeError` cause for a missing field or wrong type, `RangeError` for
+    /// an invalid scope, mode, or numeric bound, `ParamError` for an invalid
+    /// domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = executePreTradeDryRun)]
     pub fn execute_pre_trade_dry_run(&self, order: OrderLike) -> Result<JsDryRunReport, JsValue> {
         let original: JsValue = order.into();
@@ -1029,7 +1029,8 @@ impl JsAccounts {
     }
 
     /// Returns the group of `account`, or `undefined` when it is unregistered.
-    /// Policy callbacks use `ctx.accountGroup` for the cheaper operation snapshot.
+    /// Policy callbacks use `ctx.accountGroup` for the cheaper operation
+    /// snapshot.
     ///
     /// `account` accepts an `AccountId` or a numeric/string identifier.
     ///

@@ -307,7 +307,8 @@ impl JsConfigurator {
     /// Validation failure preserves both current lists. Runtime updates
     /// preserve accumulated P&L.
     ///
-    /// See {@link PnlBoundsKillswitchBuilder} for how barrier breaches are handled.
+    /// See {@link PnlBoundsKillswitchBuilder} for how barrier breaches are
+    /// handled.
     ///
     /// # Errors
     ///

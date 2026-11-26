@@ -20,7 +20,7 @@ use std::fmt::{Display, Formatter};
 use super::quote::Quote;
 use crate::core::{Instrument, InstrumentId};
 
-// ─── MarketDataError ──────────────────────────────────────────────────────────
+// ─── MarketDataError ─────────────────────────────────────────────────────────
 
 /// Error returned by market-data service read operations.
 ///
@@ -52,8 +52,8 @@ impl std::error::Error for MarketDataError {}
 /// Error returned when an operation references an
 /// [`InstrumentId`] that is not registered with the service.
 ///
-/// Returned by [`MarketDataService::push`] and the instrument-qualified TTL setters
-/// ([`MarketDataService::set_instrument_ttl`] and the
+/// Returned by [`MarketDataService::push`] and the instrument-qualified TTL
+/// setters ([`MarketDataService::set_instrument_ttl`] and the
 /// `set_instrument_account_ttl` / `set_instrument_account_group_ttl` family).
 ///
 /// [`MarketDataService::push`]:
@@ -77,8 +77,11 @@ impl std::error::Error for UnknownInstrumentId {}
 /// Error returned by
 /// [`MarketDataService::register`](super::service::MarketDataService::register)
 /// and
-/// [`MarketDataService::register_with_ttl`](super::service::MarketDataService::register_with_ttl)
+/// [`MarketDataService::register_with_ttl`]
 /// when the instrument is already registered.
+///
+/// [`MarketDataService::register_with_ttl`]:
+///     super::service::MarketDataService::register_with_ttl
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AlreadyRegistered {
     /// The instrument that was already registered.
@@ -94,9 +97,14 @@ impl Display for AlreadyRegistered {
 impl std::error::Error for AlreadyRegistered {}
 
 /// Error returned by
-/// [`MarketDataService::register_with_id`](super::service::MarketDataService::register_with_id)
+/// [`MarketDataService::register_with_id`]
 /// and
-/// [`MarketDataService::register_with_id_and_ttl`](super::service::MarketDataService::register_with_id_and_ttl).
+/// [`MarketDataService::register_with_id_and_ttl`].
+///
+/// [`MarketDataService::register_with_id`]:
+///     super::service::MarketDataService::register_with_id
+/// [`MarketDataService::register_with_id_and_ttl`]:
+///     super::service::MarketDataService::register_with_id_and_ttl
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RegistrationError {
@@ -128,7 +136,9 @@ impl Display for RegistrationError {
 impl std::error::Error for RegistrationError {}
 
 /// Error returned by the targeted fan-out pushes
-/// [`MarketDataService::push_for`](super::service::MarketDataService::push_for).
+/// [`MarketDataService::push_for`].
+///
+/// [`MarketDataService::push_for`]: super::service::MarketDataService::push_for
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PushForError {

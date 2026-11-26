@@ -108,7 +108,8 @@ const sellGate: Policy = {
     ctx: Context,
     order: Order,
   ): PolicyPreTradeResult | null {
-    // `ctx` is unused on this path; touch it so the typed parameter is exercised.
+    // `ctx` is unused on this path; touch it so the typed parameter is
+    // exercised.
     void ctx;
     if (order.operation?.side === "SELL") {
       return {

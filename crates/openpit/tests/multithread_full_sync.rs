@@ -47,7 +47,8 @@ fn build_order(account_id: AccountId) -> OrderOperation {
     }
 }
 
-// Verifies that the broker-wide AtomicU64 counter in RateLimitPolicy<FullLocking>
+// Verifies that the broker-wide AtomicU64 counter in
+// RateLimitPolicy<FullLocking>
 // does not lose increments under concurrent load from multiple threads.
 //
 // The limit is set to exactly TOTAL_THREADS * PER_THREAD so that all calls

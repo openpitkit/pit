@@ -164,9 +164,10 @@ func TestSpotFundsReservationIncoming_BuyBaseIncomingSurfacesOnReservation(t *te
 
 // TestSpotFundsReservationIncoming_SellQuoteIncomingSurfacesOnReservation
 // proves that a priced sell reservation emits a settlement-asset entry carrying
-// Incoming (expected proceeds = price * qty) in addition to the underlying-asset
-// Held entry. The incoming bucket on the settlement leg is accessible through
-// Reservation.AccountAdjustments() without any new binding code.
+// Incoming (expected proceeds = price * qty) in addition to the
+// underlying-asset Held entry. The incoming bucket on the settlement leg is
+// accessible through Reservation.AccountAdjustments() without any new binding
+// code.
 func TestSpotFundsReservationIncoming_SellQuoteIncomingSurfacesOnReservation(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(99224416)
 
@@ -235,7 +236,8 @@ func TestSpotFundsReservationIncoming_SellQuoteIncomingSurfacesOnReservation(t *
 		t.Fatalf("AccountAdjustments() error = %v", err)
 	}
 
-	// Two entries expected: [0] underlying (AAPL) held, [1] settlement (USD) incoming.
+	// Two entries expected: [0] underlying (AAPL) held, [1] settlement (USD)
+	// incoming.
 	if len(adjustments) != 2 {
 		t.Fatalf("AccountAdjustments() len = %d, want 2", len(adjustments))
 	}
@@ -291,9 +293,8 @@ func TestSpotFundsReservationIncoming_SellQuoteIncomingSurfacesOnReservation(t *
 	}
 }
 
-// TestSpotFundsReservationIncoming_PricelessSellWithoutMarketDataBundleRejectsAtPreTrade
-// proves that a quantity sell with no order price in limit-only mode is
-// rejected at pre-trade with UnsupportedOrderType. Under the no-tolerance
+// This test proves that a quantity sell with no order price in limit-only mode
+// is rejected at pre-trade with UnsupportedOrderType. Under the no-tolerance
 // contract every accepted sell must resolve a price; a sell that cannot be
 // priced is rejected rather than accepted with a dropped lock.
 func TestSpotFundsReservationIncoming_PricelessSellWithoutMarketDataBundleRejectsAtPreTrade(t *testing.T) {

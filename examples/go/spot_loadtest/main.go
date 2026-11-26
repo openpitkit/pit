@@ -129,8 +129,8 @@ func main() {
 	// (banner + non-latency diagnostics, NO headline/percentiles) to stdout and
 	// exit non-zero. Every OTHER error keeps the original behaviour (fatal log, no
 	// report). Run returns the Snapshot alongside the sentinel so the diagnostics
-	// (environment, workload counts, dispatch sizing, backpressure, handoff stalls)
-	// can still be shown.
+	// (environment, workload counts, dispatch sizing, backpressure, handoff
+	// stalls) can still be shown.
 	if errors.Is(err, driver.ErrBackpressureInvalidRun) ||
 		errors.Is(err, driver.ErrZeroChecksumInvalidRun) {
 		reporter.WriteInvalid(os.Stdout, e, cfg, *configPath, snap, stream.Stats)

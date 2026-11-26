@@ -15,7 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package configure provides runtime policy-settings updates bound to an engine.
+// Package configure provides runtime policy-settings updates bound to an
+// engine.
 package configure
 
 import (
@@ -102,16 +103,15 @@ func rateLimitWindowNanoseconds(limit policies.RateLimit) int64 {
 
 // RateLimit updates the runtime settings of the named rate-limit policy.
 //
-// brokers, assets, accounts, and accountAssets mirror the axis types accepted by
-// [policies.RateLimitReadyBuilder]. A non-nil axis replaces that axis
-// across every mode; barriers can be added and removed at runtime. A (key, mode)
-// that survives the replacement keeps its live counter (no reset). An empty
-// non-nil slice clears every mode on the axis. Clearing every axis admits every
-// order. A repeated (key, mode) in one call returns a *Error with kind
-// ErrorKindValidation and leaves the settings unchanged.
-// Clearing an account or account+asset barrier keeps its sliding-window log;
-// re-adding the key resumes counting orders still inside its window.
-// Nil axes are left unchanged.
+// brokers, assets, accounts, and accountAssets mirror the axis types accepted
+// by [policies.RateLimitReadyBuilder]. A non-nil axis replaces that axis across
+// every mode; barriers can be added and removed at runtime. A (key, mode) that
+// survives the replacement keeps its live counter (no reset). An empty non-nil
+// slice clears every mode on the axis. Clearing every axis admits every order.
+// A repeated (key, mode) in one call returns a *Error with kind
+// ErrorKindValidation and leaves the settings unchanged. Clearing an account or
+// account+asset barrier keeps its sliding-window log; re-adding the key resumes
+// counting orders still inside its window. Nil axes are left unchanged.
 //
 // Returns a *Error on a domain error (kind TypeMismatch when the name belongs
 // to a different policy type, Validation when values are invalid).
@@ -586,18 +586,17 @@ func (c Configurator) SpotFundsAccountLimitMode(
 }
 
 // SpotFundsPositionLimit pins, replaces, or clears the inclusive long and short
-// position magnitude limit for one account, asset and mode in the named SpotFunds
-// policy. The checked position starts with recorded available + held,
+// position magnitude limit for one account, asset and mode in the named
+// SpotFunds policy. The checked position starts with recorded available + held,
 // including a negative held residual. A long projection adds open positive
 // incoming; a short projection subtracts open positive held. Only the side the
-// order moves toward is checked, so a position-reducing order passes while
-// that projection stays within the limit. A Reject breach rejects with
+// order moves toward is checked, so a position-reducing order passes while that
+// projection stays within the limit. A Reject breach rejects with
 // PositionLimitExceeded at Order scope. A review breach adds a
 // PositionLimitExceeded review mark with the limit's mode. A projection that
-// cannot be computed exactly rejects with ArithmeticOverflow at Order scope
-// in every mode.
-// A change applies from the next order and does not re-evaluate open
-// reservations.
+// cannot be computed exactly rejects with ArithmeticOverflow at Order scope in
+// every mode. A change applies from the next order and does not re-evaluate
+// open reservations.
 //
 // optional.Some pins or replaces this mode's limit; optional.None clears only
 // this mode's limit. Other modes' limits are unchanged. The modes are
@@ -730,11 +729,11 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 //
 // With an effective barrier, a Reject-mode breach or a halt in any mode blocks
 // the account with PnlKillSwitchTriggered at pre-trade, dry run, a fill, the
-// account P&L force-set, and a retune that changes the effective barrier. A fill
-// checks axes for a trade or non-zero fee when the report gave no block of its
-// own. A change of an account's group membership does not check the axes;
-// the next order catches the breach.
-// A review-mode breach yields a review mark without blocking.
+// account P&L force-set, and a retune that changes the effective barrier. A
+// fill checks axes for a trade or non-zero fee when the report gave no block of
+// its own. A change of an account's group membership does not check the axes;
+// the next order catches the breach. A review-mode breach yields a review mark
+// without blocking.
 //
 // Accounts whose effective barrier changes are evaluated before return. Each
 // returned outcome pairs the affected account with its recorded block. Removing

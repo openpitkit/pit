@@ -21,7 +21,7 @@
 //! [`Storage`](super::Storage) instance. A storage owns one policy instance,
 //! created by a [`LockingPolicyFactory`]. The factory is the type-level
 //! configuration on a [`StorageBuilder`](super::StorageBuilder); each call to
-//! [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key) produces a fresh
+//! [`StorageBuilder::create_for_bound_key`] produces a fresh
 //! policy via [`LockingPolicyFactory::create_policy`], so every storage has
 //! its own private locks.
 //!
@@ -42,6 +42,9 @@
 //!
 //! Storage operations always acquire **index before values**. Implementations
 //! must not introduce any other ordering, otherwise deadlocks are possible.
+//!
+//! [`StorageBuilder::create_for_bound_key`]:
+//!     super::StorageBuilder::create_for_bound_key
 
 use std::marker::PhantomData;
 
@@ -188,10 +191,13 @@ pub unsafe trait FullySynchronized: LockingPolicy {}
 ///
 /// A factory is the type-level configuration parameter of
 /// [`StorageBuilder`](super::StorageBuilder). Every call to
-/// [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key) invokes
+/// [`StorageBuilder::create_for_bound_key`] invokes
 /// [`Self::create_policy`] and hands the freshly-built policy to the new
 /// storage. Storages built from the same builder therefore have completely
 /// independent locks.
+///
+/// [`StorageBuilder::create_for_bound_key`]:
+///     super::StorageBuilder::create_for_bound_key
 pub trait LockingPolicyFactory {
     /// Concrete policy produced by this factory.
     type Policy: LockingPolicy + 'static;

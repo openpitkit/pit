@@ -532,8 +532,8 @@ fn abandoned_frame_error() -> JsValue {
 ///
 /// The two variants are decided structurally, not by inspecting the thrown
 /// value: only a panic that abandoned the operation's frame produces
-/// [`Self::Abandoned`], so a callback throwing a value that merely looks like an
-/// internal error is still reported as a wrapped callback failure.
+/// [`Self::Abandoned`], so a callback throwing a value that merely looks like
+/// an internal error is still reported as a wrapped callback failure.
 pub(crate) enum CallbackFailure {
     /// A JS callback threw; the value is wrapped with the completed result.
     Thrown(JsValue),
@@ -1065,8 +1065,8 @@ fn read_string(object: &JsValue, key: &str) -> Result<Option<String>, JsValue> {
 ///
 /// # Errors
 ///
-/// Throws `TypeError` when present but not a number, `RangeError` when it is not
-/// an integer in `0..=65535`, and rethrows a getter exception unchanged.
+/// Throws `TypeError` when present but not a number, `RangeError` when it is
+/// not an integer in `0..=65535`, and rethrows a getter exception unchanged.
 fn read_policy_group_id(object: &JsValue, key: &str) -> Result<PolicyGroupId, JsValue> {
     let value = Reflect::get(object, &JsValue::from_str(key))?;
     if value.is_undefined() || value.is_null() {

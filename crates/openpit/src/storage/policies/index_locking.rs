@@ -91,7 +91,7 @@ unsafe impl<SharedValue: Send> Send for IndexShared<SharedValue> {}
 /// `KeyBound` carries no runtime data (it lives behind a
 /// `PhantomData<fn() -> KeyBound>` so it does not affect [`Send`] /
 /// [`Sync`] inheritance) and exists purely to gate
-/// [`StorageBuilder::create_for_bound_key`](crate::storage::StorageBuilder::create_for_bound_key).
+/// [`StorageBuilder::create_for_bound_key`].
 ///
 /// # Thread safety
 ///
@@ -113,12 +113,17 @@ unsafe impl<SharedValue: Send> Send for IndexShared<SharedValue> {}
 /// use openpit::Engine;
 ///
 /// let builder = Engine::builder::<(), ()>().account_sync();
-/// let storage = Arc::new(builder.storage_builder().create_for_bound_key::<u64, u64>());
+/// let storage = Arc::new(
+///     builder.storage_builder().create_for_bound_key::<u64, u64>(),
+/// );
 /// let s2 = Arc::clone(&storage);
 /// thread::spawn(move || {
 ///     let _ = s2.with(&1, |v| *v);
 /// });
 /// ```
+///
+/// [`StorageBuilder::create_for_bound_key`]:
+///     crate::storage::StorageBuilder::create_for_bound_key
 pub struct IndexLocking<KeyBound: 'static = AnyKey> {
     _key_bound: PhantomData<fn() -> KeyBound>,
 }

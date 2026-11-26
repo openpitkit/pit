@@ -40,7 +40,8 @@ import (
 // the shadow oracle applied them offline, so later same-account ops diverge and
 // the headline would be computed over an incomplete, skewed sample. The caller
 // must suppress the headline and exit non-zero; Run still returns the Stats and
-// Snapshot alongside this error so the caller can print non-latency diagnostics.
+// Snapshot alongside this error so the caller can print non-latency
+// diagnostics.
 var ErrBackpressureInvalidRun = errors.New(
 	"driver: run hit dispatch backpressure (ErrQueueLimit); not a valid latency measurement")
 
@@ -54,11 +55,11 @@ var ErrBackpressureInvalidRun = errors.New(
 var ErrZeroChecksumInvalidRun = errors.New(
 	"driver: anti-DCE checksum is zero on a non-empty run; decisions were not provably consumed; not a valid latency measurement")
 
-// stopTimeout bounds the graceful dispatcher drain and engine stop at the end of
-// a run. By the time it is used every future has already resolved (the collectors
-// drained the work channel) and every accepted reservation has been finalized
-// (the finalizers drained the finalize channel), so this is only a safety bound
-// on the dispatcher teardown.
+// stopTimeout bounds the graceful dispatcher drain and engine stop at the end
+// of a run. By the time it is used every future has already resolved (the
+// collectors drained the work channel) and every accepted reservation has been
+// finalized (the finalizers drained the finalize channel), so this is only a
+// safety bound on the dispatcher teardown.
 const stopTimeout = 30 * time.Second
 
 // defaultOverheadProbes is the number of empty-submit probes run before the
@@ -68,29 +69,30 @@ const defaultOverheadProbes = 200
 // defaultCollectors / defaultFinalizers size the collector and finalizer pools
 // when the config leaves them unset. The collector pool awaits resolved futures
 // and must keep up with the open-loop in-flight depth so resolve instants stay
-// accurate; the finalizer pool drains accepted reservations (CommitAndClose) off
-// the measured path.
+// accurate; the finalizer pool drains accepted reservations (CommitAndClose)
+// off the measured path.
 const (
 	defaultCollectors = 16
 	defaultFinalizers = 16
 )
 
-// finalizeBuffer is the capacity of the FAST channel feeding the finalizer pool.
-// It is generous so the collector almost never overflows handing off an accepted
-// reservation. The handoff is NON-BLOCKING: when this fast path is full the
-// collector pushes to an unbounded overflow (finalizers also drain it) so the
-// submit schedule is never throttled by the off-path finalize backlog, and the
-// overflow use is counted as a HARNESS handoff stall DIAGNOSTIC (see
-// handOffFinalize) - it does not contaminate the headline or invalidate the run.
+// finalizeBuffer is the capacity of the FAST channel feeding the finalizer
+// pool. It is generous so the collector almost never overflows handing off an
+// accepted reservation. The handoff is NON-BLOCKING: when this fast path is
+// full the collector pushes to an unbounded overflow (finalizers also drain it)
+// so the submit schedule is never throttled by the off-path finalize backlog,
+// and the overflow use is counted as a HARNESS handoff stall DIAGNOSTIC (see
+// handOffFinalize) - it does not contaminate the headline or invalidate the
+// run.
 const finalizeBuffer = 8192
 
 // overflow is an unbounded FIFO used as the spill path behind a bounded fast
 // channel so a momentarily-full buffer never blocks the producer. The submit
-// schedule must be free to keep pacing to VirtualT0 regardless of how far behind
-// the consumers are, so neither the submitter -> collector handoff nor the
-// collector -> finalizer handoff may ever block; the overflow absorbs the spill
-// and the consumers drain it. It is bounded in practice by the in-flight depth
-// (each spilled item corresponds to one submitted-but-unconsumed op).
+// schedule must be free to keep pacing to VirtualT0 regardless of how far
+// behind the consumers are, so neither the submitter -> collector handoff nor
+// the collector -> finalizer handoff may ever block; the overflow absorbs the
+// spill and the consumers drain it. It is bounded in practice by the in-flight
+// depth (each spilled item corresponds to one submitted-but-unconsumed op).
 //
 // It is safe for concurrent producers and consumers.
 type overflow[Item any] struct {
@@ -172,9 +174,11 @@ type Config struct {
 
 	// --- Shared dispatch knobs (both strategies) ---
 
-	// QueueCapacity is the buffered channel size of each queue. 0 = engine default (1024).
+	// QueueCapacity is the buffered channel size of each queue. 0 = engine default
+	// (1024).
 	QueueCapacity int
-	// SlowSubmitThreshold is the slow-submit observer threshold. 0 = engine default (1m).
+	// SlowSubmitThreshold is the slow-submit observer threshold. 0 = engine
+	// default (1m).
 	SlowSubmitThreshold time.Duration
 
 	// WindowSize is the number of order-check ops per measurement window.
@@ -238,32 +242,32 @@ func FromAppConfig(cfg *config.Config) Config {
 //
 //   - one lightweight submitter goroutine per account owns that account's
 //     ordered sub-stream. It paces each event by sleeping until the event's
-//     VirtualT0 (relative to run start), stamps that virtual time as the measured
-//     t0, submits non-blocking, hands the future to the collector via a
-//     NON-BLOCKING handoff (fast buffered channel with an unbounded overflow the
-//     collectors also drain), and IMMEDIATELY advances to the next event. It
-//     NEVER awaits a future, never waits for a decision, and NEVER blocks on a
-//     harness-internal handoff, so the open-loop submit schedule is never
+//     VirtualT0 (relative to run start), stamps that virtual time as the
+//     measured t0, submits non-blocking, hands the future to the collector via
+//     a NON-BLOCKING handoff (fast buffered channel with an unbounded overflow
+//     the collectors also drain), and IMMEDIATELY advances to the next event.
+//     It NEVER awaits a future, never waits for a decision, and NEVER blocks on
+//     a harness-internal handoff, so the open-loop submit schedule is never
 //     throttled by the harness; many of one account's ops may be in flight at
 //     once (true pipelining);
 //   - a collector goroutine pool awaits every future, records the open-loop
 //     latency = resolve - VirtualT0 (the headline) plus the service-time
 //     diagnostic = resolve - actual submit, runs the oracle, and hands accepted
 //     reservations to the finalizer pool;
-//   - a finalizer goroutine pool drains accepted reservations and CommitAndCloses
-//     them (commit = no-op, close releases the native handle, keeping the in-place
-//     hold) strictly off the measured path; the collector hands them off
-//     NON-BLOCKING (fast buffered channel with an unbounded overflow the
-//     finalizers also drain) so it never stops draining the work handoff, and a
-//     full finalize fast path is counted as a HARNESS handoff stall DIAGNOSTIC
-//     (off the measured path; it does not throttle the schedule or invalidate
-//     the run);
-//   - per-account ordering (a top-up before its order, an order-check before its
-//     settlement, a settlement before a dependent later order) is preserved by
-//     submitting each account's chain from a single goroutine in causal order; the
-//     engine's FIFO-per-account dispatch then replays the shadow's offline-ordered
-//     decisions exactly, so the strict per-op oracle holds without any per-op
-//     blocking.
+//   - a finalizer goroutine pool drains accepted reservations and
+//     CommitAndCloses them (commit = no-op, close releases the native handle,
+//     keeping the in-place hold) strictly off the measured path; the collector
+//     hands them off NON-BLOCKING (fast buffered channel with an unbounded
+//     overflow the finalizers also drain) so it never stops draining the work
+//     handoff, and a full finalize fast path is counted as a HARNESS handoff
+//     stall DIAGNOSTIC (off the measured path; it does not throttle the
+//     schedule or invalidate the run);
+//   - per-account ordering (a top-up before its order, an order-check before
+//     its settlement, a settlement before a dependent later order) is preserved
+//     by submitting each account's chain from a single goroutine in causal
+//     order; the engine's FIFO-per-account dispatch then replays the shadow's
+//     offline-ordered decisions exactly, so the strict per-op oracle holds
+//     without any per-op blocking.
 func Run(ctx context.Context, stream *generator.Stream, cfg Config) (Stats, measurement.Snapshot, error) {
 	if stream == nil {
 		return Stats{}, measurement.Snapshot{}, fmt.Errorf("driver: nil stream")
@@ -456,21 +460,21 @@ type run struct {
 	// CommitAndClose accepted reservations off the measured path. The collector
 	// NEVER blocks on it: when it is full the collector spills to
 	// finalizeOverflow (finalizers also drain it). Spilling here is counted as a
-	// HARNESS handoff stall DIAGNOSTIC (RecordHandoffStall): the finalize backlog is
-	// purely harness-internal (CommitAndClose throughput) and off the measured path,
-	// so a full finalize fast path never throttles the submit schedule and does NOT
-	// invalidate the run - it is reported as a diagnostic only.
+	// HARNESS handoff stall DIAGNOSTIC (RecordHandoffStall): the finalize backlog
+	// is purely harness-internal (CommitAndClose throughput) and off the measured
+	// path, so a full finalize fast path never throttles the submit schedule and
+	// does NOT invalidate the run - it is reported as a diagnostic only.
 	finalize         chan *asyncengine.AsyncReservation
 	finalizeOverflow overflow[*asyncengine.AsyncReservation]
 }
 
 // inflight is one submitted operation handed from a submitter to the collector.
-// The submitter never blocks on it: after submitting, it advances immediately to
-// the next event (true open-loop). intendedT0 is the event's VirtualT0 mapped to
-// an absolute instant (run start + VirtualT0); the collector subtracts it from
-// the resolve instant to get the open-loop headline latency. actualSubmit is the
-// real wall-clock instant of the submit call; the collector subtracts it from
-// the resolve instant for the service-time diagnostic.
+// The submitter never blocks on it: after submitting, it advances immediately
+// to the next event (true open-loop). intendedT0 is the event's VirtualT0
+// mapped to an absolute instant (run start + VirtualT0); the collector
+// subtracts it from the resolve instant to get the open-loop headline latency.
+// actualSubmit is the real wall-clock instant of the submit call; the collector
+// subtracts it from the resolve instant for the service-time diagnostic.
 type inflight struct {
 	event        *generator.Event
 	intendedT0   time.Time
@@ -484,11 +488,11 @@ type inflight struct {
 
 // submitChain runs one account's ordered events, true open-loop. For each event
 // it sleeps until the event's virtual arrival (start + VirtualT0), stamps that
-// virtual time as the measured t0, submits non-blocking, hands the future to the
-// collector, and IMMEDIATELY advances - it never awaits a future or waits for a
-// decision before the next submit. Settlements and runtime funding are submitted
-// here at their own virtual times; seeds are applied synchronously before the run
-// (partitionChains already excludes them).
+// virtual time as the measured t0, submits non-blocking, hands the future to
+// the collector, and IMMEDIATELY advances - it never awaits a future or waits
+// for a decision before the next submit. Settlements and runtime funding are
+// submitted here at their own virtual times; seeds are applied synchronously
+// before the run (partitionChains already excludes them).
 func (r *run) submitChain(start time.Time, events []*generator.Event) {
 	for _, ev := range events {
 		if r.ctx.Err() != nil {
@@ -524,10 +528,11 @@ func (r *run) submitChain(start time.Time, events []*generator.Event) {
 // applySeeds applies the initial per-account balance seeds synchronously on the
 // underlying engine before the async run, and checks each against the shadow
 // oracle's prediction. Seeding is setup, not measured load, so it must never go
-// through the measured async pipeline (a 10k-account herd would create thousands
-// of live queues at once). The seeds are the first events in the stream, so
-// checking them here (single-threaded, before the collectors start) keeps the
-// oracle's per-account sequence exact: seed first, then the account's async ops.
+// through the measured async pipeline (a 10k-account herd would create
+// thousands of live queues at once). The seeds are the first events in the
+// stream, so checking them here (single-threaded, before the collectors start)
+// keeps the oracle's per-account sequence exact: seed first, then the account's
+// async ops.
 func (r *run) applySeeds(syncEngine *openpit.Engine, events []generator.Event) error {
 	for i := range events {
 		ev := &events[i]
@@ -610,11 +615,11 @@ func (r *run) submitFunding(ev *generator.Event, intendedT0 time.Time) bool {
 	return true
 }
 
-// handOffWork hands one submitted op to the collector pool WITHOUT EVER BLOCKING
-// the submit schedule. It tries the fast buffered channel first; if that buffer
-// is momentarily full it spills to the unbounded workOverflow, which collectors
-// also drain. The submit loop therefore keeps pacing to each event's VirtualT0
-// no matter how far behind the collectors are.
+// handOffWork hands one submitted op to the collector pool WITHOUT EVER
+// BLOCKING the submit schedule. It tries the fast buffered channel first; if
+// that buffer is momentarily full it spills to the unbounded workOverflow,
+// which collectors also drain. The submit loop therefore keeps pacing to each
+// event's VirtualT0 no matter how far behind the collectors are.
 //
 // A full work buffer is almost always caused by collectors legitimately blocked
 // in fut.Await because the ENGINE is slow under load. That is REAL engine
@@ -640,15 +645,17 @@ func (r *run) handOffWork(item inflight) {
 }
 
 // collect is one collector goroutine: it awaits each future, records the
-// open-loop latency (and the service-time diagnostic for order-checks), runs the
-// oracle, and hands accepted order-check reservations to the finalizer pool.
+// open-loop latency (and the service-time diagnostic for order-checks), runs
+// the oracle, and hands accepted order-check reservations to the finalizer
+// pool.
 //
 // It drains BOTH the fast work channel AND the unbounded workOverflow that the
-// submit path spills into when the fast buffer is momentarily full. The overflow
-// is drained first on every iteration so its items cannot be stranded and memory
-// stays bounded by the in-flight depth. When the submitters close the work
-// channel, the closed branch drains any remaining overflow before returning, so
-// no submitted op is ever lost and the goroutine always terminates.
+// submit path spills into when the fast buffer is momentarily full. The
+// overflow is drained first on every iteration so its items cannot be stranded
+// and memory stays bounded by the in-flight depth. When the submitters close
+// the work channel, the closed branch drains any remaining overflow before
+// returning, so no submitted op is ever lost and the goroutine always
+// terminates.
 func (r *run) collect() {
 	for {
 		// Drain the spill first so overflowed items cannot be stranded behind the

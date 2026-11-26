@@ -546,8 +546,8 @@ impl JsRateLimitBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `EngineBuildError` with kind `InvalidConfiguration` when a limit is
-    /// invalid or a (key, mode) is repeated on any axis.
+    /// Throws `EngineBuildError` with kind `InvalidConfiguration` when a limit
+    /// is invalid or a (key, mode) is repeated on any axis.
     pub(crate) fn build_policy(
         &self,
         storage_builder: &crate::engine::StorageBuilderRef,

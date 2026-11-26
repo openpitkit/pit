@@ -45,7 +45,7 @@ class PlatformInfo:
 
 
 def gather_platform() -> PlatformInfo:
-    """Collect host information. Every field defaults to "unknown" on failure."""
+    """Collect host information, using "unknown" for any failed field."""
     system = _platform.system()
     p = PlatformInfo(
         hardware="unknown",
@@ -185,7 +185,7 @@ def _format_gib(b: int) -> str:
 
 
 def _run(cmd: list[str]) -> str:
-    """Run a fixed diagnostic command and return trimmed stdout, or "" on any error."""
+    """Run a fixed diagnostic; return trimmed stdout or "" on error."""
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.stdout.strip()

@@ -46,10 +46,11 @@ impl Volume {
         CashFlow::new(-self.to_decimal())
     }
 
-    /// Converts this volume into a [`PositionSize`], preserving its non-negative value.
+    /// Converts this volume into a [`PositionSize`], preserving its
+    /// non-negative value.
     ///
-    /// Used when a notional volume must be expressed as a position-management magnitude
-    /// (hold amount, release amount) without directional context.
+    /// Used when a notional volume must be expressed as a position-management
+    /// magnitude (hold amount, release amount) without directional context.
     pub fn to_position_size(self) -> PositionSize {
         PositionSize::new(self.to_decimal())
     }
@@ -61,9 +62,9 @@ impl Volume {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Overflow`] with [`ParamKind::Volume`] when division overflows.
-    /// Returns [`Error::Underflow`] with [`ParamKind::Quantity`] when result cannot be
-    /// represented as [`Quantity`].
+    /// Returns [`Error::Overflow`] with [`ParamKind::Volume`] when division
+    /// overflows. Returns [`Error::Underflow`] with [`ParamKind::Quantity`]
+    /// when result cannot be represented as [`Quantity`].
     pub fn calculate_quantity(self, price: Price) -> Result<Quantity, Error> {
         if price.is_zero() {
             return Ok(Quantity::ZERO);

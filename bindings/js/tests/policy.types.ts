@@ -17,9 +17,9 @@
 
 // Type-level conformance checks for the custom-policy SDK surface. This file is
 // intentionally NOT a `*.test.ts` (vitest ignores it) - it is exercised by
-// `npm run typecheck`. Each `@ts-expect-error` asserts that a malformed input is
-// a compile error; tsc fails the build if the expected error is ever absent, so
-// this doubles as a regression guard that `preTrade`/`builtin` stay typed.
+// `npm run typecheck`. Each `@ts-expect-error` asserts that a malformed input
+// is a compile error; tsc fails the build if the expected error is ever absent,
+// so this doubles as a regression guard that `preTrade`/`builtin` stay typed.
 
 import { Engine } from "@openpit/engine";
 import { type AccountId } from "@openpit/engine/param";

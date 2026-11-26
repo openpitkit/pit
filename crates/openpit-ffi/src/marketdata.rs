@@ -40,7 +40,7 @@ use crate::instrument::{import_instrument, import_required_instrument, OpenPitIn
 use crate::last_error::{write_error, OpenPitOutError};
 use crate::param::{OpenPitParamAccountId, OpenPitParamPrice, OpenPitParamPriceOptional};
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // InstrumentId
 
 /// Stable instrument identifier for all FFI payloads.
@@ -49,7 +49,7 @@ pub type OpenPitInstrumentId = u64;
 /// Backwards-compatible market-data spelling of [`OpenPitInstrumentId`].
 pub type OpenPitMarketDataInstrumentId = OpenPitInstrumentId;
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Quote
 
 /// Market snapshot value passed across the FFI boundary.
@@ -124,7 +124,7 @@ pub extern "C" fn openpit_create_marketdata_quote() -> OpenPitMarketDataQuote {
     OpenPitMarketDataQuote::default()
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // QuoteTtl
 
 /// Service-wide / per-instrument quote lifetime for FFI payloads.
@@ -185,7 +185,7 @@ fn duration_from_parts_saturating(secs: u64, nanos: u32) -> Duration {
     Duration::from_secs(secs).saturating_add(Duration::from_nanos(u64::from(nanos)))
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // QuoteResolution
 
 /// Selects which quote buckets a read will consult, in order.
@@ -218,7 +218,7 @@ fn import_quote_resolution(value: OpenPitMarketDataQuoteResolution) -> Option<Qu
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Get status
 
 /// Result of a market-data read.
@@ -244,7 +244,7 @@ pub enum OpenPitMarketDataGetStatus {
     Error = 255,
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Register / update status
 
 /// Result of a market-data registration or update.
@@ -273,7 +273,7 @@ pub enum OpenPitMarketDataRegisterStatus {
     NoTarget = 6,
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Handles
 
 /// Opaque shared market-data service handle.
@@ -302,7 +302,7 @@ impl OpenPitMarketDataService {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Internal helpers
 
 /// Maps a raw FFI `u32` group id to a core [`AccountGroupId`].
@@ -320,7 +320,7 @@ fn import_group(raw: OpenPitParamAccountGroupId) -> AccountGroupId {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Account-group resolver callback
 
 /// Outcome of one account-group resolver invocation.
@@ -395,7 +395,7 @@ impl AccountInfo for CallbackAccountInfo {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Service creation
 
 /// Creates a market-data service with the chosen synchronization mode.
@@ -446,7 +446,7 @@ pub extern "C" fn openpit_create_marketdata_service(
     OpenPitMarketDataService::from_handle(handle, sync_mode)
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Service lifecycle
 
 /// Releases a market-data service handle.
@@ -489,7 +489,7 @@ pub extern "C" fn openpit_marketdata_service_clone(
     OpenPitMarketDataService::from_handle(svc.handle_clone(), svc.mode)
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Registration
 
 /// Registers `instrument` with the service-wide default TTL.
@@ -683,7 +683,7 @@ pub extern "C" fn openpit_marketdata_service_register_with_id_and_ttl(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // TTL update / clear - account-level
 
 /// Pins the service-level TTL for `account_id`.
@@ -722,7 +722,7 @@ pub extern "C" fn openpit_marketdata_service_clear_account_ttl(
         .clear_account_ttl(AccountId::from_u64(account_id));
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // TTL update / clear - group-level
 
 /// Pins the service-level TTL for `account_group_id`.
@@ -763,7 +763,7 @@ pub extern "C" fn openpit_marketdata_service_clear_account_group_ttl(
         .clear_account_group_ttl(import_group(account_group_id));
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // TTL update / clear - instrument-level
 
 /// Updates the instrument-level TTL for an already-registered instrument.
@@ -821,7 +821,7 @@ pub extern "C" fn openpit_marketdata_service_clear_instrument_ttl(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // TTL update / clear - instrument × account
 
 /// Pins the instrument × account TTL cell for `(instrument_id, account_id)`.
@@ -884,10 +884,11 @@ pub extern "C" fn openpit_marketdata_service_clear_instrument_account_ttl(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // TTL update / clear - instrument × group
 
-/// Pins the instrument × group TTL cell for `(instrument_id, account_group_id)`.
+/// Pins the instrument × group TTL cell for
+/// `(instrument_id, account_group_id)`.
 ///
 /// Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) for `account_group_id` to target
 /// the instrument's default-group TTL cell.
@@ -921,7 +922,8 @@ pub extern "C" fn openpit_marketdata_service_set_instrument_account_group_ttl(
     }
 }
 
-/// Reverts the instrument × group TTL cell for `(instrument_id, account_group_id)`
+/// Reverts the instrument × group TTL cell for
+/// `(instrument_id, account_group_id)`
 /// back to "inherit".
 ///
 /// Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) for `account_group_id` to clear
@@ -954,7 +956,7 @@ pub extern "C" fn openpit_marketdata_service_clear_instrument_account_group_ttl(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Clear
 
 /// Clears the stored quote for `instrument_id`.
@@ -974,7 +976,7 @@ pub extern "C" fn openpit_marketdata_service_clear(
         .clear(InstrumentId::new(instrument_id));
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Push by id - default bucket
 
 /// Publishes a quote for `instrument_id`, replacing the entire stored snapshot.
@@ -1019,7 +1021,7 @@ pub extern "C" fn openpit_marketdata_service_push(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Push by id - targeted fan-out
 
 /// Publishes a quote for `instrument_id` into the per-account bucket of every
@@ -1108,7 +1110,7 @@ pub extern "C" fn openpit_marketdata_service_push_for(
     }
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Push by instrument name
 
 /// Publishes a quote for `instrument`, replacing the stored snapshot.
@@ -1171,7 +1173,7 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
     true
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Get / resolve
 
 /// Reads the latest quote for `(instrument_id, account_id)` under the given
@@ -1971,7 +1973,8 @@ mod tests {
             openpit_marketdata_service_set_instrument_account_ttl(service, id, 1, zero_ttl);
         assert_eq!(status, OpenPitMarketDataRegisterStatus::Ok);
 
-        // Account=1 should see the quote as unavailable (TTL=0 => already stale).
+        // Account=1 should see the quote as unavailable (TTL=0 => already
+        // stale).
         let mut out = OpenPitMarketDataQuote::default();
         let status = openpit_marketdata_service_get(
             service,

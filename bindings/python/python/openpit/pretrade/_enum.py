@@ -55,7 +55,7 @@ class RuleMode(_enum.StrEnum):
 
 @enum.unique
 class RejectCode(_enum.StrEnum):
-    """Stable machine-readable reject codes used across built-in and custom policies."""
+    """Stable machine-readable reject codes for built-in and custom policies."""
 
     MISSING_REQUIRED_FIELD = "MissingRequiredField"
     INVALID_FIELD_FORMAT = "InvalidFieldFormat"

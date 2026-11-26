@@ -31,7 +31,8 @@ use crate::storage::{self, LockingPolicy, OnceValue, Storage, StorageBuilder};
 
 // ─── AccountGroupError ───────────────────────────────────────────────────────
 
-/// Error returned by [`Accounts::register_group`](crate::Accounts::register_group)
+/// Error returned by
+/// [`Accounts::register_group`](crate::Accounts::register_group)
 /// and [`Accounts::unregister_group`](crate::Accounts::unregister_group).
 ///
 /// Both operations are atomic: when they fail, the registry is left unchanged
@@ -42,7 +43,8 @@ pub enum AccountGroupError {
     /// The target group passed to
     /// [`Accounts::register_group`](crate::Accounts::register_group) or
     /// [`Accounts::unregister_group`](crate::Accounts::unregister_group) is
-    /// the reserved [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
+    /// the reserved
+    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
     ///
     /// Accounts belong to the default group implicitly, so it cannot be a
     /// target of an explicit registration or unregistration.
@@ -262,14 +264,17 @@ where
 ///
 /// Cloneable; every clone refers to the same membership map. The handle's
 /// auto-traits derive from `StorageFactory::Shared<...>`, the sync-mode-aware
-/// wrapper chosen by [`LockingPolicyFactory::Shared`](crate::storage::LockingPolicyFactory::Shared):
+/// wrapper chosen by [`LockingPolicyFactory::Shared`]:
 ///
 /// - Under [`FullSync`](crate::core::FullSync) this is `Arc<...>`:
 ///   `Send + Sync`.
 /// - Under [`LocalSync`](crate::core::LocalSync) this is `Rc<...>`:
 ///   `!Send + !Sync`.
-/// - Under [`AccountSync`](crate::core::AccountSync) this is `IndexShared<...>`:
-///   `Send + !Sync`.
+/// - Under [`AccountSync`](crate::core::AccountSync) this is
+///   `IndexShared<...>`: `Send + !Sync`.
+///
+/// [`LockingPolicyFactory::Shared`]:
+///     crate::storage::LockingPolicyFactory::Shared
 pub(crate) struct AccountGroupsHandle<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
@@ -359,7 +364,8 @@ where
 /// Readers follow the engine's selected synchronization contract. Full mode
 /// checks synchronized readiness on each optional getter; local and account
 /// modes rely on their existing serialization contract without readiness
-/// synchronization. Use [`OperationSnapshot`] for a per-reader local fast cache.
+/// synchronization. Use [`OperationSnapshot`] for a per-reader local fast
+/// cache.
 pub struct SharedOperationSnapshot<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
@@ -382,7 +388,8 @@ impl<StorageFactory> SharedOperationSnapshot<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
-    /// Returns the account fixed at operation entry, including its original error.
+    /// Returns the account fixed at operation entry, including its original
+    /// error.
     ///
     /// # Errors
     /// Returns the original accessor error when the account was unreadable.
@@ -483,8 +490,9 @@ where
             .clone()
     }
 
-    /// Returns a reader sharing canonical first resolution without resolving data.
-    /// Its optional getters follow the selected core synchronization policy.
+    /// Returns a reader sharing canonical first resolution without resolving
+    /// data. Its optional getters follow the selected core synchronization
+    /// policy.
     pub fn shared_reader(&self) -> SharedOperationSnapshot<StorageFactory> {
         self.source.clone()
     }
@@ -830,7 +838,8 @@ mod tests {
         // First call populates the cache.
         assert_eq!(ctx.account_group(), Some(group(7)));
 
-        // Mutate the registry after the first lookup; the cached value must win.
+        // Mutate the registry after the first lookup; the cached value must
+        // win.
         handle
             .inner
             .unregister_group(&[account(1)], group(7))
@@ -1006,9 +1015,9 @@ mod tests {
         assert_eq!(ctx.account_group(), Some(group(4)));
     }
 
-    // Concurrency: under FullLocking (FullSync engines) the whole-map guard must
-    // serialize register/unregister so a failed multi-account call leaves the
-    // membership map completely unchanged even with real thread contention.
+    // Concurrency: under FullLocking (FullSync engines) the whole-map guard
+    // must serialize register/unregister so a failed multi-account call leaves
+    // the membership map completely unchanged even with real thread contention.
     #[test]
     fn full_locking_failed_register_leaves_membership_unchanged_under_contention() {
         use crate::storage::FullLocking;
@@ -1028,9 +1037,9 @@ mod tests {
                 let registry = Arc::clone(&registry);
                 scope.spawn(move || {
                     for _ in 0..200 {
-                        // Each batch ends with the conflicting account(0), so the
-                        // whole batch must roll back: account(tid) must never be
-                        // registered.
+                        // Each batch ends with the conflicting account(0), so
+                        // the whole batch must roll back: account(tid) must
+                        // never be registered.
                         let result =
                             registry.register_group(&[account(tid), account(0)], group(tid as u32));
                         assert!(result.is_err(), "batch with conflict must fail");

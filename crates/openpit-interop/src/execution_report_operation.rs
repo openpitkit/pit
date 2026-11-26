@@ -20,7 +20,8 @@
 use openpit::param::{AccountId, Side};
 use openpit::{HasAccountId, HasInstrument, HasSide, Instrument, RequestFieldAccessError};
 
-/// Populated execution-report operation group with individually-optional fields.
+/// Populated execution-report operation group with individually-optional
+/// fields.
 ///
 /// Each field is stored as [`Option`]. A `Some` value returns `Ok`; a `None`
 /// required field returns `Err(RequestFieldAccessError)`.

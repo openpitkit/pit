@@ -30,7 +30,8 @@ import pytest
 # If this file changes, update every linked documentation snippet.
 
 # Convenience aliases used throughout this file. account_info is the no-group
-# stand-in passed to reads; in policy code this is usually the pre-trade context.
+# stand-in passed to reads; in policy code this is usually the pre-trade
+# context.
 _DEFAULT = openpit.marketdata.QuoteResolution.ACCOUNT_THEN_GROUP_THEN_DEFAULT
 _NO_GROUP = types.SimpleNamespace(account_group=None)
 

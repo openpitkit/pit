@@ -198,8 +198,8 @@ func assertEngineAccountBlockRejectText(t *testing.T, got reject.Reject, wantRea
 	}
 }
 
-// assertAccountPasses drives one StartPreTrade for account 1 and fails unless it
-// is accepted with no rejects.
+// assertAccountPasses drives one StartPreTrade for account 1 and fails unless
+// it is accepted with no rejects.
 func assertAccountPasses(t *testing.T, engine *Engine) {
 	t.Helper()
 	const accountID uint64 = 1

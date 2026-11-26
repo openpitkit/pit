@@ -280,7 +280,8 @@ fn position_marks_deduplicate_across_steps_and_after_pnl() {
                 engine
                     .configure()
                     .spot_funds::<SpotFundsConfigError>(TestPolicy::NAME, |settings| {
-                        // The USD step runs before AAPL and projects zero to -2.
+                        // The USD step runs before AAPL and projects zero to
+                        // -2.
                         settings.set_position_limit(
                             account(ACCOUNT),
                             asset("USD"),

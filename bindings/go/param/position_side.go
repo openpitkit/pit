@@ -34,7 +34,8 @@ const (
 	PositionSideShort PositionSide = native.ParamPositionSideShort
 )
 
-// NewPositionSideFromHandle creates an optional PositionSide from a native handle.
+// NewPositionSideFromHandle creates an optional PositionSide from a native
+// handle.
 func NewPositionSideFromHandle(v native.ParamPositionSide) optional.Option[PositionSide] {
 	switch v {
 	case native.ParamPositionSideLong:

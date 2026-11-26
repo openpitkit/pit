@@ -20,12 +20,15 @@
 // design doc (section 7/9).
 //
 // Block order:
-//   - Headline   - steady-state OPEN-LOOP order-check p50/p99 (prominent, honest)
+//   - Headline   - steady-state OPEN-LOOP order-check p50/p99 (prominent,
+//     honest)
 //   - Environment - host, runtime, pit commit, core build profile, run config
 //   - Workload   - counts, reject rate, op mix, cohort summary
-//   - Trajectory - per-window percentile evolution for order-check and settlement
+//   - Trajectory - per-window percentile evolution for order-check and
+//     settlement
 //   - Distribution - final merged percentiles + harness self-overhead
-//   - Diagnostics - service-time diagnostic + inner metrics (queue wait, compute)
+//   - Diagnostics - service-time diagnostic + inner metrics (queue wait,
+//     compute)
 //   - Disclaimer - what is/is not measured + one-line reproduction recipe
 //
 // A run is INVALID - not a valid latency measurement - when it hit dispatch
@@ -38,8 +41,9 @@
 // dispatch sizing, backpressure, handoff stalls) and OMITS the Headline,
 // Trajectory, and Distribution percentile blocks entirely.
 //
-// Stdout/stderr separation: this package writes only to the w argument (stdout).
-// Progress noise belongs on stderr and must never pass through this package.
+// Stdout/stderr separation: this package writes only to the w argument
+// (stdout). Progress noise belongs on stderr and must never pass through this
+// package.
 package reporter
 
 import (
@@ -60,10 +64,12 @@ const separatorWidth = 72
 // pctScale converts a fraction in [0,1] to a percentage.
 const pctScale = 100.0
 
-// trajectoryRuleWidthOC is the rule width under the order-check trajectory header.
+// trajectoryRuleWidthOC is the rule width under the order-check trajectory
+// header.
 const trajectoryRuleWidthOC = 67
 
-// trajectoryRuleWidthSet is the rule width under the settlement trajectory header.
+// trajectoryRuleWidthSet is the rule width under the settlement trajectory
+// header.
 const trajectoryRuleWidthSet = 58
 
 // Write prints the full post-run report to w. It must be the ONLY writer to
@@ -74,10 +80,11 @@ const trajectoryRuleWidthSet = 58
 // recipe). streamStats is the generator's pre-run prediction summary; it is
 // used only for cohort/workload context.
 //
-// Use Write ONLY for a VALID run (no backpressure, non-zero checksum); a handoff
-// stall is a diagnostic and does not make a run invalid. When the run is invalid
-// (driver returns ErrBackpressureInvalidRun or ErrZeroChecksumInvalidRun), call
-// WriteInvalid instead: the headline and latency percentiles must be suppressed.
+// Use Write ONLY for a VALID run (no backpressure, non-zero checksum); a
+// handoff stall is a diagnostic and does not make a run invalid. When the run
+// is invalid (driver returns ErrBackpressureInvalidRun or
+// ErrZeroChecksumInvalidRun), call WriteInvalid instead: the headline and
+// latency percentiles must be suppressed.
 func Write(
 	w io.Writer,
 	e env.Env,
@@ -103,8 +110,8 @@ func Write(
 // the Headline block
 // and ALL latency-distribution percentile blocks (Trajectory, Distribution, the
 // service-time/inner-metrics latency decomposition). It keeps the non-latency
-// diagnostics - environment, workload counts, dispatch sizing, backpressure, and
-// handoff stalls - and prints a prominent invalid-run banner at the top and
+// diagnostics - environment, workload counts, dispatch sizing, backpressure,
+// and handoff stalls - and prints a prominent invalid-run banner at the top and
 // bottom that names the ACTUAL reason(s) so the suppression cannot be missed.
 //
 // It must be the ONLY writer to w during the call.
@@ -134,7 +141,8 @@ func zeroChecksumInvalid(snap measurement.Snapshot) bool {
 // invalidReasons returns the human-readable invalid reason(s) present in the
 // snapshot, in precedence order (backpressure, zero checksum). At least one is
 // present whenever WriteInvalid is called. A handoff stall is NOT an invalid
-// reason - it is a diagnostic only (off the measured path, non-blocking handoff).
+// reason - it is a diagnostic only (off the measured path, non-blocking
+// handoff).
 func invalidReasons(snap measurement.Snapshot) []string {
 	var reasons []string
 	if snap.Backpressure > 0 {
@@ -147,9 +155,9 @@ func invalidReasons(snap measurement.Snapshot) []string {
 	return reasons
 }
 
-// writeInvalidBanner prints the prominent invalid-run notice naming every reason
-// the run is invalid. It is the loud, unmissable header that explains why no
-// latency numbers follow.
+// writeInvalidBanner prints the prominent invalid-run notice naming every
+// reason the run is invalid. It is the loud, unmissable header that explains
+// why no latency numbers follow.
 func writeInvalidBanner(w io.Writer, snap measurement.Snapshot) {
 	reasons := invalidReasons(snap)
 	pf(w, "*** RUN INVALID: %s; latency numbers suppressed - this is not a valid "+
@@ -370,8 +378,8 @@ func writeWorkload(w io.Writer, snap measurement.Snapshot, streamStats generator
 
 // writeConcurrency discloses how concurrency was modelled and bounded: the full
 // population vs the bounded active working set, the engine dispatch sizing (a
-// resource knob, not sync semantics), and the backpressure count (0 in a healthy
-// run). This makes the realism of the offered load auditable.
+// resource knob, not sync semantics), and the backpressure count (0 in a
+// healthy run). This makes the realism of the offered load auditable.
 func writeConcurrency(w io.Writer, snap measurement.Snapshot, cfg *config.Config) {
 	p(w, "  Concurrency model (bounded active working set):")
 	pf(w, "    population (total accounts)   : %d", cfg.Accounts.Count)
@@ -421,12 +429,13 @@ func writeConcurrency(w io.Writer, snap measurement.Snapshot, cfg *config.Config
 			"the run is degraded - raise max_queues or lower active_accounts)", snap.Backpressure)
 	}
 
-	// Handoff stalls are a HARNESS-side DIAGNOSTIC: the collector -> finalizer fast
-	// path filled and the collector spilled to the unbounded overflow. The handoff
-	// is non-blocking and CommitAndClose is fully off the measured path (the latency
-	// was already recorded at resolve), so a stall NEVER throttles the submit
-	// schedule and does NOT invalidate the run - it only signals the finalizer pool
-	// transiently lagged. A healthy baseline typically reports zero.
+	// Handoff stalls are a HARNESS-side DIAGNOSTIC: the collector -> finalizer
+	// fast path filled and the collector spilled to the unbounded overflow. The
+	// handoff is non-blocking and CommitAndClose is fully off the measured path
+	// (the latency was already recorded at resolve), so a stall NEVER throttles
+	// the submit schedule and does NOT invalidate the run - it only signals the
+	// finalizer pool transiently lagged. A healthy baseline typically reports
+	// zero.
 	if snap.HandoffStalls == 0 {
 		p(w, "  Handoff stalls: 0 (finalizer pool kept up with the collector)")
 	} else {
@@ -628,9 +637,10 @@ func writeDiagnostics(w io.Writer, snap measurement.Snapshot, cfg *config.Config
 	}
 	p(w, "")
 
-	// Aggregate FFI/handoff residual = order-check p50 minus (queue_wait p50 + engine_compute p50).
-	// This is an APPROXIMATE aggregate estimate only; NOT a per-op subtraction.
-	// Labeled explicitly so readers do not mistake it for a precise measurement.
+	// Aggregate FFI/handoff residual = order-check p50 minus (queue_wait p50 +
+	// engine_compute p50). This is an APPROXIMATE aggregate estimate only; NOT a
+	// per-op subtraction. Labeled explicitly so readers do not mistake it for a
+	// precise measurement.
 	if im.QueueWait.Count > 0 && im.EngineCompute.Count > 0 {
 		residualP50 := snap.OrderCheck.P50 - (im.QueueWait.P50 + im.EngineCompute.P50)
 		residualP99 := snap.OrderCheck.P99 - (im.QueueWait.P99 + im.EngineCompute.P99)

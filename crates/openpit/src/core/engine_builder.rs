@@ -172,9 +172,9 @@ pub enum EngineBuildError {
     DuplicatePolicyName { name: String },
     /// Duplicate non-default `policy_group_id` across registered policies.
     ///
-    /// Multiple policies may share [`crate::DEFAULT_POLICY_GROUP_ID`], but every
-    /// explicit group identifier must be unique so that downstream consumers
-    /// can route outcomes by group without ambiguity.
+    /// Multiple policies may share [`crate::DEFAULT_POLICY_GROUP_ID`], but
+    /// every explicit group identifier must be unique so that downstream
+    /// consumers can route outcomes by group without ambiguity.
     DuplicatePolicyGroupId {
         policy_group_id: crate::core::PolicyGroupId,
     },
@@ -219,16 +219,16 @@ pub struct PolicyInstance {
     /// is registered in [`RuleMode::Reject`] mode; a custom one that needs
     /// review sets a review mode in
     /// [`Reject::mode`](crate::pretrade::Reject::mode) on the reject records it
-    /// returns. Registered in a review mode, the changes it records as main-stage
-    /// mutations for an order it marks in pre-trade are
-    /// rolled back, also after the reviewer confirms that order; changes it
-    /// makes at once, such as rate-limit counters, stay. For Spot Funds this
-    /// means nothing is held, no lock price is recorded, balances and positions
-    /// are not updated, and a later fill or cancel of that order can block the
-    /// account for a missing lock price. The rejects and account blocks it
-    /// returns become marks or are dropped unless their code is an evaluation
-    /// failure, so a P&L kill switch registered this way does not block the
-    /// account on a fill; a block it writes directly through
+    /// returns. Registered in a review mode, the changes it records as
+    /// main-stage mutations for an order it marks in pre-trade are rolled back,
+    /// also after the reviewer confirms that order; changes it makes at once,
+    /// such as rate-limit counters, stay. For Spot Funds this means nothing is
+    /// held, no lock price is recorded, balances and positions are not updated,
+    /// and a later fill or cancel of that order can block the account for a
+    /// missing lock price. The rejects and account blocks it returns become
+    /// marks or are dropped unless their code is an evaluation failure, so a
+    /// P&L kill switch registered this way does not block the account on a
+    /// fill; a block it writes directly through
     /// [`AccountControl`](crate::AccountControl) and a block from an accepted
     /// account adjustment latch in any mode.
     pub mode: RuleMode,
@@ -247,7 +247,8 @@ fn order_review_flags<Order: HasConfirmed + HasAlreadyHeld>(
 ///
 /// Policies are evaluated in registration order. Instance names must be unique
 /// across start-stage, main-stage, and account-adjustment sets;
-/// [`ReadyEngineBuilder::build`] returns [`EngineBuildError::DuplicatePolicyName`]
+/// [`ReadyEngineBuilder::build`] returns
+/// [`EngineBuildError::DuplicatePolicyName`]
 /// otherwise.
 ///
 /// # Examples
@@ -256,11 +257,13 @@ fn order_review_flags<Order: HasConfirmed + HasAlreadyHeld>(
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::time::Duration;
 /// use openpit::{
-///     WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation, WithOrderReview,
+///     WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
+///     WithOrderReview,
 /// };
 /// use openpit::pretrade::policies::{
-///     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
-///     PnlBoundsKillSwitchSettings, RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
+///     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier,
+///     PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings, RateLimit,
+///     RateLimitBrokerBarrier, RateLimitPolicy,
 ///     RateLimitSettings,
 /// };
 /// use openpit::Engine;
@@ -297,7 +300,10 @@ fn order_review_flags<Order: HasConfirmed + HasAlreadyHeld>(
 ///     RateLimitSettings::new(
 ///         [RateLimitBrokerBarrier {
 ///             mode: openpit::pretrade::RuleMode::Reject,
-///             limit: RateLimit { max_orders: 100, window: Duration::from_secs(1) },
+///             limit: RateLimit {
+///                 max_orders: 100,
+///                 window: Duration::from_secs(1),
+///             },
 ///         }],
 ///         [],
 ///         [],
@@ -343,7 +349,8 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
     /// every instance runs.
     /// Without this reader, a run whose policies return a review mark and no
     /// reject is rejected with
-    /// [`crate::pretrade::RejectCode::MissingRequiredField`], except in drop-copy.
+    /// [`crate::pretrade::RejectCode::MissingRequiredField`], except in
+    /// drop-copy.
     pub fn with_order_review(mut self) -> Self
     where
         Order: HasConfirmed + HasAlreadyHeld,
@@ -355,10 +362,9 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
     /// Applies a custom synchronization mode and advances to
     /// [`SyncedEngineBuilder`].
     ///
-    /// The mode must implement [`SyncMode`] and is typically zero-sized. For the
-    /// built-in regimes, prefer [`full_sync`](Self::full_sync),
-    /// [`no_sync`](Self::no_sync), or
-    /// [`account_sync`](Self::account_sync).
+    /// The mode must implement [`SyncMode`] and is typically zero-sized. For
+    /// the built-in regimes, prefer [`full_sync`](Self::full_sync),
+    /// [`no_sync`](Self::no_sync), or [`account_sync`](Self::account_sync).
     pub fn sync<Sync>(
         self,
         sync: Sync,
@@ -462,7 +468,8 @@ type PolicyConfigEntries<StorageLockingPolicyFactory> = Vec<(
 ///
 /// This builder deliberately has **no `build` method**: at least one policy
 /// must be registered before the engine can be constructed. Adding any policy
-/// advances to [`ReadyEngineBuilder`], which exposes [`build`](ReadyEngineBuilder::build).
+/// advances to [`ReadyEngineBuilder`], which exposes
+/// [`build`](ReadyEngineBuilder::build).
 ///
 /// The `Sync` type parameter carries the chosen [`SyncMode`]
 /// forward through the builder chain so that trading policies can create
@@ -600,7 +607,8 @@ where
     /// use openpit::{Engine, OrderOperation, PolicyInstance};
     /// use openpit::pretrade::RuleMode;
     /// use openpit::pretrade::policies::{
-    ///     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
+    ///     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
+    ///     RateLimitSettings,
     /// };
     ///
     /// let builder = Engine::builder::<OrderOperation, (), ()>().no_sync();
@@ -765,7 +773,7 @@ where
         >,
     {
         let obj = policy.into_policy_object();
-        // fallback(approved): an unnamed instance takes the policy's own name, as documented above.
+        // fallback(approved): an unnamed instance takes the policy's own name
         let name = instance.name.unwrap_or_else(|| obj.name().to_owned());
         if let Some(entry) = obj.built_in_config_entry() {
             self.config_entries

@@ -170,8 +170,8 @@ pub struct OpenPitOrder {
     ///
     /// The SDK never inspects, dereferences, or frees this value. Its meaning,
     /// lifetime, and thread-safety are the caller's responsibility. `0` / null
-    /// means "not set". See the project Threading Contract for the full lifetime
-    /// model.
+    /// means "not set". See the project Threading Contract for the full
+    /// lifetime model.
     ///
     /// The token is preserved unchanged across every engine callback that
     /// receives the carrying value, including policy callbacks and adjustment

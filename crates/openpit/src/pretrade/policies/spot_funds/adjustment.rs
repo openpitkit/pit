@@ -304,15 +304,18 @@ where
                         || halt_clears_average
                         || (clear_avg_on_flat && current.avg_entry_price().is_some());
 
-                    // Compute per-field deltas with checked arithmetic before writing
-                    // the slot. This serves two purposes:
-                    //   1. Outcome reporting: delta = actual applied change per field.
-                    //   2. Rollback: the inverse delta is later applied to whatever
-                    //      the slot holds at rollback time (safe for FullSync).
-                    // For Delta adjustments overflow here is practically impossible
-                    // (new was derived from current via checked_add); for Absolute
-                    // adjustments with extreme opposing values it can fail, and we
-                    // reject before writing so no partial state escapes.
+                    // Compute per-field deltas with checked arithmetic before
+                    // writing the slot. This serves two purposes:
+                    //   1. Outcome reporting: delta = actual applied change per
+                    //      field.
+                    //   2. Rollback: the inverse delta is later applied to
+                    //      whatever the slot holds at rollback time (safe for
+                    //      FullSync).
+                    // For Delta adjustments overflow here is practically
+                    // impossible (new was derived from current via
+                    // checked_add); for Absolute adjustments with extreme
+                    // opposing values it can fail, and we reject before writing
+                    // so no partial state escapes.
                     let available_delta = new
                         .available()
                         .checked_sub(current.available())

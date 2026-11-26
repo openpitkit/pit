@@ -49,7 +49,9 @@ use crate::storage::{ConfigCell, LocalConfigCell};
 /// use openpit::Engine;
 ///
 /// let builder = Engine::builder::<(), (), ()>().no_sync();
-/// let storage = builder.storage_builder().create_for_bound_key::<u32, String>();
+/// let storage = builder
+///     .storage_builder()
+///     .create_for_bound_key::<u32, String>();
 /// storage.with_mut(1, || "hello".to_string(), |entry, is_new| {
 ///     assert!(is_new);
 ///     entry.push_str(", world");

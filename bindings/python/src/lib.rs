@@ -638,7 +638,8 @@ impl PyQuoteTtl {
     }
 }
 
-/// Resolution mode that controls which quote buckets a read may fall through to.
+/// Resolution mode that controls which quote buckets a read may fall through
+/// to.
 #[pyclass(
     name = "QuoteResolution",
     module = "openpit.marketdata",
@@ -841,7 +842,7 @@ impl PyMarketDataService {
         .map_err(create_registration_error)
     }
 
-    // ── TTL setters / clearers ────────────────────────────────────────────────
+    // ── TTL setters / clearers ───────────────────────────────────────────────
 
     fn set_account_ttl(
         &self,
@@ -981,13 +982,13 @@ impl PyMarketDataService {
         .map_err(create_unknown_instrument_id_error)
     }
 
-    // ── Clear ─────────────────────────────────────────────────────────────────
+    // ── Clear ────────────────────────────────────────────────────────────────
 
     fn clear(&self, py: Python<'_>, instrument_id: &PyInstrumentId) {
         py.detach(|| self.inner.clear(instrument_id.inner));
     }
 
-    // ── Push (default bucket) ─────────────────────────────────────────────────
+    // ── Push (default bucket) ────────────────────────────────────────────────
 
     /// Publish one quote observation into the default bucket.
     ///
@@ -1030,7 +1031,7 @@ impl PyMarketDataService {
         Ok(PyInstrumentId { inner })
     }
 
-    // ── Targeted fan-out push ─────────────────────────────────────────────────
+    // ── Targeted fan-out push ────────────────────────────────────────────────
 
     /// Push one quote observation to specific accounts and/or groups.
     ///
@@ -1069,7 +1070,7 @@ impl PyMarketDataService {
         .map_err(create_push_for_error)
     }
 
-    // ── Get ───────────────────────────────────────────────────────────────────
+    // ── Get ──────────────────────────────────────────────────────────────────
 
     #[pyo3(signature = (instrument_id, account_id, account_info, resolution))]
     fn get_optional(
@@ -1081,7 +1082,8 @@ impl PyMarketDataService {
         resolution: PyQuoteResolution,
     ) -> PyResult<Option<PyQuote>> {
         let account_id = parse_account_id_input(account_id)?;
-        // GIL is held throughout so the adapter can read Python attributes lazily.
+        // GIL is held throughout so the adapter can read Python attributes
+        // lazily.
         let scope = PythonCallbackScope::enter();
         let adapter = PyAccountInfo { obj: account_info };
         let result = self
@@ -1112,7 +1114,8 @@ impl PyMarketDataService {
         resolution: PyQuoteResolution,
     ) -> PyResult<PyQuote> {
         let account_id = parse_account_id_input(account_id)?;
-        // GIL is held throughout so the adapter can read Python attributes lazily.
+        // GIL is held throughout so the adapter can read Python attributes
+        // lazily.
         let scope = PythonCallbackScope::enter();
         let adapter = PyAccountInfo { obj: account_info };
         let result = self
@@ -1129,7 +1132,7 @@ impl PyMarketDataService {
             .map_err(create_market_data_error)
     }
 
-    // ── Resolve ───────────────────────────────────────────────────────────────
+    // ── Resolve ──────────────────────────────────────────────────────────────
 
     fn resolve(
         &self,
@@ -1325,10 +1328,12 @@ impl PyEngine {
     ///     TypeError: If `order` is not an order object or a policy returns
     ///         a non-iterable value other than `None`.
     ///     ValueError: If a policy return value has an invalid reject field.
-    ///     AttributeError: If a policy return value lacks a required reject field.
-    ///     OverflowError: If a policy return value has a `user_data` token that
+    ///     AttributeError: If a policy return value lacks a required reject
+    ///     field. OverflowError: If a policy return value has a `user_data`
+    ///     token that
     ///         fits in 64 bits but exceeds the platform's word size.
-    ///     Exception: Exceptions from policy callbacks or from Python code invoked
+    ///     Exception: Exceptions from policy callbacks or from Python code
+    ///     invoked
     ///         while reading their return values keep their original type.
     #[pyo3(signature = (order))]
     fn start_pre_trade_dry_run(
@@ -1348,16 +1353,20 @@ impl PyEngine {
     /// Run a non-mutating simulation of the pre-trade start and main stages.
     ///
     /// Raises:
-    ///     TypeError: If `order` is not an order object, a start-stage policy returns
-    ///         a non-iterable value other than `None`, or a main-stage policy return
-    ///         value has a non-iterable collection or an incompatible field type.
+    ///     TypeError: If `order` is not an order object, a start-stage policy
+    ///     returns
+    ///         a non-iterable value other than `None`, or a main-stage policy
+    ///         return value has a non-iterable collection or an incompatible
+    ///         field type.
     ///     ValueError: If a policy return value has an invalid field.
-    ///     openpit.param.ParamError: If a numeric field in a policy return value fails
+    ///     openpit.param.ParamError: If a numeric field in a policy return
+    ///     value fails
     ///         domain parsing or exceeds the supported decimal range.
     ///     AttributeError: If a policy return value lacks a required attribute.
     ///     OverflowError: If a policy return value has a `user_data` token that
     ///         fits in 64 bits but exceeds the platform's word size.
-    ///     Exception: Exceptions from policy callbacks or from Python code invoked
+    ///     Exception: Exceptions from policy callbacks or from Python code
+    ///     invoked
     ///         while reading their return values keep their original type.
     #[pyo3(signature = (order))]
     fn execute_pre_trade_dry_run(
@@ -1567,8 +1576,9 @@ impl PyConfigurator {
     ///
     /// ``name`` must match the name given to the policy at registration time.
     /// ``account_barriers`` accepts only
-    /// ``PnlBoundsAccountAssetBarrierUpdate`` entities. Runtime updates preserve
-    /// live accumulated P&L and cannot provide construction-only ``initial_pnl``.
+    /// ``PnlBoundsAccountAssetBarrierUpdate`` entities. Runtime updates
+    /// preserve live accumulated P&L and cannot provide construction-only
+    /// ``initial_pnl``.
     ///
     /// An axis passed as ``None`` is left unchanged; an empty list replaces the
     /// axis with an empty set (subject to the policy's at-least-one-barrier
@@ -1620,8 +1630,8 @@ impl PyConfigurator {
 
     /// Force-set the live accumulated P&L for one account entry.
     ///
-    /// ``name`` must match the name given to the P&L bounds kill-switch policy at
-    /// registration time.
+    /// ``name`` must match the name given to the P&L bounds kill-switch policy
+    /// at registration time.
     ///
     /// Unlike :meth:`pnl_bounds_killswitch`, which retunes bounds and never
     /// touches accumulated P&L, this is an absolute assignment (upsert) of the
@@ -1883,34 +1893,35 @@ impl PyConfigurator {
     /// Retune the account P&L bounds axis of a spot-funds policy.
     ///
     /// ``name`` must match the name given to the policy at registration time.
-    /// Omitted lists or ``None`` stay unchanged. A supplied global list replaces
-    /// every mode of the global slot. A supplied group or account list replaces
-    /// that tier wholesale: every group or account, every mode. An empty list
-    /// clears the corresponding tier or global slot.
-    /// Repeated modes for the same target raise ``PolicyConfigureError`` and
-    /// leave all settings unchanged. Each barrier needs at least one bound.
-    /// With a known effective account currency, an account-tier mismatch fails
-    /// closed and blocks the account; account-group and global mismatches are
-    /// skipped. A known-currency account with no account barrier and no
-    /// matching fallback has no effective barrier, but its PnL keeps
-    /// accumulating and publishing. Without an effective currency, the first
-    /// in-scope barrier applies. Bounds are compared as stored and are never
-    /// FX-converted.
+    /// Omitted lists or ``None`` stay unchanged. A supplied global list
+    /// replaces every mode of the global slot. A supplied group or account list
+    /// replaces that tier wholesale: every group or account, every mode. An
+    /// empty list clears the corresponding tier or global slot. Repeated modes
+    /// for the same target raise ``PolicyConfigureError`` and leave all
+    /// settings unchanged. Each barrier needs at least one bound. With a known
+    /// effective account currency, an account-tier mismatch fails closed and
+    /// blocks the account; account-group and global mismatches are skipped. A
+    /// known-currency account with no account barrier and no matching fallback
+    /// has no effective barrier, but its PnL keeps accumulating and publishing.
+    /// Without an effective currency, the first in-scope barrier applies.
+    /// Bounds are compared as stored and are never FX-converted.
     ///
     /// An account whose effective barrier changed is evaluated against its
     /// stored account P&L before this call returns: an already halted account,
-    /// or one already beyond the new Reject-mode barrier, is blocked here before
-    /// its next fill, and the returned result carries the block the engine has
-    /// already recorded. Each ``AccountBlockOutcome`` identifies the affected
-    /// account together with its newly inserted block. Removing the last
-    /// effective barrier reports no block and does not release an existing
+    /// or one already beyond the new Reject-mode barrier, is blocked here
+    /// before its next fill, and the returned result carries the block the
+    /// engine has already recorded. Each ``AccountBlockOutcome`` identifies the
+    /// affected account together with its newly inserted block. Removing the
+    /// last effective barrier reports no block and does not release an existing
     /// block. Clearing an override can expose a fallback barrier; the fallback
     /// is evaluated normally and may record and report a block.
     ///
     /// Raises:
-    ///     ValueError: If a mode or barrier value is invalid. Validation happens
+    ///     ValueError: If a mode or barrier value is invalid. Validation
+    ///     happens
     ///         during this call, before core configuration is attempted.
-    ///     PolicyConfigureError: If the policy is not found, has the wrong type,
+    ///     PolicyConfigureError: If the policy is not found, has the wrong
+    ///     type,
     ///         or the new settings fail core validation.
     #[pyo3(signature = (name, *, global_barriers = None, account_group_barriers = None, account_barriers = None))]
     fn spot_funds_pnl_bounds_killswitch(
@@ -2002,9 +2013,10 @@ impl PyConfigurator {
 /// Membership, retirement, Spot Funds retunes and all currency setters/clearers
 /// are caller-guaranteed exclusive in every mode, including ``full_sync``.
 /// Before effective currency changes, explicitly clear and zero the account,
-/// including group moves, group currency, global/default currency and retirement
-/// clearing an account override. The SDK does not validate activity, reset,
-/// convert or recalculate state. In-flight operations keep resolved values.
+/// including group moves, group currency, global/default currency and
+/// retirement clearing an account override. The SDK does not validate activity,
+/// reset, convert or recalculate state. In-flight operations keep resolved
+/// values.
 ///
 /// For an example of good practice in building a control plane on this SDK,
 /// see `Pit Officer <http://officer.openpit.dev/>`_.
@@ -2065,7 +2077,8 @@ impl PyAccounts {
             .map_err(convert_account_group_error)
     }
 
-    /// Policy callbacks use ``ctx.account_group`` for the cheaper operation snapshot.
+    /// Policy callbacks use ``ctx.account_group`` for the cheaper operation
+    /// snapshot.
     #[pyo3(signature = (account))]
     fn group_of(
         &self,
@@ -2130,8 +2143,9 @@ impl PyAccounts {
     /// nothing. Stored PnL and cost basis accumulated under a different
     /// effective currency lose their meaning; the SDK guarantees nothing about
     /// them and does not convert, detect, or report the change. Barrier
-    /// selection remains deterministic: new operations resolve the new currency;
-    /// in-flight operations retain their already resolved snapshot values.
+    /// selection remains deterministic: new operations resolve the new
+    /// currency; in-flight operations retain their already resolved snapshot
+    /// values.
     #[pyo3(signature = (group, asset))]
     fn set_group_currency(
         &self,
@@ -2153,8 +2167,9 @@ impl PyAccounts {
     /// nothing. Stored PnL and cost basis accumulated under a different
     /// effective currency lose their meaning; the SDK guarantees nothing about
     /// them and does not convert, detect, or report the change. Barrier
-    /// selection remains deterministic: new operations resolve the new currency;
-    /// in-flight operations retain their already resolved snapshot values.
+    /// selection remains deterministic: new operations resolve the new
+    /// currency; in-flight operations retain their already resolved snapshot
+    /// values.
     #[pyo3(signature = (group))]
     fn clear_group_currency(&self, py: Python<'_>, group: &Bound<'_, PyAny>) -> PyResult<()> {
         let group_id = parse_account_group_id_input_allow_default(group)?;
@@ -3275,9 +3290,10 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
         order: &Order,
     ) -> Result<(), Rejects> {
         Python::attach(|py| {
-            // Optional: if the Python policy defines check_pre_trade_start_dry_run,
-            // call it; otherwise fall back to the normal start check, which matches
-            // the native default behavior.
+            // Optional: if the Python policy defines
+            // check_pre_trade_start_dry_run,
+            // call it; otherwise fall back to the normal start check, which
+            // matches the native default behavior.
             let policy_bound = self.policy.bind(py);
             let has_dry_run = policy_bound
                 .hasattr("check_pre_trade_start_dry_run")
@@ -3316,7 +3332,8 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         Python::attach(|py| {
-            // Optional: if the Python policy defines perform_pre_trade_check_dry_run,
+            // Optional: if the Python policy defines
+            // perform_pre_trade_check_dry_run,
             // call it; otherwise fall back to the normal check, which matches
             // the native default behavior.
             let policy_bound = self.policy.bind(py);
@@ -4786,7 +4803,8 @@ impl PyReadyEngineBuilder {
         }
     }
 
-    // Underscore-prefixed Python name: called only by policy builders' _build hooks.
+    // Underscore-prefixed Python name: called only by policy builders' _build
+    // hooks.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name = "_add_builtin_rate_limit", signature = (*, policy_group_id = 0, broker_barriers = vec![], asset_barriers = vec![], account_barriers = vec![], account_asset_barriers = vec![], name=None, mode=None))]
     fn add_builtin_rate_limit<'py>(
@@ -5744,8 +5762,8 @@ fn make_spot_funds_policy(
 ) -> PyResult<SpotFundsPolicy<EngineLocking, EngineLocking>> {
     let market_orders: Option<SpotFundsMarketData<EngineLocking>> = match market_data {
         Some((handle, md_mode)) => {
-            // Mismatch guard: a multi-threaded engine requires a fully-locked MD
-            // service. A no-sync MD service has no-op internal locks and is
+            // Mismatch guard: a multi-threaded engine requires a fully-locked
+            // MD service. A no-sync MD service has no-op internal locks and is
             // unsafe under concurrent access from a Full/Account engine.
             if matches!(engine_sync, SyncMode::Full | SyncMode::Account)
                 && md_mode == SyncMode::None
@@ -6589,8 +6607,9 @@ impl PyAccountId {
     ///
     /// Collisions are theoretically possible. For n distinct account strings
     /// the probability of at least one collision is approximately n^2 / 2^65.
-    /// If collision risk is unacceptable, use ``from_int`` with a collision-free
-    /// integer mapping instead. See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
+    /// If collision risk is unacceptable, use ``from_int`` with a
+    /// collision-free integer mapping instead. See
+    /// <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
     /// specification.
     #[staticmethod]
     fn from_string(value: &str) -> PyResult<Self> {
@@ -6644,8 +6663,8 @@ impl PyAccountGroupId {
     /// The account group an account belongs to until assigned to another.
     ///
     /// Mirrors the module-level ``openpit.param.DEFAULT_ACCOUNT_GROUP``. No
-    /// constructor produces this value: ``from_int(0)`` raises and ``from_string``
-    /// never hashes to it.
+    /// constructor produces this value: ``from_int(0)`` raises and
+    /// ``from_string`` never hashes to it.
     #[classattr]
     #[allow(non_snake_case)]
     fn DEFAULT() -> Self {
@@ -6674,12 +6693,15 @@ impl PyAccountGroupId {
         })
     }
 
-    /// Constructs an account-group identifier by hashing a string with FNV-1a 32-bit.
+    /// Constructs an account-group identifier by hashing a string with FNV-1a
+    /// 32-bit.
     ///
-    /// Hash collisions are possible. For n distinct group strings the probability of at
-    /// least one collision is approximately n^2 / (2 * 2^32). If collision risk is
-    /// unacceptable, use ``from_int`` with a collision-free integer mapping instead.
-    /// See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm specification.
+    /// Hash collisions are possible. For n distinct group strings the
+    /// probability of at least one collision is approximately n^2 / (2 * 2^32).
+    /// If collision risk is unacceptable, use ``from_int`` with a
+    /// collision-free integer mapping instead. See
+    /// <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
+    /// specification.
     #[staticmethod]
     fn from_string(value: &str) -> PyResult<Self> {
         Ok(Self {
@@ -8167,14 +8189,16 @@ impl PyRequest {
     ///     TypeError: If a policy return value has a non-iterable collection
     ///         or an incompatible field type.
     ///     ValueError: If a policy return value has an invalid field.
-    ///     openpit.param.ParamError: If a numeric field in a policy return value fails
+    ///     openpit.param.ParamError: If a numeric field in a policy return
+    ///     value fails
     ///         domain parsing or exceeds the supported decimal range.
     ///     AttributeError: If a policy return value lacks a required attribute.
     ///     OverflowError: If a policy return value has a `user_data` token that
     ///         fits in 64 bits but exceeds the platform's word size.
-    ///     Exception: Exceptions from policy callbacks, from mutation rollback callbacks,
-    ///         or from Python code invoked while reading policy return values keep their
-    ///         original type.
+    ///     Exception: Exceptions from policy callbacks, from mutation rollback
+    ///     callbacks,
+    ///         or from Python code invoked while reading policy return values
+    ///         keep their original type.
     fn execute(&self, py: Python<'_>) -> PyResult<PyExecuteResult> {
         let request = self
             .inner
@@ -8463,7 +8487,8 @@ impl Drop for PyDropCopyOperation {
 ///
 /// Use `is_pass` (or `bool(report)`) to check for rejects and `reviews` for
 /// marks that require a human decision before submission. The `lock`,
-/// `account_adjustments` and `account_block` describe the effects of a live run.
+/// `account_adjustments` and `account_block` describe the effects of a live
+/// run.
 #[pyclass(name = "DryRunReport", module = "openpit.pretrade")]
 struct PyPreTradeDryRunReport {
     inner: PreTradeDryRunReport,
@@ -8515,7 +8540,8 @@ impl PyPreTradeDryRunReport {
     }
 
     /// Returns the account block an account-scope reject would have latched, or
-    /// `None` when the order would have passed or produced a non-account reject.
+    /// `None` when the order would have passed or produced a non-account
+    /// reject.
     #[getter]
     fn account_block(&self) -> Option<PyAccountBlock> {
         self.inner.account_block().map(convert_account_block)
@@ -9968,7 +9994,8 @@ fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<Option<ScalarOpe
 
 fn parse_leverage_input(value: &Bound<'_, PyAny>) -> PyResult<Leverage> {
     // Python bool is a subclass of int, so True/False would pass as 1/0 here.
-    // We explicitly reject bool to avoid silently accepting it as a numeric value.
+    // We explicitly reject bool to avoid silently accepting it as a numeric
+    // value.
     if value.extract::<bool>().is_ok() || is_python_decimal(value)? {
         return Err(PyValueError::new_err(
             "leverage must be openpit.param.Leverage, int, or float",

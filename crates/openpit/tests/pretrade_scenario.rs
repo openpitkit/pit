@@ -694,8 +694,8 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .start_pre_trade(usd_order)
         .expect("no barrier configured for USD: order must pass");
 
-    // Arithmetic overflow inside apply_execution_report returns true (kill switch).
-    // Two MAX applications: first stores MAX, second overflows → true.
+    // Arithmetic overflow inside apply_execution_report returns true (kill
+    // switch). Two MAX applications: first stores MAX, second overflows → true.
     let overflow_account = AccountId::from_u64(1);
     let overflow_builder = Engine::builder::<TestOrder, TestReport, ()>().no_sync();
     let overflow_policy: TestPnlPolicy = PnlBoundsKillSwitchPolicy::new(
@@ -947,7 +947,7 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
     reservation.rollback();
 }
 
-//--------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ObservedContext {

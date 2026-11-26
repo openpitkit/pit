@@ -20,7 +20,8 @@ use super::{define_signed_value_type, CashFlow, ParamKind, Pnl, PositionSize};
 define_signed_value_type!(
     /// Fee amount.
     ///
-    /// Can be negative when representing rebates or fee adjustments in reconciliation.
+    /// Can be negative when representing rebates or fee adjustments in
+    /// reconciliation.
     Fee,
     ParamKind::Fee
 );
@@ -31,10 +32,11 @@ impl Fee {
         Pnl::new(-self.to_decimal())
     }
 
-    /// Converts fee into a position size for instruments where fees are paid in the base asset.
+    /// Converts fee into a position size for instruments where fees are paid in
+    /// the base asset.
     ///
-    /// The resulting position size is negative (representing an outflow) for positive fees,
-    /// and positive for fee rebates.
+    /// The resulting position size is negative (representing an outflow) for
+    /// positive fees, and positive for fee rebates.
     pub fn to_position_size(self) -> PositionSize {
         PositionSize::new(-self.to_decimal())
     }

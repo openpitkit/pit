@@ -93,9 +93,11 @@ func TestAsyncEngineShardedGoroutineCleanup(t *testing.T) {
 }
 
 // TestAsyncEngineDynamicGoroutineCleanup verifies that all worker goroutines
-// and the cleanup goroutine started by a Dynamic engine exit after StopGraceful.
+// and the cleanup goroutine started by a Dynamic engine exit after
+// StopGraceful.
 func TestAsyncEngineDynamicGoroutineCleanup(t *testing.T) {
-	// NOTE: Not parallel - same reasoning as TestAsyncEngineShardedGoroutineCleanup.
+	// NOTE: Not parallel - same reasoning as
+	// TestAsyncEngineShardedGoroutineCleanup.
 
 	baseline := runtime.NumGoroutine()
 	driver := newFakeDriver()

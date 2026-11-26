@@ -65,9 +65,9 @@ fn parse_configure_limit(
 /// Each cap is present when its wrapper's `is_set` field is `true`. When
 /// `is_set` is `false`, the wrapper's `value` field is ignored. An unset cap
 /// does not constrain that metric, and lookup continues down that metric's
-/// barrier chain. A cap rejects an order whose value on that metric is above it;
-/// a cap of zero rejects positive metric values and admits a value of exactly
-/// zero. At least one cap must be present in every limit.
+/// barrier chain. A cap rejects an order whose value on that metric is above
+/// it; a cap of zero rejects positive metric values and admits a value of
+/// exactly zero. At least one cap must be present in every limit.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesOrderSizeLimit {
@@ -366,8 +366,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 ///   must be non-null, properly aligned, and point to that many initialized,
 ///   readable entries for the duration of the call.
 /// - When `has_account_asset` is `true` and `account_asset_len` is greater than
-///   zero, `account_asset` must be non-null, properly aligned, and point to that
-///   many initialized, readable entries for the duration of the call.
+///   zero, `account_asset` must be non-null, properly aligned, and point to
+///   that many initialized, readable entries for the duration of the call.
 /// - Every optional wrapper's `is_set` field in each supplied barrier must hold
 ///   a valid `bool` value.
 /// - Each non-null `asset` string-view pointer must point to `len` initialized,

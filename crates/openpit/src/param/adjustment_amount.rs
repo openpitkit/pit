@@ -17,7 +17,8 @@
 
 use crate::param::PositionSize;
 
-/// Signed balance/position adjustment payload; delta applies change, absolute sets target value.
+/// Signed balance/position adjustment payload; delta applies change, absolute
+/// sets target value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AdjustmentAmount {

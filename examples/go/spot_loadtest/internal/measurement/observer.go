@@ -25,9 +25,9 @@ import (
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 )
 
-// ObserverSink accumulates inner-metrics from the asyncengine Observer callbacks
-// into SEPARATE diagnostic histograms that are kept strictly out of the headline
-// latency streams.
+// ObserverSink accumulates inner-metrics from the asyncengine Observer
+// callbacks into SEPARATE diagnostic histograms that are kept strictly out of
+// the headline latency streams.
 //
 // Observer callbacks run on worker or submitter goroutines; they must be cheap
 // and thread-safe. ObserverSink satisfies that by recording into mutex-guarded
@@ -99,7 +99,8 @@ func (o *ObserverSink) RecordQueueRemoved() {
 	o.queuesRemoved.Add(1)
 }
 
-// InnerMetrics is the immutable diagnostic snapshot of the observer inner metrics.
+// InnerMetrics is the immutable diagnostic snapshot of the observer inner
+// metrics.
 type InnerMetrics struct {
 	// QueueWait is the aggregate queue-wait distribution from OnDequeue.
 	QueueWait Percentiles

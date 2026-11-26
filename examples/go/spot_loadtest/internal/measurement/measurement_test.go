@@ -136,8 +136,8 @@ func TestMergedPercentilesMatchWindowUnion(t *testing.T) {
 
 // TestMergeWindowRangeLossless is the consistency invariant test: merging ALL
 // per-window raw histograms (warmup = 0, i.e. MergeWindowRange(windows, 0))
-// must reproduce the all-run merged percentiles bit-for-bit (within HdrHistogram
-// quantization). This proves that:
+// must reproduce the all-run merged percentiles bit-for-bit (within
+// HdrHistogram quantization). This proves that:
 //   - the per-window histogram copies are lossless (Export+Import round-trips),
 //   - MergeWindowRange and the internal merged histogram use the same data, and
 //   - the two code paths agree so the steady-state headline is trustworthy.

@@ -469,7 +469,8 @@ def test_example_wiki_domain_types_directional_types() -> None:
     # - Work With Directional Types
     import openpit
 
-    # Directional helpers keep side logic explicit instead of comparing raw strings.
+    # Directional helpers keep side logic explicit instead of comparing raw
+    # strings.
     side = openpit.param.Side.BUY
     position_side = openpit.param.PositionSide.LONG
 
@@ -531,11 +532,13 @@ def test_example_wiki_pipeline_main_stage_finalize() -> None:
     order = _aapl_usd_order("100", "185")
 
     start_result = engine.start_pre_trade(order=order)
-    # Main stage consumes the deferred request and returns reservation or rejects.
+    # Main stage consumes the deferred request and returns reservation or
+    # rejects.
     execute_result = start_result.request.execute()
 
     if execute_result:
-        # Commit only after the caller knows the reservation should become durable.
+        # Commit only after the caller knows the reservation should become
+        # durable.
         execute_result.reservation.commit()
     else:
         for reject in execute_result.rejects:
@@ -720,7 +723,8 @@ def test_example_wiki_account_control_block() -> None:
         .build()
     )
 
-    # The accepted adjustment reports a block that the engine has already recorded.
+    # The accepted adjustment reports a block that the engine has already
+    # recorded.
     result = engine.apply_account_adjustment(
         account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[
@@ -732,8 +736,8 @@ def test_example_wiki_account_control_block() -> None:
     assert result.ok
     assert len(result.account_blocks) == 1
 
-    # A later order on the same account is rejected with ACCOUNT_BLOCKED, without
-    # any start-check involvement.
+    # A later order on the same account is rejected with ACCOUNT_BLOCKED,
+    # without any start-check involvement.
     blocked = engine.start_pre_trade(
         order=openpit.Order(
             operation=openpit.OrderOperation(
@@ -1101,7 +1105,8 @@ def test_example_wiki_pipeline_apply_post_trade_feedback() -> None:
     )
     report = _aapl_usd_report("-50", "3.4")
 
-    # Execution reports feed realized outcomes back into cumulative policy state.
+    # Execution reports feed realized outcomes back into cumulative policy
+    # state.
     result = engine.apply_execution_report(report=report)
     for outcome in result.account_pnls:
         print(f"account P&L outcome for {outcome.account_id}")
@@ -1464,7 +1469,8 @@ def test_example_wiki_balance_reconciliation_delta_absolute() -> None:
     )
     assert second.ok
     usd = second.outcomes[0].entry.balance
-    # delta is the change to add to your own ledger; absolute is just a snapshot.
+    # delta is the change to add to your own ledger; absolute is just a
+    # snapshot.
     assert usd.delta == openpit.param.PositionSize(5000)
     assert usd.absolute == openpit.param.PositionSize(15000)
 
@@ -1566,7 +1572,8 @@ def test_example_wiki_spot_funds_global_limit_mode() -> None:
     assert not result.ok
     assert result.rejects[0].reason == "spot funds insufficient"
 
-    # Switch to TrackOnly: the same order now passes and reserves against deficit.
+    # Switch to TrackOnly: the same order now passes and reserves against
+    # deficit.
     engine.configure().spot_funds(
         openpit.pretrade.policies.SpotFundsBuilder.NAME,
         global_limit_mode=openpit.pretrade.policies.SpotFundsLimitMode.TRACK_ONLY,
@@ -1629,7 +1636,8 @@ def test_example_wiki_spot_funds_per_account_limit_mode() -> None:
     assert not result.ok
     assert result.rejects[0].reason == "spot funds insufficient"
 
-    # Pin this account to TrackOnly: per-account override wins over global Enforce.
+    # Pin this account to TrackOnly: per-account override wins over global
+    # Enforce.
     engine.configure().spot_funds(
         openpit.pretrade.policies.SpotFundsBuilder.NAME,
         account_limit_modes=[

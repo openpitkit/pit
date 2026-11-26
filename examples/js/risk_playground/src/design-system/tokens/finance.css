@@ -58,7 +58,8 @@
   --short: var(--sell);
 
   /* Direction glyph + reading order the components/surfaces read.
-   * --dir-shape: triangle (solid trending) · --tape-read: chrono (newest-on-top)
+   * --dir-shape: triangle (solid trending) · --tape-read: chrono
+   * (newest-on-top)
    * --dir-flash: motion played on a new event */
   --dir-shape: triangle;          /* @kind other */
   --tape-read: chrono;            /* @kind other */
@@ -106,7 +107,8 @@
   --long: var(--buy);
   --short: var(--sell);
 
-  /* ladder dialect: chevron glyph · price-anchored reading · level-pulse motion */
+  /* ladder dialect: chevron glyph · price-anchored reading · level-pulse
+   * motion */
   --dir-shape: chevron;           /* @kind other */
   --tape-read: anchored;          /* @kind other */
   --dir-flash: ladder-level-pulse; /* @kind other */

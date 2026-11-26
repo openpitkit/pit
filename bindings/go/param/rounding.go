@@ -40,9 +40,11 @@ const (
 	RoundingStrategyDefault RoundingStrategy = native.ParamRoundingStrategyDefault
 	// RoundingStrategyBanker is banker's rounding alias.
 	RoundingStrategyBanker RoundingStrategy = native.ParamRoundingStrategyBanker
-	// RoundingStrategyConservativeProfit rounds down for conservative profit estimates.
+	// RoundingStrategyConservativeProfit rounds down for conservative profit
+	// estimates.
 	RoundingStrategyConservativeProfit RoundingStrategy = native.ParamRoundingStrategyConservativeProfit
-	// RoundingStrategyConservativeLoss rounds down for conservative loss estimates.
+	// RoundingStrategyConservativeLoss rounds down for conservative loss
+	// estimates.
 	RoundingStrategyConservativeLoss RoundingStrategy = native.ParamRoundingStrategyConservativeLoss
 )
 

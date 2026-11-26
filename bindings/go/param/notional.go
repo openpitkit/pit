@@ -130,7 +130,8 @@ func NewNotionalFromHandle(v native.ParamNotional) Notional {
 	return Notional{native: v}
 }
 
-// NewNotionalOptionFromHandle creates an optional Notional from a native optional handle.
+// NewNotionalOptionFromHandle creates an optional Notional from a native
+// optional handle.
 func NewNotionalOptionFromHandle(v native.ParamNotionalOptional) optional.Option[Notional] {
 	if !native.ParamNotionalOptionalIsSet(v) {
 		return optional.None[Notional]()
@@ -138,7 +139,8 @@ func NewNotionalOptionFromHandle(v native.ParamNotionalOptional) optional.Option
 	return optional.Some(NewNotionalFromHandle(native.ParamNotionalOptionalGet(v)))
 }
 
-// NewNotionalFromStringRounded creates a Notional from a string, rounded to the given scale.
+// NewNotionalFromStringRounded creates a Notional from a string, rounded to the
+// given scale.
 func NewNotionalFromStringRounded(
 	v string,
 	scale uint32,
@@ -151,7 +153,8 @@ func NewNotionalFromStringRounded(
 	return NewNotionalFromHandle(nativeValue), nil
 }
 
-// NewNotionalFromFloatRounded creates a Notional from a float64, rounded to the given scale.
+// NewNotionalFromFloatRounded creates a Notional from a float64, rounded to the
+// given scale.
 func NewNotionalFromFloatRounded(
 	v float64,
 	scale uint32,
@@ -164,7 +167,8 @@ func NewNotionalFromFloatRounded(
 	return NewNotionalFromHandle(nativeValue), nil
 }
 
-// NewNotionalFromDecimalRounded converts a shopspring decimal to a rounded Notional.
+// NewNotionalFromDecimalRounded converts a shopspring decimal to a rounded
+// Notional.
 //
 // Returns an error wrapping ErrOverflow if the mantissa - the coefficient with
 // a positive exponent folded in - exceeds signed 128-bit range, or v's scale
@@ -222,31 +226,36 @@ func (v Notional) Handle() native.ParamNotional {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v Notional) Float() float64 {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamNotionalToF64(v.native))
 }
 
 // String returns the decimal string representation of the notional.
 func (v Notional) String() string {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamNotionalToString(v.native))
 }
 
 // IsZero reports whether the notional is zero.
 func (v Notional) IsZero() bool {
-	// invariant: native value already validated on construction; conversion cannot fail.
+	// invariant: native value already validated on construction; conversion cannot
+	// fail.
 	return newParamValueOrPanic(native.ParamNotionalIsZero(v.native))
 }
 
 // Equal reports whether v and other are equal.
 func (v Notional) Equal(other Notional) bool {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamNotionalCompare(v.native, other.native)) == 0
 }
 
 // Compare returns -1, 0, or 1 comparing v to other.
 func (v Notional) Compare(other Notional) int {
-	// invariant: native values already validated on construction; comparison cannot fail.
+	// invariant: native values already validated on construction; comparison
+	// cannot fail.
 	return newParamValueOrPanic(native.ParamNotionalCompare(v.native, other.native))
 }
 
@@ -295,7 +304,8 @@ func (v Notional) CheckedMulFloat(scalar float64) (Notional, error) {
 	return NewNotionalFromHandle(result), nil
 }
 
-// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
+// CheckedDivInt returns v / divisor or an error on division by zero or
+// overflow.
 func (v Notional) CheckedDivInt(divisor int64) (Notional, error) {
 	result, err := native.ParamNotionalCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -313,7 +323,8 @@ func (v Notional) CheckedDivUint(divisor uint64) (Notional, error) {
 	return NewNotionalFromHandle(result), nil
 }
 
-// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
+// CheckedDivFloat returns v / divisor or an error on division by zero or
+// overflow.
 func (v Notional) CheckedDivFloat(divisor float64) (Notional, error) {
 	result, err := native.ParamNotionalCheckedDivF64(v.native, divisor)
 	if err != nil {

@@ -249,8 +249,8 @@ describe("Review-Mode.md wiki example", () => {
 describe("Domain-Types.md wiki examples", () => {
   it("creates validated value objects", () => {
     // Source: https://wiki.openpit.dev/Domain-Types/ - Create Validated Values
-    // Build validated value objects at the integration boundary. Assets cross the
-    // boundary as plain strings, so there is no asset wrapper to construct.
+    // Build validated value objects at the integration boundary. Assets cross
+    // the boundary as plain strings, so there is no asset wrapper to construct.
     const asset = "AAPL";
     const quantity = Quantity.fromString("10.5");
     const price = Price.fromString("185");
@@ -270,7 +270,8 @@ describe("Domain-Types.md wiki examples", () => {
   it("works with directional types", () => {
     // Source: https://wiki.openpit.dev/Domain-Types/
     // - Work With Directional Types
-    // Directional helpers keep side logic explicit instead of comparing raw strings.
+    // Directional helpers keep side logic explicit instead of comparing raw
+    // strings.
     const side = Side.buy();
     const positionSide = PositionSide.long();
 
@@ -284,7 +285,8 @@ describe("Domain-Types.md wiki examples", () => {
 
   it("creates leverage from either representation", () => {
     // Source: https://wiki.openpit.dev/Domain-Types/ - Create Leverage
-    // Pick the constructor that matches the upstream representation you receive.
+    // Pick the constructor that matches the upstream representation you
+    // receive.
     const fromMultiplier = Leverage.fromInt(100);
     const fromFloat = Leverage.fromFloat(100.5);
 
@@ -359,7 +361,8 @@ describe("Pre-trade-Pipeline.md wiki examples", () => {
     const execute = request.execute();
 
     if (execute.ok) {
-      // Commit only after the caller knows the reservation should become durable.
+      // Commit only after the caller knows the reservation should become
+      // durable.
       const reservation = execute.reservation;
       if (reservation === undefined) {
         throw new Error("accepted execute result is missing its reservation");
@@ -467,7 +470,8 @@ describe("Pre-trade-Pipeline.md wiki examples", () => {
       financialImpact: { pnl: "-50", fee: "3.4" },
     };
 
-    // Execution reports feed realized outcomes back into cumulative policy state.
+    // Execution reports feed realized outcomes back into cumulative policy
+    // state.
     const result = engine.applyExecutionReport(report);
     for (const outcome of result.accountPnls) {
       console.log(`account P&L outcome for ${outcome.accountId.toString()}`);
@@ -487,9 +491,9 @@ describe("Getting-Started.md wiki examples", () => {
   it("builds an engine and runs the end-to-end flow", () => {
     // Source: https://wiki.openpit.dev/Getting-Started/ - Build an Engine
     // 1. Build the engine (one time at the platform initialization). The WASM
-    // engine is single-threaded and has no user-selectable sync mode. The first
-    // builtin() advances the staged builder to the ready builder; the rest register
-    // in place.
+    //    engine is single-threaded and has no user-selectable sync mode. The
+    //    first builtin() advances the staged builder to the ready builder;
+    //    the rest register in place.
     const ready = Engine.builder().builtin(buildOrderValidation());
 
     ready.builtin(
@@ -525,8 +529,9 @@ describe("Getting-Started.md wiki examples", () => {
 
     const engine = ready.build();
 
-    // 2. Check an order. Scalars accept plain values (the account id as a number,
-    // the price as a decimal string); the order is an object literal.
+    // 2. Check an order. Scalars accept plain values (the account id as a
+    //    number, the price as a decimal string); the order is an object
+    //    literal.
     const order: OrderInit = {
       operation: {
         underlyingAsset: "AAPL",
@@ -547,8 +552,8 @@ describe("Getting-Started.md wiki examples", () => {
     }
 
     // 3. Quick, lightweight checks were performed during the start stage. The
-    // system state has not yet changed. Before the heavy-duty checks, other work on
-    // the request can be performed by holding the request object.
+    //    system state has not yet changed. Before the heavy-duty checks, other
+    //    work on the request can be performed by holding the request object.
 
     // 4. Real pre-trade and risk control.
     const request = start.request;
@@ -712,7 +717,8 @@ describe("Getting-Started.md wiki examples", () => {
       financialImpact: { pnl: "-50", fee: "3.4" },
     };
 
-    // Execution reports feed realized outcomes back into cumulative policy state.
+    // Execution reports feed realized outcomes back into cumulative policy
+    // state.
     const result = engine.applyExecutionReport(report);
     for (const outcome of result.accountPnls) {
       console.log(`account P&L outcome for ${outcome.accountId.toString()}`);
@@ -731,9 +737,9 @@ describe("Getting-Started.md wiki examples", () => {
 describe("Account-Adjustments.md wiki examples", () => {
   it("applies a mixed balance + position batch atomically", () => {
     // Source: https://wiki.openpit.dev/Account-Adjustments/ - Examples
-    // Build one batch that mixes balance and position adjustments. Each adjustment
-    // is a plain object literal; position sizes cross the boundary as decimal
-    // strings.
+    // Build one batch that mixes balance and position adjustments. Each
+    // adjustment is a plain object literal; position sizes cross the boundary
+    // as decimal strings.
     const accountId = 99224416;
 
     const adjustments: AccountAdjustmentInit[] = [
@@ -775,8 +781,9 @@ describe("Account-Adjustments.md wiki examples", () => {
 
       constructor(private readonly maxCumulative: PositionSize) {}
 
-      // The pre-trade hooks are required by the Policy interface; this policy only
-      // acts on the account-adjustment path, so they accept with no contribution.
+      // The pre-trade hooks are required by the Policy interface; this policy
+      // only acts on the account-adjustment path, so they accept with no
+      // contribution.
       checkPreTradeStart(): Iterable<PolicyReject> {
         return [];
       }
@@ -831,13 +838,13 @@ describe("Account-Adjustments.md wiki examples", () => {
           };
         }
 
-        // Apply immediately so later adjustments in the same batch see the updated
-        // total.
+        // Apply immediately so later adjustments in the same batch see the
+        // updated total.
         this.totals.set(assetId, newTotal);
 
         // Rollback by absolute value - safe in the account-adjustment pipeline
-        // because no external system sees intermediate batch state. Commit is empty:
-        // the state was applied eagerly.
+        // because no external system sees intermediate batch state. Commit is
+        // empty: the state was applied eagerly.
         return {
           mutations: [
             {
@@ -907,8 +914,8 @@ describe("Account-Groups.md wiki examples", () => {
       .builtin(buildOrderValidation())
       .build();
 
-    // Group two accounts under one compact identifier. Account and group ids cross
-    // the boundary as plain numbers.
+    // Group two accounts under one compact identifier. Account and group ids
+    // cross the boundary as plain numbers.
     const accounts = engine.accounts();
     const hedgeBook = 7;
     accounts.registerGroup([10, 11], hedgeBook);
@@ -946,7 +953,8 @@ describe("Account-Blocking.md wiki examples", () => {
     accounts.blockGroup(desk, "desk suspended");
     accounts.unblockGroup(desk);
 
-    // Harness: after the block/unblock round-trip the account is tradeable again.
+    // Harness: after the block/unblock round-trip the account is tradeable
+    // again.
     const result = engine.executePreTrade(sharedOrder());
     expect(result.ok).toBe(true);
   });
@@ -959,8 +967,8 @@ describe("Balance-Reconciliation.md wiki examples", () => {
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
     const accountId = 99224416;
 
-    // An absolute adjustment sets the available USD to a target level. The amount
-    // crosses the boundary as a decimal string.
+    // An absolute adjustment sets the available USD to a target level. The
+    // amount crosses the boundary as a decimal string.
     const seed = (amount: string): AccountAdjustmentInit => ({
       operation: { asset: "USD" },
       amount: { balance: AdjustmentAmount.absolute(amount) },
@@ -974,7 +982,8 @@ describe("Balance-Reconciliation.md wiki examples", () => {
     // Second seed: available USD goes from 10000 to 15000.
     const second = engine.applyAccountAdjustment(accountId, [seed("15000")]);
     usd = second.outcomes[0]!.entry.balance!;
-    // delta is the change to add to your own ledger; absolute is just a snapshot.
+    // delta is the change to add to your own ledger; absolute is just a
+    // snapshot.
     console.log(usd.delta.toString(), usd.absolute.toString()); // => "5000" "15000"
 
     expect(first.ok).toBe(true);
@@ -1196,7 +1205,8 @@ describe("Spot-Funds.md wiki examples", () => {
 
     const accountId = 99224416;
 
-    // Seed 10000 USD of available funds through the account-adjustment pipeline.
+    // Seed 10000 USD of available funds through the account-adjustment
+    // pipeline.
     const seed: AccountAdjustmentInit = {
       operation: { asset: "USD" },
       amount: { balance: AdjustmentAmount.absolute("10000") },
@@ -1254,7 +1264,8 @@ describe("Spot-Funds.md wiki examples", () => {
     };
     engine.applyAccountAdjustment(accountId, [seed]);
 
-    // Market buy (no price): priced at mark 200 + 15% = 230 per unit worst case.
+    // Market buy (no price): priced at mark 200 + 15% = 230 per unit worst
+    // case.
     const order: OrderInit = {
       operation: {
         underlyingAsset: "AAPL",
@@ -1501,7 +1512,8 @@ describe("Policy-API.md wiki examples", () => {
   it("rolls back eager state when the same hook rejects", () => {
     // Source: https://wiki.openpit.dev/Policy-API/
     // - Example: Rollback Safety Pattern
-    // Updates intermediate in-memory state and may then reject the same request.
+    // Updates intermediate in-memory state and may then reject the same
+    // request.
     function reserveThenValidatePolicy(): Policy {
       // Policy-local state, captured by the hook closure.
       let reserved = Volume.fromString("0");
@@ -1626,7 +1638,8 @@ describe("Policy-API.md wiki examples", () => {
       .preTrade(blockOnAdjustmentPolicy)
       .build();
 
-    // The accepted adjustment reports a block that the engine has already recorded.
+    // The accepted adjustment reports a block that the engine has already
+    // recorded.
     const adjustmentResult = engine.applyAccountAdjustment(99224416, [
       { operation: { asset: "USD" } },
     ]);
@@ -1634,8 +1647,8 @@ describe("Policy-API.md wiki examples", () => {
       throw new Error("accepted adjustment must report one account block");
     }
 
-    // A later order on the same account is rejected with AccountBlocked, without
-    // any start-check involvement.
+    // A later order on the same account is rejected with AccountBlocked,
+    // without any start-check involvement.
     const blocked = engine.startPreTrade({
       operation: {
         underlyingAsset: "AAPL",

@@ -183,14 +183,16 @@ where
         self.remove_if(key, Holdings::is_zero)
     }
 
-    /// Like [`with_mut_or_insert`](Self::with_mut_or_insert) but atomically removes a newly-inserted
-    /// slot when the mutation leaves it all-zero. The check and removal happen
-    /// under the same exclusive-index lock that performed the insertion, so
-    /// the zero-valued slot is never visible to other threads.
+    /// Like [`with_mut_or_insert`](Self::with_mut_or_insert) but atomically
+    /// removes a newly-inserted slot when the mutation leaves it all-zero. The
+    /// check and removal happen under the same exclusive-index lock that
+    /// performed the insertion, so the zero-valued slot is never visible to
+    /// other threads.
     ///
     /// For slots that were already present, behaviour is identical to
-    /// [`with_mut_or_insert`](Self::with_mut_or_insert); pruning of existing slots is the caller's
-    /// responsibility via [`remove_if_zero`](Self::remove_if_zero).
+    /// [`with_mut_or_insert`](Self::with_mut_or_insert); pruning of existing
+    /// slots is the caller's responsibility via
+    /// [`remove_if_zero`](Self::remove_if_zero).
     pub fn with_mut_or_insert_prune_new_if_zero<Mutator, Output, Error, Initializer>(
         &self,
         key: (AccountId, Asset),

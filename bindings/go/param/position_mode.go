@@ -32,7 +32,8 @@ const (
 	PositionModeHedged PositionMode = native.ParamPositionModeHedged
 )
 
-// NewPositionModeFromHandle creates an optional PositionMode from a native handle.
+// NewPositionModeFromHandle creates an optional PositionMode from a native
+// handle.
 func NewPositionModeFromHandle(v native.ParamPositionMode) optional.Option[PositionMode] {
 	if v == native.ParamPositionModeNotSet {
 		return optional.None[PositionMode]()

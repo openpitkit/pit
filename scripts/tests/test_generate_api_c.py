@@ -215,6 +215,39 @@ def test_parse_file_includes_pointer_alias_for_out_error() -> None:
     assert out_param_error_alias.alias == "*mut *mut OpenPitParamError"
 
 
+def test_render_header_wraps_indented_field_documentation() -> None:
+    module = load_c_api_module()
+    field_doc = [
+        "The field carries the value used to evaluate orders against account limits.",
+        "- The caller supplies a value in the same currency as the account limits.",
+    ]
+    record = module.Item(
+        "struct",
+        "OpenPitExample",
+        [],
+        fields=[module.Field("value", "u64", field_doc)],
+    )
+
+    header = module.render_header([record])
+
+    field_comment = re.search(r"(?m)^    /\*\*\n(?P<body>.*?)^     \*/", header, re.S)
+    assert field_comment is not None
+    lines = field_comment.group("body").splitlines()
+    assert all(len(line) <= 80 for line in lines), lines
+    assert " ".join(line[7:].strip() for line in lines) == " ".join(field_doc)
+
+
+def test_render_header_rejects_unbreakable_documentation_word() -> None:
+    module = load_c_api_module()
+    word = "unbreakable" * 8
+    record = module.Item("struct", "OpenPitExample", [word])
+
+    with pytest.raises(
+        ValueError, match=rf"C header comment cannot wrap at 80 characters: '{word}'"
+    ):
+        module.render_header([record])
+
+
 def test_generate_headers_writes_ffi_artifacts_without_docs(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -228,9 +261,13 @@ def test_generate_headers_writes_ffi_artifacts_without_docs(
 
     module.generate_headers()
 
-    assert header_path.read_text(encoding="utf-8").startswith("/*")
-    assert go_copy.read_text(encoding="utf-8") == header_path.read_text(
-        encoding="utf-8"
+    header = header_path.read_text(encoding="utf-8")
+    assert header.startswith("/*")
+    assert go_copy.read_text(encoding="utf-8") == header
+    assert all(
+        len(line) <= 80
+        for line in header.splitlines()
+        if line.lstrip().startswith(("/*", "*", "//"))
     )
     # The FFI-artifact path must never touch the documentation tree.
     assert not docs_dir.exists()

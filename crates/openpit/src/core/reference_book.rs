@@ -154,7 +154,8 @@ struct ReferenceBookEntry {
 /// needs both subsystems can explicitly reuse an ID with
 /// [`MarketDataService::register_with_id`].
 ///
-/// [`MarketDataService::register_with_id`]: crate::marketdata::MarketDataService::register_with_id
+/// [`MarketDataService::register_with_id`]:
+/// crate::marketdata::MarketDataService::register_with_id
 #[derive(Default)]
 pub struct ReferenceBook {
     by_id: HashMap<InstrumentId, ReferenceBookEntry>,

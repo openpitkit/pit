@@ -75,8 +75,8 @@ const (
 )
 
 // Derived amounts used only in the narration below, named so the linter sees no
-// magic numbers: one buy's notional (qty * price) and what stays available after
-// the first buy's funds are held.
+// magic numbers: one buy's notional (qty * price) and what stays available
+// after the first buy's funds are held.
 const (
 	orderNotional      = 60_000 // scenarioOrderQty * scenarioOrderPrice
 	availableAfterBuy1 = 40_000 // scenarioSeedFunds - orderNotional
@@ -197,11 +197,11 @@ func runExample() error {
 // engine interaction so the flow above stays readable.
 // =============================================================================
 
-// buildEngine wires a limit-only engine with the SpotFunds policy. OrderValidation
-// is registered first so the engine refuses malformed orders before SpotFunds
-// sees them. SpotFunds is not given WithMarketOrders, so market orders (no limit
-// price) are rejected with UnsupportedOrderType - this example only sends limit
-// orders.
+// buildEngine wires a limit-only engine with the SpotFunds policy.
+// OrderValidation is registered first so the engine refuses malformed orders
+// before SpotFunds sees them. SpotFunds is not given WithMarketOrders, so
+// market orders (no limit price) are rejected with UnsupportedOrderType - this
+// example only sends limit orders.
 func buildEngine() (*openpit.Engine, error) {
 	return openpit.NewEngineBuilder().
 		FullSync().

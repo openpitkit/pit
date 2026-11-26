@@ -35,8 +35,8 @@ use super::pnl_bounds;
 /// Per-settlement P&L bounds configuration for the broker barrier.
 ///
 /// Defines the loss/profit limits for a settlement asset, applied as a broker
-/// barrier across all accounts. Use [`PnlBoundsAccountAssetBarrier`] to add tighter
-/// per-account+asset bounds.
+/// barrier across all accounts. Use [`PnlBoundsAccountAssetBarrier`] to add
+/// tighter per-account+asset bounds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PnlBoundsBrokerBarrier {
     /// Settlement asset whose accumulated P&L is being monitored.
@@ -56,9 +56,9 @@ pub struct PnlBoundsBrokerBarrier {
 
 /// Per-(account, settlement-asset) P&L bounds refinement.
 ///
-/// Pairs a [`PnlBoundsBrokerBarrier`] (the settlement and bounds configuration) with
-/// an account identity and a starting P&L. Within each mode the broker barrier
-/// takes priority over this account+asset barrier.
+/// Pairs a [`PnlBoundsBrokerBarrier`] (the settlement and bounds configuration)
+/// with an account identity and a starting P&L. Within each mode the broker
+/// barrier takes priority over this account+asset barrier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PnlBoundsAccountAssetBarrier {
     /// Settlement asset and bounds for this account+asset barrier.
@@ -89,7 +89,8 @@ pub struct PnlBoundsAccountAssetBarrierUpdate {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PnlBoundsKillSwitchPolicyError {
-    /// Neither broker nor account+asset barriers were provided to the constructor.
+    /// Neither broker nor account+asset barriers were provided to the
+    /// constructor.
     NoBarriersConfigured,
     /// Both lower and upper bounds are omitted for one settlement asset.
     NoBoundsConfigured { settlement_asset: Asset },
@@ -109,7 +110,8 @@ pub enum PnlBoundsKillSwitchPolicyError {
         /// Enforcement mode whose key was repeated.
         mode: RuleMode,
     },
-    /// Barriers for one (account, settlement asset) pair supplied unequal seeds.
+    /// Barriers for one (account, settlement asset) pair supplied unequal
+    /// seeds.
     ConflictingInitialPnl {
         /// Account whose starting P&L conflicted.
         account_id: AccountId,
@@ -167,8 +169,9 @@ impl std::error::Error for PnlBoundsKillSwitchPolicyError {}
 /// never touched by a settings update.
 ///
 /// `group_id` is set at construction time and cannot be changed via a settings
-/// update; it is part of the settings so that the engine can distribute a single
-/// clone of the cell while the group tag travels with the settings snapshot.
+/// update; it is part of the settings so that the engine can distribute a
+/// single clone of the cell while the group tag travels with the settings
+/// snapshot.
 ///
 /// # Realized P&L accumulates independently of barrier configuration
 ///
@@ -310,8 +313,8 @@ impl PnlBoundsKillSwitchSettings {
     ///
     /// Validates every barrier before applying; returns an error (leaving
     /// settings unchanged) if any barrier has neither bound set, repeats an
-    /// (account, settlement asset, mode) key, or the combined set would be empty.
-    /// The update DTO has no `initial_pnl`: runtime replacement always
+    /// (account, settlement asset, mode) key, or the combined set would be
+    /// empty. The update DTO has no `initial_pnl`: runtime replacement always
     /// evaluates the live accumulator.
     pub fn set_account_barriers(
         &mut self,
@@ -388,7 +391,7 @@ pub(crate) type RealizedPnlStorage<LockingPolicyFactory> =
 /// `(account, settlement)` pair, the order passes.
 ///
 /// Review barriers need an engine built with
-/// [`EngineBuilder::with_order_review`](crate::EngineBuilder::with_order_review).
+/// [`EngineBuilder::with_order_review`].
 /// Without it, a pre-trade stage with review marks and no effective reject
 /// returns an engine
 /// [`MissingRequiredField`](crate::pretrade::RejectCode::MissingRequiredField)
@@ -416,6 +419,9 @@ pub(crate) type RealizedPnlStorage<LockingPolicyFactory> =
 /// On success, the policy forgets the account's zero realized-P&L entries.
 /// See [`Engine::retire_account`](crate::Engine::retire_account) for the
 /// engine-wide contract.
+///
+/// [`EngineBuilder::with_order_review`]:
+///     crate::EngineBuilder::with_order_review
 pub struct PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
@@ -1544,7 +1550,8 @@ mod tests {
         let policy: TestPolicy =
             PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
-        // initial_pnl -90 is within account bounds [-100, ∞): passes before any report
+        // initial_pnl -90 is within account bounds [-100, ∞): passes before any
+        // report
         assert!(check_start(&policy, &order("USD", account(1))).is_ok());
         // account 2 has no account+asset barrier, starts at 0: passes broker
         assert!(check_start(&policy, &order("USD", account(2))).is_ok());
@@ -2194,15 +2201,16 @@ mod tests {
 
     // `Configurator::set_account_pnl` force-sets the live accumulator and the
     // override is observed on the next hot-path check: forcing one account past
-    // a bound rejects its next order, while forcing a different (never-breached)
-    // account inside the bound lets its order through. Driven through a real
-    // engine because the override lives on the configurator, not the policy.
+    // a bound rejects its next order, while forcing a different
+    // (never-breached) account inside the bound lets its order through. Driven
+    // through a real engine because the override lives on the configurator, not
+    // the policy.
     //
     // The two directions use different accounts on purpose: a breach is a kill
-    // switch, so once account 1 is rejected the engine latches its account-level
-    // block, which force-setting the ledger back inside the bound does not clear
-    // (only an explicit admin unblock does). The passing direction is therefore
-    // exercised on account 2.
+    // switch, so once account 1 is rejected the engine latches its
+    // account-level block, which force-setting the ledger back inside the bound
+    // does not clear (only an explicit admin unblock does). The passing
+    // direction is therefore exercised on account 2.
     #[test]
     fn set_account_pnl_overrides_live_accumulator() {
         use crate::Engine;
@@ -2253,9 +2261,10 @@ mod tests {
     }
 
     // Realized P&L accumulated before a barrier is added must be respected once
-    // the barrier is installed at runtime. Construct with a barrier on account B
-    // / USD only (to satisfy the "at least one barrier" constructor rule), then
-    // feed reports for account A / USD (no barrier yet) to build up a loss.
+    // the barrier is installed at runtime. Construct with a barrier on account
+    // B / USD only (to satisfy the "at least one barrier" constructor rule),
+    // then feed reports for account A / USD (no barrier yet) to build up a
+    // loss.
     #[test]
     fn barrier_added_at_runtime_sees_pre_accumulated_pnl() {
         use crate::pretrade::ConfigurablePolicy;

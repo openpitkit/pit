@@ -30,15 +30,18 @@ impl Quantity {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication overflows.
+    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication
+    /// overflows.
     pub fn calculate_volume(self, price: Price) -> Result<Volume, Error> {
         price.calculate_volume(self)
     }
 
-    /// Converts this quantity into a [`PositionSize`], preserving its non-negative value.
+    /// Converts this quantity into a [`PositionSize`], preserving its
+    /// non-negative value.
     ///
-    /// Used when a quantity must be expressed as a magnitude in position-management
-    /// operations (holds, releases) where no directional context is needed.
+    /// Used when a quantity must be expressed as a magnitude in
+    /// position-management operations (holds, releases) where no directional
+    /// context is needed.
     pub fn to_position_size(self) -> PositionSize {
         PositionSize::new(self.to_decimal())
     }
