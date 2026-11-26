@@ -510,60 +510,42 @@ struct RateLimit {
 // Broker-wide rate-limit barrier.
 struct RateLimitBrokerBarrier {
   RateLimit limit;
+  /// The rule's mode, part of the barrier's key. Defaults to Reject.
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
 
-  explicit RateLimitBrokerBarrier(RateLimit barrierLimit)
-      : limit(barrierLimit) {}
-};
-
-/// Tri-state runtime update for the singular rate-limit broker barrier.
-class RateLimitBrokerBarrierUpdate {
- public:
-  [[nodiscard]] static RateLimitBrokerBarrierUpdate Unchanged() noexcept {
-    return RateLimitBrokerBarrierUpdate(false, std::nullopt);
-  }
-
-  [[nodiscard]] static RateLimitBrokerBarrierUpdate Clear() noexcept {
-    return RateLimitBrokerBarrierUpdate(true, std::nullopt);
-  }
-
-  [[nodiscard]] static RateLimitBrokerBarrierUpdate Set(
-      RateLimitBrokerBarrier barrier) {
-    return RateLimitBrokerBarrierUpdate(true, barrier);
-  }
-
-  [[nodiscard]] bool HasUpdate() const noexcept { return m_hasUpdate; }
-
-  [[nodiscard]] const std::optional<RateLimitBrokerBarrier>& Barrier()
-      const noexcept {
-    return m_barrier;
-  }
-
- private:
-  RateLimitBrokerBarrierUpdate(
-      bool hasUpdate, std::optional<RateLimitBrokerBarrier> barrier) noexcept
-      : m_hasUpdate(hasUpdate), m_barrier(barrier) {}
-
-  bool m_hasUpdate = false;
-  std::optional<RateLimitBrokerBarrier> m_barrier;
+  explicit RateLimitBrokerBarrier(RateLimit barrierLimit,
+                                  ::openpit::reject::RuleMode barrierMode =
+                                      ::openpit::reject::RuleMode::Reject)
+      : limit(barrierLimit), mode(barrierMode) {}
 };
 
 // Per-settlement-asset rate-limit barrier.
 struct RateLimitAssetBarrier {
   RateLimit limit;
   ::openpit::param::Asset settlementAsset;
+  /// The rule's mode, part of the barrier's key. Defaults to Reject.
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
 
-  RateLimitAssetBarrier(RateLimit barrierLimit, ::openpit::param::Asset asset)
-      : limit(barrierLimit), settlementAsset(std::move(asset)) {}
+  RateLimitAssetBarrier(RateLimit barrierLimit, ::openpit::param::Asset asset,
+                        ::openpit::reject::RuleMode barrierMode =
+                            ::openpit::reject::RuleMode::Reject)
+      : limit(barrierLimit),
+        settlementAsset(std::move(asset)),
+        mode(barrierMode) {}
 };
 
 // Per-account rate-limit barrier.
 struct RateLimitAccountBarrier {
   RateLimit limit;
   ::openpit::param::AccountId accountId;
+  /// The rule's mode, part of the barrier's key. Defaults to Reject.
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
 
   RateLimitAccountBarrier(RateLimit barrierLimit,
-                          ::openpit::param::AccountId account)
-      : limit(barrierLimit), accountId(account) {}
+                          ::openpit::param::AccountId account,
+                          ::openpit::reject::RuleMode barrierMode =
+                              ::openpit::reject::RuleMode::Reject)
+      : limit(barrierLimit), accountId(account), mode(barrierMode) {}
 };
 
 // Per-(account, settlement-asset) rate-limit barrier.
@@ -571,18 +553,24 @@ struct RateLimitAccountAssetBarrier {
   RateLimit limit;
   ::openpit::param::AccountId accountId;
   ::openpit::param::Asset settlementAsset;
+  /// The rule's mode, part of the barrier's key. Defaults to Reject.
+  ::openpit::reject::RuleMode mode = ::openpit::reject::RuleMode::Reject;
 
   RateLimitAccountAssetBarrier(RateLimit barrierLimit,
                                ::openpit::param::AccountId account,
-                               ::openpit::param::Asset asset)
+                               ::openpit::param::Asset asset,
+                               ::openpit::reject::RuleMode barrierMode =
+                                   ::openpit::reject::RuleMode::Reject)
       : limit(barrierLimit),
         accountId(account),
-        settlementAsset(std::move(asset)) {}
+        settlementAsset(std::move(asset)),
+        mode(barrierMode) {}
 };
 
 // Built-in rate-limit policy. Every axis is optional. A policy registered with
 // no barrier admits every order and can be configured later through
 // Engine::Configure().
+// A repeated (key, mode) on any axis makes AddTo throw openpit::Error.
 class RateLimitPolicy {
  public:
   RateLimitPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -590,8 +578,9 @@ class RateLimitPolicy {
     return *this;
   }
 
+  /// Appends one broker barrier per mode; duplicates make AddTo throw.
   RateLimitPolicy& BrokerBarrier(RateLimitBrokerBarrier barrier) {
-    m_broker = barrier;
+    m_brokerBarriers.push_back(barrier);
     return *this;
   }
 
@@ -614,12 +603,14 @@ class RateLimitPolicy {
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
         ::openpit::detail::PolicyInstanceToNative(instance);
-    OpenPitPretradePoliciesRateLimitBrokerBarrier brokerRaw{};
-    const OpenPitPretradePoliciesRateLimitBrokerBarrier* brokerPtr = nullptr;
-    if (m_broker) {
-      brokerRaw.max_orders = m_broker->limit.maxOrders;
-      brokerRaw.window_nanoseconds = m_broker->limit.windowNanoseconds;
-      brokerPtr = &brokerRaw;
+    std::vector<OpenPitPretradePoliciesRateLimitBrokerBarrier> brokerRaw;
+    brokerRaw.reserve(m_brokerBarriers.size());
+    for (const RateLimitBrokerBarrier& barrier : m_brokerBarriers) {
+      OpenPitPretradePoliciesRateLimitBrokerBarrier raw{};
+      raw.max_orders = barrier.limit.maxOrders;
+      raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+      raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
+      brokerRaw.push_back(raw);
     }
 
     std::vector<OpenPitPretradePoliciesRateLimitAssetBarrier> assetRaw;
@@ -629,6 +620,7 @@ class RateLimitPolicy {
       raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
       raw.max_orders = barrier.limit.maxOrders;
       raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+      raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
       assetRaw.push_back(raw);
     }
 
@@ -639,6 +631,7 @@ class RateLimitPolicy {
       raw.account_id = ::openpit::detail::Native(barrier.accountId);
       raw.max_orders = barrier.limit.maxOrders;
       raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+      raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
       accountRaw.push_back(raw);
     }
 
@@ -651,22 +644,24 @@ class RateLimitPolicy {
       raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
       raw.max_orders = barrier.limit.maxOrders;
       raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+      raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
       accountAssetRaw.push_back(raw);
     }
 
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_rate_limit_policy(
-            ::openpit::detail::Native(builder), m_policyGroupId, brokerPtr,
-            assetRaw.data(), assetRaw.size(), accountRaw.data(),
-            accountRaw.size(), accountAssetRaw.data(), accountAssetRaw.size(),
-            &rawInstance, &error)) {
+            ::openpit::detail::Native(builder), m_policyGroupId,
+            brokerRaw.data(), brokerRaw.size(), assetRaw.data(),
+            assetRaw.size(), accountRaw.data(), accountRaw.size(),
+            accountAssetRaw.data(), accountAssetRaw.size(), &rawInstance,
+            &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_engine_builder_add_builtin_rate_limit_policy failed");
     }
   }
 
  private:
-  std::optional<RateLimitBrokerBarrier> m_broker;
+  std::vector<RateLimitBrokerBarrier> m_brokerBarriers;
   std::vector<RateLimitAssetBarrier> m_assetBarriers;
   std::vector<RateLimitAccountBarrier> m_accountBarriers;
   std::vector<RateLimitAccountAssetBarrier> m_accountAssetBarriers;

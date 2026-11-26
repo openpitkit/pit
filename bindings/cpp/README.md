@@ -175,7 +175,9 @@ page.
 - `SpotFundsPolicy` -
   [per-account solvency gate over spendable funds](https://wiki.openpit.dev/Spot-Funds/)
 - `OrderValidationPolicy` - [structural integrity checks on every order](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
-- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+- `RateLimitPolicy` -
+  [throttle order flow per broker, asset, account, or account-asset,
+  rejecting or flagging for review per rule](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
 - `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
 - `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
 - [Custom C++ policies](https://wiki.openpit.dev/Policy-API/#c-interface)

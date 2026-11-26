@@ -193,11 +193,11 @@ function buildEngine(limits: Limits): Engine {
   // broker (global) axis; see the Policies wiki page for per-asset and
   // per-account axes.
   ready.builtin(
-    buildRateLimit().brokerBarrier(
+    buildRateLimit().brokerBarriers([
       new RateLimitBrokerBarrier(
         new RateLimit(limits.maxOrdersBurst, limits.rateWindowMs),
       ),
-    ),
+    ]),
   );
 
   return ready.build();

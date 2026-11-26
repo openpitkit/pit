@@ -434,9 +434,9 @@ describe("Getting-Started.md wiki examples", () => {
     );
 
     ready.builtin(
-      buildRateLimit().brokerBarrier(
+      buildRateLimit().brokerBarriers([
         new RateLimitBrokerBarrier(new RateLimit(100, 1000)),
-      ),
+      ]),
     );
 
     // Quantity is keyed by the underlying asset, notional by the
@@ -1011,14 +1011,69 @@ describe("Policies.md wiki examples", () => {
     const engine = Engine.builder()
 
       .builtin(
-        buildRateLimit().brokerBarrier(
+        buildRateLimit().brokerBarriers([
           new RateLimitBrokerBarrier(new RateLimit(100, 1000)),
-        ),
+        ]),
       )
       .build();
 
     const result = engine.executePreTrade(sharedOrder());
     expect(result.ok).toBe(true);
+  });
+
+  it("RateLimitPolicy review modes", () => {
+    // Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy review modes
+    // Keep this example in sync with the matching wiki example.
+    const engine = Engine.builder()
+      .builtin(
+        buildRateLimit().brokerBarriers([
+          new RateLimitBrokerBarrier(
+            new RateLimit(3, 3_600_000),
+            RuleMode.Reject,
+          ),
+          new RateLimitBrokerBarrier(
+            new RateLimit(1, 3_600_000),
+            RuleMode.ReviewWithoutHold,
+          ),
+        ]),
+      )
+      .build();
+
+    const order: OrderInit = {
+      operation: {
+        underlyingAsset: "AAPL",
+        settlementAsset: "USD",
+        accountId: 99224416,
+        side: "BUY",
+        tradeAmount: TradeAmount.quantity("1"),
+        price: "100",
+      },
+    };
+
+    // The first order is accepted without review marks.
+    const first = engine.startPreTrade(order);
+    expect(first.ok).toBe(true);
+    expect(first.reviews).toEqual([]);
+
+    // The second order is accepted with one review mark.
+    const second = engine.startPreTrade(order);
+    expect(second.ok).toBe(true);
+    expect(second.reviews).toHaveLength(1);
+    expect(second.reviews[0]?.code).toBe("RateLimitExceeded");
+    expect(second.reviews[0]?.mode).toBe(RuleMode.ReviewWithoutHold);
+
+    // Confirm the second order: no mark, but the attempt still counts.
+    order.review = { confirmed: true };
+    const confirmed = engine.startPreTrade(order);
+    expect(confirmed.ok).toBe(true);
+    expect(confirmed.reviews).toEqual([]);
+
+    // The third order is rejected after the confirmed attempt spent a unit.
+    order.review = { confirmed: false };
+    const third = engine.startPreTrade(order);
+    expect(third.ok).toBe(false);
+    expect(third.rejects[0]?.code).toBe("RateLimitExceeded");
+    expect(third.rejects[0]?.mode).toBe(RuleMode.Reject);
   });
 
   it("builds an OrderSizeLimit engine", () => {

@@ -511,6 +511,62 @@ fn standalone_context_review_flags_match_reader_selection() {
     assert_eq!(context.already_held(), Ok(false));
 }
 
+#[test]
+fn rate_limit_review_marks_keep_account_open_and_reject_wins() {
+    use openpit::pretrade::policies::RateLimitAssetBarrier;
+
+    let builder = Engine::builder::<OrderOperation, (), ()>()
+        .with_order_review()
+        .no_sync();
+    let usd = Asset::new("USD").unwrap();
+    let settings = RateLimitSettings::new(
+        [],
+        [(RuleMode::Reject, 3), (RuleMode::ReviewWithoutHold, 1)].map(|(mode, max_orders)| {
+            RateLimitAssetBarrier {
+                mode,
+                settlement_asset: usd.clone(),
+                limit: RateLimit {
+                    max_orders,
+                    window: Duration::from_secs(3600),
+                },
+            }
+        }),
+        [],
+        [],
+    )
+    .unwrap();
+    let policy = RateLimitPolicy::new(settings, builder.storage_builder());
+    let engine = builder.pre_trade(policy).build().unwrap();
+    let order = OrderOperation {
+        instrument: Instrument::new(Asset::new("AAPL").unwrap(), usd),
+        account_id: AccountId::from_u64(1),
+        side: Side::Buy,
+        trade_amount: TradeAmount::Quantity(Quantity::from_str("1").unwrap()),
+        price: None,
+    };
+    let first = engine.execute_pre_trade(order.clone()).unwrap();
+    assert!(first.reviews().is_empty());
+    for _ in 0..2 {
+        let reservation = engine
+            .execute_pre_trade(order.clone())
+            .expect("review mark does not block the account");
+        assert_eq!(reservation.reviews().len(), 1);
+        assert_eq!(reservation.reviews()[0].mode, RuleMode::ReviewWithoutHold);
+        assert_eq!(reservation.reviews()[0].scope, RejectScope::Order);
+    }
+    let rejects = engine
+        .execute_pre_trade(order)
+        .err()
+        .expect("reject limit exceeded");
+    assert_eq!(
+        rejects.len(),
+        1,
+        "engine discards marks when an effective reject exists"
+    );
+    assert_eq!(rejects[0].mode, RuleMode::Reject);
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Signal {
     None,
@@ -2219,12 +2275,13 @@ fn effective_reject_discards_marks_from_the_same_policy() {
 
 fn broker_rate_limit(max_orders: usize) -> RateLimitSettings {
     RateLimitSettings::new(
-        Some(RateLimitBrokerBarrier {
+        [RateLimitBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             limit: RateLimit {
                 max_orders,
                 window: Duration::from_secs(3600),
             },
-        }),
+        }],
         [],
         [],
         [],
@@ -2547,6 +2604,51 @@ fn confirmed_main_without_hold_keeps_reservation() {
         assert_eq!(state.held.get(), 0);
         assert_eq!(state.commits.get(), 0);
         assert_eq!(state.rollbacks.get(), 0);
+    }
+}
+
+#[test]
+fn confirmed_spends_both_rate_limit_thresholds_and_drops_review_marks() {
+    for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+        let builder = Engine::builder::<Order, (), ()>()
+            .with_order_review()
+            .no_sync();
+        let settings = RateLimitSettings::new(
+            [(RuleMode::Reject, 4), (mode, 2)].map(|(mode, max_orders)| RateLimitBrokerBarrier {
+                mode,
+                limit: RateLimit {
+                    max_orders,
+                    window: Duration::from_secs(3600),
+                },
+            }),
+            [],
+            [],
+            [],
+        )
+        .unwrap();
+        let policy = RateLimitPolicy::new(settings, builder.storage_builder());
+        let engine = builder.pre_trade(policy).build().unwrap();
+        for (attempt, confirmed) in [false, true, false, true].into_iter().enumerate() {
+            let pending = engine.start_pre_trade(order(confirmed)).unwrap();
+            if attempt == 2 {
+                assert_eq!(pending.reviews().len(), 1);
+                assert_eq!(pending.reviews()[0].code, RejectCode::RateLimitExceeded);
+                assert_eq!(pending.reviews()[0].mode, mode);
+            } else {
+                assert!(
+                    pending.reviews().is_empty(),
+                    "attempt {}: no review mark",
+                    attempt + 1
+                );
+            }
+            let mut reservation = pending.execute().unwrap();
+            assert_eq!(reservation.reviews().len(), usize::from(attempt == 2));
+            reservation.commit();
+        }
+        let rejects = engine.start_pre_trade(order(false)).unwrap_err();
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+        assert_eq!(rejects[0].mode, RuleMode::Reject);
     }
 }
 

@@ -23,28 +23,41 @@ package native
 import "C"
 
 import (
+	"fmt"
 	"unsafe"
 )
 
 //------------------------------------------------------------------------------
 // BuiltinRateLimitPolicy
 
+// ValidateRateLimitMode rejects unknown Go modes before native conversion.
+func ValidateRateLimitMode(mode PretradeRuleMode, axis string, index int) error {
+	if mode > RuleModeReviewWithoutHold {
+		return fmt.Errorf("%s[%d] has invalid mode %d", axis, index, mode)
+	}
+	return nil
+}
+
 func NewPretradePoliciesRateLimitBrokerBarrier(
+	mode PretradeRuleMode,
 	maxOrders uint,
 	windowNanoseconds int64,
 ) PretradePoliciesRateLimitBrokerBarrier {
 	return PretradePoliciesRateLimitBrokerBarrier{
+		mode:               ruleModeToC(mode),
 		max_orders:         C.size_t(maxOrders),
 		window_nanoseconds: C.int64_t(windowNanoseconds),
 	}
 }
 
 func NewPretradePoliciesRateLimitAssetBarrier(
+	mode PretradeRuleMode,
 	maxOrders uint,
 	windowNanoseconds int64,
 	settlementAsset string,
 ) PretradePoliciesRateLimitAssetBarrier {
 	return PretradePoliciesRateLimitAssetBarrier{
+		mode:               ruleModeToC(mode),
 		max_orders:         C.size_t(maxOrders),
 		window_nanoseconds: C.int64_t(windowNanoseconds),
 		settlement_asset:   importString(settlementAsset),
@@ -52,11 +65,13 @@ func NewPretradePoliciesRateLimitAssetBarrier(
 }
 
 func NewPretradePoliciesRateLimitAccountBarrier(
+	mode PretradeRuleMode,
 	accountID ParamAccountID,
 	maxOrders uint,
 	windowNanoseconds int64,
 ) PretradePoliciesRateLimitAccountBarrier {
 	return PretradePoliciesRateLimitAccountBarrier{
+		mode:               ruleModeToC(mode),
 		account_id:         accountID,
 		max_orders:         C.size_t(maxOrders),
 		window_nanoseconds: C.int64_t(windowNanoseconds),
@@ -64,12 +79,14 @@ func NewPretradePoliciesRateLimitAccountBarrier(
 }
 
 func NewPretradePoliciesRateLimitAccountAssetBarrier(
+	mode PretradeRuleMode,
 	accountID ParamAccountID,
 	maxOrders uint,
 	windowNanoseconds int64,
 	settlementAsset string,
 ) PretradePoliciesRateLimitAccountAssetBarrier {
 	return PretradePoliciesRateLimitAccountAssetBarrier{
+		mode:               ruleModeToC(mode),
 		account_id:         accountID,
 		max_orders:         C.size_t(maxOrders),
 		window_nanoseconds: C.int64_t(windowNanoseconds),

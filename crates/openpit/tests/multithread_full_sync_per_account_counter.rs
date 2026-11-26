@@ -168,6 +168,7 @@ fn build_order(account_id: AccountId) -> OrderOperation {
 fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
     let account_barriers: Vec<RateLimitAccountBarrier> = (0..TOTAL_THREADS as u64)
         .map(|id| RateLimitAccountBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             account_id: AccountId::from_u64(id),
             limit: RateLimit {
                 max_orders: PER_THREAD,
@@ -178,7 +179,7 @@ fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
 
     let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
     let policy: Arc<TestPolicy> = Arc::new(RateLimitPolicy::<FullLocking>::new(
-        RateLimitSettings::new(None, [], account_barriers, [])
+        RateLimitSettings::new([], [], account_barriers, [])
             .expect("rate limit settings must be valid"),
         builder.storage_builder(),
     ));
@@ -223,9 +224,10 @@ fn concurrent_drop_copy_account_limit_decisions_are_exact() {
     let rate_limit = DecisionCountingRateLimitPolicy {
         inner: RateLimitPolicy::<FullLocking>::new(
             RateLimitSettings::new(
-                None,
+                [],
                 [],
                 [RateLimitAccountBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     account_id,
                     limit: RateLimit {
                         max_orders: 1,

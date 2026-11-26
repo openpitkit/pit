@@ -121,7 +121,8 @@ cargo build -p openpit-ffi --release
 - [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
   \- structural integrity checks on every order.
 - [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-  \- throttle order flow per broker, asset, or account.
+  \- throttle order flow per broker, asset, account, or account-asset,
+  rejecting or flagging for review per rule.
 - [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
   \- fat-finger caps on quantity and notional.
 - [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
@@ -321,6 +322,7 @@ int main(void) {
     }
     pnl_barrier.lower_bound.is_set = true;
 
+    rate_limit.mode = OPENPIT_PRETRADE_RULE_MODE_REJECT;
     rate_limit.max_orders = 100;
     rate_limit.window_nanoseconds = 1000000000;
 
@@ -361,7 +363,8 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_rate_limit_policy(
-            builder, 0, &rate_limit, NULL, 0, NULL, 0, NULL, 0, NULL, &error)) {
+            builder, 0, &rate_limit, 1, NULL, 0, NULL, 0, NULL, 0, NULL,
+            &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_rate_limit_policy",
             error);

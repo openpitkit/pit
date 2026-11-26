@@ -175,7 +175,7 @@ def build_engine(limits: Limits) -> openpit.Engine:
         # uses the broker (global) axis; see the Policies wiki page for
         # per-asset and per-account axes.
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(
                     limit=policies.RateLimit(
                         max_orders=limits.max_orders_burst,

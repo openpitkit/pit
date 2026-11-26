@@ -83,13 +83,14 @@ fn order(account: u64) -> OrderOperation {
 
 fn broker_settings(max_orders: usize) -> RateLimitSettings {
     RateLimitSettings::new(
-        Some(RateLimitBrokerBarrier {
+        [RateLimitBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             limit: RateLimit {
                 max_orders,
                 // Wide window so every order in the test shares one window.
                 window: Duration::from_secs(60),
             },
-        }),
+        }],
         [],
         [],
         [],
@@ -150,12 +151,13 @@ fn configure_retunes_live_policy_behavior() {
     engine
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 2,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
         })
         .expect("retune must publish");
 
@@ -181,12 +183,13 @@ fn configure_rate_limit_retune_does_not_reset_surviving_broker_counter() {
     engine
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 2,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
         })
         .expect("retune must publish without replacing the counter");
 
@@ -203,9 +206,10 @@ fn configure_rate_limit_account_barrier_reject_does_not_block_account() {
     let account_id = AccountId::from_u64(7);
     let engine = build_rate_limit_engine(
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
@@ -233,6 +237,7 @@ fn configure_rate_limit_account_barrier_reject_does_not_block_account() {
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
             settings.set_account_barriers([RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 3,
                     window: Duration::from_secs(60),
@@ -251,9 +256,10 @@ fn rate_limit_account_barrier_dry_run_reject_does_not_block_account() {
     let account_id = AccountId::from_u64(7);
     let engine = build_rate_limit_engine(
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
@@ -282,10 +288,11 @@ fn configure_rate_limit_account_asset_barrier_reject_does_not_block_account() {
     let usd = Asset::new("USD").expect("asset code must be valid");
     let engine = build_rate_limit_engine(
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [],
             [RateLimitAccountAssetBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
@@ -316,6 +323,7 @@ fn configure_rate_limit_account_asset_barrier_reject_does_not_block_account() {
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
             settings.set_account_asset_barriers([RateLimitAccountAssetBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 3,
                     window: Duration::from_secs(60),
@@ -341,6 +349,7 @@ fn configure_adds_asset_barrier_at_runtime() {
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
             settings.set_asset_barriers([RateLimitAssetBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 settlement_asset: Asset::new("USD").expect("asset code must be valid"),
                 limit: RateLimit {
                     max_orders: 1,
@@ -368,12 +377,13 @@ fn configure_unknown_policy_name_is_reported() {
     let error = engine
         .configure()
         .rate_limit::<RateLimitPolicyError>("does-not-exist", |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
         })
         .expect_err("an unknown policy name must be rejected");
     assert_eq!(
@@ -410,12 +420,13 @@ fn configure_validation_failure_keeps_prior_value() {
     let error = engine
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1_000,
                     window: Duration::ZERO,
                 },
-            }))
+            }])
         })
         .expect_err("an invalid window must be rejected");
     assert!(
@@ -455,12 +466,13 @@ fn built_in_configuration_works_in_every_sync_mode() {
     local
         .configure()
         .rate_limit::<RateLimitPolicyError>(RateLimitPolicy::<NoLocking>::NAME, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
         })
         .expect("LocalSync retune must publish");
     local
@@ -472,12 +484,13 @@ fn built_in_configuration_works_in_every_sync_mode() {
     account
         .configure()
         .rate_limit::<RateLimitPolicyError>(RateLimitPolicy::<AccountLocking>::NAME, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
         })
         .expect("AccountSync retune must publish");
     account
@@ -488,12 +501,13 @@ fn built_in_configuration_works_in_every_sync_mode() {
     let full = build_engine(5);
     full.configure()
         .rate_limit::<RateLimitPolicyError>(RateLimitPolicy::<FullLocking>::NAME, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
         })
         .expect("FullSync retune must publish");
     full.execute_pre_trade(order(0))
@@ -504,7 +518,7 @@ fn built_in_configuration_works_in_every_sync_mode() {
 #[test]
 fn empty_policy_lifecycle_rate_limit_axes() {
     let engine = build_rate_limit_engine(
-        RateLimitSettings::new(None, [], [], []).expect("empty settings must be valid"),
+        RateLimitSettings::new([], [], [], []).expect("empty settings must be valid"),
     );
     let name = RateLimitPolicy::<FullLocking>::NAME;
     engine
@@ -520,13 +534,22 @@ fn empty_policy_lifecycle_rate_limit_axes() {
         engine
             .configure()
             .rate_limit::<RateLimitPolicyError>(name, |settings| match axis {
-                0 => settings.set_broker(Some(RateLimitBrokerBarrier { limit })),
+                0 => settings.set_broker_barriers([RateLimitBrokerBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
+                    limit,
+                }]),
                 1 => settings.set_asset_barriers([RateLimitAssetBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     limit,
                     settlement_asset,
                 }]),
-                2 => settings.set_account_barriers([RateLimitAccountBarrier { limit, account_id }]),
+                2 => settings.set_account_barriers([RateLimitAccountBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
+                    limit,
+                    account_id,
+                }]),
                 3 => settings.set_account_asset_barriers([RateLimitAccountAssetBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     limit,
                     account_id,
                     settlement_asset,
@@ -545,7 +568,7 @@ fn empty_policy_lifecycle_rate_limit_axes() {
         engine
             .configure()
             .rate_limit::<RateLimitPolicyError>(name, |settings| match axis {
-                0 => settings.set_broker(None),
+                0 => settings.set_broker_barriers([]),
                 1 => settings.set_asset_barriers([]),
                 2 => settings.set_account_barriers([]),
                 3 => settings.set_account_asset_barriers([]),
@@ -563,7 +586,7 @@ fn empty_policy_lifecycle_rate_limit_axes() {
 #[test]
 fn empty_policy_lifecycle_rate_limit_untouched_axis_survives_clear() {
     let engine = build_rate_limit_engine(
-        RateLimitSettings::new(None, [], [], []).expect("empty settings must be valid"),
+        RateLimitSettings::new([], [], [], []).expect("empty settings must be valid"),
     );
     let name = RateLimitPolicy::<FullLocking>::NAME;
     let limit = RateLimit {
@@ -574,10 +597,12 @@ fn empty_policy_lifecycle_rate_limit_untouched_axis_survives_clear() {
         engine
             .configure()
             .rate_limit::<RateLimitPolicyError>(name, |settings| {
-                settings.set_broker(Some(RateLimitBrokerBarrier {
+                settings.set_broker_barriers([RateLimitBrokerBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     limit: limit.clone(),
-                }))?;
+                }])?;
                 settings.set_asset_barriers([RateLimitAssetBarrier {
+                    mode: openpit::pretrade::RuleMode::Reject,
                     limit: limit.clone(),
                     settlement_asset: Asset::new("USD").expect("asset code must be valid"),
                 }])
@@ -598,7 +623,7 @@ fn empty_policy_lifecycle_rate_limit_untouched_axis_survives_clear() {
         assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
         engine
             .configure()
-            .rate_limit::<RateLimitPolicyError>(name, |settings| settings.set_broker(None))
+            .rate_limit::<RateLimitPolicyError>(name, |settings| settings.set_broker_barriers([]))
             .expect("last-to-empty must publish");
         engine
             .execute_pre_trade(order(2))
@@ -613,11 +638,12 @@ fn empty_policy_lifecycle_rate_limit_account_log_resumes() {
         window: Duration::from_secs(3600),
     };
     let barrier = RateLimitAccountBarrier {
+        mode: openpit::pretrade::RuleMode::Reject,
         limit,
         account_id: AccountId::from_u64(7),
     };
     let engine = build_rate_limit_engine(
-        RateLimitSettings::new(None, [], [barrier.clone()], []).expect("settings must be valid"),
+        RateLimitSettings::new([], [], [barrier.clone()], []).expect("settings must be valid"),
     );
     let name = RateLimitPolicy::<FullLocking>::NAME;
     for _ in 0..2 {
@@ -628,7 +654,7 @@ fn empty_policy_lifecycle_rate_limit_account_log_resumes() {
     engine
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
-            settings.set_broker(None)?;
+            settings.set_broker_barriers([])?;
             settings.set_asset_barriers([])?;
             settings.set_account_asset_barriers([])?;
             settings.set_account_barriers([])
@@ -655,12 +681,13 @@ fn empty_policy_lifecycle_rate_limit_account_asset_log_resumes() {
         window: Duration::from_secs(3600),
     };
     let barrier = RateLimitAccountAssetBarrier {
+        mode: openpit::pretrade::RuleMode::Reject,
         limit,
         account_id: AccountId::from_u64(8),
         settlement_asset: Asset::new("USD").expect("asset code must be valid"),
     };
     let engine = build_rate_limit_engine(
-        RateLimitSettings::new(None, [], [], [barrier.clone()]).expect("settings must be valid"),
+        RateLimitSettings::new([], [], [], [barrier.clone()]).expect("settings must be valid"),
     );
     let name = RateLimitPolicy::<FullLocking>::NAME;
     for _ in 0..2 {
@@ -671,7 +698,7 @@ fn empty_policy_lifecycle_rate_limit_account_asset_log_resumes() {
     engine
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
-            settings.set_broker(None)?;
+            settings.set_broker_barriers([])?;
             settings.set_asset_barriers([])?;
             settings.set_account_barriers([])?;
             settings.set_account_asset_barriers([])
@@ -702,9 +729,10 @@ fn empty_policy_lifecycle_rate_limit_broker_restarts_window() {
     };
     let engine = build_rate_limit_engine(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: limit.clone(),
-            }),
+            }],
             [],
             [],
             [],
@@ -719,12 +747,15 @@ fn empty_policy_lifecycle_rate_limit_broker_restarts_window() {
     }
     engine
         .configure()
-        .rate_limit::<RateLimitPolicyError>(name, |settings| settings.set_broker(None))
+        .rate_limit::<RateLimitPolicyError>(name, |settings| settings.set_broker_barriers([]))
         .expect("clearing the last axis must publish");
     engine
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier { limit }))
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
+                limit,
+            }])
         })
         .expect("re-adding broker must publish");
     engine
@@ -738,8 +769,7 @@ fn empty_policy_lifecycle_every_sync_mode() {
         ($builder:expr, $locking:ty) => {{
             let builder = $builder;
             let rate = RateLimitPolicy::<$locking>::new(
-                RateLimitSettings::new(None, [], [], [])
-                    .expect("empty rate settings must be valid"),
+                RateLimitSettings::new([], [], [], []).expect("empty rate settings must be valid"),
                 builder.storage_builder(),
             );
             let size = OrderSizeLimitPolicy::<$locking>::new(
@@ -758,12 +788,13 @@ fn empty_policy_lifecycle_every_sync_mode() {
             engine
                 .configure()
                 .rate_limit::<RateLimitPolicyError>(rate_name, |settings| {
-                    settings.set_broker(Some(RateLimitBrokerBarrier {
+                    settings.set_broker_barriers([RateLimitBrokerBarrier {
+                        mode: openpit::pretrade::RuleMode::Reject,
                         limit: RateLimit {
                             max_orders: 0,
                             window: Duration::from_secs(3600),
                         },
-                    }))
+                    }])
                 })
                 .expect("rate barrier must publish");
             let rejects = engine
@@ -773,7 +804,9 @@ fn empty_policy_lifecycle_every_sync_mode() {
             assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
             engine
                 .configure()
-                .rate_limit::<RateLimitPolicyError>(rate_name, |settings| settings.set_broker(None))
+                .rate_limit::<RateLimitPolicyError>(rate_name, |settings| {
+                    settings.set_broker_barriers([])
+                })
                 .expect("rate clear must publish");
             engine
                 .execute_pre_trade(order(1))
@@ -1136,9 +1169,10 @@ fn drop_copy_blocking_matches_live_pre_trade() {
     let account_id = AccountId::from_u64(9);
     let rate_engine = build_rate_limit_engine(
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),

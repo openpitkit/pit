@@ -163,7 +163,7 @@ func EngineBuilderAddBuiltinOrderValidation(builder EngineBuilder, groupID Polic
 func EngineBuilderAddBuiltinRateLimit(
 	builder EngineBuilder,
 	groupID PolicyGroupID,
-	broker *PretradePoliciesRateLimitBrokerBarrier,
+	brokers []PretradePoliciesRateLimitBrokerBarrier,
 	assets []PretradePoliciesRateLimitAssetBarrier,
 	accounts []PretradePoliciesRateLimitAccountBarrier,
 	accountAssets []PretradePoliciesRateLimitAccountAssetBarrier,
@@ -174,6 +174,10 @@ func EngineBuilderAddBuiltinRateLimit(
 		return err
 	}
 	defer release()
+	var brokersPtr *C.OpenPitPretradePoliciesRateLimitBrokerBarrier
+	if len(brokers) > 0 {
+		brokersPtr = (*C.OpenPitPretradePoliciesRateLimitBrokerBarrier)(unsafe.Pointer(&brokers[0]))
+	}
 	var assetsPtr *C.OpenPitPretradePoliciesRateLimitAssetBarrier
 	if len(assets) > 0 {
 		assetsPtr = (*C.OpenPitPretradePoliciesRateLimitAssetBarrier)(unsafe.Pointer(&assets[0]))
@@ -191,7 +195,8 @@ func EngineBuilderAddBuiltinRateLimit(
 	ok := C.openpit_engine_builder_add_builtin_rate_limit_policy(
 		builder,
 		groupID,
-		broker,
+		brokersPtr,
+		C.size_t(len(brokers)),
 		assetsPtr,
 		C.size_t(len(assets)),
 		accountsPtr,
@@ -201,6 +206,7 @@ func EngineBuilderAddBuiltinRateLimit(
 		cInstance,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(brokers)
 	runtime.KeepAlive(assets)
 	runtime.KeepAlive(accounts)
 	runtime.KeepAlive(accountAssets)

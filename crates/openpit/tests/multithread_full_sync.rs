@@ -59,12 +59,13 @@ fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
     let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
     let policy: Arc<TestPolicy> = Arc::new(RateLimitPolicy::<FullLocking>::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: total_calls,
                     window: Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [],
             [],

@@ -873,6 +873,7 @@ mod tests {
 
     fn broker_barrier(max_orders: usize) -> RateLimitBrokerBarrier {
         RateLimitBrokerBarrier {
+            mode: crate::pretrade::RuleMode::Reject,
             limit: RateLimit {
                 max_orders,
                 // Wide window so every order in the test shares one window.
@@ -895,7 +896,7 @@ mod tests {
 
     fn build_engine(max_orders: usize) -> FullSyncEngine<OrderOperation> {
         let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
-        let settings = RateLimitSettings::new(Some(broker_barrier(max_orders)), [], [], [])
+        let settings = RateLimitSettings::new([broker_barrier(max_orders)], [], [], [])
             .expect("broker barrier is a valid configuration");
         let policy = RateLimitPolicy::<FullLocking>::new(settings, builder.storage_builder());
         builder
@@ -907,7 +908,7 @@ mod tests {
     #[cfg(debug_assertions)]
     fn build_engine_with_order_size(max_orders: usize) -> FullSyncEngine<OrderOperation> {
         let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
-        let rate_settings = RateLimitSettings::new(Some(broker_barrier(max_orders)), [], [], [])
+        let rate_settings = RateLimitSettings::new([broker_barrier(max_orders)], [], [], [])
             .expect("broker barrier is a valid configuration");
         let size_settings = OrderSizeLimitSettings::new(Some(order_size_broker("100")), [], [])
             .expect("order-size broker barrier is a valid configuration");
@@ -1068,7 +1069,7 @@ mod tests {
             engine
                 .configure()
                 .rate_limit::<RateLimitPolicyError>(name, |settings| {
-                    settings.set_broker(Some(broker_barrier(100)))
+                    settings.set_broker_barriers([broker_barrier(100)])
                 })?;
             Ok(())
         });
@@ -1122,7 +1123,7 @@ mod tests {
                 engine_b
                     .configure()
                     .rate_limit(name, |settings| {
-                        settings.set_broker(Some(broker_barrier(9)))
+                        settings.set_broker_barriers([broker_barrier(9)])
                     })
                     .expect("independent engine update must succeed");
                 Ok(())

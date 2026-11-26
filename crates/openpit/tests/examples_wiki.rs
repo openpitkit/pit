@@ -490,12 +490,13 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
 
     let rate_limit_policy = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 100,
                     window: Duration::from_secs(1),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -1246,12 +1247,13 @@ fn example_wiki_policies_rate_limit() -> Result<(), Box<dyn std::error::Error>> 
     let builder = Engine::builder::<OrderOperation, PitExecutionReport, ()>().no_sync();
     let policy = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 100,
                     window: Duration::from_secs(1),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -1262,6 +1264,85 @@ fn example_wiki_policies_rate_limit() -> Result<(), Box<dyn std::error::Error>> 
 
     let order = aapl_usd_order("1", "100");
     engine.start_pre_trade(order)?.execute()?.commit();
+    Ok(())
+}
+
+#[test]
+fn example_wiki_rate_limit_review_modes() -> Result<(), Box<dyn std::error::Error>> {
+    // Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy review modes
+    // Keep this example in sync with the matching wiki example.
+    use std::time::Duration;
+
+    use openpit::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount};
+    use openpit::pretrade::policies::{
+        RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
+    };
+    use openpit::pretrade::{RejectCode, RuleMode};
+    use openpit::{Engine, Instrument, OrderOperation, OrderReview, WithOrderReview};
+
+    let builder = Engine::builder::<WithOrderReview<OrderOperation>, (), ()>()
+        .with_order_review()
+        .no_sync();
+    let policy = RateLimitPolicy::new(
+        RateLimitSettings::new(
+            [
+                RateLimitBrokerBarrier {
+                    mode: RuleMode::Reject,
+                    limit: RateLimit {
+                        max_orders: 3,
+                        window: Duration::from_secs(3600),
+                    },
+                },
+                RateLimitBrokerBarrier {
+                    mode: RuleMode::ReviewWithoutHold,
+                    limit: RateLimit {
+                        max_orders: 1,
+                        window: Duration::from_secs(3600),
+                    },
+                },
+            ],
+            [],
+            [],
+            [],
+        )?,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+    let mut order = WithOrderReview {
+        inner: OrderOperation {
+            instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+            account_id: AccountId::from_u64(99224416),
+            side: Side::Buy,
+            trade_amount: TradeAmount::Quantity(Quantity::from_str("1")?),
+            price: Some(Price::from_str("100")?),
+        },
+        review: OrderReview::default(),
+    };
+
+    // The first order is accepted without review marks.
+    let first = engine.start_pre_trade(order.clone())?;
+    assert!(first.reviews().is_empty());
+    first.execute()?.commit();
+
+    // The second order is accepted with one review mark.
+    let second = engine.start_pre_trade(order.clone())?;
+    assert_eq!(second.reviews().len(), 1);
+    assert_eq!(second.reviews()[0].code, RejectCode::RateLimitExceeded);
+    assert_eq!(second.reviews()[0].mode, RuleMode::ReviewWithoutHold);
+    second.execute()?.commit();
+
+    // Confirm the second order: no mark, but the attempt still counts.
+    order.review.confirmed = true;
+    let confirmed = engine.start_pre_trade(order.clone())?;
+    assert!(confirmed.reviews().is_empty());
+    confirmed.execute()?.commit();
+
+    // The third order is rejected after the confirmed attempt spent a unit.
+    order.review.confirmed = false;
+    let rejects = engine.start_pre_trade(order).unwrap_err();
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    assert_eq!(rejects[0].mode, RuleMode::Reject);
     Ok(())
 }
 
@@ -2314,12 +2395,13 @@ fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dy
     let builder = Engine::builder::<OrderOperation, Report, ()>().no_sync();
     let policy = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 5,
                     window: Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -2340,12 +2422,13 @@ fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dy
     engine
         .configure()
         .rate_limit::<RateLimitPolicyError>(name, |settings| {
-            settings.set_broker(Some(RateLimitBrokerBarrier {
+            settings.set_broker_barriers([RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 2,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
         })?;
 
     // The next order would have passed under the old limit of 5; the new limit

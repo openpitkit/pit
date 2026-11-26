@@ -25,6 +25,13 @@
  * `EngineBuilder.builtin` after a barrier configuration call.
  * Rate-limit and order-size-limit axis calls may pass no barriers to register
  * an empty policy that admits every order.
+ * Rate-limit barriers default to `Reject`; their case-sensitive `mode` is
+ * part of the key. `brokerBarriers` appends barriers; `EngineBuilder.build()`
+ * checks the accumulated list for at most one barrier per mode. Repeated
+ * (key, mode) pairs fail the build with `EngineBuildError`, kind
+ * `InvalidConfiguration`.
+ * Every attempt that reaches the start hook counts on every threshold, a
+ * confirmed re-run included; under confirmed the engine ignores review marks.
  *
  * Order-size quantity caps resolve by underlying asset and notional caps by
  * settlement asset. Either cap may be absent and then constrains nothing; its

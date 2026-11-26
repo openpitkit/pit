@@ -66,14 +66,16 @@ fn build_engine(total_calls: usize) -> TestEngine {
     let builder = openpit::Engine::builder().full_sync();
     let policy = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: total_calls,
                     window: Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 account_id: account(),
                 limit: RateLimit {
                     max_orders: total_calls,

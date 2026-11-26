@@ -55,17 +55,17 @@ const CONFIGURE_TS: &'static str = r#"
 /**
  * Runtime rate-limit configuration options.
  * Omitted, `undefined` or `null` fields leave their axis unchanged. A
- * supplied iterable replaces the whole axis, and an empty one clears it.
- * `clearBroker: true` removes the broker barrier. Clearing every axis is
- * valid; the policy then admits every order.
+ * supplied iterable replaces every mode on the axis, and an empty one clears
+ * it. Clearing every axis is valid; the policy then admits every order.
+ * Repeated (key, mode) pairs throw `PolicyConfigureError` and leave the
+ * previous settings unchanged.
  * Clearing an account or account-and-asset barrier keeps that key's
  * sliding-window log; re-adding the key resumes counting orders still inside
  * its window, rejected orders included. Re-added broker and asset barriers
  * start fresh windows.
  */
 export interface RateLimitConfigureOptions {
-  broker?: RateLimitBrokerBarrier | null;
-  clearBroker?: boolean;
+  brokerBarriers?: Iterable<RateLimitBrokerBarrier> | null;
   assetBarriers?: Iterable<RateLimitAssetBarrier> | null;
   accountBarriers?: Iterable<RateLimitAccountBarrier> | null;
   accountAssetBarriers?: Iterable<RateLimitAccountAssetBarrier> | null;
@@ -206,11 +206,14 @@ type SpotFundsLimitModeEntry<Id> = (Id, Option<openpit::pretrade::SpotFundsLimit
 #[wasm_bindgen(js_class = Configurator)]
 impl JsConfigurator {
     /// Retunes a registered rate-limit policy at runtime.
+    /// Omitted or null axes stay unchanged. An iterable replaces every mode
+    /// on that axis; an empty iterable clears it. Duplicate (key, mode)
+    /// pairs fail without changing the settings.
     ///
     /// # Errors
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
-    /// validation failure. Throws `ParamError` for malformed options. Throws
+    /// validation failure. Throws `TypeError` for malformed options. Throws
     /// `LifecycleError` when the owning engine is re-entered synchronously from
     /// one of its policy callbacks.
     #[wasm_bindgen(js_name = rateLimit)]
@@ -222,16 +225,8 @@ impl JsConfigurator {
         self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "rateLimit options")?;
-        let broker = optional_wrapper_field::<JsRateLimitBrokerBarrier>(&options, "broker")?
-            .map(|barrier| barrier.to_core());
-        let clear_broker = optional_bool_field(&options, "clearBroker")?;
-        if broker.is_some() && clear_broker.unwrap_or(false) {
-            return Err(make_error(
-                ErrorKind::Param,
-                "broker and clearBroker cannot be used together",
-                Some("Other"),
-            ));
-        }
+        let broker =
+            optional_wrapper_iter_field::<JsRateLimitBrokerBarrier>(&options, "brokerBarriers")?;
         let assets =
             optional_wrapper_iter_field::<JsRateLimitAssetBarrier>(&options, "assetBarriers")?;
         let accounts =
@@ -243,10 +238,10 @@ impl JsConfigurator {
 
         self.inner
             .rate_limit(name, |settings| {
-                if let Some(broker) = broker {
-                    settings.set_broker(Some(broker))?;
-                } else if clear_broker.unwrap_or(false) {
-                    settings.set_broker(None)?;
+                if let Some(barriers) = broker {
+                    settings.set_broker_barriers(
+                        barriers.into_iter().map(JsRateLimitBrokerBarrier::to_core),
+                    )?;
                 }
                 if let Some(barriers) = assets {
                     settings.set_asset_barriers(

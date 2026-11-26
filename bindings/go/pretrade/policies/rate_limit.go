@@ -24,7 +24,7 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
-	"go.openpit.dev/openpit/pkg/ptr"
+	"go.openpit.dev/openpit/reject"
 )
 
 func rateLimitWindowNanoseconds(limit RateLimit) int64 {
@@ -38,6 +38,12 @@ func rateLimitWindowNanoseconds(limit RateLimit) int64 {
 // counter: at a window boundary the observed burst can briefly reach up to
 // 2 * MaxOrders. Account and account+asset barriers count them with a precise
 // sliding-window log.
+//
+// Each barrier's mode is part of its key and has its own counter. When
+// exceeded, a review-mode barrier adds a RateLimitExceeded review mark instead
+// of rejecting. Every attempt that reaches the start hook counts on every
+// threshold, a confirmed re-run included; under Confirmed the engine ignores
+// review marks.
 type RateLimit struct {
 	// MaxOrders is the maximum number of orders accepted within Window.
 	MaxOrders uint
@@ -47,17 +53,23 @@ type RateLimit struct {
 
 // RateLimitBrokerBarrier applies a rate limit across the entire broker.
 type RateLimitBrokerBarrier struct {
+	// Mode is part of the rule's key. The zero value is RuleModeReject.
+	Mode  reject.RuleMode
 	Limit RateLimit
 }
 
 // RateLimitAssetBarrier applies a rate limit per settlement asset.
 type RateLimitAssetBarrier struct {
+	// Mode is part of the rule's key. The zero value is RuleModeReject.
+	Mode            reject.RuleMode
 	Limit           RateLimit
 	SettlementAsset param.Asset
 }
 
 // RateLimitAccountBarrier applies a rate limit per account.
 type RateLimitAccountBarrier struct {
+	// Mode is part of the rule's key. The zero value is RuleModeReject.
+	Mode      reject.RuleMode
 	Limit     RateLimit
 	AccountID param.AccountID
 }
@@ -65,6 +77,8 @@ type RateLimitAccountBarrier struct {
 // RateLimitAccountAssetBarrier applies a rate limit per
 // (account, settlement asset) pair.
 type RateLimitAccountAssetBarrier struct {
+	// Mode is part of the rule's key. The zero value is RuleModeReject.
+	Mode            reject.RuleMode
 	Limit           RateLimit
 	AccountID       param.AccountID
 	SettlementAsset param.Asset
@@ -82,7 +96,7 @@ type RateLimitBuilder struct {
 
 // RateLimitReadyBuilder holds a fully-configured rate-limit policy.
 type RateLimitReadyBuilder struct {
-	broker                              *native.PretradePoliciesRateLimitBrokerBarrier
+	brokerBarriers                      []native.PretradePoliciesRateLimitBrokerBarrier
 	assetBarriers                       []native.PretradePoliciesRateLimitAssetBarrier
 	assetBarrierSettlementAssets        []param.Asset
 	accountBarriers                     []native.PretradePoliciesRateLimitAccountBarrier
@@ -116,25 +130,33 @@ func (b *RateLimitReadyBuilder) PolicyGroupID(groupID model.PolicyGroupID) *Rate
 	return b
 }
 
-// BrokerBarrier sets the broker-wide rate limit and returns a ready
+// BrokerBarriers appends broker-wide rate limits and returns a ready
 // builder.
-func (b *RateLimitBuilder) BrokerBarrier(barrier RateLimitBrokerBarrier) *RateLimitReadyBuilder {
-	b.builder.BrokerBarrier(barrier)
+func (b *RateLimitBuilder) BrokerBarriers(barriers ...RateLimitBrokerBarrier) *RateLimitReadyBuilder {
+	b.builder.BrokerBarriers(barriers...)
 	return b.builder
 }
 
-// BrokerBarrier sets or replaces the broker-wide rate limit.
-func (b *RateLimitReadyBuilder) BrokerBarrier(
-	barrier RateLimitBrokerBarrier,
+// BrokerBarriers appends broker-wide rate limits.
+func (b *RateLimitReadyBuilder) BrokerBarriers(
+	barriers ...RateLimitBrokerBarrier,
 ) *RateLimitReadyBuilder {
 	if b.err != nil {
 		return b
 	}
-	windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
-	b.broker = ptr.New(native.NewPretradePoliciesRateLimitBrokerBarrier(
-		barrier.Limit.MaxOrders,
-		windowNanos,
-	))
+	for _, barrier := range barriers {
+		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "broker", len(b.brokerBarriers)); err != nil {
+			b.err = err
+			return b
+		}
+		windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
+		b.brokerBarriers = append(b.brokerBarriers,
+			native.NewPretradePoliciesRateLimitBrokerBarrier(
+				native.PretradeRuleMode(barrier.Mode),
+				barrier.Limit.MaxOrders,
+				windowNanos,
+			))
+	}
 	return b
 }
 
@@ -153,10 +175,15 @@ func (b *RateLimitReadyBuilder) AssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
+		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "asset", len(b.assetBarriers)); err != nil {
+			b.err = err
+			return b
+		}
 		windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
 		b.assetBarriers = append(
 			b.assetBarriers,
 			native.NewPretradePoliciesRateLimitAssetBarrier(
+				native.PretradeRuleMode(barrier.Mode),
 				barrier.Limit.MaxOrders,
 				windowNanos,
 				barrier.SettlementAsset.Handle(),
@@ -186,10 +213,15 @@ func (b *RateLimitReadyBuilder) AccountBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
+		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "account", len(b.accountBarriers)); err != nil {
+			b.err = err
+			return b
+		}
 		windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
 		b.accountBarriers = append(
 			b.accountBarriers,
 			native.NewPretradePoliciesRateLimitAccountBarrier(
+				native.PretradeRuleMode(barrier.Mode),
 				barrier.AccountID.Handle(),
 				barrier.Limit.MaxOrders,
 				windowNanos,
@@ -217,10 +249,15 @@ func (b *RateLimitReadyBuilder) AccountAssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
+		if err := native.ValidateRateLimitMode(native.PretradeRuleMode(barrier.Mode), "account_asset", len(b.accountAssetBarriers)); err != nil {
+			b.err = err
+			return b
+		}
 		windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
 		b.accountAssetBarriers = append(
 			b.accountAssetBarriers,
 			native.NewPretradePoliciesRateLimitAccountAssetBarrier(
+				native.PretradeRuleMode(barrier.Mode),
 				barrier.AccountID.Handle(),
 				barrier.Limit.MaxOrders,
 				windowNanos,
@@ -244,7 +281,7 @@ func (b *RateLimitReadyBuilder) Build(builder native.EngineBuilder, instance *na
 	err := native.EngineBuilderAddBuiltinRateLimit(
 		builder,
 		native.PolicyGroupID(b.policyGroupID),
-		b.broker,
+		b.brokerBarriers,
 		b.assetBarriers,
 		b.accountBarriers,
 		b.accountAssetBarriers,

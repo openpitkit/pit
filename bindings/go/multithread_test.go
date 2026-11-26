@@ -59,7 +59,8 @@ func buildFullSyncRateLimitEngine(t *testing.T, maxOrders uint) *Engine {
 	t.Helper()
 	engine, err := NewEngineBuilder().FullSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode: reject.RuleModeReject,
 				Limit: policies.RateLimit{
 					MaxOrders: maxOrders,
 					Window:    time.Minute,
@@ -77,6 +78,7 @@ func buildFullSyncAccountRateLimitEngine(t *testing.T, maxOrders uint, accounts 
 	barriers := make([]policies.RateLimitAccountBarrier, accounts)
 	for i := 0; i < accounts; i++ {
 		barriers[i] = policies.RateLimitAccountBarrier{
+			Mode: reject.RuleModeReject,
 			Limit: policies.RateLimit{
 				MaxOrders: maxOrders,
 				Window:    time.Minute,
@@ -98,6 +100,7 @@ func buildAccountSyncAccountRateLimitEngine(t *testing.T, maxOrders uint, accoun
 	barriers := make([]policies.RateLimitAccountBarrier, accounts)
 	for i := 0; i < accounts; i++ {
 		barriers[i] = policies.RateLimitAccountBarrier{
+			Mode: reject.RuleModeReject,
 			Limit: policies.RateLimit{
 				MaxOrders: maxOrders,
 				Window:    time.Minute,

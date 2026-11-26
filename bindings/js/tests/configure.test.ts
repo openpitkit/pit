@@ -358,9 +358,11 @@ describe("empty policy lifecycle", () => {
     const axes = [
       {
         update: (count: number) => ({
-          broker: new RateLimitBrokerBarrier(new RateLimit(count, 60_000)),
+          brokerBarriers: [
+            new RateLimitBrokerBarrier(new RateLimit(count, 60_000)),
+          ],
         }),
-        clear: { clearBroker: true },
+        clear: { brokerBarriers: [] },
         account: ACCOUNT,
         settlement: "USD",
         resumes: false,
@@ -416,7 +418,7 @@ describe("empty policy lifecycle", () => {
       expect(rejected.rejects[0]?.code).toBe("RateLimitExceeded");
 
       configure.rateLimit(name, {
-        broker: null,
+        brokerBarriers: null,
         assetBarriers: null,
         accountBarriers: null,
         accountAssetBarriers: null,
@@ -441,13 +443,13 @@ describe("empty policy lifecycle", () => {
     }
 
     configure.rateLimit(name, {
-      broker: new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
+      brokerBarriers: [new RateLimitBrokerBarrier(new RateLimit(1, 60_000))],
     });
     expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
     const reactivated = engine.startPreTrade(makeOrder());
     expect(reactivated.ok).toBe(false);
     expect(reactivated.rejects[0]?.code).toBe("RateLimitExceeded");
-    configure.rateLimit(name, { clearBroker: true });
+    configure.rateLimit(name, { brokerBarriers: [] });
     expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
   });
 
@@ -556,9 +558,9 @@ describe("runtime configurator", () => {
     const engine = Engine.builder()
 
       .builtin(
-        buildRateLimit().brokerBarrier(
+        buildRateLimit().brokerBarriers([
           new RateLimitBrokerBarrier(new RateLimit(5, 60_000)),
-        ),
+        ]),
       )
       .build();
 
@@ -578,7 +580,7 @@ describe("runtime configurator", () => {
     // Tighten the broker limit to 2 at runtime, without rebuilding the engine.
     // Built-in policies register under their type name (RateLimitBuilder.NAME).
     engine.configure().rateLimit(RateLimitBuilder.NAME, {
-      broker: new RateLimitBrokerBarrier(new RateLimit(2, 60_000)),
+      brokerBarriers: [new RateLimitBrokerBarrier(new RateLimit(2, 60_000))],
     });
 
     // The next order would have passed under the old limit of 5; the new limit
@@ -596,15 +598,15 @@ describe("runtime configurator", () => {
     const engine = Engine.builder()
 
       .builtin(
-        buildRateLimit().brokerBarrier(
+        buildRateLimit().brokerBarriers([
           new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
-        ),
+        ]),
       )
       .build();
 
     try {
       engine.configure().rateLimit("NoSuchPolicy", {
-        broker: new RateLimitBrokerBarrier(new RateLimit(2, 60_000)),
+        brokerBarriers: [new RateLimitBrokerBarrier(new RateLimit(2, 60_000))],
       });
       throw new Error("expected unknown policy error");
     } catch (error) {
@@ -614,7 +616,7 @@ describe("runtime configurator", () => {
 
     try {
       engine.configure().rateLimit(RateLimitBuilder.NAME, {
-        broker: new RateLimitBrokerBarrier(new RateLimit(1, 0)),
+        brokerBarriers: [new RateLimitBrokerBarrier(new RateLimit(1, 0))],
       });
       throw new Error("expected validation error");
     } catch (error) {
@@ -626,33 +628,7 @@ describe("runtime configurator", () => {
     }
   });
 
-  it("rejects conflicting broker set and clear inputs in the JS binding", () => {
-    const rateEngine = Engine.builder()
-      .builtin(
-        buildRateLimit().brokerBarrier(
-          new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
-        ),
-      )
-      .build();
-
-    expect(() =>
-      rateEngine.configure().rateLimit(RateLimitBuilder.NAME, {
-        broker: new RateLimitBrokerBarrier(new RateLimit(2, 60_000)),
-        clearBroker: true,
-      }),
-    ).toThrow(ParamError);
-    try {
-      rateEngine.configure().rateLimit(RateLimitBuilder.NAME, {
-        broker: new RateLimitBrokerBarrier(new RateLimit(2, 60_000)),
-        clearBroker: true,
-      });
-    } catch (error) {
-      expect(error).toBeInstanceOf(ParamError);
-      expect((error as Error).message).toBe(
-        "broker and clearBroker cannot be used together",
-      );
-    }
-
+  it("rejects conflicting order-size broker set and clear inputs", () => {
     const sizeEngine = Engine.builder()
       .builtin(
         buildOrderSizeLimit().brokerBarrier(
@@ -678,14 +654,16 @@ describe("runtime configurator", () => {
     const engine = Engine.builder()
       .builtin(
         buildRateLimit()
-          .brokerBarrier(new RateLimitBrokerBarrier(new RateLimit(1, 60_000)))
+          .brokerBarriers([
+            new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
+          ])
           .assetBarriers([
             new RateLimitAssetBarrier(new RateLimit(10, 60_000), "USD"),
           ]),
       )
       .build();
 
-    engine.configure().rateLimit(RateLimitBuilder.NAME, { clearBroker: true });
+    engine.configure().rateLimit(RateLimitBuilder.NAME, { brokerBarriers: [] });
 
     for (let index = 0; index < 2; index += 1) {
       const result = engine.executePreTrade(makeOrder());
@@ -694,16 +672,16 @@ describe("runtime configurator", () => {
     }
   });
 
-  it("leaves a rate-limit broker barrier unchanged when clearBroker is false", () => {
+  it("leaves a rate-limit broker barrier unchanged when omitted", () => {
     const engine = Engine.builder()
       .builtin(
-        buildRateLimit().brokerBarrier(
+        buildRateLimit().brokerBarriers([
           new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
-        ),
+        ]),
       )
       .build();
 
-    engine.configure().rateLimit(RateLimitBuilder.NAME, { clearBroker: false });
+    engine.configure().rateLimit(RateLimitBuilder.NAME, {});
 
     const first = engine.executePreTrade(makeOrder());
     expect(first.ok).toBe(true);

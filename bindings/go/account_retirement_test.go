@@ -81,6 +81,7 @@ func TestRetireAccountBuiltInConfigurationRefusal(t *testing.T) {
 	engine, err := NewEngineBuilder().FullSync().
 		Builtin(policies.BuildRateLimit().AccountBarriers(
 			policies.RateLimitAccountBarrier{
+				Mode:      reject.RuleModeReject,
 				AccountID: accountID,
 				Limit:     policies.RateLimit{MaxOrders: 1, Window: time.Minute},
 			},

@@ -51,7 +51,7 @@ pnl_policy = (
 )
 rate_limit_policy = (
     openpit.pretrade.policies.build_rate_limit()
-    .broker_barrier(
+    .broker_barriers(
         openpit.pretrade.policies.RateLimitBrokerBarrier(
             limit=openpit.pretrade.policies.RateLimit(
                 max_orders=100,

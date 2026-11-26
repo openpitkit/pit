@@ -1477,64 +1477,72 @@ impl PyConfigurator {
     /// Axes passed as ``None`` are left unchanged. A supplied list REPLACES
     /// that axis wholesale: an empty list clears it. Clearing every axis is
     /// valid; the policy then admits every order without reading order fields.
-    /// Barriers may be added and removed at runtime; a barrier key that
+    /// Barriers may be added and removed at runtime; a (key, mode) pair that
     /// survives a replacement keeps its live counter (no reset).
-    /// ``broker`` replaces the broker barrier when provided and leaves it
-    /// unchanged when ``None``. Set
-    /// ``clear_broker=True`` to remove the broker barrier.
+    /// ``broker_barriers`` replaces every mode on the broker axis; an empty
+    /// list clears all broker modes. Repeated (key, mode) pairs and invalid
+    /// modes raise ``PolicyConfigureError`` without changing any settings.
     /// Clearing an account or account-and-asset barrier keeps its
     /// sliding-window log; re-adding the key resumes counting orders still in
     /// its window, including rejected orders. Re-added broker and asset
     /// barriers start fresh windows.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (name, *, broker = None, clear_broker = false, asset_barriers = None, account_barriers = None, account_asset_barriers = None))]
+    #[pyo3(signature = (name, *, broker_barriers = None, asset_barriers = None, account_barriers = None, account_asset_barriers = None))]
     fn rate_limit(
         &self,
         py: Python<'_>,
         name: &str,
-        broker: Option<Bound<'_, PyAny>>,
-        clear_broker: bool,
+        broker_barriers: Option<Vec<Bound<'_, PyAny>>>,
         asset_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_asset_barriers: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<()> {
-        if clear_broker && broker.is_some() {
-            return Err(PyValueError::new_err(
-                "broker and clear_broker cannot both be provided",
-            ));
-        }
-        let broker_barrier = broker
-            .as_ref()
-            .map(parse_rate_limit_broker_barrier)
-            .transpose()?;
+        let validation_error = |error: RateLimitBarrierParseError| match error {
+            RateLimitBarrierParseError::Mode(error) => {
+                convert_configure_error(ConfigureError::Validation {
+                    name: name.to_owned(),
+                    message: error.value(py).to_string(),
+                })
+            }
+            RateLimitBarrierParseError::Python(error) => error,
+        };
+        let brokers = broker_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_rate_limit_broker_barrier)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(validation_error)?;
         let assets: Option<Vec<RateLimitAssetBarrier>> = asset_barriers
             .map(|v| {
                 v.iter()
                     .map(parse_rate_limit_asset_barrier)
-                    .collect::<PyResult<Vec<_>>>()
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .transpose()?;
+            .transpose()
+            .map_err(validation_error)?;
         let accounts: Option<Vec<RateLimitAccountBarrier>> = account_barriers
             .map(|v| {
                 v.iter()
                     .map(parse_rate_limit_account_barrier)
-                    .collect::<PyResult<Vec<_>>>()
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .transpose()?;
+            .transpose()
+            .map_err(validation_error)?;
         let account_assets: Option<Vec<RateLimitAccountAssetBarrier>> = account_asset_barriers
             .map(|v| {
                 v.iter()
                     .map(parse_rate_limit_account_asset_barrier)
-                    .collect::<PyResult<Vec<_>>>()
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .transpose()?;
+            .transpose()
+            .map_err(validation_error)?;
 
         py.detach(|| {
             self.inner.rate_limit(name, |s| {
-                if clear_broker {
-                    s.set_broker(None)?;
-                } else if let Some(b) = &broker_barrier {
-                    s.set_broker(Some(b.clone()))?;
+                if let Some(b) = &brokers {
+                    s.set_broker_barriers(b.iter().cloned())?;
                 }
                 if let Some(v) = &assets {
                     s.set_asset_barriers(v.iter().cloned())?;
@@ -4622,14 +4630,14 @@ impl PyReadyEngineBuilder {
 
     // Underscore-prefixed Python name: called only by policy builders' _build hooks.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(name = "_add_builtin_rate_limit", signature = (*, policy_group_id = 0, broker = None, asset_barriers = vec![], account_barriers = vec![], account_asset_barriers = vec![], name=None, mode=None))]
+    #[pyo3(name = "_add_builtin_rate_limit", signature = (*, policy_group_id = 0, broker_barriers = vec![], asset_barriers = vec![], account_barriers = vec![], account_asset_barriers = vec![], name=None, mode=None))]
     fn add_builtin_rate_limit<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
-        broker: Option<(usize, u64)>,
-        asset_barriers: Vec<(String, usize, u64)>,
-        account_barriers: Vec<(u64, usize, u64)>,
-        account_asset_barriers: Vec<(u64, String, usize, u64)>,
+        broker_barriers: Vec<Bound<'_, PyAny>>,
+        asset_barriers: Vec<Bound<'_, PyAny>>,
+        account_barriers: Vec<Bound<'_, PyAny>>,
+        account_asset_barriers: Vec<Bound<'_, PyAny>>,
         name: Option<String>,
         mode: Option<&str>,
     ) -> PyResult<PyRef<'py, Self>> {
@@ -4642,7 +4650,7 @@ impl PyReadyEngineBuilder {
             make_rate_limit_policy(
                 storage_builder,
                 PolicyGroupId::new(policy_group_id),
-                broker,
+                broker_barriers,
                 asset_barriers,
                 account_barriers,
                 account_asset_barriers,
@@ -4915,24 +4923,65 @@ fn parse_rate_limit_entity(obj: &Bound<'_, PyAny>) -> PyResult<RateLimit> {
     })
 }
 
-fn parse_rate_limit_broker_barrier(obj: &Bound<'_, PyAny>) -> PyResult<RateLimitBrokerBarrier> {
+enum RateLimitBarrierParseError {
+    Mode(PyErr),
+    Python(PyErr),
+}
+
+impl From<PyErr> for RateLimitBarrierParseError {
+    fn from(error: PyErr) -> Self {
+        Self::Python(error)
+    }
+}
+
+impl From<RateLimitBarrierParseError> for PyErr {
+    fn from(error: RateLimitBarrierParseError) -> Self {
+        match error {
+            RateLimitBarrierParseError::Mode(error) | RateLimitBarrierParseError::Python(error) => {
+                error
+            }
+        }
+    }
+}
+
+fn parse_rate_limit_barrier_mode(
+    obj: &Bound<'_, PyAny>,
+) -> Result<RuleMode, RateLimitBarrierParseError> {
+    let mode = obj.getattr("mode")?;
+    if mode.is_none() {
+        Ok(RuleMode::Reject)
+    } else {
+        parse_rule_mode(&mode, "barrier.mode").map_err(RateLimitBarrierParseError::Mode)
+    }
+}
+
+fn parse_rate_limit_broker_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> Result<RateLimitBrokerBarrier, RateLimitBarrierParseError> {
     ensure_policy_entity(obj, "RateLimitBrokerBarrier")?;
     Ok(RateLimitBrokerBarrier {
+        mode: parse_rate_limit_barrier_mode(obj)?,
         limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
     })
 }
 
-fn parse_rate_limit_asset_barrier(obj: &Bound<'_, PyAny>) -> PyResult<RateLimitAssetBarrier> {
+fn parse_rate_limit_asset_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> Result<RateLimitAssetBarrier, RateLimitBarrierParseError> {
     ensure_policy_entity(obj, "RateLimitAssetBarrier")?;
     Ok(RateLimitAssetBarrier {
+        mode: parse_rate_limit_barrier_mode(obj)?,
         limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
         settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
     })
 }
 
-fn parse_rate_limit_account_barrier(obj: &Bound<'_, PyAny>) -> PyResult<RateLimitAccountBarrier> {
+fn parse_rate_limit_account_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> Result<RateLimitAccountBarrier, RateLimitBarrierParseError> {
     ensure_policy_entity(obj, "RateLimitAccountBarrier")?;
     Ok(RateLimitAccountBarrier {
+        mode: parse_rate_limit_barrier_mode(obj)?,
         limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
         account_id: parse_account_id_input(&obj.getattr("account_id")?)?,
     })
@@ -4940,9 +4989,10 @@ fn parse_rate_limit_account_barrier(obj: &Bound<'_, PyAny>) -> PyResult<RateLimi
 
 fn parse_rate_limit_account_asset_barrier(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<RateLimitAccountAssetBarrier> {
+) -> Result<RateLimitAccountAssetBarrier, RateLimitBarrierParseError> {
     ensure_policy_entity(obj, "RateLimitAccountAssetBarrier")?;
     Ok(RateLimitAccountAssetBarrier {
+        mode: parse_rate_limit_barrier_mode(obj)?,
         limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
         account_id: parse_account_id_input(&obj.getattr("account_id")?)?,
         settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
@@ -5000,80 +5050,47 @@ fn parse_order_size_account_asset_barrier(
 }
 
 type ParsedRateLimitBarriers = (
-    Option<RateLimitBrokerBarrier>,
+    Vec<RateLimitBrokerBarrier>,
     Vec<RateLimitAssetBarrier>,
     Vec<RateLimitAccountBarrier>,
     Vec<RateLimitAccountAssetBarrier>,
 );
 
 fn parse_rate_limit_barriers(
-    broker: Option<(usize, u64)>,
-    asset_barriers: Vec<(String, usize, u64)>,
-    account_barriers: Vec<(u64, usize, u64)>,
-    account_asset_barriers: Vec<(u64, String, usize, u64)>,
+    broker_barriers: Vec<Bound<'_, PyAny>>,
+    asset_barriers: Vec<Bound<'_, PyAny>>,
+    account_barriers: Vec<Bound<'_, PyAny>>,
+    account_asset_barriers: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<ParsedRateLimitBarriers> {
-    let broker_barrier = broker.map(|(max_orders, window_nanoseconds)| RateLimitBrokerBarrier {
-        limit: RateLimit {
-            max_orders,
-            window: Duration::from_nanos(window_nanoseconds),
-        },
-    });
-
-    let asset: Vec<RateLimitAssetBarrier> = asset_barriers
-        .into_iter()
-        .map(|(settlement, max_orders, window_nanoseconds)| {
-            Ok(RateLimitAssetBarrier {
-                limit: RateLimit {
-                    max_orders,
-                    window: Duration::from_nanos(window_nanoseconds),
-                },
-                settlement_asset: openpit::param::Asset::new(&settlement)
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-            })
-        })
-        .collect::<PyResult<Vec<_>>>()?;
-
-    let account: Vec<RateLimitAccountBarrier> = account_barriers
-        .into_iter()
-        .map(
-            |(account_id, max_orders, window_nanoseconds)| RateLimitAccountBarrier {
-                limit: RateLimit {
-                    max_orders,
-                    window: Duration::from_nanos(window_nanoseconds),
-                },
-                account_id: AccountId::from_u64(account_id),
-            },
-        )
-        .collect();
-
-    let account_asset: Vec<RateLimitAccountAssetBarrier> = account_asset_barriers
-        .into_iter()
-        .map(|(account_id, settlement, max_orders, window_nanoseconds)| {
-            Ok(RateLimitAccountAssetBarrier {
-                limit: RateLimit {
-                    max_orders,
-                    window: Duration::from_nanos(window_nanoseconds),
-                },
-                account_id: AccountId::from_u64(account_id),
-                settlement_asset: openpit::param::Asset::new(&settlement)
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-            })
-        })
-        .collect::<PyResult<Vec<_>>>()?;
-
-    Ok((broker_barrier, asset, account, account_asset))
+    let broker = broker_barriers
+        .iter()
+        .map(parse_rate_limit_broker_barrier)
+        .collect::<Result<Vec<_>, _>>()?;
+    let asset = asset_barriers
+        .iter()
+        .map(parse_rate_limit_asset_barrier)
+        .collect::<Result<Vec<_>, _>>()?;
+    let account = account_barriers
+        .iter()
+        .map(parse_rate_limit_account_barrier)
+        .collect::<Result<Vec<_>, _>>()?;
+    let account_asset = account_asset_barriers
+        .iter()
+        .map(parse_rate_limit_account_asset_barrier)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((broker, asset, account, account_asset))
 }
 
 fn make_rate_limit_policy(
     storage_builder: &StorageBuilder<openpit_interop::StorageLockingPolicyFactory>,
     policy_group_id: PolicyGroupId,
-    broker: Option<(usize, u64)>,
-    asset_barriers: Vec<(String, usize, u64)>,
-    account_barriers: Vec<(u64, usize, u64)>,
-    account_asset_barriers: Vec<(u64, String, usize, u64)>,
+    broker_barriers: Vec<Bound<'_, PyAny>>,
+    asset_barriers: Vec<Bound<'_, PyAny>>,
+    account_barriers: Vec<Bound<'_, PyAny>>,
+    account_asset_barriers: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<RateLimitPolicy<openpit_interop::StorageLockingPolicyFactory>> {
     let (broker_barrier, asset, account, account_asset) = parse_rate_limit_barriers(
-        broker,
+        broker_barriers,
         asset_barriers,
         account_barriers,
         account_asset_barriers,
@@ -10293,6 +10310,16 @@ class AdjustmentCheck:
             builder
                 .add_configurable_pnl_killswitch(pnl_policy, openpit::PolicyInstance::default())?;
 
+            let window_kwargs = PyDict::new(py);
+            window_kwargs.set_item("milliseconds", 1_000)?;
+            let window = py
+                .import("datetime")?
+                .getattr("timedelta")?
+                .call((), Some(&window_kwargs))?;
+            let rate_limit = policies_module.getattr("RateLimit")?.call1((100, window))?;
+            let rl_barrier_obj = policies_module
+                .getattr("RateLimitBrokerBarrier")?
+                .call1((rate_limit,))?;
             let rl_policy = {
                 let state = builder.state.borrow();
                 let storage_builder = state
@@ -10302,7 +10329,7 @@ class AdjustmentCheck:
                 make_rate_limit_policy(
                     storage_builder,
                     DEFAULT_POLICY_GROUP_ID,
-                    Some((100, 1_000)),
+                    vec![rl_barrier_obj],
                     vec![],
                     vec![],
                     vec![],

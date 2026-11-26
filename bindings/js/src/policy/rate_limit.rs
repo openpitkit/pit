@@ -18,7 +18,7 @@
 //! Builtin rate-limit policy builder and its barrier data types.
 //!
 //! `buildRateLimit()` returns a configuring builder. Calling any barrier setter
-//! (`brokerBarrier`, `assetBarriers`, `accountBarriers`,
+//! (`brokerBarriers`, `assetBarriers`, `accountBarriers`,
 //! `accountAssetBarriers`) produces a ready-builder token that can be passed to
 //! `builder.builtin(token)`. `withPolicyGroupId` preserves the current stage.
 //! The shared `RateLimit` carries `{ maxOrders, windowMs }`; the window crosses
@@ -31,7 +31,7 @@ use openpit::pretrade::policies::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
 };
-use openpit::pretrade::PolicyGroupId;
+use openpit::pretrade::{PolicyGroupId, RuleMode};
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
@@ -185,6 +185,7 @@ fn read_f64_field(value: &JsValue, field: &str) -> Result<f64, JsValue> {
 #[derive(Clone, Copy)]
 pub struct JsRateLimitBrokerBarrier {
     limit: JsRateLimit,
+    mode: RuleMode,
 }
 
 #[wasm_bindgen(js_class = RateLimitBrokerBarrier)]
@@ -192,17 +193,34 @@ impl JsRateLimitBrokerBarrier {
     /// Constructs a broker barrier from its limit.
     ///
     /// `limit` accepts a `RateLimit` object or a plain `RateLimitInit` literal.
+    /// `mode` is part of the rule's key; omitted or null means `Reject`.
     ///
     /// # Errors
     ///
     /// Throws `TypeError` for a malformed limit shape or missing/non-numeric
     /// field, and `RangeError` for an invalid numeric boundary. Exceptions from
     /// plain-object getters or a wrapper's `clone()` propagate unchanged.
+    /// A non-string mode throws `TypeError`; an unknown string throws
+    /// `RangeError`. Mode strings are case-sensitive.
     #[wasm_bindgen(constructor)]
-    pub fn new(limit: RateLimitLike) -> Result<JsRateLimitBrokerBarrier, JsValue> {
+    pub fn new(
+        limit: RateLimitLike,
+        #[wasm_bindgen(unchecked_optional_param_type = "import(\"../types.js\").RuleMode | null")]
+        mode: Option<JsValue>,
+    ) -> Result<JsRateLimitBrokerBarrier, JsValue> {
         Ok(Self {
             limit: JsRateLimit::coerce(limit.into())?,
+            mode: super::parse_rule_mode(
+                &mode.unwrap_or(JsValue::UNDEFINED),
+                "RateLimitBrokerBarrier.mode",
+            )?,
         })
+    }
+
+    /// The rule's mode, part of the barrier's key.
+    #[wasm_bindgen(getter, unchecked_return_type = "import(\"../types.js\").RuleMode")]
+    pub fn mode(&self) -> String {
+        self.mode.as_str().to_owned()
     }
 
     #[wasm_bindgen(js_name = clone)]
@@ -214,6 +232,7 @@ impl JsRateLimitBrokerBarrier {
 impl JsRateLimitBrokerBarrier {
     pub(crate) fn to_core(self) -> RateLimitBrokerBarrier {
         RateLimitBrokerBarrier {
+            mode: self.mode,
             limit: self.limit.to_core(),
         }
     }
@@ -225,26 +244,42 @@ impl JsRateLimitBrokerBarrier {
 pub struct JsRateLimitAssetBarrier {
     limit: JsRateLimit,
     settlement_asset: Asset,
+    mode: RuleMode,
 }
 
 #[wasm_bindgen(js_class = RateLimitAssetBarrier)]
 impl JsRateLimitAssetBarrier {
     /// Constructs an asset barrier from its limit and settlement asset.
+    /// `mode` is part of the rule's key; omitted or null means `Reject`.
     ///
     /// # Errors
     ///
     /// Throws `TypeError`/`RangeError` for an invalid limit, or `AssetError`
     /// when `settlementAsset` is empty. Exceptions from plain-object getters or
     /// a wrapper's `clone()` propagate unchanged.
+    /// A non-string mode throws `TypeError`; an unknown string throws
+    /// `RangeError`. Mode strings are case-sensitive.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: RateLimitLike,
         settlement_asset: &str,
+        #[wasm_bindgen(unchecked_optional_param_type = "import(\"../types.js\").RuleMode | null")]
+        mode: Option<JsValue>,
     ) -> Result<JsRateLimitAssetBarrier, JsValue> {
         Ok(Self {
             limit: JsRateLimit::coerce(limit.into())?,
             settlement_asset: parse_asset(settlement_asset)?,
+            mode: super::parse_rule_mode(
+                &mode.unwrap_or(JsValue::UNDEFINED),
+                "RateLimitAssetBarrier.mode",
+            )?,
         })
+    }
+
+    /// The rule's mode, part of the barrier's key.
+    #[wasm_bindgen(getter, unchecked_return_type = "import(\"../types.js\").RuleMode")]
+    pub fn mode(&self) -> String {
+        self.mode.as_str().to_owned()
     }
 
     #[wasm_bindgen(js_name = clone)]
@@ -258,6 +293,7 @@ impl JsRateLimitAssetBarrier {
         RateLimitAssetBarrier {
             limit: self.limit.to_core(),
             settlement_asset: self.settlement_asset.clone(),
+            mode: self.mode,
         }
     }
 }
@@ -268,6 +304,7 @@ impl JsRateLimitAssetBarrier {
 pub struct JsRateLimitAccountBarrier {
     limit: JsRateLimit,
     account_id: JsAccountId,
+    mode: RuleMode,
 }
 
 #[wasm_bindgen(js_class = RateLimitAccountBarrier)]
@@ -276,21 +313,36 @@ impl JsRateLimitAccountBarrier {
     ///
     /// `limit` accepts a `RateLimit` object or a plain `RateLimitInit` literal;
     /// `accountId` accepts an `AccountId` or a numeric/string identifier.
+    /// `mode` is part of the rule's key; omitted or null means `Reject`.
     ///
     /// # Errors
     ///
     /// Throws `TypeError`/`RangeError` for an invalid limit, or
     /// `AccountIdError` for an invalid identifier. Exceptions from plain-object
     /// getters or a wrapper's `clone()` propagate unchanged.
+    /// A non-string mode throws `TypeError`; an unknown string throws
+    /// `RangeError`. Mode strings are case-sensitive.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: RateLimitLike,
         account_id: AccountIdLike,
+        #[wasm_bindgen(unchecked_optional_param_type = "import(\"../types.js\").RuleMode | null")]
+        mode: Option<JsValue>,
     ) -> Result<JsRateLimitAccountBarrier, JsValue> {
         Ok(Self {
             limit: JsRateLimit::coerce(limit.into())?,
             account_id: JsAccountId::from_inner(resolve_account_id(account_id.into())?),
+            mode: super::parse_rule_mode(
+                &mode.unwrap_or(JsValue::UNDEFINED),
+                "RateLimitAccountBarrier.mode",
+            )?,
         })
+    }
+
+    /// The rule's mode, part of the barrier's key.
+    #[wasm_bindgen(getter, unchecked_return_type = "import(\"../types.js\").RuleMode")]
+    pub fn mode(&self) -> String {
+        self.mode.as_str().to_owned()
     }
 
     #[wasm_bindgen(js_name = clone)]
@@ -304,6 +356,7 @@ impl JsRateLimitAccountBarrier {
         RateLimitAccountBarrier {
             limit: self.limit.to_core(),
             account_id: self.account_id.inner(),
+            mode: self.mode,
         }
     }
 }
@@ -315,11 +368,13 @@ pub struct JsRateLimitAccountAssetBarrier {
     limit: JsRateLimit,
     account_id: JsAccountId,
     settlement_asset: Asset,
+    mode: RuleMode,
 }
 
 #[wasm_bindgen(js_class = RateLimitAccountAssetBarrier)]
 impl JsRateLimitAccountAssetBarrier {
     /// Constructs an account-asset barrier from its parts.
+    /// `mode` is part of the rule's key; omitted or null means `Reject`.
     ///
     /// # Errors
     ///
@@ -327,17 +382,31 @@ impl JsRateLimitAccountAssetBarrier {
     /// for an invalid identifier, or `AssetError` when `settlementAsset` is
     /// empty. Exceptions from plain-object getters or a wrapper's `clone()`
     /// propagate unchanged.
+    /// A non-string mode throws `TypeError`; an unknown string throws
+    /// `RangeError`. Mode strings are case-sensitive.
     #[wasm_bindgen(constructor)]
     pub fn new(
         limit: RateLimitLike,
         account_id: AccountIdLike,
         settlement_asset: &str,
+        #[wasm_bindgen(unchecked_optional_param_type = "import(\"../types.js\").RuleMode | null")]
+        mode: Option<JsValue>,
     ) -> Result<JsRateLimitAccountAssetBarrier, JsValue> {
         Ok(Self {
             limit: JsRateLimit::coerce(limit.into())?,
             account_id: JsAccountId::from_inner(resolve_account_id(account_id.into())?),
             settlement_asset: parse_asset(settlement_asset)?,
+            mode: super::parse_rule_mode(
+                &mode.unwrap_or(JsValue::UNDEFINED),
+                "RateLimitAccountAssetBarrier.mode",
+            )?,
         })
+    }
+
+    /// The rule's mode, part of the barrier's key.
+    #[wasm_bindgen(getter, unchecked_return_type = "import(\"../types.js\").RuleMode")]
+    pub fn mode(&self) -> String {
+        self.mode.as_str().to_owned()
     }
 
     #[wasm_bindgen(js_name = clone)]
@@ -352,16 +421,19 @@ impl JsRateLimitAccountAssetBarrier {
             limit: self.limit.to_core(),
             account_id: self.account_id.inner(),
             settlement_asset: self.settlement_asset.clone(),
+            mode: self.mode,
         }
     }
 }
 
 /// Configuring builder for the builtin rate-limit policy.
+/// A repeated (key, mode) on any axis fails the build with `EngineBuildError`,
+/// kind `InvalidConfiguration`.
 #[wasm_bindgen(js_name = RateLimitBuilder)]
 #[derive(Clone, Default)]
 pub struct JsRateLimitBuilder {
     policy_group_id: u16,
-    broker: Option<JsRateLimitBrokerBarrier>,
+    broker_barriers: Vec<JsRateLimitBrokerBarrier>,
     asset_barriers: Vec<JsRateLimitAssetBarrier>,
     account_barriers: Vec<JsRateLimitAccountBarrier>,
     account_asset_barriers: Vec<JsRateLimitAccountAssetBarrier>,
@@ -375,15 +447,23 @@ impl JsRateLimitBuilder {
         RateLimitPolicy::<crate::engine::StorageFactory>::NAME.to_owned()
     }
 
-    /// Sets the broker-wide barrier and returns the builder for chaining.
+    /// Adds broker barriers and returns the builder for chaining.
+    /// Appends an iterable; `EngineBuilder.build()` checks the accumulated list
+    /// for at most one broker barrier per mode.
     #[wasm_bindgen(
-        js_name = brokerBarrier,
+        js_name = brokerBarriers,
         unchecked_return_type = "RateLimitReadyBuilder"
     )]
-    pub fn broker_barrier(&self, barrier: &JsRateLimitBrokerBarrier) -> JsRateLimitBuilder {
+    pub fn broker_barriers(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "Iterable<RateLimitBrokerBarrier>")]
+        barriers: JsValue,
+    ) -> Result<JsRateLimitBuilder, JsValue> {
+        let barriers: Vec<JsRateLimitBrokerBarrier> =
+            collect_cloned_wrappers(&barriers, "brokerBarriers")?;
         let mut next = self.clone();
-        next.broker = Some(*barrier);
-        next
+        next.broker_barriers.extend(barriers);
+        Ok(next)
     }
 
     /// Adds per-asset barriers and returns the builder for chaining.
@@ -466,14 +546,17 @@ impl JsRateLimitBuilder {
     ///
     /// # Errors
     ///
-    /// Throws `EngineBuildError` when a limit is invalid.
+    /// Throws `EngineBuildError` with kind `InvalidConfiguration` when a limit is
+    /// invalid or a (key, mode) is repeated on any axis.
     pub(crate) fn build_policy(
         &self,
         storage_builder: &crate::engine::StorageBuilderRef,
     ) -> Result<RateLimitPolicy<crate::engine::StorageFactory>, JsValue> {
-        let broker = self.broker.map(|barrier| RateLimitBrokerBarrier {
-            limit: barrier.limit.to_core(),
-        });
+        let broker = self
+            .broker_barriers
+            .iter()
+            .copied()
+            .map(JsRateLimitBrokerBarrier::to_core);
         let asset: Vec<RateLimitAssetBarrier> = self
             .asset_barriers
             .iter()

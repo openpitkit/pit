@@ -24,8 +24,10 @@ use openpit::pretrade::policies::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
 };
+use openpit::pretrade::RuleMode;
 
 use crate::engine::{write_configure_error, OpenPitConfigureError};
+use crate::reject::{import_rule_mode, OpenPitPretradeRuleMode};
 
 use super::*;
 
@@ -34,6 +36,9 @@ use super::*;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesRateLimitBrokerBarrier {
+    /// Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold.
+    /// Values greater than 3 are an error.
+    pub mode: OpenPitPretradeRuleMode,
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
@@ -47,6 +52,9 @@ pub struct OpenPitPretradePoliciesRateLimitBrokerBarrier {
 pub struct OpenPitPretradePoliciesRateLimitAssetBarrier {
     /// Settlement asset this barrier applies to.
     pub settlement_asset: OpenPitStringView,
+    /// Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold.
+    /// Values greater than 3 are an error.
+    pub mode: OpenPitPretradeRuleMode,
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
@@ -60,6 +68,9 @@ pub struct OpenPitPretradePoliciesRateLimitAssetBarrier {
 pub struct OpenPitPretradePoliciesRateLimitAccountBarrier {
     /// Account this barrier applies to.
     pub account_id: OpenPitParamAccountId,
+    /// Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold.
+    /// Values greater than 3 are an error.
+    pub mode: OpenPitPretradeRuleMode,
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
@@ -75,6 +86,9 @@ pub struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
     pub account_id: OpenPitParamAccountId,
     /// Settlement asset this barrier applies to.
     pub settlement_asset: OpenPitStringView,
+    /// Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold.
+    /// Values greater than 3 are an error.
+    pub mode: OpenPitPretradeRuleMode,
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
@@ -90,19 +104,32 @@ fn rate_limit_window_duration(window_nanoseconds: i64) -> Result<Duration, Strin
     Ok(Duration::from_nanos(window_nanoseconds as u64))
 }
 
+fn rate_limit_mode(
+    value: OpenPitPretradeRuleMode,
+    axis: &str,
+    index: usize,
+) -> Result<RuleMode, String> {
+    import_rule_mode(value).ok_or_else(|| format!("{axis}[{index}] has invalid mode {value}"))
+}
+
 #[no_mangle]
 /// Adds the built-in rate-limit policy to the engine builder.
 ///
 /// Contract:
 /// - `builder` must be a valid engine builder pointer.
 /// - `policy_group_id` assigns the policy to a policy group (pass `0` for default).
-/// - Every axis may be empty (null `broker`, zero array lengths). The policy
-///   then admits every order and can be configured later through
+/// - Every axis may be empty (zero lengths, pointers may be null). The
+///   policy then admits every order and can be configured later through
 ///   `openpit_engine_configure_rate_limit`.
 /// - When a length is greater than zero the corresponding pointer must point
 ///   to that many readable entries.
 /// - Each `settlement_asset` string view inside an array entry must be valid
 ///   for the duration of the call.
+/// - Each barrier's `mode` is 0 or 1 for Reject, 2 for ReviewWithHold, or
+///   3 for ReviewWithoutHold; values greater than 3 are an error.
+/// - Broker barriers are an array keyed by mode. Other axes are keyed by
+///   their target and mode. A repeated (key, mode) within one call fails the
+///   whole call and leaves the settings unchanged.
 ///
 /// Success:
 /// - returns `true`; the builder retains the policy.
@@ -116,6 +143,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
     builder: *mut crate::engine::OpenPitEngineBuilder,
     policy_group_id: u16,
     broker: *const OpenPitPretradePoliciesRateLimitBrokerBarrier,
+    broker_len: usize,
     asset: *const OpenPitPretradePoliciesRateLimitAssetBarrier,
     asset_len: usize,
     account: *const OpenPitPretradePoliciesRateLimitAccountBarrier,
@@ -129,6 +157,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
         write_error(out_error, "engine builder is null");
         return false;
     }
+    let broker_slice =
+        match unsafe { try_slice_arg(broker, broker_len, "rate_limit_policy broker", out_error) } {
+            Some(v) => v,
+            None => return false,
+        };
     let asset_slice =
         match unsafe { try_slice_arg(asset, asset_len, "rate_limit_policy asset", out_error) } {
             Some(v) => v,
@@ -152,12 +185,20 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
         None => return false,
     };
 
-    let broker_opt = if !broker.is_null() {
-        let b = unsafe { &*broker };
-        Some(RateLimitBrokerBarrier {
+    let mut broker_barriers = Vec::with_capacity(broker_slice.len());
+    for (index, entry) in broker_slice.iter().enumerate() {
+        let mode = match rate_limit_mode(entry.mode, "broker", index) {
+            Ok(mode) => mode,
+            Err(e) => {
+                write_error(out_error, &format!("rate_limit_policy {e}"));
+                return false;
+            }
+        };
+        broker_barriers.push(RateLimitBrokerBarrier {
+            mode,
             limit: RateLimit {
-                max_orders: b.max_orders,
-                window: match rate_limit_window_duration(b.window_nanoseconds) {
+                max_orders: entry.max_orders,
+                window: match rate_limit_window_duration(entry.window_nanoseconds) {
                     Ok(v) => v,
                     Err(e) => {
                         write_error(
@@ -168,13 +209,18 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
                     }
                 },
             },
-        })
-    } else {
-        None
-    };
+        });
+    }
 
     let mut asset_barriers = Vec::with_capacity(asset_slice.len());
     for (index, entry) in asset_slice.iter().enumerate() {
+        let mode = match rate_limit_mode(entry.mode, "asset", index) {
+            Ok(mode) => mode,
+            Err(e) => {
+                write_error(out_error, &format!("rate_limit_policy {e}"));
+                return false;
+            }
+        };
         let settlement = match parse_asset_or_error(
             entry.settlement_asset,
             "asset",
@@ -186,6 +232,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
             None => return false,
         };
         asset_barriers.push(RateLimitAssetBarrier {
+            mode,
             limit: RateLimit {
                 max_orders: entry.max_orders,
                 window: match rate_limit_window_duration(entry.window_nanoseconds) {
@@ -204,8 +251,16 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
     }
 
     let mut account_barriers = Vec::with_capacity(account_slice.len());
-    for entry in account_slice {
+    for (index, entry) in account_slice.iter().enumerate() {
+        let mode = match rate_limit_mode(entry.mode, "account", index) {
+            Ok(mode) => mode,
+            Err(e) => {
+                write_error(out_error, &format!("rate_limit_policy {e}"));
+                return false;
+            }
+        };
         account_barriers.push(RateLimitAccountBarrier {
+            mode,
             limit: RateLimit {
                 max_orders: entry.max_orders,
                 window: match rate_limit_window_duration(entry.window_nanoseconds) {
@@ -225,6 +280,13 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 
     let mut account_asset_barriers = Vec::with_capacity(account_asset_slice.len());
     for (index, entry) in account_asset_slice.iter().enumerate() {
+        let mode = match rate_limit_mode(entry.mode, "account_asset", index) {
+            Ok(mode) => mode,
+            Err(e) => {
+                write_error(out_error, &format!("rate_limit_policy {e}"));
+                return false;
+            }
+        };
         let settlement = match parse_asset_or_error(
             entry.settlement_asset,
             "account_asset",
@@ -236,6 +298,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
             None => return false,
         };
         account_asset_barriers.push(RateLimitAccountAssetBarrier {
+            mode,
             limit: RateLimit {
                 max_orders: entry.max_orders,
                 window: match rate_limit_window_duration(entry.window_nanoseconds) {
@@ -255,7 +318,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
     }
 
     let settings = match RateLimitSettings::new(
-        broker_opt,
+        broker_barriers,
         asset_barriers,
         account_barriers,
         account_asset_barriers,
@@ -291,12 +354,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 ///
 /// This is a partial update (PATCH): each axis is touched only when its
 /// `has_*` flag is `true`. A touched axis is replaced wholesale - barriers
-/// can be added and removed at runtime. A barrier key that survives the
+/// can be added and removed at runtime. A (key, mode) that survives the
 /// replacement keeps its live counter (no reset). An empty axis (`len` 0
-/// with `has_*` true) clears it. Setting `has_broker` to `true` with a null
-/// `broker` pointer clears the broker barrier. Clearing every axis is valid;
-/// the policy then admits every order and can be configured again through
-/// this function.
+/// with `has_*` true) clears every mode on that axis. Clearing every axis
+/// is valid; the policy then admits every order and can be configured again
+/// through this function.
 ///
 /// Clearing an account or account+asset key retains its stored sliding log,
 /// even when every axis becomes empty; re-adding that key counts orders still
@@ -308,15 +370,17 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
 ///   policy added via `openpit_engine_builder_add_builtin_rate_limit_policy`
 ///   registers under its fixed name `"RateLimitPolicy"`, so pass that string
 ///   here.
-/// - When `has_broker` is `true` and `broker` is non-null, it must point to
-///   one readable entry whose `max_orders`/`window_nanoseconds` replace the
-///   broker barrier; a null `broker` with `has_broker` true clears it.
-/// - When `has_asset`/`has_account`/`has_account_asset` is `true`, the
+/// - When `has_broker`/`has_asset`/`has_account`/`has_account_asset` is `true`, the
 ///   matching pointer must point to `*_len` readable entries (a length of
-///   zero clears that axis). Each `settlement_asset` view must be valid for
-///   the duration of the call.
+///   zero clears that axis and allows a null pointer). Each
+///   `settlement_asset` view must be valid for the duration of the call.
 /// - A `has_*` flag set to `false` leaves that axis untouched regardless of
 ///   the pointer/length arguments.
+/// - Each barrier's `mode` is 0 or 1 for Reject, 2 for ReviewWithHold, or
+///   3 for ReviewWithoutHold; values greater than 3 are a Validation error.
+/// - Broker barriers are an array keyed by mode. Other axes are keyed by
+///   their target and mode. A repeated (key, mode) within one call fails the
+///   whole call with Validation and leaves the settings unchanged.
 ///
 /// Success:
 /// - returns `true`; the new limits apply from the next order onward, retaining
@@ -334,6 +398,7 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,
     broker: *const OpenPitPretradePoliciesRateLimitBrokerBarrier,
+    broker_len: usize,
     has_broker: bool,
     asset: *const OpenPitPretradePoliciesRateLimitAssetBarrier,
     asset_len: usize,
@@ -367,25 +432,56 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
     };
 
     // Parse every C argument into owned Rust values up front, so the
-    // configure closure only runs infallible-typed setters. An argument that
+    // configure closure only receives parsed values. An argument that
     // cannot be parsed (e.g. an invalid asset code) never reaches the core
     // configurator and is reported as a `Validation` error.
-    let broker_barrier: Option<RateLimitBrokerBarrier> = if has_broker && !broker.is_null() {
-        let b = unsafe { &*broker };
-        Some(RateLimitBrokerBarrier {
-            limit: RateLimit {
-                max_orders: b.max_orders,
-                window: match rate_limit_window_duration(b.window_nanoseconds) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        write_configure_error(out_error, OpenPitConfigureError::validation(e));
-                        return false;
-                    }
+    let broker_barriers: Vec<RateLimitBrokerBarrier> = if has_broker {
+        let slice = match unsafe {
+            try_slice_arg(
+                broker,
+                broker_len,
+                "rate_limit broker",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation("rate_limit broker is null".to_owned()),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let mode = match rate_limit_mode(entry.mode, "broker", index) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    write_configure_error(
+                        out_error,
+                        OpenPitConfigureError::validation(format!("rate_limit {e}")),
+                    );
+                    return false;
+                }
+            };
+            out.push(RateLimitBrokerBarrier {
+                mode,
+                limit: RateLimit {
+                    max_orders: entry.max_orders,
+                    window: match rate_limit_window_duration(entry.window_nanoseconds) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            write_configure_error(out_error, OpenPitConfigureError::validation(e));
+                            return false;
+                        }
+                    },
                 },
-            },
-        })
+            });
+        }
+        out
     } else {
-        None
+        Vec::new()
     };
 
     let asset_barriers: Vec<RateLimitAssetBarrier> = if has_asset {
@@ -403,6 +499,16 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
+            let mode = match rate_limit_mode(entry.mode, "asset", index) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    write_configure_error(
+                        out_error,
+                        OpenPitConfigureError::validation(format!("rate_limit {e}")),
+                    );
+                    return false;
+                }
+            };
             let settlement = match parse_configure_asset(
                 entry.settlement_asset,
                 "asset",
@@ -416,6 +522,7 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
                 }
             };
             out.push(RateLimitAssetBarrier {
+                mode,
                 limit: RateLimit {
                     max_orders: entry.max_orders,
                     window: match rate_limit_window_duration(entry.window_nanoseconds) {
@@ -453,8 +560,19 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
             }
         };
         let mut out = Vec::with_capacity(slice.len());
-        for entry in slice {
+        for (index, entry) in slice.iter().enumerate() {
+            let mode = match rate_limit_mode(entry.mode, "account", index) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    write_configure_error(
+                        out_error,
+                        OpenPitConfigureError::validation(format!("rate_limit {e}")),
+                    );
+                    return false;
+                }
+            };
             out.push(RateLimitAccountBarrier {
+                mode,
                 limit: RateLimit {
                     max_orders: entry.max_orders,
                     window: match rate_limit_window_duration(entry.window_nanoseconds) {
@@ -507,7 +625,18 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
                     return false;
                 }
             };
+            let mode = match rate_limit_mode(entry.mode, "account_asset", index) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    write_configure_error(
+                        out_error,
+                        OpenPitConfigureError::validation(format!("rate_limit {e}")),
+                    );
+                    return false;
+                }
+            };
             out.push(RateLimitAccountAssetBarrier {
+                mode,
                 limit: RateLimit {
                     max_orders: entry.max_orders,
                     window: match rate_limit_window_duration(entry.window_nanoseconds) {
@@ -531,7 +660,7 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
         &name,
         |settings| -> Result<(), RateLimitPolicyError> {
             if has_broker {
-                settings.set_broker(broker_barrier.clone())?;
+                settings.set_broker_barriers(broker_barriers.iter().cloned())?;
             }
             if has_asset {
                 settings.set_asset_barriers(asset_barriers.iter().cloned())?;
@@ -560,6 +689,511 @@ mod tests {
 
     use crate::order::OpenPitOrder;
     use crate::param::{OpenPitParamDecimal, OpenPitParamQuantity};
+    use crate::reject::{
+        OPENPIT_PRETRADE_RULE_MODE_REJECT, OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+    };
+
+    fn broker_barrier(
+        mode: OpenPitPretradeRuleMode,
+        max_orders: usize,
+    ) -> OpenPitPretradePoliciesRateLimitBrokerBarrier {
+        OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode,
+            max_orders,
+            window_nanoseconds: 3_600_000_000_000,
+        }
+    }
+
+    fn add_rate_limit_arrays(
+        builder: *mut crate::engine::OpenPitEngineBuilder,
+        broker: &[OpenPitPretradePoliciesRateLimitBrokerBarrier],
+        asset: &[OpenPitPretradePoliciesRateLimitAssetBarrier],
+        account: &[OpenPitPretradePoliciesRateLimitAccountBarrier],
+        account_asset: &[OpenPitPretradePoliciesRateLimitAccountAssetBarrier],
+        out_error: OpenPitOutError,
+    ) -> bool {
+        unsafe {
+            openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                broker.as_ptr(),
+                broker.len(),
+                asset.as_ptr(),
+                asset.len(),
+                account.as_ptr(),
+                account.len(),
+                account_asset.as_ptr(),
+                account_asset.len(),
+                std::ptr::null(),
+                out_error,
+            )
+        }
+    }
+
+    fn configure_rate_limit_arrays(
+        engine: *mut crate::engine::OpenPitEngine,
+        broker: &[OpenPitPretradePoliciesRateLimitBrokerBarrier],
+        asset: &[OpenPitPretradePoliciesRateLimitAssetBarrier],
+        account: &[OpenPitPretradePoliciesRateLimitAccountBarrier],
+        account_asset: &[OpenPitPretradePoliciesRateLimitAccountAssetBarrier],
+        has_axes: [bool; 4],
+        out_error: *mut *mut OpenPitConfigureError,
+    ) -> bool {
+        unsafe {
+            openpit_engine_configure_rate_limit(
+                engine,
+                OpenPitStringView::from_utf8("RateLimitPolicy"),
+                broker.as_ptr(),
+                broker.len(),
+                has_axes[0],
+                asset.as_ptr(),
+                asset.len(),
+                has_axes[1],
+                account.as_ptr(),
+                account.len(),
+                has_axes[2],
+                account_asset.as_ptr(),
+                account_asset.len(),
+                has_axes[3],
+                out_error,
+            )
+        }
+    }
+
+    fn build_rate_limit_engine(
+        broker: &[OpenPitPretradePoliciesRateLimitBrokerBarrier],
+    ) -> *mut crate::engine::OpenPitEngine {
+        build_engine_with_builtin_start_policy(|builder| {
+            add_rate_limit_arrays(builder, broker, &[], &[], &[], std::ptr::null_mut())
+        })
+    }
+
+    fn builder_error_message(error: *mut crate::string::OpenPitSharedString) -> String {
+        assert!(!error.is_null(), "builder error must be populated");
+        let view = crate::string::openpit_shared_string_view(error);
+        let bytes = unsafe { std::slice::from_raw_parts(view.ptr, view.len) };
+        let message = std::str::from_utf8(bytes).expect("utf8").to_owned();
+        crate::string::openpit_destroy_shared_string(error);
+        message
+    }
+
+    fn assert_rate_limit_mark(
+        list: *mut crate::reject::OpenPitPretradeRejectList,
+        mode: OpenPitPretradeRuleMode,
+    ) {
+        assert!(!list.is_null(), "mark list must be populated");
+        assert_eq!(crate::reject::openpit_pretrade_reject_list_len(list), 1);
+        let mut mark = std::mem::MaybeUninit::uninit();
+        assert!(crate::reject::openpit_pretrade_reject_list_get(
+            list,
+            0,
+            mark.as_mut_ptr(),
+        ));
+        let mark = unsafe { mark.assume_init() };
+        assert_eq!(mark.mode, mode, "mark must preserve the barrier mode");
+        assert_eq!(
+            mark.code,
+            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED
+        );
+        crate::reject::openpit_destroy_pretrade_reject_list(list);
+    }
+
+    #[test]
+    fn rate_limit_broker_reject_wins_over_review() {
+        let broker = [
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 1),
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD, 1),
+        ];
+        let engine = build_rate_limit_engine(&broker);
+        run_start_pre_trade_passes(engine);
+        let mut request = std::ptr::null_mut();
+        let mut rejects = std::ptr::null_mut();
+        let status = crate::engine::openpit_engine_start_pre_trade(
+            engine,
+            &valid_pit_order(),
+            &mut request,
+            &mut rejects,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Rejected);
+        assert!(request.is_null());
+        assert_rate_limit_mark(rejects, OPENPIT_PRETRADE_RULE_MODE_REJECT);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn rate_limit_broker_review_getter_preserves_mode() {
+        for mode in [
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD,
+        ] {
+            let engine = build_rate_limit_engine(&[broker_barrier(mode, 1)]);
+            run_start_pre_trade_passes(engine);
+            let mut request = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            let status = crate::engine::openpit_engine_start_pre_trade(
+                engine,
+                &valid_pit_order(),
+                &mut request,
+                &mut rejects,
+                std::ptr::null_mut(),
+            );
+            assert_eq!(status, crate::engine::OpenPitPretradeStatus::Passed);
+            assert!(rejects.is_null());
+            let mut error = std::ptr::null_mut();
+            let reviews =
+                crate::engine::openpit_pretrade_pre_trade_request_get_reviews(request, &mut error);
+            assert!(error.is_null());
+            assert_rate_limit_mark(reviews, mode);
+            crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn rate_limit_zero_mode_is_reject_and_duplicate_modes_fail() {
+        let mut broker = [broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 1); 2];
+        let mut asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            max_orders: 1,
+            window_nanoseconds: 3_600_000_000_000,
+        }; 2];
+        let mut account = [OpenPitPretradePoliciesRateLimitAccountBarrier {
+            account_id: 7,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            max_orders: 1,
+            window_nanoseconds: 3_600_000_000_000,
+        }; 2];
+        let mut account_asset = [OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
+            account_id: 7,
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            max_orders: 1,
+            window_nanoseconds: 3_600_000_000_000,
+        }; 2];
+        for first_mode in [0, OPENPIT_PRETRADE_RULE_MODE_REJECT] {
+            broker[0].mode = first_mode;
+            asset[0].mode = first_mode;
+            account[0].mode = first_mode;
+            account_asset[0].mode = first_mode;
+            for axis in 0..4 {
+                let builder = crate::engine::openpit_create_engine_builder(
+                    crate::engine::OpenPitSyncPolicy::Full as u8,
+                    std::ptr::null_mut(),
+                );
+                let mut error = std::ptr::null_mut();
+                let ok = add_rate_limit_arrays(
+                    builder,
+                    if axis == 0 { &broker } else { &[] },
+                    if axis == 1 { &asset } else { &[] },
+                    if axis == 2 { &account } else { &[] },
+                    if axis == 3 { &account_asset } else { &[] },
+                    &mut error,
+                );
+                assert!(!ok, "duplicate axis {axis} must fail");
+                let message = builder_error_message(error);
+                assert!(message.contains("duplicate"), "{message}");
+                assert!(message.contains("Reject"), "{message}");
+                assert!(
+                    add_rate_limit_arrays(builder, &[], &[], &[], &[], std::ptr::null_mut(),),
+                    "failed registration must leave the builder unchanged"
+                );
+                let engine = crate::engine::openpit_engine_builder_build(
+                    builder,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                assert!(!engine.is_null());
+                run_start_pre_trade_passes(engine);
+                crate::engine::openpit_destroy_engine(engine);
+                crate::engine::openpit_destroy_engine_builder(builder);
+            }
+        }
+    }
+
+    #[test]
+    fn rate_limit_same_key_different_modes_builds() {
+        let broker = [
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 1),
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD, 1),
+        ];
+        let asset = broker.map(|barrier| OpenPitPretradePoliciesRateLimitAssetBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: barrier.mode,
+            max_orders: barrier.max_orders,
+            window_nanoseconds: barrier.window_nanoseconds,
+        });
+        let account = broker.map(|barrier| OpenPitPretradePoliciesRateLimitAccountBarrier {
+            account_id: 7,
+            mode: barrier.mode,
+            max_orders: barrier.max_orders,
+            window_nanoseconds: barrier.window_nanoseconds,
+        });
+        let account_asset =
+            broker.map(
+                |barrier| OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
+                    account_id: 7,
+                    settlement_asset: OpenPitStringView::from_utf8("USD"),
+                    mode: barrier.mode,
+                    max_orders: barrier.max_orders,
+                    window_nanoseconds: barrier.window_nanoseconds,
+                },
+            );
+        let engine = build_engine_with_builtin_start_policy(|builder| {
+            add_rate_limit_arrays(
+                builder,
+                &broker,
+                &asset,
+                &account,
+                &account_asset,
+                std::ptr::null_mut(),
+            )
+        });
+        run_start_pre_trade_passes(engine);
+        run_start_pre_trade_rejected(engine);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn rate_limit_configure_duplicate_is_atomic() {
+        let asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            max_orders: 100,
+            window_nanoseconds: 3_600_000_000_000,
+        }; 2];
+        for duplicate_broker in [true, false] {
+            let engine =
+                build_rate_limit_engine(&[broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 1)]);
+            run_start_pre_trade_passes(engine);
+            let broker = [broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 100); 2];
+            let mut error = std::ptr::null_mut();
+            let ok = configure_rate_limit_arrays(
+                engine,
+                if duplicate_broker {
+                    &broker
+                } else {
+                    &broker[..1]
+                },
+                if duplicate_broker { &[] } else { &asset },
+                &[],
+                &[],
+                [true, true, false, false],
+                &mut error,
+            );
+            assert!(!ok, "duplicate configure must fail");
+            let (kind, message) = configure_error_message(error);
+            assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Validation);
+            assert!(message.contains("duplicate"), "{message}");
+            assert!(message.contains("Reject"), "{message}");
+            run_start_pre_trade_rejected(engine);
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn rate_limit_configure_zero_mode_is_reject_and_duplicate_is_atomic() {
+        let broker = [
+            broker_barrier(0, 100),
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 100),
+        ];
+        let mut asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            max_orders: 100,
+            window_nanoseconds: 3_600_000_000_000,
+        }; 2];
+        let mut account = [OpenPitPretradePoliciesRateLimitAccountBarrier {
+            account_id: 7,
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            max_orders: 100,
+            window_nanoseconds: 3_600_000_000_000,
+        }; 2];
+        let mut account_asset = [OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
+            account_id: 7,
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+            max_orders: 100,
+            window_nanoseconds: 3_600_000_000_000,
+        }; 2];
+        asset[0].mode = 0;
+        account[0].mode = 0;
+        account_asset[0].mode = 0;
+        for axis in 0..4 {
+            let engine =
+                build_rate_limit_engine(&[broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 1)]);
+            run_start_pre_trade_passes(engine);
+            let mut error = std::ptr::null_mut();
+            let ok = configure_rate_limit_arrays(
+                engine,
+                if axis == 0 { &broker } else { &broker[1..] },
+                if axis == 1 { &asset } else { &[] },
+                if axis == 2 { &account } else { &[] },
+                if axis == 3 { &account_asset } else { &[] },
+                [true; 4],
+                &mut error,
+            );
+            assert!(!ok, "duplicate axis {axis} must fail");
+            let (kind, message) = configure_error_message(error);
+            assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Validation);
+            assert!(message.contains("duplicate"), "{message}");
+            assert!(message.contains("Reject"), "{message}");
+            run_start_pre_trade_rejected(engine);
+            crate::engine::openpit_destroy_engine(engine);
+        }
+    }
+
+    #[test]
+    fn rate_limit_invalid_modes_fail_atomically() {
+        for bad_mode in [4] {
+            for (axis, axis_name) in ["broker", "asset", "account", "account_asset"]
+                .iter()
+                .enumerate()
+            {
+                let mut broker = [
+                    broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 100),
+                    broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD, 100),
+                ];
+                let mut asset =
+                    ["USD", "EUR"].map(|asset| OpenPitPretradePoliciesRateLimitAssetBarrier {
+                        settlement_asset: OpenPitStringView::from_utf8(asset),
+                        mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                        max_orders: 100,
+                        window_nanoseconds: 3_600_000_000_000,
+                    });
+                let mut account =
+                    [7, 8].map(
+                        |account_id| OpenPitPretradePoliciesRateLimitAccountBarrier {
+                            account_id,
+                            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                            max_orders: 100,
+                            window_nanoseconds: 3_600_000_000_000,
+                        },
+                    );
+                let mut account_asset =
+                    [7, 8].map(
+                        |account_id| OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
+                            account_id,
+                            settlement_asset: OpenPitStringView::from_utf8("USD"),
+                            mode: OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                            max_orders: 100,
+                            window_nanoseconds: 3_600_000_000_000,
+                        },
+                    );
+                match axis {
+                    0 => broker[1].mode = bad_mode,
+                    1 => asset[1].mode = bad_mode,
+                    2 => account[1].mode = bad_mode,
+                    3 => account_asset[1].mode = bad_mode,
+                    _ => unreachable!(),
+                }
+                let builder = crate::engine::openpit_create_engine_builder(
+                    crate::engine::OpenPitSyncPolicy::Full as u8,
+                    std::ptr::null_mut(),
+                );
+                let mut error = std::ptr::null_mut();
+                assert!(
+                    !add_rate_limit_arrays(
+                        builder,
+                        &broker,
+                        &asset,
+                        &account,
+                        &account_asset,
+                        &mut error,
+                    ),
+                    "builder must reject {axis_name} mode {bad_mode}"
+                );
+                let message = builder_error_message(error);
+                let expected = format!("{axis_name}[1] has invalid mode {bad_mode}");
+                assert!(message.contains(&expected), "{message}");
+                crate::engine::openpit_destroy_engine_builder(builder);
+
+                let engine = build_rate_limit_engine(&[broker_barrier(
+                    OPENPIT_PRETRADE_RULE_MODE_REJECT,
+                    1,
+                )]);
+                run_start_pre_trade_passes(engine);
+                let mut error = std::ptr::null_mut();
+                assert!(
+                    !configure_rate_limit_arrays(
+                        engine,
+                        &broker,
+                        &asset,
+                        &account,
+                        &account_asset,
+                        [true; 4],
+                        &mut error,
+                    ),
+                    "configure must reject {axis_name} mode {bad_mode}"
+                );
+                let (kind, message) = configure_error_message(error);
+                assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Validation);
+                assert!(message.contains(&expected), "{message}");
+                run_start_pre_trade_rejected(engine);
+                crate::engine::openpit_destroy_engine(engine);
+            }
+        }
+    }
+
+    #[test]
+    fn rate_limit_configure_broker_clear_and_untouched() {
+        let broker = [
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REJECT, 1),
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD, 1),
+            broker_barrier(OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD, 1),
+        ];
+        let engine = build_rate_limit_engine(&broker);
+        run_start_pre_trade_passes(engine);
+        let mut error = std::ptr::null_mut();
+        let invalid = [broker_barrier(
+            OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD + 1,
+            100,
+        )];
+        assert!(
+            configure_rate_limit_arrays(engine, &invalid, &[], &[], &[], [false; 4], &mut error,),
+            "untouched broker must ignore the pointer and length"
+        );
+        assert!(error.is_null());
+        run_start_pre_trade_rejected(engine);
+        assert!(configure_rate_limit_arrays(
+            engine,
+            &[],
+            &[],
+            &[],
+            &[],
+            [true, false, false, false],
+            &mut error,
+        ));
+        assert!(error.is_null());
+        for _ in 0..2 {
+            let mut request = std::ptr::null_mut();
+            let mut rejects = std::ptr::null_mut();
+            let status = crate::engine::openpit_engine_start_pre_trade(
+                engine,
+                &valid_pit_order(),
+                &mut request,
+                &mut rejects,
+                std::ptr::null_mut(),
+            );
+            assert_eq!(status, crate::engine::OpenPitPretradeStatus::Passed);
+            assert!(rejects.is_null());
+            let mut error = std::ptr::null_mut();
+            let reviews =
+                crate::engine::openpit_pretrade_pre_trade_request_get_reviews(request, &mut error);
+            assert!(error.is_null());
+            assert!(!reviews.is_null());
+            assert_eq!(
+                crate::reject::openpit_pretrade_reject_list_len(reviews),
+                0,
+                "clearing broker must remove every review mode"
+            );
+            crate::reject::openpit_destroy_pretrade_reject_list(reviews);
+            crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+        }
+        crate::engine::openpit_destroy_engine(engine);
+    }
 
     fn quantity_param(mantissa: i128, scale: i32) -> OpenPitParamQuantity {
         OpenPitParamQuantity(OpenPitParamDecimal {
@@ -649,6 +1283,7 @@ mod tests {
     #[test]
     fn add_builtin_rate_limit_policy_happy_path() {
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 100,
             window_nanoseconds: 1_000_000_000,
         };
@@ -657,6 +1292,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -679,6 +1315,7 @@ mod tests {
                 builder,
                 0,
                 std::ptr::null(),
+                0,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -701,6 +1338,7 @@ mod tests {
                 builder,
                 0,
                 std::ptr::null(),
+                0,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -713,22 +1351,26 @@ mod tests {
         });
         run_start_pre_trade_passes(engine);
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 3_600_000_000_000,
         };
         let asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
             settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 3_600_000_000_000,
         }];
         let account = [OpenPitPretradePoliciesRateLimitAccountBarrier {
             account_id: 7,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 3_600_000_000_000,
         }];
         let account_asset = [OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
             account_id: 7,
             settlement_asset: OpenPitStringView::from_utf8("USD"),
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 3_600_000_000_000,
         }];
@@ -740,6 +1382,7 @@ mod tests {
                         engine,
                         OpenPitStringView::from_utf8("RateLimitPolicy"),
                         &broker,
+                        1,
                         axis == 0,
                         asset.as_ptr(),
                         asset.len(),
@@ -764,6 +1407,7 @@ mod tests {
                         engine,
                         OpenPitStringView::from_utf8("RateLimitPolicy"),
                         std::ptr::null(),
+                        0,
                         axis == 0,
                         std::ptr::null(),
                         0,
@@ -791,6 +1435,7 @@ mod tests {
                         engine,
                         OpenPitStringView::from_utf8("RateLimitPolicy"),
                         &broker,
+                        1,
                         true,
                         asset.as_ptr(),
                         asset.len(),
@@ -814,6 +1459,7 @@ mod tests {
                         engine,
                         OpenPitStringView::from_utf8("RateLimitPolicy"),
                         std::ptr::null(),
+                        0,
                         false,
                         std::ptr::null(),
                         0,
@@ -837,6 +1483,7 @@ mod tests {
                         engine,
                         OpenPitStringView::from_utf8("RateLimitPolicy"),
                         std::ptr::null(),
+                        0,
                         true,
                         std::ptr::null(),
                         0,
@@ -861,6 +1508,7 @@ mod tests {
     #[test]
     fn add_builtin_rate_limit_policy_local_sync_mode() {
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 50,
             window_nanoseconds: 10_000_000_000,
         };
@@ -873,6 +1521,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -898,22 +1547,26 @@ mod tests {
     fn add_builtin_rate_limit_policy_cross_axis_all_configured() {
         let usd = OpenPitStringView::from_utf8("USD");
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1000,
             window_nanoseconds: 60_000_000_000,
         };
         let asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
             settlement_asset: usd,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 500,
             window_nanoseconds: 60_000_000_000,
         }];
         let account = [OpenPitPretradePoliciesRateLimitAccountBarrier {
             account_id: 42,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 200,
             window_nanoseconds: 60_000_000_000,
         }];
         let account_asset = [OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
             account_id: 42,
             settlement_asset: usd,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 100,
             window_nanoseconds: 60_000_000_000,
         }];
@@ -922,6 +1575,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 asset.as_ptr(),
                 asset.len(),
                 account.as_ptr(),
@@ -973,6 +1627,7 @@ mod tests {
     #[test]
     fn configure_rate_limit_round_trip_tightens_broker_barrier() {
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 100,
             window_nanoseconds: 1_000_000_000,
         };
@@ -981,6 +1636,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -995,6 +1651,7 @@ mod tests {
         // Retune the broker barrier down to a single order per minute before
         // any order is submitted, so the live counter starts clean.
         let tighter = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 60_000_000_000,
         };
@@ -1004,6 +1661,7 @@ mod tests {
                 engine,
                 OpenPitStringView::from_utf8("RateLimitPolicy"),
                 &tighter,
+                1,
                 true,
                 std::ptr::null(),
                 0,
@@ -1032,6 +1690,7 @@ mod tests {
     #[test]
     fn configure_rate_limit_unknown_name_reports_error() {
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 100,
             window_nanoseconds: 1_000_000_000,
         };
@@ -1040,6 +1699,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -1052,6 +1712,7 @@ mod tests {
         });
 
         let tighter = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 60_000_000_000,
         };
@@ -1061,6 +1722,7 @@ mod tests {
                 engine,
                 OpenPitStringView::from_utf8("NoSuchPolicy"),
                 &tighter,
+                1,
                 true,
                 std::ptr::null(),
                 0,
@@ -1090,6 +1752,7 @@ mod tests {
     #[test]
     fn configure_rate_limit_adds_asset_barrier_at_runtime() {
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 100,
             window_nanoseconds: 1_000_000_000,
         };
@@ -1099,6 +1762,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -1114,6 +1778,7 @@ mod tests {
         let usd = OpenPitStringView::from_utf8("USD");
         let asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
             settlement_asset: usd,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 60_000_000_000,
         }];
@@ -1123,6 +1788,7 @@ mod tests {
                 engine,
                 OpenPitStringView::from_utf8("RateLimitPolicy"),
                 std::ptr::null(),
+                0,
                 false,
                 asset.as_ptr(),
                 asset.len(),
@@ -1151,6 +1817,7 @@ mod tests {
     #[test]
     fn configure_rate_limit_invalid_window_reports_validation() {
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 100,
             window_nanoseconds: 1_000_000_000,
         };
@@ -1159,6 +1826,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -1172,6 +1840,7 @@ mod tests {
 
         // Zero window is invalid.
         let zero_window = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 0,
         };
@@ -1181,6 +1850,7 @@ mod tests {
                 engine,
                 OpenPitStringView::from_utf8("RateLimitPolicy"),
                 &zero_window,
+                1,
                 true,
                 std::ptr::null(),
                 0,
@@ -1201,6 +1871,7 @@ mod tests {
         // Negative windows are rejected at the Rust FFI boundary before they
         // can be reinterpreted as huge unsigned durations.
         let negative_window = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: -1_000_000_000,
         };
@@ -1210,6 +1881,7 @@ mod tests {
                 engine,
                 OpenPitStringView::from_utf8("RateLimitPolicy"),
                 &negative_window,
+                1,
                 true,
                 std::ptr::null(),
                 0,
@@ -1236,6 +1908,7 @@ mod tests {
     #[test]
     fn configure_rate_limit_rejects_null_and_invalid_utf8_names() {
         let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 100,
             window_nanoseconds: 1_000_000_000,
         };
@@ -1244,6 +1917,7 @@ mod tests {
                 builder,
                 0,
                 &broker,
+                1,
                 std::ptr::null(),
                 0,
                 std::ptr::null(),
@@ -1267,6 +1941,7 @@ mod tests {
                     engine,
                     name,
                     std::ptr::null(),
+                    0,
                     false,
                     std::ptr::null(),
                     0,

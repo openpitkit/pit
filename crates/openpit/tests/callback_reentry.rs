@@ -170,12 +170,13 @@ mod debug {
     fn engine() -> FullSyncEngine<OrderOperation, ExecutionReportOperation> {
         let builder = Engine::builder::<OrderOperation, ExecutionReportOperation, ()>().full_sync();
         let settings = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 100,
                     window: Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [],
             [],

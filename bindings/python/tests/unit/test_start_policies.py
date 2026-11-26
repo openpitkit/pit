@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import threading
 
@@ -188,7 +189,7 @@ def test_rate_limit_rejects_second_order_in_window() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(
                     limit=policies.RateLimit(
                         max_orders=1,
@@ -206,6 +207,232 @@ def test_rate_limit_rejects_second_order_in_window() -> None:
     assert not second.ok
     assert len(second.rejects) == 1
     assert second.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+
+
+@pytest.mark.unit
+def test_rate_limit_reject_and_review_share_target() -> None:
+    policies = openpit.pretrade.policies
+    mode = openpit.pretrade.RuleMode
+    window = datetime.timedelta(hours=1)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit()
+            .broker_barriers(
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(2, window), mode=mode.REJECT
+                )
+            )
+            .broker_barriers(
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(1, window), mode=mode.REVIEW_WITHOUT_HOLD
+                )
+            )
+        )
+        .build()
+    )
+    first = engine.start_pre_trade(order=conftest.make_order())
+    assert first.ok
+    assert first.reviews == []
+    second = engine.start_pre_trade(order=conftest.make_order())
+    assert second.ok
+    assert len(second.reviews) == 1
+    assert second.reviews[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+    assert second.reviews[0].mode == mode.REVIEW_WITHOUT_HOLD
+    third = engine.start_pre_trade(order=conftest.make_order())
+    assert not third.ok
+    assert len(third.rejects) == 1
+    assert third.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+    assert third.rejects[0].mode == mode.REJECT
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_rate_limit_confirmed_spends_both_thresholds_and_drops_review_marks(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barriers(
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(4, datetime.timedelta(hours=1)),
+                    mode=openpit.pretrade.RuleMode.REJECT,
+                ),
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(2, datetime.timedelta(hours=1)), mode=mode
+                ),
+            )
+        )
+        .build()
+    )
+    order = conftest.make_order()
+    first = engine.start_pre_trade(order=order)
+    assert first.ok
+    assert not first.reviews
+    confirmed = openpit.Order(
+        operation=order.operation, review=openpit.OrderReview(confirmed=True)
+    )
+    second = engine.start_pre_trade(order=confirmed)
+    assert second.ok
+    assert not second.reviews
+    third = engine.start_pre_trade(order=order)
+    assert third.ok
+    assert len(third.reviews) == 1
+    assert third.reviews[0].mode == mode
+    assert third.reviews[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+    fourth = engine.start_pre_trade(order=confirmed)
+    assert fourth.ok
+    assert not fourth.reviews
+    fifth = engine.start_pre_trade(order=order)
+    assert not fifth.ok
+    assert len(fifth.rejects) == 1
+    assert fifth.rejects[0].mode == openpit.pretrade.RuleMode.REJECT
+    assert fifth.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("axis", ["broker", "asset", "account", "account_asset"])
+def test_rate_limit_duplicate_keys_and_distinct_modes(
+    axis: str, rate_limit_barriers: dict
+) -> None:
+    policies = openpit.pretrade.policies
+    barrier = rate_limit_barriers[axis]
+    builder = policies.build_rate_limit()
+    add = getattr(builder, f"{axis}_barriers")
+    with pytest.raises(ValueError, match="Reject"):
+        openpit.Engine.builder().no_sync().builtin(add(barrier, barrier)).build()
+
+    review = dataclasses.replace(
+        barrier, mode=openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD
+    )
+    ready = getattr(policies.build_rate_limit(), f"{axis}_barriers")(barrier, review)
+    if axis != "broker":
+        ready.broker_barriers(rate_limit_barriers["broker"])
+    engine = openpit.Engine.builder().no_sync().builtin(ready).build()
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+    duplicate = dataclasses.replace(
+        barrier, limit=policies.RateLimit(10, datetime.timedelta(hours=1))
+    )
+    update = {f"{axis}_barriers": [duplicate, duplicate]}
+    if axis != "broker":
+        update["broker_barriers"] = [
+            policies.RateLimitBrokerBarrier(
+                policies.RateLimit(10, datetime.timedelta(hours=1))
+            )
+        ]
+    with pytest.raises(openpit.PolicyConfigureError, match="Reject") as caught:
+        engine.configure().rate_limit(policies.RateLimitBuilder.NAME, **update)
+    assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
+    outside_target = conftest.make_order(
+        account_id=openpit.param.AccountId.from_int(99224417),
+        instrument=openpit.Instrument("MSFT", "EUR"),
+    )
+    assert not engine.start_pre_trade(order=outside_target).ok
+
+
+@pytest.fixture
+def rate_limit_barriers() -> dict:
+    policies = openpit.pretrade.policies
+    limit = policies.RateLimit(1, datetime.timedelta(hours=1))
+    account = conftest.make_order().operation.account_id
+    asset = openpit.param.Asset("USD")
+    return {
+        "broker": policies.RateLimitBrokerBarrier(limit),
+        "asset": policies.RateLimitAssetBarrier(limit, asset),
+        "account": policies.RateLimitAccountBarrier(limit, account),
+        "account_asset": policies.RateLimitAccountAssetBarrier(limit, account, asset),
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("axis", ["broker", "asset", "account", "account_asset"])
+@pytest.mark.parametrize("phase", ["build", "configure"])
+def test_rate_limit_none_mode_is_reject(
+    axis: str, phase: str, rate_limit_barriers: dict
+) -> None:
+    policies = openpit.pretrade.policies
+    barrier = dataclasses.replace(rate_limit_barriers[axis], mode=None)
+    explicit = dataclasses.replace(barrier, mode=openpit.pretrade.RuleMode.REJECT)
+    if phase == "build":
+        with pytest.raises(ValueError, match="duplicate.*Reject"):
+            (
+                openpit.Engine.builder()
+                .no_sync()
+                .builtin(
+                    getattr(policies.build_rate_limit(), f"{axis}_barriers")(
+                        barrier, explicit
+                    )
+                )
+                .build()
+            )
+        return
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(policies.build_rate_limit().broker_barriers())
+        .build()
+    )
+    with pytest.raises(openpit.PolicyConfigureError, match="duplicate.*Reject"):
+        engine.configure().rate_limit(
+            policies.RateLimitBuilder.NAME,
+            **{f"{axis}_barriers": [barrier, explicit]},
+        )
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("axis", ["broker", "asset", "account", "account_asset"])
+@pytest.mark.parametrize("mode", ["reject", "Unknown", 7])
+@pytest.mark.parametrize("phase", ["build", "configure"])
+def test_rate_limit_invalid_modes_use_construction_and_runtime_errors(
+    axis: str, mode: object, phase: str, rate_limit_barriers: dict
+) -> None:
+    policies = openpit.pretrade.policies
+    barrier = dataclasses.replace(rate_limit_barriers[axis], mode=mode)
+    suffix = f", got {mode!r}" if isinstance(mode, str) else ""
+    message = (
+        "barrier.mode must be 'Reject', 'ReviewWithHold', or 'ReviewWithoutHold'"
+        f"{suffix}"
+    )
+    if phase == "build":
+        with pytest.raises(ValueError, match="mode must be") as caught:
+            (
+                openpit.Engine.builder()
+                .no_sync()
+                .builtin(
+                    getattr(policies.build_rate_limit(), f"{axis}_barriers")(barrier)
+                )
+                .build()
+            )
+        assert str(caught.value) == message
+        return
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barriers(rate_limit_barriers["broker"])
+        )
+        .build()
+    )
+    with pytest.raises(openpit.PolicyConfigureError, match="mode must be") as caught:
+        engine.configure().rate_limit(
+            policies.RateLimitBuilder.NAME, **{f"{axis}_barriers": [barrier]}
+        )
+    assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
+    assert str(caught.value).endswith(message)
+    assert "ValueError:" not in str(caught.value)
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+    assert not engine.start_pre_trade(order=conftest.make_order()).ok
 
 
 @pytest.mark.unit
@@ -972,7 +1199,7 @@ def test_with_full_sync_uses_full_locking_for_builtin_policies() -> None:
         openpit.Engine.builder()
         .full_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(
                     limit=policies.RateLimit(
                         max_orders=100,
@@ -1065,7 +1292,7 @@ def test_engine_full_sync_concurrent_broker_rate_limit_is_safe() -> None:
         openpit.Engine.builder()
         .full_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(
                     limit=policies.RateLimit(
                         max_orders=total_calls,
@@ -1117,7 +1344,7 @@ def test_builtin_policy_builders_accept_non_default_group_id() -> None:
         .builtin(
             policies.build_rate_limit()
             .with_policy_group_id(1)
-            .broker_barrier(
+            .broker_barriers(
                 policies.RateLimitBrokerBarrier(
                     limit=policies.RateLimit(
                         max_orders=10,
@@ -1351,7 +1578,7 @@ def test_rate_limit_zero_window_rejected_by_builder() -> None:
     policies = openpit.pretrade.policies
     with pytest.raises(ValueError, match="rate limit window must be positive"):
         openpit.Engine.builder().no_sync().builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(
                     limit=policies.RateLimit(
                         max_orders=1,

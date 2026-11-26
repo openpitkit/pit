@@ -873,6 +873,69 @@ def test_example_wiki_policies_order_validation() -> None:
 
 
 @pytest.mark.integration
+def test_example_wiki_rate_limit_review_modes() -> None:
+    # Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy review modes
+    # Keep this example in sync with the matching wiki example.
+    import datetime
+
+    import openpit
+    from openpit.pretrade import RuleMode, policies
+
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barriers(
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(3, datetime.timedelta(hours=1)),
+                    mode=RuleMode.REJECT,
+                ),
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(1, datetime.timedelta(hours=1)),
+                    mode=RuleMode.REVIEW_WITHOUT_HOLD,
+                ),
+            )
+        )
+        .build()
+    )
+    order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=openpit.param.AccountId.from_int(99224416),
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.TradeAmount.quantity("1"),
+            price=openpit.param.Price("100"),
+        )
+    )
+
+    # The first order is accepted without review marks.
+    first = engine.execute_pre_trade(order=order)
+    assert first.ok and first.reviews == []
+    first.reservation.commit()
+
+    # The second order is accepted with one review mark.
+    second = engine.execute_pre_trade(order=order)
+    assert second.ok and len(second.reviews) == 1
+    assert second.reviews[0].mode == RuleMode.REVIEW_WITHOUT_HOLD
+    assert second.reviews[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+    second.reservation.commit()
+
+    # Confirm the second order: no mark, but the attempt still counts.
+    confirmed_order = openpit.Order(
+        operation=order.operation, review=openpit.OrderReview(confirmed=True)
+    )
+    confirmed = engine.execute_pre_trade(order=confirmed_order)
+    assert confirmed.ok and confirmed.reviews == []
+    confirmed.reservation.commit()
+
+    # The third order is rejected after the confirmed attempt spent a unit.
+    third = engine.execute_pre_trade(order=order)
+    assert not third.ok
+    assert third.rejects[0].mode == RuleMode.REJECT
+    assert third.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+
+
+@pytest.mark.integration
 def test_example_wiki_policies_rate_limit() -> None:
     # Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy
     # Keep this example in sync with the matching wiki example.
@@ -885,7 +948,7 @@ def test_example_wiki_policies_rate_limit() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            openpit.pretrade.policies.build_rate_limit().broker_barrier(
+            openpit.pretrade.policies.build_rate_limit().broker_barriers(
                 openpit.pretrade.policies.RateLimitBrokerBarrier(
                     limit=openpit.pretrade.policies.RateLimit(
                         max_orders=100,
@@ -1541,7 +1604,7 @@ def test_example_wiki_dynamic_policy_reconfiguration_rate_limit() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            openpit.pretrade.policies.build_rate_limit().broker_barrier(
+            openpit.pretrade.policies.build_rate_limit().broker_barriers(
                 openpit.pretrade.policies.RateLimitBrokerBarrier(
                     limit=openpit.pretrade.policies.RateLimit(
                         max_orders=5,
@@ -1563,12 +1626,14 @@ def test_example_wiki_dynamic_policy_reconfiguration_rate_limit() -> None:
     # Built-in policies register under their type name (RateLimitBuilder.NAME).
     engine.configure().rate_limit(
         openpit.pretrade.policies.RateLimitBuilder.NAME,
-        broker=openpit.pretrade.policies.RateLimitBrokerBarrier(
-            limit=openpit.pretrade.policies.RateLimit(
-                max_orders=2,
-                window=datetime.timedelta(seconds=60),
+        broker_barriers=[
+            openpit.pretrade.policies.RateLimitBrokerBarrier(
+                limit=openpit.pretrade.policies.RateLimit(
+                    max_orders=2,
+                    window=datetime.timedelta(seconds=60),
+                ),
             ),
-        ),
+        ],
     )
 
     # The next order would have passed under the old limit of 5; the new limit

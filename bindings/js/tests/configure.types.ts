@@ -18,12 +18,16 @@
 import { type Configurator, Engine } from "@openpit/engine";
 import { AccountGroupId } from "@openpit/engine/param";
 import { PnlHaltReason } from "@openpit/engine/pretrade";
+import { RuleMode } from "@openpit/engine/reject";
 import {
   buildRateLimit,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
   PnlBoundsBrokerBarrier,
   RateLimit,
+  RateLimitAssetBarrier,
+  RateLimitAccountBarrier,
+  RateLimitAccountAssetBarrier,
   RateLimitBrokerBarrier,
   RateLimitBuilder,
   SpotFundsBuilder,
@@ -37,16 +41,60 @@ import {
 const configurator: Configurator = Engine.builder()
 
   .builtin(
-    buildRateLimit().brokerBarrier(
+    buildRateLimit().brokerBarriers([
       new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
-    ),
+    ]),
   )
   .build()
   .configure();
 
 configurator.rateLimit(RateLimitBuilder.NAME, {
-  broker: new RateLimitBrokerBarrier(new RateLimit(2, 60_000)),
+  brokerBarriers: [new RateLimitBrokerBarrier(new RateLimit(2, 60_000))],
 });
+
+const rateLimit = new RateLimit(2, 60_000);
+const reviewBroker = new RateLimitBrokerBarrier(
+  rateLimit,
+  RuleMode.ReviewWithoutHold,
+);
+const reviewAsset = new RateLimitAssetBarrier(
+  rateLimit,
+  "USD",
+  RuleMode.ReviewWithHold,
+);
+const reviewAccount = new RateLimitAccountBarrier(
+  rateLimit,
+  7,
+  RuleMode.ReviewWithoutHold,
+);
+const reviewAccountAsset = new RateLimitAccountAssetBarrier(
+  rateLimit,
+  7,
+  "USD",
+  RuleMode.Reject,
+);
+const barrierMode: RuleMode = reviewBroker.mode;
+void [barrierMode, reviewAsset, reviewAccount, reviewAccountAsset];
+Engine.builder().builtin(
+  buildRateLimit().brokerBarriers(new Set([reviewBroker])),
+);
+configurator.rateLimit(RateLimitBuilder.NAME, {
+  brokerBarriers: new Set([reviewBroker]),
+});
+configurator.rateLimit(RateLimitBuilder.NAME, { brokerBarriers: null });
+configurator.rateLimit(RateLimitBuilder.NAME, { brokerBarriers: [] });
+// @ts-expect-error Rate-limit brokerBarrier was replaced by brokerBarriers.
+void buildRateLimit().brokerBarrier;
+configurator.rateLimit(RateLimitBuilder.NAME, {
+  // @ts-expect-error Rate-limit broker was replaced by brokerBarriers.
+  broker: reviewBroker,
+});
+configurator.rateLimit(RateLimitBuilder.NAME, {
+  // @ts-expect-error An empty brokerBarriers iterable clears the axis.
+  clearBroker: true,
+});
+// @ts-expect-error RuleMode strings use exact PascalCase spelling.
+new RateLimitBrokerBarrier(rateLimit, "reject");
 
 const spotFundsName: string = SpotFundsBuilder.NAME;
 const spotFundsPnlName: string = SpotFundsPnlBoundsKillswitchBuilder.NAME;

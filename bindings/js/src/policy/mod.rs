@@ -332,8 +332,8 @@ export interface OrderSizeLimitReadyBuilder extends OrderSizeLimitBuilder {
  */
 export interface RateLimitReadyBuilder extends RateLimitBuilder {
   readonly [builtinReadyBuilderBrand]: true;
-  brokerBarrier(
-    ...args: Parameters<RateLimitBuilder["brokerBarrier"]>
+  brokerBarriers(
+    ...args: Parameters<RateLimitBuilder["brokerBarriers"]>
   ): RateLimitReadyBuilder;
   assetBarriers(
     ...args: Parameters<RateLimitBuilder["assetBarriers"]>

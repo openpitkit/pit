@@ -1037,7 +1037,7 @@ TEST(EngineConfigure, EmptyPolicyLifecycleRateLimit) {
     const char* name;
     std::uint64_t account;
     const char* settlement;
-    policies::RateLimitBrokerBarrierUpdate broker;
+    std::optional<std::vector<policies::RateLimitBrokerBarrier>> broker;
     std::optional<std::vector<policies::RateLimitAssetBarrier>> assets;
     std::optional<std::vector<policies::RateLimitAccountBarrier>> accounts;
     std::optional<std::vector<policies::RateLimitAccountAssetBarrier>>
@@ -1045,24 +1045,19 @@ TEST(EngineConfigure, EmptyPolicyLifecycleRateLimit) {
   };
   const std::array<AxisCase, 4> cases{{
       {"broker", 1001, "USD",
-       policies::RateLimitBrokerBarrierUpdate::Set(
-           policies::RateLimitBrokerBarrier(limit)),
-       std::nullopt, std::nullopt, std::nullopt},
-      {"asset", 1002, "EUR",
-       policies::RateLimitBrokerBarrierUpdate::Unchanged(),
+       std::vector{policies::RateLimitBrokerBarrier(limit)}, std::nullopt,
+       std::nullopt, std::nullopt},
+      {"asset", 1002, "EUR", std::nullopt,
        std::vector<policies::RateLimitAssetBarrier>{
            policies::RateLimitAssetBarrier(limit,
                                            openpit::param::Asset("EUR"))},
        std::nullopt, std::nullopt},
-      {"account", 1003, "GBP",
-       policies::RateLimitBrokerBarrierUpdate::Unchanged(), std::nullopt,
+      {"account", 1003, "GBP", std::nullopt, std::nullopt,
        std::vector<policies::RateLimitAccountBarrier>{
            policies::RateLimitAccountBarrier(limit,
                                              AccountId::FromUint64(1003))},
        std::nullopt},
-      {"account-asset", 1004, "JPY",
-       policies::RateLimitBrokerBarrierUpdate::Unchanged(), std::nullopt,
-       std::nullopt,
+      {"account-asset", 1004, "JPY", std::nullopt, std::nullopt, std::nullopt,
        std::vector<policies::RateLimitAccountAssetBarrier>{
            policies::RateLimitAccountAssetBarrier(
                limit, AccountId::FromUint64(1004),
@@ -1079,18 +1074,16 @@ TEST(EngineConfigure, EmptyPolicyLifecycleRateLimit) {
                                    test.accountAssets);
     };
     const auto clear = [&] {
+      auto brokers = test.broker;
       auto assets = test.assets;
       auto accounts = test.accounts;
       auto accountAssets = test.accountAssets;
+      if (brokers) brokers->clear();
       if (assets) assets->clear();
       if (accounts) accounts->clear();
       if (accountAssets) accountAssets->clear();
-      engine.Configure().RateLimit(
-          policies::RateLimitPolicyName,
-          test.broker.HasUpdate()
-              ? policies::RateLimitBrokerBarrierUpdate::Clear()
-              : policies::RateLimitBrokerBarrierUpdate::Unchanged(),
-          assets, accounts, accountAssets);
+      engine.Configure().RateLimit(policies::RateLimitPolicyName, brokers,
+                                   assets, accounts, accountAssets);
     };
     set();
     check(order, false);
@@ -1113,8 +1106,7 @@ TEST(EngineConfigure, EmptyPolicyLifecycleRateLimit) {
       openpit::param::Asset("AAPL"), openpit::param::Asset("CHF"));
   engine.Configure().RateLimit(
       policies::RateLimitPolicyName,
-      policies::RateLimitBrokerBarrierUpdate::Set(
-          policies::RateLimitBrokerBarrier(limit)),
+      std::vector{policies::RateLimitBrokerBarrier(limit)},
       std::vector<policies::RateLimitAssetBarrier>{
           policies::RateLimitAssetBarrier(limit, openpit::param::Asset("CHF"))},
       std::nullopt, std::nullopt);
@@ -1122,14 +1114,12 @@ TEST(EngineConfigure, EmptyPolicyLifecycleRateLimit) {
   check(order, true);
   ASSERT_NO_THROW(engine.Configure().RateLimit(
       policies::RateLimitPolicyName,
-      policies::RateLimitBrokerBarrierUpdate::Clear(), std::nullopt,
+      std::vector<policies::RateLimitBrokerBarrier>{}, std::nullopt,
       std::nullopt, std::nullopt));
   check(order, true);
-  engine.Configure().RateLimit(
-      policies::RateLimitPolicyName,
-      policies::RateLimitBrokerBarrierUpdate::Unchanged(),
-      std::vector<policies::RateLimitAssetBarrier>{}, std::nullopt,
-      std::nullopt);
+  engine.Configure().RateLimit(policies::RateLimitPolicyName, std::nullopt,
+                               std::vector<policies::RateLimitAssetBarrier>{},
+                               std::nullopt, std::nullopt);
   check(order, false);
   check(order, false);
 }
@@ -1249,10 +1239,9 @@ TEST(EngineConfigure, RateLimitUpdateChangesRuntimeBudget) {
 
   engine.Configure().RateLimit(
       policies::RateLimitPolicyName,
-      policies::RateLimitBrokerBarrierUpdate::Set(
-          policies::RateLimitBrokerBarrier(policies::RateLimit(
-              /*maxOrders=*/2,
-              /*windowNanoseconds=*/60'000'000'000))));
+      std::vector{policies::RateLimitBrokerBarrier(policies::RateLimit(
+          /*maxOrders=*/2,
+          /*windowNanoseconds=*/60'000'000'000))});
 
   EXPECT_TRUE(engine.StartPreTrade(TestOrder(1)).Passed());
   EXPECT_TRUE(engine.StartPreTrade(TestOrder(1)).Passed());
@@ -1264,16 +1253,281 @@ TEST(EngineConfigure, RateLimitUpdateChangesRuntimeBudget) {
   EXPECT_EQ(third.rejects.front().code, RejectCode::RateLimitExceeded);
 }
 
+TEST(RateLimitReview, BrokerModesCountIndependently) {
+  using openpit::reject::RuleMode;
+  EngineBuilder builder(SyncPolicy::None);
+  builder.Add(policies::RateLimitPolicy{}
+                  .BrokerBarrier(policies::RateLimitBrokerBarrier(
+                      policies::RateLimit(2, 3'600'000'000'000)))
+                  .BrokerBarrier(policies::RateLimitBrokerBarrier(
+                      policies::RateLimit(1, 3'600'000'000'000),
+                      RuleMode::ReviewWithoutHold)));
+  const Engine engine = builder.Build();
+  const auto order = TestOrder(1);
+
+  const auto first = engine.StartPreTrade(order);
+  ASSERT_TRUE(first.Passed());
+  EXPECT_TRUE(first.request->Reviews().empty());
+
+  auto second = engine.ExecutePreTrade(order);
+  ASSERT_TRUE(second.Passed());
+  const auto reviews = second.reservation->Reviews();
+  ASSERT_EQ(reviews.size(), 1u);
+  EXPECT_EQ(reviews.front().code, RejectCode::RateLimitExceeded);
+  EXPECT_EQ(reviews.front().mode, RuleMode::ReviewWithoutHold);
+  second.reservation->Commit();
+
+  const auto third = engine.StartPreTrade(order);
+  ASSERT_FALSE(third.Passed());
+  ASSERT_EQ(third.rejects.size(), 1u);
+  EXPECT_EQ(third.rejects.front().code, RejectCode::RateLimitExceeded);
+  EXPECT_EQ(third.rejects.front().mode, RuleMode::Reject);
+}
+
+TEST(RateLimitReview, ConfirmedSpendsBothThresholdsAndDropsReviewMarks) {
+  using openpit::reject::RuleMode;
+  for (const auto mode :
+       {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    EngineBuilder builder(SyncPolicy::None);
+    builder.Add(policies::RateLimitPolicy{}
+                    .BrokerBarrier(policies::RateLimitBrokerBarrier(
+                        policies::RateLimit(4, 3'600'000'000'000)))
+                    .BrokerBarrier(policies::RateLimitBrokerBarrier(
+                        policies::RateLimit(2, 3'600'000'000'000), mode)));
+    const Engine engine = builder.Build();
+    auto order = TestOrder(1);
+    const auto first = engine.StartPreTrade(order);
+    ASSERT_TRUE(first.Passed());
+    EXPECT_TRUE(first.request->Reviews().empty());
+
+    order.review.emplace().confirmed = true;
+    const auto confirmed = engine.StartPreTrade(order);
+    ASSERT_TRUE(confirmed.Passed());
+    EXPECT_TRUE(confirmed.request->Reviews().empty());
+
+    order.review->confirmed = false;
+    const auto next = engine.StartPreTrade(order);
+    ASSERT_TRUE(next.Passed());
+    const auto reviews = next.request->Reviews();
+    ASSERT_EQ(reviews.size(), 1u);
+    EXPECT_EQ(reviews.front().code, RejectCode::RateLimitExceeded);
+    EXPECT_EQ(reviews.front().mode, mode);
+
+    order.review->confirmed = true;
+    const auto confirmedExceeded = engine.StartPreTrade(order);
+    ASSERT_TRUE(confirmedExceeded.Passed());
+    EXPECT_TRUE(confirmedExceeded.request->Reviews().empty());
+
+    order.review->confirmed = false;
+    const auto exceeded = engine.StartPreTrade(order);
+    ASSERT_FALSE(exceeded.Passed());
+    ASSERT_EQ(exceeded.rejects.size(), 1u);
+    EXPECT_EQ(exceeded.rejects.front().code, RejectCode::RateLimitExceeded);
+    EXPECT_EQ(exceeded.rejects.front().mode, RuleMode::Reject);
+  }
+}
+
+TEST(RateLimitReview, DuplicateBrokerModeThrowsAtAddTo) {
+  const policies::RateLimitBrokerBarrier barrier(
+      policies::RateLimit(1, 3'600'000'000'000));
+  EngineBuilder builder(SyncPolicy::None);
+  try {
+    policies::RateLimitPolicy{}
+        .BrokerBarrier(barrier)
+        .BrokerBarrier(barrier)
+        .AddTo(builder);
+    FAIL() << "duplicate broker mode must throw openpit::Error";
+  } catch (const openpit::Error& error) {
+    EXPECT_NE(std::string(error.what()).find("Reject"), std::string::npos);
+  }
+}
+
+TEST(RateLimitReview, AssetDuplicatesFailButDifferentModesBuild) {
+  using openpit::reject::RuleMode;
+  const policies::RateLimit limit(1, 3'600'000'000'000);
+  const policies::RateLimitAssetBarrier barrier(limit,
+                                                openpit::param::Asset("USD"));
+  EngineBuilder duplicate(SyncPolicy::None);
+  EXPECT_THROW(policies::RateLimitPolicy{}
+                   .AssetBarrier(barrier)
+                   .AssetBarrier(barrier)
+                   .AddTo(duplicate),
+               openpit::Error);
+
+  EngineBuilder distinct(SyncPolicy::None);
+  distinct.Add(policies::RateLimitPolicy{}.AssetBarrier(barrier).AssetBarrier(
+      policies::RateLimitAssetBarrier(limit, openpit::param::Asset("USD"),
+                                      RuleMode::ReviewWithoutHold)));
+  EXPECT_TRUE(static_cast<bool>(distinct.Build()));
+}
+
+TEST(RateLimitReview, ConfigureDuplicatesLeaveEveryAxisUnchanged) {
+  const policies::RateLimit limit(0, 3'600'000'000'000);
+  const policies::RateLimitBrokerBarrier broker(limit);
+  const policies::RateLimitAssetBarrier asset(limit,
+                                              openpit::param::Asset("USD"));
+  const policies::RateLimitAccountBarrier account(limit,
+                                                  AccountId::FromUint64(1));
+  const policies::RateLimitAccountAssetBarrier accountAsset(
+      limit, AccountId::FromUint64(1), openpit::param::Asset("USD"));
+  for (int axis = 0; axis < 4; ++axis) {
+    SCOPED_TRACE(axis);
+    EngineBuilder builder(SyncPolicy::None);
+    builder.Add(policies::RateLimitPolicy{}.BrokerBarrier(broker));
+    const Engine engine = builder.Build();
+    try {
+      engine.Configure().RateLimit(
+          policies::RateLimitPolicyName,
+          axis == 0 ? std::vector{broker, broker}
+                    : std::vector<policies::RateLimitBrokerBarrier>{},
+          axis == 1 ? std::vector{asset, asset}
+                    : std::vector<policies::RateLimitAssetBarrier>{},
+          axis == 2 ? std::vector{account, account}
+                    : std::vector<policies::RateLimitAccountBarrier>{},
+          axis == 3 ? std::vector{accountAsset, accountAsset}
+                    : std::vector<policies::RateLimitAccountAssetBarrier>{});
+      FAIL() << "duplicate (key, mode) must throw ConfigureError";
+    } catch (const openpit::ConfigureError& error) {
+      EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
+      EXPECT_NE(std::string(error.what()).find("Reject"), std::string::npos);
+    }
+    const auto result = engine.StartPreTrade(TestOrder(1));
+    ASSERT_FALSE(result.Passed());
+    ASSERT_EQ(result.rejects.size(), 1u);
+    EXPECT_EQ(result.rejects.front().reason,
+              "rate limit exceeded: broker barrier");
+  }
+}
+
+TEST(RateLimitReview, ConfigureBrokersReplacePreserveAndClearAllModes) {
+  using openpit::reject::RuleMode;
+  EngineBuilder builder(SyncPolicy::None);
+  builder.Add(policies::RateLimitPolicy{}
+                  .BrokerBarrier(policies::RateLimitBrokerBarrier(
+                      policies::RateLimit(1, 3'600'000'000'000)))
+                  .BrokerBarrier(policies::RateLimitBrokerBarrier(
+                      policies::RateLimit(0, 3'600'000'000'000),
+                      RuleMode::ReviewWithoutHold)));
+  const Engine engine = builder.Build();
+  const auto order = TestOrder(1);
+  const auto first = engine.StartPreTrade(order);
+  ASSERT_TRUE(first.Passed());
+  ASSERT_EQ(first.request->Reviews().size(), 1u);
+  engine.Configure().RateLimit(policies::RateLimitPolicyName, std::nullopt);
+  const auto second = engine.StartPreTrade(order);
+  ASSERT_FALSE(second.Passed());
+  ASSERT_EQ(second.rejects.size(), 1u);
+  EXPECT_EQ(second.rejects.front().code, RejectCode::RateLimitExceeded);
+
+  engine.Configure().RateLimit(policies::RateLimitPolicyName,
+                               std::vector<policies::RateLimitBrokerBarrier>{});
+  const auto clearedBoth = engine.StartPreTrade(order);
+  ASSERT_TRUE(clearedBoth.Passed());
+  EXPECT_TRUE(clearedBoth.request->Reviews().empty());
+
+  engine.Configure().RateLimit(
+      policies::RateLimitPolicyName,
+      std::vector{policies::RateLimitBrokerBarrier(
+                      policies::RateLimit(1, 3'600'000'000'000)),
+                  policies::RateLimitBrokerBarrier(
+                      policies::RateLimit(0, 3'600'000'000'000),
+                      RuleMode::ReviewWithoutHold)});
+  engine.Configure().RateLimit(policies::RateLimitPolicyName,
+                               std::vector{policies::RateLimitBrokerBarrier(
+                                   policies::RateLimit(0, 3'600'000'000'000),
+                                   RuleMode::ReviewWithHold)});
+  const auto replaced = engine.StartPreTrade(order);
+  ASSERT_TRUE(replaced.Passed());
+  const auto reviews = replaced.request->Reviews();
+  ASSERT_EQ(reviews.size(), 1u);
+  EXPECT_EQ(reviews.front().mode, RuleMode::ReviewWithHold);
+
+  engine.Configure().RateLimit(policies::RateLimitPolicyName,
+                               std::vector<policies::RateLimitBrokerBarrier>{});
+  const auto cleared = engine.StartPreTrade(order);
+  ASSERT_TRUE(cleared.Passed());
+  EXPECT_TRUE(cleared.request->Reviews().empty());
+}
+
+TEST(RateLimitReview, EveryAxisForwardsModeAtBuildAndConfigure) {
+  using openpit::reject::RuleMode;
+  const policies::RateLimit limit(0, 3'600'000'000'000);
+  EXPECT_EQ(policies::RateLimitBrokerBarrier(limit).mode, RuleMode::Reject);
+  EXPECT_EQ(
+      policies::RateLimitAssetBarrier(limit, openpit::param::Asset("USD")).mode,
+      RuleMode::Reject);
+  EXPECT_EQ(
+      policies::RateLimitAccountBarrier(limit, AccountId::FromUint64(1)).mode,
+      RuleMode::Reject);
+  EXPECT_EQ(policies::RateLimitAccountAssetBarrier(
+                limit, AccountId::FromUint64(1), openpit::param::Asset("USD"))
+                .mode,
+            RuleMode::Reject);
+  for (const bool configure : {false, true}) {
+    for (int axis = 0; axis < 4; ++axis) {
+      for (const auto mode : {RuleMode::Reject, RuleMode::ReviewWithHold,
+                              RuleMode::ReviewWithoutHold}) {
+        SCOPED_TRACE(configure);
+        SCOPED_TRACE(axis);
+        SCOPED_TRACE(static_cast<int>(mode));
+        policies::RateLimitPolicy policy;
+        std::vector<policies::RateLimitBrokerBarrier> brokers;
+        std::vector<policies::RateLimitAssetBarrier> assets;
+        std::vector<policies::RateLimitAccountBarrier> accounts;
+        std::vector<policies::RateLimitAccountAssetBarrier> accountAssets;
+        switch (axis) {
+          case 0:
+            brokers.emplace_back(limit, mode);
+            policy.BrokerBarrier(brokers.front());
+            break;
+          case 1:
+            assets.emplace_back(limit, openpit::param::Asset("USD"), mode);
+            policy.AssetBarrier(assets.front());
+            break;
+          case 2:
+            accounts.emplace_back(limit, AccountId::FromUint64(1), mode);
+            policy.AccountBarrier(accounts.front());
+            break;
+          case 3:
+            accountAssets.emplace_back(limit, AccountId::FromUint64(1),
+                                       openpit::param::Asset("USD"), mode);
+            policy.AccountAssetBarrier(accountAssets.front());
+            break;
+        }
+        EngineBuilder builder(SyncPolicy::None);
+        builder.Add(configure ? policies::RateLimitPolicy{} : policy);
+        const Engine engine = builder.Build();
+        if (configure) {
+          engine.Configure().RateLimit(policies::RateLimitPolicyName, brokers,
+                                       assets, accounts, accountAssets);
+        }
+        const auto result = engine.StartPreTrade(TestOrder(1));
+        if (mode == RuleMode::Reject) {
+          ASSERT_FALSE(result.Passed());
+          ASSERT_EQ(result.rejects.size(), 1u);
+          EXPECT_EQ(result.rejects.front().code, RejectCode::RateLimitExceeded);
+        } else {
+          ASSERT_TRUE(result.Passed());
+          const auto reviews = result.request->Reviews();
+          ASSERT_EQ(reviews.size(), 1u);
+          EXPECT_EQ(reviews.front().code, RejectCode::RateLimitExceeded);
+          EXPECT_EQ(reviews.front().mode, mode);
+        }
+      }
+    }
+  }
+}
+
 TEST(EngineConfigure, UnknownPolicyThrowsStructuredConfigureError) {
   Engine engine = SingleOrderEngine();
 
   try {
     engine.Configure().RateLimit(
         "MissingPolicy",
-        policies::RateLimitBrokerBarrierUpdate::Set(
-            policies::RateLimitBrokerBarrier(policies::RateLimit(
-                /*maxOrders=*/2,
-                /*windowNanoseconds=*/60'000'000'000))));
+        std::vector{policies::RateLimitBrokerBarrier(policies::RateLimit(
+            /*maxOrders=*/2,
+            /*windowNanoseconds=*/60'000'000'000))});
     FAIL() << "Configure().RateLimit should have thrown";
   } catch (const openpit::ConfigureError& error) {
     EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Unknown);
@@ -1289,7 +1543,7 @@ TEST(EngineConfigure, RateLimitBrokerUpdateCanClearOrRemainUnchanged) {
   Engine cleared = BrokerAndAssetRateLimitEngine();
   cleared.Configure().RateLimit(
       policies::RateLimitPolicyName,
-      policies::RateLimitBrokerBarrierUpdate::Clear());
+      std::vector<policies::RateLimitBrokerBarrier>{});
   EXPECT_TRUE(cleared.StartPreTrade(TestOrder(1)).Passed());
   EXPECT_TRUE(cleared.StartPreTrade(TestOrder(1)).Passed());
 }

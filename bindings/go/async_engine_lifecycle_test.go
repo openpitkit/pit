@@ -93,13 +93,13 @@ func TestAsyncEngineEmptyPolicyLifecycle(t *testing.T) {
 	check(0)
 	for cycle := 0; cycle < 2; cycle++ {
 		if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
-			&policies.RateLimitBrokerBarrier{Limit: policies.RateLimit{MaxOrders: 0, Window: time.Hour}}, nil, nil, nil); err != nil {
+			[]policies.RateLimitBrokerBarrier{{Mode: reject.RuleModeReject, Limit: policies.RateLimit{MaxOrders: 0, Window: time.Hour}}}, nil, nil, nil); err != nil {
 			t.Fatalf("Configure().RateLimit() error = %v", err)
 		}
 		check(reject.CodeRateLimitExceeded)
-		if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
-			optional.Some[*policies.RateLimitBrokerBarrier](nil), nil, nil, nil); err != nil {
-			t.Fatalf("Configure().RateLimitUpdate(clear) error = %v", err)
+		if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+			[]policies.RateLimitBrokerBarrier{}, nil, nil, nil); err != nil {
+			t.Fatalf("Configure().RateLimit(clear) error = %v", err)
 		}
 		check(0)
 		if err := engine.Configure().OrderSizeLimit(policies.OrderSizeLimitPolicyName,

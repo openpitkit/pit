@@ -1917,6 +1917,11 @@ struct OpenPitPretradePoliciesOrderSizeBrokerBarrier {
  */
 struct OpenPitPretradePoliciesRateLimitBrokerBarrier {
     /**
+     * Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold. Values
+     * greater than 3 are an error.
+     */
+    OpenPitPretradeRuleMode mode;
+    /**
      * Maximum number of orders accepted within the window.
      */
     size_t max_orders;
@@ -1935,6 +1940,11 @@ struct OpenPitPretradePoliciesRateLimitAccountBarrier {
      * Account this barrier applies to.
      */
     OpenPitParamAccountId account_id;
+    /**
+     * Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold. Values
+     * greater than 3 are an error.
+     */
+    OpenPitPretradeRuleMode mode;
     /**
      * Maximum number of orders accepted within the window.
      */
@@ -2717,6 +2727,11 @@ struct OpenPitPretradePoliciesRateLimitAssetBarrier {
      */
     OpenPitStringView settlement_asset;
     /**
+     * Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold. Values
+     * greater than 3 are an error.
+     */
+    OpenPitPretradeRuleMode mode;
+    /**
      * Maximum number of orders accepted within the window.
      */
     size_t max_orders;
@@ -2739,6 +2754,11 @@ struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
      * Settlement asset this barrier applies to.
      */
     OpenPitStringView settlement_asset;
+    /**
+     * Rule mode: 0 or 1 Reject, 2 ReviewWithHold, 3 ReviewWithoutHold. Values
+     * greater than 3 are an error.
+     */
+    OpenPitPretradeRuleMode mode;
     /**
      * Maximum number of orders accepted within the window.
      */
@@ -7834,13 +7854,18 @@ bool openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
  * - `builder` must be a valid engine builder pointer.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for
  *   default).
- * - Every axis may be empty (null `broker`, zero array lengths). The policy
+ * - Every axis may be empty (zero lengths, pointers may be null). The policy
  *   then admits every order and can be configured later through
  *   `openpit_engine_configure_rate_limit`.
  * - When a length is greater than zero the corresponding pointer must point
  *   to that many readable entries.
  * - Each `settlement_asset` string view inside an array entry must be valid
  *   for the duration of the call.
+ * - Each barrier's `mode` is 0 or 1 for Reject, 2 for ReviewWithHold, or 3
+ *   for ReviewWithoutHold; values greater than 3 are an error.
+ * - Broker barriers are an array keyed by mode. Other axes are keyed by
+ *   their target and mode. A repeated (key, mode) within one call fails the
+ *   whole call and leaves the settings unchanged.
  *
  * Success:
  * - returns `true`; the builder retains the policy.
@@ -7855,6 +7880,7 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
     OpenPitEngineBuilder * builder,
     uint16_t policy_group_id,
     const OpenPitPretradePoliciesRateLimitBrokerBarrier * broker,
+    size_t broker_len,
     const OpenPitPretradePoliciesRateLimitAssetBarrier * asset,
     size_t asset_len,
     const OpenPitPretradePoliciesRateLimitAccountBarrier * account,
@@ -7870,11 +7896,10 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
  *
  * This is a partial update (PATCH): each axis is touched only when its `has_*`
  * flag is `true`. A touched axis is replaced wholesale - barriers can be added
- * and removed at runtime. A barrier key that survives the replacement keeps
+ * and removed at runtime. A (key, mode) that survives the replacement keeps
  * its live counter (no reset). An empty axis (`len` 0 with `has_*` true)
- * clears it. Setting `has_broker` to `true` with a null `broker` pointer
- * clears the broker barrier. Clearing every axis is valid; the policy then
- * admits every order and can be configured again through this function.
+ * clears every mode on that axis. Clearing every axis is valid; the policy
+ * then admits every order and can be configured again through this function.
  *
  * Clearing an account or account+asset key retains its stored sliding log,
  * even when every axis becomes empty; re-adding that key counts orders still
@@ -7886,15 +7911,17 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
  *   added via `openpit_engine_builder_add_builtin_rate_limit_policy`
  *   registers under its fixed name `"RateLimitPolicy"`, so pass that string
  *   here.
- * - When `has_broker` is `true` and `broker` is non-null, it must point to
- *   one readable entry whose `max_orders`/`window_nanoseconds` replace the
- *   broker barrier; a null `broker` with `has_broker` true clears it.
- * - When `has_asset`/`has_account`/`has_account_asset` is `true`, the
- *   matching pointer must point to `*_len` readable entries (a length of
- *   zero clears that axis). Each `settlement_asset` view must be valid for
- *   the duration of the call.
+ * - When `has_broker`/`has_asset`/`has_account`/`has_account_asset` is
+ *   `true`, the matching pointer must point to `*_len` readable entries (a
+ *   length of zero clears that axis and allows a null pointer). Each
+ *   `settlement_asset` view must be valid for the duration of the call.
  * - A `has_*` flag set to `false` leaves that axis untouched regardless of
  *   the pointer/length arguments.
+ * - Each barrier's `mode` is 0 or 1 for Reject, 2 for ReviewWithHold, or 3
+ *   for ReviewWithoutHold; values greater than 3 are a Validation error.
+ * - Broker barriers are an array keyed by mode. Other axes are keyed by
+ *   their target and mode. A repeated (key, mode) within one call fails the
+ *   whole call with Validation and leaves the settings unchanged.
  *
  * Success:
  * - returns `true`; the new limits apply from the next order onward,
@@ -7913,6 +7940,7 @@ bool openpit_engine_configure_rate_limit(
     OpenPitEngine * engine,
     OpenPitStringView name,
     const OpenPitPretradePoliciesRateLimitBrokerBarrier * broker,
+    size_t broker_len,
     bool has_broker,
     const OpenPitPretradePoliciesRateLimitAssetBarrier * asset,
     size_t asset_len,

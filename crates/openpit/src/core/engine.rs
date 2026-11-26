@@ -4554,12 +4554,13 @@ mod tests {
     fn drop_copy_rollback_does_not_refund_rate_limit_attempt() {
         let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
         let settings = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -4979,12 +4980,13 @@ mod tests {
     fn drop_copy_fatal_reject_consumes_rate_limit_like_ordinary_pre_trade() {
         let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
         let settings = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -5016,9 +5018,10 @@ mod tests {
         let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
         let order = order_with_settlement("USD");
         let settings = RateLimitSettings::new(
-            None,
+            [],
             [],
             [RateLimitAccountBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 account_id: order.account_id().expect("test order has an account"),
                 limit: RateLimit {
                     max_orders: 1,
@@ -5052,10 +5055,11 @@ mod tests {
         let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
         let order = order_with_settlement("USD");
         let settings = RateLimitSettings::new(
-            None,
+            [],
             [],
             [],
             [RateLimitAccountAssetBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 account_id: order.account_id().expect("test order has an account"),
                 settlement_asset: Asset::new("USD").expect("asset must be valid"),
                 limit: RateLimit {

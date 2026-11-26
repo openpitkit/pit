@@ -277,9 +277,10 @@ fn order_review_flags<Order: HasConfirmed + HasAlreadyHeld>(
 ///
 /// let rate_policy = RateLimitPolicy::new(
 ///     RateLimitSettings::new(
-///         Some(RateLimitBrokerBarrier {
+///         [RateLimitBrokerBarrier {
+///             mode: openpit::pretrade::RuleMode::Reject,
 ///             limit: RateLimit { max_orders: 100, window: Duration::from_secs(1) },
-///         }),
+///         }],
 ///         [],
 ///         [],
 ///         [],
@@ -574,12 +575,13 @@ where
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use std::time::Duration;
     /// use openpit::{Engine, OrderOperation, PolicyInstance};
+    /// use openpit::pretrade::RuleMode;
     /// use openpit::pretrade::policies::{
     ///     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
     /// };
     ///
     /// let builder = Engine::builder::<OrderOperation, (), ()>().no_sync();
-    /// let settings = RateLimitSettings::new(None, [], [], [])?;
+    /// let settings = RateLimitSettings::new([], [], [], [])?;
     /// let first =
     ///     RateLimitPolicy::new(settings.clone(), builder.storage_builder());
     /// let second = RateLimitPolicy::new(settings, builder.storage_builder());
@@ -594,9 +596,10 @@ where
     ///     })
     ///     .build()?;
     /// for (name, max_orders) in [("first", 10), ("second", 20)] {
-    ///     let settings = RateLimitSettings::new(Some(RateLimitBrokerBarrier {
+    ///     let settings = RateLimitSettings::new([RateLimitBrokerBarrier {
+    ///         mode: RuleMode::Reject,
     ///         limit: RateLimit { max_orders, window: Duration::from_secs(1) },
-    ///     }), [], [], [])?;
+    ///     }], [], [], [])?;
     ///     engine.configure().rate_limit(name, |current| {
     ///         *current = settings;
     ///         Ok::<_, std::convert::Infallible>(())

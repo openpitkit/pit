@@ -102,63 +102,52 @@ func rateLimitWindowNanoseconds(limit policies.RateLimit) int64 {
 
 // RateLimit updates the runtime settings of the named rate-limit policy.
 //
-// broker, assets, accounts, and accountAssets mirror the axis types accepted by
+// brokers, assets, accounts, and accountAssets mirror the axis types accepted by
 // [policies.RateLimitReadyBuilder]. A non-nil axis replaces that axis
-// wholesale; barriers can be added and removed at runtime. A barrier key that
-// survives the replacement keeps its live counter (no reset). An empty non-nil
-// slice clears the axis. Clearing every axis is valid and admits every order.
+// across every mode; barriers can be added and removed at runtime. A (key, mode)
+// that survives the replacement keeps its live counter (no reset). An empty
+// non-nil slice clears every mode on the axis. Clearing every axis admits every
+// order. A repeated (key, mode) in one call returns a *Error with kind
+// ErrorKindValidation and leaves the settings unchanged.
 // Clearing an account or account+asset barrier keeps its sliding-window log;
 // re-adding the key resumes counting orders still inside its window.
-// Nil axes and nil broker are left unchanged.
+// Nil axes are left unchanged.
 //
 // Returns a *Error on a domain error (kind TypeMismatch when the name belongs
 // to a different policy type, Validation when values are invalid).
 func (c Configurator) RateLimit(
 	name string,
-	broker *policies.RateLimitBrokerBarrier,
+	brokers []policies.RateLimitBrokerBarrier,
 	assets []policies.RateLimitAssetBarrier,
 	accounts []policies.RateLimitAccountBarrier,
 	accountAssets []policies.RateLimitAccountAssetBarrier,
 ) error {
-	return c.RateLimitUpdate(
-		name,
-		optional.From(broker, broker != nil),
-		assets,
-		accounts,
-		accountAssets,
-	)
-}
-
-// RateLimitUpdate updates the named rate-limit policy and can also clear the
-// broker barrier.
-//
-// broker uses three states: optional.None leaves the broker unchanged,
-// optional.Some(nil) clears it, and optional.Some(&barrier) sets/replaces it.
-// Slice arguments use the same semantics as [Configurator.RateLimit].
-func (c Configurator) RateLimitUpdate(
-	name string,
-	broker optional.Option[*policies.RateLimitBrokerBarrier],
-	assets []policies.RateLimitAssetBarrier,
-	accounts []policies.RateLimitAccountBarrier,
-	accountAssets []policies.RateLimitAccountAssetBarrier,
-) error {
-	var nativeBroker *native.PretradePoliciesRateLimitBrokerBarrier
-	brokerValue, hasBroker := broker.Get()
-	if hasBroker && brokerValue != nil {
-		windowNanos := rateLimitWindowNanoseconds(brokerValue.Limit)
-		b := native.NewPretradePoliciesRateLimitBrokerBarrier(
-			brokerValue.Limit.MaxOrders,
-			windowNanos,
-		)
-		nativeBroker = ptr.New(b)
+	var nativeBrokers []native.PretradePoliciesRateLimitBrokerBarrier
+	if brokers != nil {
+		nativeBrokers = make([]native.PretradePoliciesRateLimitBrokerBarrier, 0, len(brokers))
+		for i, b := range brokers {
+			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(b.Mode), "broker", i); err != nil {
+				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
+			}
+			windowNanos := rateLimitWindowNanoseconds(b.Limit)
+			nativeBrokers = append(nativeBrokers, native.NewPretradePoliciesRateLimitBrokerBarrier(
+				native.PretradeRuleMode(b.Mode),
+				b.Limit.MaxOrders,
+				windowNanos,
+			))
+		}
 	}
 
 	var nativeAssets []native.PretradePoliciesRateLimitAssetBarrier
 	if assets != nil {
 		nativeAssets = make([]native.PretradePoliciesRateLimitAssetBarrier, 0, len(assets))
-		for _, a := range assets {
+		for i, a := range assets {
+			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(a.Mode), "asset", i); err != nil {
+				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
+			}
 			windowNanos := rateLimitWindowNanoseconds(a.Limit)
 			nativeAssets = append(nativeAssets, native.NewPretradePoliciesRateLimitAssetBarrier(
+				native.PretradeRuleMode(a.Mode),
 				a.Limit.MaxOrders,
 				windowNanos,
 				a.SettlementAsset.Handle(),
@@ -169,9 +158,13 @@ func (c Configurator) RateLimitUpdate(
 	var nativeAccounts []native.PretradePoliciesRateLimitAccountBarrier
 	if accounts != nil {
 		nativeAccounts = make([]native.PretradePoliciesRateLimitAccountBarrier, 0, len(accounts))
-		for _, a := range accounts {
+		for i, a := range accounts {
+			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(a.Mode), "account", i); err != nil {
+				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
+			}
 			windowNanos := rateLimitWindowNanoseconds(a.Limit)
 			nativeAccounts = append(nativeAccounts, native.NewPretradePoliciesRateLimitAccountBarrier(
+				native.PretradeRuleMode(a.Mode),
 				a.AccountID.Handle(),
 				a.Limit.MaxOrders,
 				windowNanos,
@@ -182,11 +175,15 @@ func (c Configurator) RateLimitUpdate(
 	var nativeAccountAssets []native.PretradePoliciesRateLimitAccountAssetBarrier
 	if accountAssets != nil {
 		nativeAccountAssets = make([]native.PretradePoliciesRateLimitAccountAssetBarrier, 0, len(accountAssets))
-		for _, a := range accountAssets {
+		for i, a := range accountAssets {
+			if err := native.ValidateRateLimitMode(native.PretradeRuleMode(a.Mode), "account_asset", i); err != nil {
+				return &Error{Message: err.Error(), Kind: ErrorKindValidation}
+			}
 			windowNanos := rateLimitWindowNanoseconds(a.Limit)
 			nativeAccountAssets = append(
 				nativeAccountAssets,
 				native.NewPretradePoliciesRateLimitAccountAssetBarrier(
+					native.PretradeRuleMode(a.Mode),
 					a.AccountID.Handle(),
 					a.Limit.MaxOrders,
 					windowNanos,
@@ -199,8 +196,7 @@ func (c Configurator) RateLimitUpdate(
 	configErr := native.EngineConfigureRateLimit(
 		c.engine,
 		name,
-		nativeBroker,
-		hasBroker,
+		nativeBrokers,
 		nativeAssets,
 		nativeAccounts,
 		nativeAccountAssets,

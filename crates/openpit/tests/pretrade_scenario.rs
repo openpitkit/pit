@@ -93,12 +93,13 @@ fn integration_scenario_rate_limit_then_kill_switch() {
     ));
     let rate_policy = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_millis(500),
                 },
-            }),
+            }],
             [],
             [],
             [],

@@ -36,13 +36,17 @@ class Configurator {
   explicit Configurator(const ::openpit::Engine& engine) noexcept
       : m_engine(::openpit::detail::Native(engine)) {}
 
+  /// A set axis replaces every mode on it; an empty vector clears the axis.
+  /// An omitted axis is unchanged. A surviving (key, mode) keeps its live
+  /// counter. A repeated (key, mode) in one call throws ConfigureError
+  /// (Validation) and leaves the settings unchanged.
   /// Clearing an account or account+asset barrier keeps its sliding-window log;
-  /// re-adding the key resumes counting orders still inside its window.
+  /// re-adding the (key, mode) resumes counting within that window.
   void RateLimit(
       std::string_view name,
-      ::openpit::pretrade::policies::RateLimitBrokerBarrierUpdate broker =
-          ::openpit::pretrade::policies::RateLimitBrokerBarrierUpdate::
-              Unchanged(),
+      std::optional<
+          std::vector<::openpit::pretrade::policies::RateLimitBrokerBarrier>>
+          brokers = std::nullopt,
       std::optional<
           std::vector<::openpit::pretrade::policies::RateLimitAssetBarrier>>
           assets = std::nullopt,
@@ -52,12 +56,16 @@ class Configurator {
       std::optional<std::vector<
           ::openpit::pretrade::policies::RateLimitAccountAssetBarrier>>
           accountAssets = std::nullopt) const {
-    OpenPitPretradePoliciesRateLimitBrokerBarrier brokerRaw{};
-    const OpenPitPretradePoliciesRateLimitBrokerBarrier* brokerPtr = nullptr;
-    if (broker.Barrier()) {
-      brokerRaw.max_orders = broker.Barrier()->limit.maxOrders;
-      brokerRaw.window_nanoseconds = broker.Barrier()->limit.windowNanoseconds;
-      brokerPtr = &brokerRaw;
+    std::vector<OpenPitPretradePoliciesRateLimitBrokerBarrier> brokerRaw;
+    if (brokers) {
+      brokerRaw.reserve(brokers->size());
+      for (const auto& barrier : *brokers) {
+        OpenPitPretradePoliciesRateLimitBrokerBarrier raw{};
+        raw.max_orders = barrier.limit.maxOrders;
+        raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+        raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
+        brokerRaw.push_back(raw);
+      }
     }
 
     std::vector<OpenPitPretradePoliciesRateLimitAssetBarrier> assetRaw;
@@ -69,6 +77,7 @@ class Configurator {
             ::openpit::detail::Native(barrier.settlementAsset);
         raw.max_orders = barrier.limit.maxOrders;
         raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+        raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
         assetRaw.push_back(raw);
       }
     }
@@ -81,6 +90,7 @@ class Configurator {
         raw.account_id = ::openpit::detail::Native(barrier.accountId);
         raw.max_orders = barrier.limit.maxOrders;
         raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+        raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
         accountRaw.push_back(raw);
       }
     }
@@ -96,16 +106,17 @@ class Configurator {
             ::openpit::detail::Native(barrier.settlementAsset);
         raw.max_orders = barrier.limit.maxOrders;
         raw.window_nanoseconds = barrier.limit.windowNanoseconds;
+        raw.mode = static_cast<OpenPitPretradeRuleMode>(barrier.mode);
         accountAssetRaw.push_back(raw);
       }
     }
 
     OpenPitConfigureError* error = nullptr;
     if (!openpit_engine_configure_rate_limit(
-            m_engine, ::openpit::detail::MakeStringView(name), brokerPtr,
-            broker.HasUpdate(), assetRaw.data(), assetRaw.size(),
-            assets.has_value(), accountRaw.data(), accountRaw.size(),
-            accounts.has_value(), accountAssetRaw.data(),
+            m_engine, ::openpit::detail::MakeStringView(name), brokerRaw.data(),
+            brokerRaw.size(), brokers.has_value(), assetRaw.data(),
+            assetRaw.size(), assets.has_value(), accountRaw.data(),
+            accountRaw.size(), accounts.has_value(), accountAssetRaw.data(),
             accountAssetRaw.size(), accountAssets.has_value(), &error)) {
       ::openpit::detail::ThrowFromConfigureError(
           error, "openpit_engine_configure_rate_limit failed");

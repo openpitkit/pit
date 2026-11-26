@@ -112,7 +112,7 @@ def test_rate_limit_configuration_uses_named_entities() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
             )
         )
@@ -124,7 +124,7 @@ def test_rate_limit_configuration_uses_named_entities() -> None:
 
     engine.configure().rate_limit(
         policies.RateLimitBuilder.NAME,
-        broker=policies.RateLimitBrokerBarrier(limit=_rate_limit(2)),
+        broker_barriers=[policies.RateLimitBrokerBarrier(limit=_rate_limit(2))],
         asset_barriers=[
             policies.RateLimitAssetBarrier(
                 limit=_rate_limit(10),
@@ -329,9 +329,11 @@ def test_empty_policy_lifecycle_rate_limit() -> None:
     axes = [
         (
             lambda count: {
-                "broker": policies.RateLimitBrokerBarrier(limit=_rate_limit(count))
+                "broker_barriers": [
+                    policies.RateLimitBrokerBarrier(limit=_rate_limit(count))
+                ]
             },
-            {"clear_broker": True},
+            {"broker_barriers": []},
             conftest.make_order(),
             False,
         ),
@@ -389,7 +391,7 @@ def test_empty_policy_lifecycle_rate_limit() -> None:
 
         configure.rate_limit(
             name,
-            broker=None,
+            broker_barriers=None,
             asset_barriers=None,
             account_barriers=None,
             account_asset_barriers=None,
@@ -417,7 +419,7 @@ def test_empty_policy_lifecycle_rate_limit() -> None:
         assert engine.start_pre_trade(order=order).ok
 
     configure.rate_limit(
-        name, broker=policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
+        name, broker_barriers=[policies.RateLimitBrokerBarrier(limit=_rate_limit(1))]
     )
     assert engine.start_pre_trade(order=conftest.make_order()).ok
     reactivated = engine.start_pre_trade(order=conftest.make_order())
@@ -425,7 +427,7 @@ def test_empty_policy_lifecycle_rate_limit() -> None:
     assert (
         reactivated.rejects[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
     )
-    configure.rate_limit(name, clear_broker=True)
+    configure.rate_limit(name, broker_barriers=[])
     assert engine.start_pre_trade(order=conftest.make_order()).ok
 
 
@@ -527,7 +529,7 @@ def test_rate_limit_configuration_can_clear_broker_barrier() -> None:
         .no_sync()
         .builtin(
             policies.build_rate_limit()
-            .broker_barrier(policies.RateLimitBrokerBarrier(limit=_rate_limit(1)))
+            .broker_barriers(policies.RateLimitBrokerBarrier(limit=_rate_limit(1)))
             .account_barriers(
                 policies.RateLimitAccountBarrier(
                     limit=_rate_limit(10),
@@ -545,10 +547,117 @@ def test_rate_limit_configuration_can_clear_broker_barrier() -> None:
 
     engine.configure().rate_limit(
         policies.RateLimitBuilder.NAME,
-        clear_broker=True,
+        broker_barriers=[],
     )
 
     assert engine.start_pre_trade(order=conftest.make_order()).ok
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mode",
+    [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+    ],
+)
+def test_rate_limit_broker_patch_preserves_review_counter(
+    mode: openpit.pretrade.RuleMode,
+) -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barriers(
+                policies.RateLimitBrokerBarrier(limit=_rate_limit(3), mode=mode)
+            )
+        )
+        .build()
+    )
+    order = conftest.make_order()
+    for _ in range(2):
+        before = engine.start_pre_trade(order=order)
+        assert before.ok
+        assert before.reviews == []
+    engine.configure().rate_limit(
+        policies.RateLimitBuilder.NAME,
+        broker_barriers=[
+            policies.RateLimitBrokerBarrier(limit=_rate_limit(4), mode=mode)
+        ],
+    )
+    for _ in range(2):
+        within_limit = engine.start_pre_trade(order=order)
+        assert within_limit.ok
+        assert within_limit.reviews == []
+    exceeded = engine.start_pre_trade(order=order)
+    assert exceeded.ok
+    assert len(exceeded.reviews) == 1
+    assert exceeded.reviews[0].mode == mode
+    assert exceeded.reviews[0].code == openpit.pretrade.RejectCode.RATE_LIMIT_EXCEEDED
+
+
+@pytest.mark.unit
+def test_rate_limit_broker_patch_preserves_or_clears_every_mode() -> None:
+    policies = openpit.pretrade.policies
+    barriers = [
+        policies.RateLimitBrokerBarrier(limit=_rate_limit(2)),
+        policies.RateLimitBrokerBarrier(
+            limit=_rate_limit(0),
+            mode=openpit.pretrade.RuleMode.REVIEW_WITHOUT_HOLD,
+        ),
+    ]
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(policies.build_rate_limit().broker_barriers(*barriers))
+        .build()
+    )
+    configure = engine.configure()
+    name = policies.RateLimitBuilder.NAME
+    configure.rate_limit(name)
+    first = engine.start_pre_trade(order=conftest.make_order())
+    assert first.ok
+    assert len(first.reviews) == 1
+    configure.rate_limit(name, broker_barriers=None)
+    second = engine.start_pre_trade(order=conftest.make_order())
+    assert second.ok
+    assert len(second.reviews) == 1
+    assert not engine.start_pre_trade(order=conftest.make_order()).ok
+    configure.rate_limit(name, broker_barriers=[barriers[1]])
+    replaced = engine.start_pre_trade(order=conftest.make_order())
+    assert replaced.ok
+    assert len(replaced.reviews) == 1
+    configure.rate_limit(name, broker_barriers=barriers)
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+    assert not engine.start_pre_trade(order=conftest.make_order()).ok
+    configure.rate_limit(name, broker_barriers=[])
+    cleared = engine.start_pre_trade(order=conftest.make_order())
+    assert cleared.ok
+    assert cleared.reviews == []
+
+
+@pytest.mark.unit
+def test_rate_limit_negative_window_at_configure_raises_value_error() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barriers(
+                policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
+            )
+        )
+        .build()
+    )
+    barrier = policies.RateLimitBrokerBarrier(
+        limit=policies.RateLimit(1, datetime.timedelta(seconds=-1))
+    )
+    with pytest.raises(ValueError, match="^RateLimit.window must not be negative$"):
+        engine.configure().rate_limit(
+            policies.RateLimitBuilder.NAME, broker_barriers=[barrier]
+        )
 
 
 @pytest.mark.unit
@@ -956,25 +1065,30 @@ def test_spot_funds_pnl_runtime_global_barrier_is_not_a_collection() -> None:
 
 
 @pytest.mark.unit
-def test_broker_clear_and_replacement_are_mutually_exclusive() -> None:
+def test_rate_limit_broker_duplicate_update_is_atomic() -> None:
     policies = openpit.pretrade.policies
     engine = (
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
             )
         )
         .build()
     )
 
-    with pytest.raises(ValueError, match="clear_broker"):
+    with pytest.raises(openpit.PolicyConfigureError, match="Reject") as caught:
         engine.configure().rate_limit(
             policies.RateLimitBuilder.NAME,
-            broker=policies.RateLimitBrokerBarrier(limit=_rate_limit(2)),
-            clear_broker=True,
+            broker_barriers=[
+                policies.RateLimitBrokerBarrier(limit=_rate_limit(2)),
+                policies.RateLimitBrokerBarrier(limit=_rate_limit(3)),
+            ],
         )
+    assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+    assert not engine.start_pre_trade(order=conftest.make_order()).ok
 
 
 @pytest.mark.unit
@@ -1237,7 +1351,7 @@ def test_set_account_pnl_type_mismatch() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
             )
         )
@@ -1547,7 +1661,7 @@ def test_set_spot_funds_account_pnl_type_mismatch() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
             )
         )
@@ -1807,7 +1921,7 @@ def test_configurator_rejects_obsolete_tuple_and_string_inputs() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
             )
         )
@@ -1833,7 +1947,7 @@ def test_configurator_rejects_obsolete_tuple_and_string_inputs() -> None:
 
     with pytest.raises(TypeError, match="RateLimitBrokerBarrier"):
         configurator.rate_limit(
-            policies.RateLimitBuilder.NAME, broker=(1, 60_000_000_000)
+            policies.RateLimitBuilder.NAME, broker_barriers=[(1, 60_000_000_000)]
         )
     with pytest.raises(TypeError, match="OrderSizeBrokerBarrier"):
         configurator.order_size_limit(
@@ -1900,7 +2014,7 @@ def test_configurator_reports_domain_validation_errors() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
             )
         )
@@ -1910,12 +2024,14 @@ def test_configurator_reports_domain_validation_errors() -> None:
     with pytest.raises(openpit.PolicyConfigureError) as caught:
         engine.configure().rate_limit(
             policies.RateLimitBuilder.NAME,
-            broker=policies.RateLimitBrokerBarrier(
-                limit=policies.RateLimit(
-                    max_orders=1,
-                    window=datetime.timedelta(0),
-                )
-            ),
+            broker_barriers=[
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(
+                        max_orders=1,
+                        window=datetime.timedelta(0),
+                    )
+                ),
+            ],
         )
     assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
 

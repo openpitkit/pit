@@ -940,8 +940,9 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 			),
 		).
 		Builtin(
-			policies.BuildRateLimit().BrokerBarrier(
+			policies.BuildRateLimit().BrokerBarriers(
 				policies.RateLimitBrokerBarrier{
+					Mode:  reject.RuleModeReject,
 					Limit: policies.RateLimit{MaxOrders: 100, Window: time.Second},
 				},
 			),
@@ -1244,14 +1245,97 @@ func TestExampleWikiPoliciesOrderValidation(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
+// Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy review modes
+// Keep this example synchronized with the wiki snippet.
+func TestExampleWikiRateLimitReviewMode(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().Builtin(
+		policies.BuildRateLimit().BrokerBarriers(
+			policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
+				Limit: policies.RateLimit{MaxOrders: 3, Window: time.Hour},
+			},
+			policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReviewWithoutHold,
+				Limit: policies.RateLimit{MaxOrders: 1, Window: time.Hour},
+			},
+		),
+	).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+	order := model.NewOrder()
+
+	// First order: accepted, no review marks.
+	request, rejects, err := engine.StartPreTrade(order)
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request == nil || len(rejects) != 0 {
+		t.Fatalf("first order rejects = %v, want accepted", rejects)
+	}
+	reviews, err := request.Reviews()
+	request.Close()
+	if err != nil || len(reviews) != 0 {
+		t.Fatalf("first order Reviews() = %v, %v, want no marks", reviews, err)
+	}
+
+	// Second order: accepted, one review mark.
+	request, rejects, err = engine.StartPreTrade(order)
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request == nil || len(rejects) != 0 {
+		t.Fatalf("second order rejects = %v, want accepted", rejects)
+	}
+	reviews, err = request.Reviews()
+	request.Close()
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("second order Reviews() = %v, %v, want one mark", reviews, err)
+	}
+	if reviews[0].Code != reject.CodeRateLimitExceeded || reviews[0].Mode != reject.RuleModeReviewWithoutHold {
+		t.Fatalf("second order reviews = %v, want RateLimitExceeded ReviewWithoutHold", reviews)
+	}
+
+	// Confirm the second order: no mark, but the attempt still counts.
+	review := order.EnsureReviewView()
+	review.SetConfirmed(true)
+	request, rejects, err = engine.StartPreTrade(order)
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request == nil || len(rejects) != 0 {
+		t.Fatalf("confirmed order rejects = %v, want accepted", rejects)
+	}
+	reviews, err = request.Reviews()
+	request.Close()
+	if err != nil || len(reviews) != 0 {
+		t.Fatalf("confirmed order Reviews() = %v, %v, want no marks", reviews, err)
+	}
+
+	// Third order: rejected after the confirmed attempt spent the third unit.
+	review.SetConfirmed(false)
+	request, rejects, err = engine.StartPreTrade(order)
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request != nil {
+		request.Close()
+	}
+	if request != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeRateLimitExceeded || rejects[0].Mode != reject.RuleModeReject {
+		t.Fatalf("third order rejects = %v, want RateLimitExceeded Reject", rejects)
+	}
+}
+
 // Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy
 func TestExampleWikiPoliciesRateLimit(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
 			policies.BuildRateLimit().
-				BrokerBarrier(
+				BrokerBarriers(
 					policies.RateLimitBrokerBarrier{
+						Mode: reject.RuleModeReject,
 						Limit: policies.RateLimit{
 							MaxOrders: 100,
 							Window:    time.Second,
@@ -2412,8 +2496,9 @@ func TestExampleWikiAsyncEngine(t *testing.T) {
 		AccountSync().
 		Builtin(policies.BuildOrderValidation()).
 		Builtin(
-			policies.BuildRateLimit().BrokerBarrier(
+			policies.BuildRateLimit().BrokerBarriers(
 				policies.RateLimitBrokerBarrier{
+					Mode: reject.RuleModeReject,
 					Limit: policies.RateLimit{
 						MaxOrders: 100,
 						Window:    time.Second,
@@ -2823,8 +2908,9 @@ func TestExampleWikiDynamicPolicyReconfigurationRateLimit(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
-			policies.BuildRateLimit().BrokerBarrier(
+			policies.BuildRateLimit().BrokerBarriers(
 				policies.RateLimitBrokerBarrier{
+					Mode: reject.RuleModeReject,
 					Limit: policies.RateLimit{
 						MaxOrders: 5,
 						Window:    60 * time.Second,
@@ -2854,9 +2940,10 @@ func TestExampleWikiDynamicPolicyReconfigurationRateLimit(t *testing.T) {
 	// Built-in policies register under their type name (policies.RateLimitPolicyName).
 	err = engine.Configure().RateLimit(
 		policies.RateLimitPolicyName,
-		&policies.RateLimitBrokerBarrier{
+		[]policies.RateLimitBrokerBarrier{{
+			Mode:  reject.RuleModeReject,
 			Limit: policies.RateLimit{MaxOrders: 2, Window: 60 * time.Second},
-		},
+		}},
 		nil,
 		nil,
 		nil,

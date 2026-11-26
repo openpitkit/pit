@@ -28,7 +28,9 @@ use crate::pretrade::policy::{missing_required_field_reject, PolicyGroupId, Poli
 use crate::pretrade::start_pre_trade_time::start_pre_trade_now;
 use crate::pretrade::ConfigurablePolicy;
 use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
-use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
+use crate::pretrade::{
+    PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects, RuleMode,
+};
 use crate::storage::{ConfigCell, Storage, StorageBuilder};
 use crate::time::Instant;
 use crate::{Mutation, Mutations};
@@ -57,6 +59,8 @@ pub struct RateLimit {
 pub struct RateLimitBrokerBarrier {
     /// Rate-limit configuration for this broker barrier.
     pub limit: RateLimit,
+    /// Enforcement mode, part of this barrier's key.
+    pub mode: RuleMode,
 }
 
 /// Per-settlement-asset rate-limit barrier.
@@ -70,6 +74,8 @@ pub struct RateLimitAssetBarrier {
     pub limit: RateLimit,
     /// Settlement asset this barrier applies to.
     pub settlement_asset: Asset,
+    /// Enforcement mode, part of this barrier's key.
+    pub mode: RuleMode,
 }
 
 /// Per-account rate-limit barrier.
@@ -82,6 +88,8 @@ pub struct RateLimitAccountBarrier {
     pub limit: RateLimit,
     /// Account this barrier applies to.
     pub account_id: AccountId,
+    /// Enforcement mode, part of this barrier's key.
+    pub mode: RuleMode,
 }
 
 /// Per-(account, settlement-asset) rate-limit barrier.
@@ -96,6 +104,8 @@ pub struct RateLimitAccountAssetBarrier {
     pub account_id: AccountId,
     /// Settlement asset this barrier applies to.
     pub settlement_asset: Asset,
+    /// Enforcement mode, part of this barrier's key.
+    pub mode: RuleMode,
 }
 
 /// Errors returned by [`RateLimitPolicy`] construction and by the
@@ -106,6 +116,34 @@ pub enum RateLimitPolicyError {
     /// A barrier window is zero or exceeds the maximum representable
     /// nanoseconds.
     InvalidWindow { window: Duration },
+    /// A broker mode was repeated in one input.
+    DuplicateBrokerBarrier {
+        /// Mode whose key was repeated.
+        mode: RuleMode,
+    },
+    /// An asset and mode were repeated in one input.
+    DuplicateAssetBarrier {
+        /// Asset whose key was repeated.
+        asset: Asset,
+        /// Mode whose key was repeated.
+        mode: RuleMode,
+    },
+    /// An account and mode were repeated in one input.
+    DuplicateAccountBarrier {
+        /// Account whose key was repeated.
+        account_id: AccountId,
+        /// Mode whose key was repeated.
+        mode: RuleMode,
+    },
+    /// An account, asset and mode were repeated in one input.
+    DuplicateAccountAssetBarrier {
+        /// Account whose key was repeated.
+        account_id: AccountId,
+        /// Asset whose key was repeated.
+        asset: Asset,
+        /// Mode whose key was repeated.
+        mode: RuleMode,
+    },
 }
 
 impl Display for RateLimitPolicyError {
@@ -114,6 +152,24 @@ impl Display for RateLimitPolicyError {
             Self::InvalidWindow { window } => write!(
                 f,
                 "rate limit window must be positive and fit in u64 nanoseconds, got {window:?}"
+            ),
+            Self::DuplicateBrokerBarrier { mode } => {
+                write!(f, "duplicate broker barrier for mode {}", mode.as_str())
+            }
+            Self::DuplicateAssetBarrier { asset, mode } => {
+                write!(
+                    f,
+                    "duplicate asset barrier for asset {asset} in mode {}",
+                    mode.as_str()
+                )
+            }
+            Self::DuplicateAccountBarrier { mode, .. } => {
+                write!(f, "duplicate account barrier in mode {}", mode.as_str())
+            }
+            Self::DuplicateAccountAssetBarrier { asset, mode, .. } => write!(
+                f,
+                "duplicate account+asset barrier for asset {asset} in mode {}",
+                mode.as_str()
             ),
         }
     }
@@ -138,20 +194,21 @@ struct RateLimitSlot {
 /// live fixed-window counters here, behind `Arc`, so the hot path reads limits
 /// and mutates counters under a single settings-cell read. The account axes
 /// keep no slot: their sliding-window logs live in the policy's storages, keyed
-/// lazily per account.
+/// lazily per (account, mode).
 ///
 /// All four axes are replace-shaped and fully runtime-updatable: a setter can
 /// add, remove, or retune any barrier on its axis. A key that survives a
 /// replacement keeps its live counter (`Arc::clone`), so a retune never resets
 /// the window and flood protection persists across it. The account-axis
 /// sliding logs survive replacements by construction, since they live in the
-/// policy keyed per account rather than in these settings. Clearing an account
-/// or account+asset barrier leaves that key's log in storage, including when
+/// policy keyed per account and mode rather than in these settings. Clearing
+/// an account or account+asset barrier leaves that key's log in storage, even when
 /// the last barrier is cleared. Re-adding the key resumes counting the orders
 /// still inside its configured window unless the account was retired:
 /// [`Engine::retire_account`](crate::Engine::retire_account) deletes its logs
 /// once no barrier names it, so re-added barriers start with empty logs.
 /// A re-added broker or asset barrier starts a fresh window.
+/// Mode is part of every key; counters are independent across modes.
 ///
 /// All axes may be empty; the policy then admits every order. Barriers can
 /// be added later through [`Engine::configure`](crate::Engine::configure).
@@ -169,167 +226,271 @@ struct RateLimitSlot {
 ///   immediately to the existing log.
 #[derive(Debug, Clone)]
 pub struct RateLimitSettings {
+    reject: RateLimitModeSettings,
+    review_with_hold: RateLimitModeSettings,
+    review_without_hold: RateLimitModeSettings,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RateLimitModeSettings {
     asset_limits: HashMap<Asset, RateLimitSlot>,
     account_limits: HashMap<AccountId, RateLimit>,
     account_asset_limits: HashMap<(AccountId, Asset), RateLimit>,
     broker: Option<RateLimitSlot>,
 }
 
+impl RateLimitModeSettings {
+    fn is_empty(&self) -> bool {
+        self.broker.is_none()
+            && self.asset_limits.is_empty()
+            && self.account_limits.is_empty()
+            && self.account_asset_limits.is_empty()
+    }
+}
+
 impl RateLimitSettings {
+    fn empty() -> Self {
+        Self {
+            reject: RateLimitModeSettings::default(),
+            review_with_hold: RateLimitModeSettings::default(),
+            review_without_hold: RateLimitModeSettings::default(),
+        }
+    }
+
+    fn mode(&self, mode: RuleMode) -> &RateLimitModeSettings {
+        match mode {
+            RuleMode::Reject => &self.reject,
+            RuleMode::ReviewWithHold => &self.review_with_hold,
+            RuleMode::ReviewWithoutHold => &self.review_without_hold,
+        }
+    }
+
+    fn mode_mut(&mut self, mode: RuleMode) -> &mut RateLimitModeSettings {
+        match mode {
+            RuleMode::Reject => &mut self.reject,
+            RuleMode::ReviewWithHold => &mut self.review_with_hold,
+            RuleMode::ReviewWithoutHold => &mut self.review_without_hold,
+        }
+    }
+
+    fn modes(&self) -> [(RuleMode, &RateLimitModeSettings); 3] {
+        let Self {
+            reject,
+            review_with_hold,
+            review_without_hold,
+        } = self;
+        [
+            (RuleMode::Reject, reject),
+            (RuleMode::ReviewWithHold, review_with_hold),
+            (RuleMode::ReviewWithoutHold, review_without_hold),
+        ]
+    }
+
+    fn modes_mut(&mut self) -> [(RuleMode, &mut RateLimitModeSettings); 3] {
+        let Self {
+            reject,
+            review_with_hold,
+            review_without_hold,
+        } = self;
+        [
+            (RuleMode::Reject, reject),
+            (RuleMode::ReviewWithHold, review_with_hold),
+            (RuleMode::ReviewWithoutHold, review_without_hold),
+        ]
+    }
+
     /// Builds a validated rate-limit configuration.
     ///
     /// All axes may be empty; the policy then admits every order. Barriers
     /// can be added later through
     /// [`Engine::configure`](crate::Engine::configure).
     /// Each window is validated; a zero or oversized window returns
-    /// [`RateLimitPolicyError::InvalidWindow`]. Duplicate keys within an
-    /// axis: last-write-wins (no error).
+    /// [`RateLimitPolicyError::InvalidWindow`]. Repeated (key, mode) pairs
+    /// within an axis return the corresponding duplicate-barrier error.
     ///
+    /// # Errors
+    ///
+    /// Returns [`RateLimitPolicyError::InvalidWindow`] for an invalid window,
+    /// or [`RateLimitPolicyError::DuplicateBrokerBarrier`],
+    /// [`RateLimitPolicyError::DuplicateAssetBarrier`],
+    /// [`RateLimitPolicyError::DuplicateAccountBarrier`] or
+    /// [`RateLimitPolicyError::DuplicateAccountAssetBarrier`] for a repeated
+    /// (key, mode) on the corresponding axis.
     pub fn new(
-        broker: Option<RateLimitBrokerBarrier>,
+        broker_barriers: impl IntoIterator<Item = RateLimitBrokerBarrier>,
         asset_barriers: impl IntoIterator<Item = RateLimitAssetBarrier>,
         account_barriers: impl IntoIterator<Item = RateLimitAccountBarrier>,
         account_asset_barriers: impl IntoIterator<Item = RateLimitAccountAssetBarrier>,
     ) -> Result<Self, RateLimitPolicyError> {
-        let broker = broker
-            .map(|b| validate_limit(b.limit).map(fresh_slot))
-            .transpose()?;
-
-        let asset_limits: HashMap<Asset, RateLimitSlot> = asset_barriers
-            .into_iter()
-            .map(|b| validate_limit(b.limit).map(|limit| (b.settlement_asset, fresh_slot(limit))))
-            .collect::<Result<_, _>>()?;
-
-        let account_limits: HashMap<AccountId, RateLimit> = account_barriers
-            .into_iter()
-            .map(|b| validate_limit(b.limit).map(|limit| (b.account_id, limit)))
-            .collect::<Result<_, _>>()?;
-
-        let account_asset_limits: HashMap<(AccountId, Asset), RateLimit> = account_asset_barriers
-            .into_iter()
-            .map(|b| {
-                validate_limit(b.limit).map(|limit| ((b.account_id, b.settlement_asset), limit))
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            asset_limits,
-            account_limits,
-            account_asset_limits,
-            broker,
-        })
+        let mut settings = Self::empty();
+        settings.set_broker_barriers(broker_barriers)?;
+        settings.set_asset_barriers(asset_barriers)?;
+        settings.set_account_barriers(account_barriers)?;
+        settings.set_account_asset_barriers(account_asset_barriers)?;
+        Ok(settings)
     }
 
-    /// Replaces the broker barrier (add, remove, or retune).
-    ///
-    /// A surviving broker keeps its live counter, so a retune never resets the
-    /// window. Passing `None` clears the axis, including the last barrier.
+    /// Replaces all broker modes, preserving surviving modes' live counters.
+    /// An empty input clears all broker barriers.
     ///
     /// # Errors
     ///
-    /// [`RateLimitPolicyError::InvalidWindow`] if `limit.window` is zero or
-    /// oversized. On error `self` is left untouched.
-    pub fn set_broker(
+    /// Returns [`RateLimitPolicyError::InvalidWindow`] for an invalid window
+    /// or [`RateLimitPolicyError::DuplicateBrokerBarrier`] for a repeated
+    /// mode. On error `self` is left untouched.
+    pub fn set_broker_barriers(
         &mut self,
-        broker: Option<RateLimitBrokerBarrier>,
+        barriers: impl IntoIterator<Item = RateLimitBrokerBarrier>,
     ) -> Result<(), RateLimitPolicyError> {
-        let next = match broker {
-            Some(b) => {
-                let limit = validate_limit(b.limit)?;
-                // Carry the live counter over so a retune keeps the window.
-                let counter = match self.broker.as_ref() {
-                    Some(slot) => Arc::clone(&slot.counter),
-                    None => Arc::new(AtomicWindowCounter::new(0)),
-                };
-                Some(RateLimitSlot { counter, limit })
+        let mut replacement = Self::empty();
+        for barrier in barriers {
+            let mode = barrier.mode;
+            if replacement.mode(mode).broker.is_some() {
+                return Err(RateLimitPolicyError::DuplicateBrokerBarrier { mode });
             }
-            None => None,
-        };
-
-        self.broker = next;
+            let limit = validate_limit(barrier.limit)?;
+            let slot = match self.mode(mode).broker.as_ref() {
+                Some(slot) => RateLimitSlot {
+                    counter: Arc::clone(&slot.counter),
+                    limit,
+                },
+                None => fresh_slot(limit),
+            };
+            replacement.mode_mut(mode).broker = Some(slot);
+        }
+        for ((_, settings), (_, replacement)) in
+            self.modes_mut().into_iter().zip(replacement.modes_mut())
+        {
+            settings.broker = replacement.broker.take();
+        }
         Ok(())
     }
 
     /// Replaces the full set of per-asset barriers (add, remove, or retune).
     ///
-    /// Each surviving asset keeps its live counter, so a retune never resets
-    /// the window; new keys start a fresh window. Duplicate keys within one
-    /// call: last-write-wins. An empty set clears the axis, including the
-    /// last barrier.
+    /// Each surviving (asset, mode) keeps its live counter, so a retune never
+    /// resets the window; new keys start a fresh window. Repeated keys return
+    /// [`RateLimitPolicyError::DuplicateAssetBarrier`]. An empty input clears
+    /// the axis.
     ///
     /// # Errors
     ///
-    /// [`RateLimitPolicyError::InvalidWindow`] if any `limit.window` is zero or
-    /// oversized. On error `self` is left untouched.
+    /// Returns [`RateLimitPolicyError::InvalidWindow`] for an invalid window
+    /// or [`RateLimitPolicyError::DuplicateAssetBarrier`] for a repeated
+    /// (asset, mode). On error `self` is left untouched.
     pub fn set_asset_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = RateLimitAssetBarrier>,
     ) -> Result<(), RateLimitPolicyError> {
-        let mut asset_limits: HashMap<Asset, RateLimitSlot> = HashMap::new();
+        let mut replacement = Self::empty();
         for barrier in barriers {
+            let key = barrier.settlement_asset;
+            let asset_limits = &mut replacement.mode_mut(barrier.mode).asset_limits;
+            if asset_limits.contains_key(&key) {
+                return Err(RateLimitPolicyError::DuplicateAssetBarrier {
+                    asset: key,
+                    mode: barrier.mode,
+                });
+            }
             let limit = validate_limit(barrier.limit)?;
             // Carry the counter over for a surviving asset; start fresh for a
             // new one.
-            let counter = match self.asset_limits.get(&barrier.settlement_asset) {
+            let counter = match self.mode(barrier.mode).asset_limits.get(&key) {
                 Some(slot) => Arc::clone(&slot.counter),
                 None => Arc::new(AtomicWindowCounter::new(0)),
             };
-            asset_limits.insert(barrier.settlement_asset, RateLimitSlot { counter, limit });
+            asset_limits.insert(key, RateLimitSlot { counter, limit });
         }
 
-        self.asset_limits = asset_limits;
+        for ((_, settings), (_, replacement)) in
+            self.modes_mut().into_iter().zip(replacement.modes_mut())
+        {
+            std::mem::swap(&mut settings.asset_limits, &mut replacement.asset_limits);
+        }
         Ok(())
     }
 
     /// Replaces the full set of per-account barriers (add, remove, or retune).
     ///
-    /// The sliding-window logs live in the policy keyed per account, so they
-    /// survive a replacement; a surviving account keeps counting without a
-    /// reset. Duplicate keys within one call: last-write-wins. An empty set
-    /// clears the axis, including the last barrier.
+    /// The sliding-window logs are keyed per (account, mode) in the policy and
+    /// survive a replacement; a surviving key keeps counting without a
+    /// reset. Repeated keys return
+    /// [`RateLimitPolicyError::DuplicateAccountBarrier`]. An empty input
+    /// clears the axis.
     ///
     /// # Errors
     ///
-    /// [`RateLimitPolicyError::InvalidWindow`] if any `limit.window` is zero or
-    /// oversized. On error `self` is left untouched.
+    /// Returns [`RateLimitPolicyError::InvalidWindow`] for an invalid window
+    /// or [`RateLimitPolicyError::DuplicateAccountBarrier`] for a repeated
+    /// (account, mode). On error `self` is left untouched.
     pub fn set_account_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = RateLimitAccountBarrier>,
     ) -> Result<(), RateLimitPolicyError> {
-        let mut account_limits: HashMap<AccountId, RateLimit> = HashMap::new();
+        let mut replacement = Self::empty();
         for barrier in barriers {
-            account_limits.insert(barrier.account_id, validate_limit(barrier.limit)?);
+            let key = barrier.account_id;
+            let account_limits = &mut replacement.mode_mut(barrier.mode).account_limits;
+            if account_limits.contains_key(&key) {
+                return Err(RateLimitPolicyError::DuplicateAccountBarrier {
+                    account_id: key,
+                    mode: barrier.mode,
+                });
+            }
+            account_limits.insert(key, validate_limit(barrier.limit)?);
         }
 
-        self.account_limits = account_limits;
+        for ((_, settings), (_, replacement)) in
+            self.modes_mut().into_iter().zip(replacement.modes_mut())
+        {
+            std::mem::swap(
+                &mut settings.account_limits,
+                &mut replacement.account_limits,
+            );
+        }
         Ok(())
     }
 
     /// Replaces the full set of per-(account, asset) barriers (add, remove, or
     /// retune).
     ///
-    /// The sliding-window logs live in the policy keyed per pair, so they
-    /// survive a replacement; a surviving pair keeps counting without a reset.
-    /// Duplicate keys within one call: last-write-wins. An empty set clears
-    /// the axis, including the last barrier.
+    /// The sliding-window logs are keyed per (account, asset, mode) in the
+    /// policy and survive replacements; a surviving key keeps its count.
+    /// Repeated keys return
+    /// [`RateLimitPolicyError::DuplicateAccountAssetBarrier`]. An empty input
+    /// clears the axis.
     ///
     /// # Errors
     ///
-    /// [`RateLimitPolicyError::InvalidWindow`] if any `limit.window` is zero or
-    /// oversized. On error `self` is left untouched.
+    /// Returns [`RateLimitPolicyError::InvalidWindow`] for an invalid window
+    /// or [`RateLimitPolicyError::DuplicateAccountAssetBarrier`] for a
+    /// repeated (account, asset, mode). On error `self` is left untouched.
     pub fn set_account_asset_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = RateLimitAccountAssetBarrier>,
     ) -> Result<(), RateLimitPolicyError> {
-        let mut account_asset_limits: HashMap<(AccountId, Asset), RateLimit> = HashMap::new();
+        let mut replacement = Self::empty();
         for barrier in barriers {
-            account_asset_limits.insert(
-                (barrier.account_id, barrier.settlement_asset),
-                validate_limit(barrier.limit)?,
-            );
+            let key = (barrier.account_id, barrier.settlement_asset);
+            let account_asset_limits = &mut replacement.mode_mut(barrier.mode).account_asset_limits;
+            if account_asset_limits.contains_key(&key) {
+                return Err(RateLimitPolicyError::DuplicateAccountAssetBarrier {
+                    account_id: key.0,
+                    asset: key.1,
+                    mode: barrier.mode,
+                });
+            }
+            account_asset_limits.insert(key, validate_limit(barrier.limit)?);
         }
 
-        self.account_asset_limits = account_asset_limits;
+        for ((_, settings), (_, replacement)) in
+            self.modes_mut().into_iter().zip(replacement.modes_mut())
+        {
+            std::mem::swap(
+                &mut settings.account_asset_limits,
+                &mut replacement.account_asset_limits,
+            );
+        }
         Ok(())
     }
 
@@ -337,11 +498,13 @@ impl RateLimitSettings {
     // detaching this Settings from any counters shared with a caller-held
     // clone. Each policy owns counters tied to its own epoch.
     fn rearm(&mut self) {
-        if let Some(slot) = self.broker.as_mut() {
-            slot.counter = Arc::new(AtomicWindowCounter::new(0));
-        }
-        for slot in self.asset_limits.values_mut() {
-            slot.counter = Arc::new(AtomicWindowCounter::new(0));
+        for (_, settings) in self.modes_mut() {
+            if let Some(slot) = settings.broker.as_mut() {
+                slot.counter = Arc::new(AtomicWindowCounter::new(0));
+            }
+            for slot in settings.asset_limits.values_mut() {
+                slot.counter = Arc::new(AtomicWindowCounter::new(0));
+            }
         }
     }
 }
@@ -430,10 +593,13 @@ impl AtomicWindowCounter {
 ///
 /// Four configurable barrier axes - broker (all orders), per settlement
 /// asset, per account, and per (account, settlement asset). Every applicable
-/// axis is incremented and checked on every call to `check_pre_trade_start`.
-/// An order is rejected if any applicable axis breaches its `max_orders` over
-/// its `window`. Every call, including rejected ones, consumes a slot in every
-/// applicable axis so that flood attempts cannot bypass any counter.
+/// axis is counted before resolving breaches on `check_pre_trade_start`.
+/// Modes have independent counters. Reject rules return one reject, in axis
+/// priority order: broker, asset, account, account+asset. Each review mode
+/// returns at most one mark in that same priority order. Every attempt that
+/// reaches the start hook counts on every threshold, a confirmed re-run
+/// included; under `confirmed` the engine ignores review marks.
+/// Dry runs spend nothing.
 ///
 /// Broker and asset axes use approximate fixed-window counters backed by
 /// `AtomicU64` pairs. They are atomic and lock-free; at a window boundary, the
@@ -445,13 +611,14 @@ impl AtomicWindowCounter {
 /// and the engine can add, remove, or retune barriers at runtime through
 /// [`Engine::configure`](crate::Engine::configure). The broker and asset
 /// fixed-window counters ride inside that cell behind `Arc`; the account-axis
-/// sliding-window logs live in the policy's storages, keyed lazily per account.
+/// sliding-window logs live in the policy's storages, keyed lazily by account
+/// and mode (and settlement asset on the account+asset axis).
 ///
 /// Constructor rules:
 /// - every axis may be empty; the policy then admits every order;
 /// - barriers can be added later through
 ///   [`Engine::configure`](crate::Engine::configure);
-/// - duplicate keys within an axis: last-write-wins (no error).
+/// - repeated (key, mode) pairs within an axis return a duplicate-barrier error.
 ///
 /// # Account retirement
 ///
@@ -476,9 +643,10 @@ impl AtomicWindowCounter {
 ///
 /// let builder = Engine::builder::<OrderOperation, (), ()>().no_sync();
 /// let settings = RateLimitSettings::new(
-///     Some(RateLimitBrokerBarrier {
+///     [RateLimitBrokerBarrier {
+///         mode: openpit::pretrade::RuleMode::Reject,
 ///         limit: RateLimit { max_orders: 2, window: Duration::from_secs(60) },
-///     }),
+///     }],
 ///     [],
 ///     [],
 ///     [],
@@ -513,11 +681,11 @@ where
     settings:
         <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<RateLimitSettings>,
     per_account_timestamps: <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
-        TimestampStorage<AccountId, LockingPolicyFactory>,
+        TimestampStorage<(AccountId, RuleMode), LockingPolicyFactory>,
     >,
     per_account_asset_timestamps:
         <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
-            TimestampStorage<(AccountId, Asset), LockingPolicyFactory>,
+            TimestampStorage<(AccountId, Asset, RuleMode), LockingPolicyFactory>,
         >,
 }
 
@@ -542,8 +710,8 @@ where
         storage_builder: &StorageBuilder<LockingPolicyFactory>,
     ) -> Self
     where
-        LockingPolicyFactory: crate::storage::CreateStorageFor<AccountId>
-            + crate::storage::CreateStorageFor<(AccountId, Asset)>,
+        LockingPolicyFactory: crate::storage::CreateStorageFor<(AccountId, RuleMode)>
+            + crate::storage::CreateStorageFor<(AccountId, Asset, RuleMode)>,
     {
         let epoch = Instant::now();
 
@@ -609,10 +777,10 @@ where
         crate::storage::LockingPolicyFactory + crate::storage::CreateStorageFor<AccountId>,
     Sync: crate::core::SyncMode<StorageLockingPolicyFactory = LockingPolicyFactory>,
     <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
-        TimestampStorage<AccountId, LockingPolicyFactory>,
+        TimestampStorage<(AccountId, RuleMode), LockingPolicyFactory>,
     >: 'static,
     <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
-        TimestampStorage<(AccountId, Asset), LockingPolicyFactory>,
+        TimestampStorage<(AccountId, Asset, RuleMode), LockingPolicyFactory>,
     >: 'static,
 {
     fn name(&self) -> &str {
@@ -628,27 +796,33 @@ where
         account_id: AccountId,
         mutations: &mut Mutations,
     ) -> Result<(), AccountRetirementRefusal> {
-        if self.settings.with(|settings| {
-            settings.account_limits.contains_key(&account_id)
-                || settings
-                    .account_asset_limits
-                    .keys()
-                    .any(|(account, _)| *account == account_id)
-        }) {
-            return Err(AccountRetirementRefusal::ConfigurationReferencesAccount);
-        }
+        let modes = self.settings.with(|settings| {
+            let modes = settings.modes();
+            if modes.iter().any(|(_, settings)| {
+                settings.account_limits.contains_key(&account_id)
+                    || settings
+                        .account_asset_limits
+                        .keys()
+                        .any(|(account, _)| *account == account_id)
+            }) {
+                return Err(AccountRetirementRefusal::ConfigurationReferencesAccount);
+            }
+            Ok(modes.map(|(mode, _)| mode))
+        })?;
 
         let keys: Vec<_> = self
             .per_account_asset_timestamps
             .keys()
             .into_iter()
-            .filter(|(account, _)| *account == account_id)
+            .filter(|(account, _, _)| *account == account_id)
             .collect();
         let per_account_timestamps = self.per_account_timestamps.clone();
         let per_account_asset_timestamps = self.per_account_asset_timestamps.clone();
         mutations.push(Mutation::new(
             move || {
-                per_account_timestamps.remove(&account_id);
+                for mode in modes {
+                    per_account_timestamps.remove(&(account_id, mode));
+                }
                 for key in keys {
                     per_account_asset_timestamps.remove(&key);
                 }
@@ -728,8 +902,14 @@ where
             .as_nanos() as u64;
 
         self.settings.with_snapshot(|s| {
-            let needs_settlement = !s.asset_limits.is_empty() || !s.account_asset_limits.is_empty();
-            let needs_account = !s.account_limits.is_empty() || !s.account_asset_limits.is_empty();
+            let mut needs_settlement = false;
+            let mut needs_account = false;
+            for (_, settings) in s.modes() {
+                needs_settlement |=
+                    !settings.asset_limits.is_empty() || !settings.account_asset_limits.is_empty();
+                needs_account |= !settings.account_limits.is_empty()
+                    || !settings.account_asset_limits.is_empty();
+            }
 
             let settlement_opt: Option<Asset> = if needs_settlement {
                 Some(
@@ -752,55 +932,65 @@ where
                 None
             };
 
-            let broker = s.broker.as_ref().map(|slot| {
-                let count = fixed_window_count(slot, now_nanos, record);
-                over_limit(count, &slot.limit, "broker barrier")
-            });
-
-            let asset = settlement_opt.as_ref().and_then(|settlement| {
-                s.asset_limits.get(settlement).map(|slot| {
+            let mut entries = Vec::new();
+            for (mode, settings) in s.modes() {
+                if settings.is_empty() {
+                    continue;
+                }
+                let broker = settings.broker.as_ref().map(|slot| {
                     let count = fixed_window_count(slot, now_nanos, record);
-                    over_limit(count, &slot.limit, "asset barrier")
-                })
-            });
+                    over_limit(count, &slot.limit, "broker barrier")
+                });
 
-            let account = account_id_opt.and_then(|account_id| {
-                s.account_limits.get(&account_id).map(|limit| {
-                    let count = sliding_window_count(
-                        &self.per_account_timestamps,
-                        account_id,
-                        now,
-                        limit.window,
-                        record,
-                    );
-                    over_limit(count, limit, "account barrier")
-                })
-            });
+                let asset = settlement_opt.as_ref().and_then(|settlement| {
+                    settings.asset_limits.get(settlement).map(|slot| {
+                        let count = fixed_window_count(slot, now_nanos, record);
+                        over_limit(count, &slot.limit, "asset barrier")
+                    })
+                });
 
-            let account_asset = account_id_opt.and_then(|account_id| {
-                settlement_opt.as_ref().and_then(|settlement| {
-                    let key = (account_id, settlement.clone());
-                    s.account_asset_limits.get(&key).map(|limit| {
+                let account = account_id_opt.and_then(|account_id| {
+                    settings.account_limits.get(&account_id).map(|limit| {
                         let count = sliding_window_count(
-                            &self.per_account_asset_timestamps,
-                            key,
+                            &self.per_account_timestamps,
+                            (account_id, mode),
                             now,
                             limit.window,
                             record,
                         );
-                        over_limit(count, limit, "account+asset barrier")
+                        over_limit(count, limit, "account barrier")
                     })
-                })
-            });
+                });
 
-            match broker
-                .flatten()
-                .or_else(|| asset.flatten())
-                .or_else(|| account.flatten())
-                .or_else(|| account_asset.flatten())
-            {
-                Some(reject) => Err(reject),
-                None => Ok(()),
+                let account_asset = account_id_opt.and_then(|account_id| {
+                    settlement_opt.as_ref().and_then(|settlement| {
+                        let key = (account_id, settlement.clone());
+                        settings.account_asset_limits.get(&key).map(|limit| {
+                            let count = sliding_window_count(
+                                &self.per_account_asset_timestamps,
+                                (key.0, key.1, mode),
+                                now,
+                                limit.window,
+                                record,
+                            );
+                            over_limit(count, limit, "account+asset barrier")
+                        })
+                    })
+                });
+
+                if let Some(reject) = broker
+                    .flatten()
+                    .or_else(|| asset.flatten())
+                    .or_else(|| account.flatten())
+                    .or_else(|| account_asset.flatten())
+                {
+                    entries.push(reject.with_mode(mode));
+                }
+            }
+            if entries.is_empty() {
+                Ok(())
+            } else {
+                Err(Rejects::new(entries))
             }
         })
     }
@@ -852,7 +1042,7 @@ fn window_nanos(limit: &RateLimit) -> u64 {
 
 // Builds a reject if `count` breaches `limit`, else `None`. Keeps the
 // limit read and the threshold comparison inside the single settings read.
-fn over_limit(count: u64, limit: &RateLimit, reason: &'static str) -> Option<Rejects> {
+fn over_limit(count: u64, limit: &RateLimit, reason: &'static str) -> Option<Reject> {
     (count > limit.max_orders as u64)
         .then(|| rate_limit_reject(reason, count, limit.max_orders as u64, limit.window))
 }
@@ -864,7 +1054,7 @@ fn rate_limit_reject(
     count: u64,
     max_orders: u64,
     window: Duration,
-) -> Rejects {
+) -> Reject {
     Reject::new(
         RATE_LIMIT_POLICY_NAME,
         RejectScope::Order,
@@ -875,7 +1065,6 @@ fn rate_limit_reject(
             count, window, max_orders
         ),
     )
-    .into()
 }
 
 fn validate_limit(limit: RateLimit) -> Result<RateLimit, RateLimitPolicyError> {
@@ -935,6 +1124,7 @@ mod tests {
     use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
     use crate::pretrade::{
         ConfigurablePolicy, PreTradeContext, PreTradePolicy, RejectCode, RejectScope, Rejects,
+        RuleMode,
     };
     use crate::storage::{ConfigCell, FullLocking, LocalConfigCell, NoLocking};
 
@@ -958,12 +1148,13 @@ mod tests {
     #[test]
     fn zero_window_rejected_by_settings() {
         let err = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::ZERO,
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -985,12 +1176,13 @@ mod tests {
     #[test]
     fn sub_microsecond_window_accepted_by_settings() {
         let result = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_nanos(500),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -1002,12 +1194,13 @@ mod tests {
     #[test]
     fn maximum_window_accepted_by_settings() {
         let result = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_nanos(u64::MAX),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -1020,12 +1213,13 @@ mod tests {
     fn excessive_window_rejected_by_settings() {
         let max_plus_one = Duration::from_nanos(u64::MAX) + Duration::from_nanos(1);
         let err = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: max_plus_one,
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -1037,13 +1231,13 @@ mod tests {
 
     #[test]
     fn empty_settings_are_accepted() {
-        assert!(RateLimitSettings::new(None, [], [], []).is_ok());
+        assert!(RateLimitSettings::new([], [], [], []).is_ok());
     }
 
     // ── runtime setters ──────────────────────────────────────────────────────
 
     #[test]
-    fn set_broker_retunes_without_resetting_counter() {
+    fn set_broker_barriers_retunes_without_resetting_counter() {
         // With a generous limit of 5, push three orders, then replace the
         // broker with a tighter limit of 2 in the same window. If the retune
         // reset the counter the fourth order would pass; its rejection proves
@@ -1059,12 +1253,13 @@ mod tests {
         policy
             .settings_cell()
             .update::<RateLimitPolicyError>(|s| {
-                s.set_broker(Some(RateLimitBrokerBarrier {
+                s.set_broker_barriers([RateLimitBrokerBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     limit: RateLimit {
                         max_orders: 2,
                         window: Duration::from_secs(10),
                     },
-                }))
+                }])
             })
             .expect("retune must publish");
 
@@ -1081,6 +1276,7 @@ mod tests {
             .settings_cell()
             .update::<RateLimitPolicyError>(|s| {
                 s.set_asset_barriers([RateLimitAssetBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     settlement_asset: usd.clone(),
                     limit: RateLimit {
                         max_orders: 1,
@@ -1098,24 +1294,25 @@ mod tests {
     }
 
     #[test]
-    fn set_broker_none_removes_axis_when_another_remains() {
+    fn empty_broker_barriers_remove_axis_when_another_remains() {
         // Broker + asset both configured; removing the broker leaves the asset
         // barrier live, so a flood that previously tripped the broker now only
         // trips the asset axis.
         let mut settings = asset_settings("USD", 100, Duration::from_secs(60));
         settings
-            .set_broker(Some(RateLimitBrokerBarrier {
+            .set_broker_barriers([RateLimitBrokerBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(60),
                 },
-            }))
+            }])
             .expect("broker add must succeed");
         let policy = policy_from(settings);
 
         policy
             .settings_cell()
-            .update::<RateLimitPolicyError>(|s| s.set_broker(None))
+            .update::<RateLimitPolicyError>(|s| s.set_broker_barriers([]))
             .expect("remove must publish");
 
         let base = Instant::now();
@@ -1135,7 +1332,7 @@ mod tests {
         let o = order(account(1));
 
         let mut settings = broker_settings(1, window);
-        assert!(settings.set_broker(None).is_ok());
+        assert!(settings.set_broker_barriers([]).is_ok());
         let cleared_broker = policy_from(settings);
 
         let mut settings = asset_settings("USD", 1, window);
@@ -1176,7 +1373,7 @@ mod tests {
                 panic!("empty policy must not read instrument");
             }
         }
-        let policy = policy_from(RateLimitSettings::new(None, [], [], []).expect("empty is valid"));
+        let policy = policy_from(RateLimitSettings::new([], [], [], []).expect("empty is valid"));
         let order = EmptyOrder(std::cell::Cell::new(0));
         let ctx = PreTradeContext::<NoLocking>::new(None, &order);
         order.0.set(0);
@@ -1199,6 +1396,7 @@ mod tests {
         let usd = Asset::new("USD").expect("asset code must be valid");
         let err = settings
             .set_asset_barriers([RateLimitAssetBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 settlement_asset: usd.clone(),
                 limit: RateLimit {
                     max_orders: 1,
@@ -1215,6 +1413,7 @@ mod tests {
         // A rejected setter must leave the prior limit untouched.
         assert_eq!(
             settings
+                .reject
                 .asset_limits
                 .get(&usd)
                 .expect("usd set")
@@ -1243,12 +1442,13 @@ mod tests {
         policy
             .settings_cell()
             .update::<RateLimitPolicyError>(|s| {
-                s.set_broker(Some(RateLimitBrokerBarrier {
+                s.set_broker_barriers([RateLimitBrokerBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     limit: RateLimit {
                         max_orders: 2,
                         window: Duration::from_secs(10),
                     },
-                }))
+                }])
             })
             .expect("retune must publish");
         assert!(check_at(&policy, &o, base + Duration::from_secs(3)).is_err());
@@ -1257,12 +1457,13 @@ mod tests {
         policy
             .settings_cell()
             .update::<RateLimitPolicyError>(|s| {
-                s.set_broker(Some(RateLimitBrokerBarrier {
+                s.set_broker_barriers([RateLimitBrokerBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     limit: RateLimit {
                         max_orders: 10,
                         window: Duration::from_secs(10),
                     },
-                }))
+                }])
             })
             .expect("retune must publish");
         let later = base + Duration::from_secs(20);
@@ -1277,19 +1478,20 @@ mod tests {
         let handle = policy.settings_cell();
         handle
             .update::<RateLimitPolicyError>(|s| {
-                s.set_broker(Some(RateLimitBrokerBarrier {
+                s.set_broker_barriers([RateLimitBrokerBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     limit: RateLimit {
                         max_orders: 7,
                         window: Duration::from_secs(10),
                     },
-                }))
+                }])
             })
             .expect("retune must publish");
         // The policy's own field observes the update done through the clone.
         assert_eq!(
             policy
                 .settings
-                .with(|s| s.broker.as_ref().map(|b| b.limit.max_orders)),
+                .with(|s| s.reject.broker.as_ref().map(|b| b.limit.max_orders)),
             Some(7)
         );
     }
@@ -1307,6 +1509,7 @@ mod tests {
                 self.settings
                     .update::<RateLimitPolicyError>(|settings| {
                         settings.set_asset_barriers([RateLimitAssetBarrier {
+                            mode: crate::pretrade::RuleMode::Reject,
                             limit: RateLimit {
                                 max_orders: 10,
                                 window: Duration::from_secs(60),
@@ -1379,6 +1582,7 @@ mod tests {
                 self.settings
                     .update::<RateLimitPolicyError>(|settings| {
                         settings.set_asset_barriers([RateLimitAssetBarrier {
+                            mode: crate::pretrade::RuleMode::Reject,
                             limit: RateLimit {
                                 max_orders: 10,
                                 window: Duration::from_secs(60),
@@ -1548,13 +1752,15 @@ mod tests {
         };
         let policy = policy_from(
             RateLimitSettings::new(
-                None,
+                [],
                 [],
                 [RateLimitAccountBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     limit: limit.clone(),
                     account_id,
                 }],
                 [RateLimitAccountAssetBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     limit,
                     account_id,
                     settlement_asset: usd.clone(),
@@ -1563,13 +1769,13 @@ mod tests {
             .expect("valid barriers"),
         );
         let o = order(account_id);
-        let key = (account_id, usd);
+        let key = (account_id, usd, RuleMode::Reject);
         let now = Instant::now();
 
         assert!(check_dry_run_at(&policy, &o, now).is_ok());
         assert!(policy
             .per_account_timestamps
-            .with(&account_id, |_| ())
+            .with(&(account_id, RuleMode::Reject), |_| ())
             .is_none());
         assert!(policy
             .per_account_asset_timestamps
@@ -1580,7 +1786,7 @@ mod tests {
         assert!(check_at(&policy, &o, now).is_ok());
         assert!(policy
             .per_account_timestamps
-            .with(&account_id, |_| ())
+            .with(&(account_id, RuleMode::Reject), |_| ())
             .is_some());
         assert!(policy
             .per_account_asset_timestamps
@@ -1899,14 +2105,16 @@ mod tests {
     fn both_barriers_checked_and_account_barrier_triggers_after_broker() {
         let policy = policy_from(
             RateLimitSettings::new(
-                Some(RateLimitBrokerBarrier {
+                [RateLimitBrokerBarrier {
+                    mode: RuleMode::Reject,
                     limit: RateLimit {
                         max_orders: 3,
                         window: Duration::from_secs(10),
                     },
-                }),
+                }],
                 [],
                 [RateLimitAccountBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     account_id: account(1),
                     limit: RateLimit {
                         max_orders: 1,
@@ -1931,14 +2139,16 @@ mod tests {
     fn broker_reject_reported_when_both_barriers_breach() {
         let policy = policy_from(
             RateLimitSettings::new(
-                Some(RateLimitBrokerBarrier {
+                [RateLimitBrokerBarrier {
+                    mode: RuleMode::Reject,
                     limit: RateLimit {
                         max_orders: 1,
                         window: Duration::from_secs(10),
                     },
-                }),
+                }],
                 [],
                 [RateLimitAccountBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     account_id: account(1),
                     limit: RateLimit {
                         max_orders: 1,
@@ -1967,12 +2177,13 @@ mod tests {
 
         let group = PolicyGroupId::new(7);
         let settings = RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: Duration::from_secs(10),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -2101,9 +2312,12 @@ mod tests {
         }
     }
 
-    fn check_at(policy: &TestPolicy, order: &OrderOperation, now: Instant) -> Result<(), Rejects> {
+    fn check_at<Order>(policy: &TestPolicy, order: &Order, now: Instant) -> Result<(), Rejects>
+    where
+        Order: crate::HasAccountId + crate::HasInstrument,
+    {
         with_start_pre_trade_now(now, || {
-            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::core::LocalSync>>::check_pre_trade_start(
+            <TestPolicy as PreTradePolicy<Order, (), (), crate::core::LocalSync>>::check_pre_trade_start(
                 policy,
                 &PreTradeContext::<NoLocking>::new(None, order),
                 order,
@@ -2111,13 +2325,16 @@ mod tests {
         })
     }
 
-    fn check_dry_run_at(
+    fn check_dry_run_at<Order>(
         policy: &TestPolicy,
-        order: &OrderOperation,
+        order: &Order,
         now: Instant,
-    ) -> Result<(), Rejects> {
+    ) -> Result<(), Rejects>
+    where
+        Order: crate::HasAccountId + crate::HasInstrument,
+    {
         with_start_pre_trade_now(now, || {
-            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::core::LocalSync>>::check_pre_trade_start_dry_run(
+            <TestPolicy as PreTradePolicy<Order, (), (), crate::core::LocalSync>>::check_pre_trade_start_dry_run(
                 policy,
                 &PreTradeContext::<NoLocking>::new(None, order),
                 order,
@@ -2127,9 +2344,10 @@ mod tests {
 
     fn broker_settings(max_orders: usize, window: Duration) -> RateLimitSettings {
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: RuleMode::Reject,
                 limit: RateLimit { max_orders, window },
-            }),
+            }],
             [],
             [],
             [],
@@ -2143,8 +2361,9 @@ mod tests {
 
     fn asset_settings(settlement: &str, max_orders: usize, window: Duration) -> RateLimitSettings {
         RateLimitSettings::new(
-            None,
+            [],
             [RateLimitAssetBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 limit: RateLimit { max_orders, window },
                 settlement_asset: Asset::new(settlement).expect("asset code must be valid"),
             }],
@@ -2164,9 +2383,10 @@ mod tests {
         window: Duration,
     ) -> RateLimitSettings {
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [RateLimitAccountBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 account_id,
                 limit: RateLimit { max_orders, window },
             }],
@@ -2186,10 +2406,11 @@ mod tests {
         window: Duration,
     ) -> RateLimitSettings {
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [],
             [RateLimitAccountAssetBarrier {
+                mode: crate::pretrade::RuleMode::Reject,
                 account_id,
                 settlement_asset: Asset::new(settlement).expect("asset code must be valid"),
                 limit: RateLimit { max_orders, window },
@@ -2215,9 +2436,10 @@ mod tests {
         let other = account(11223344);
         let policy = policy_from(
             RateLimitSettings::new(
-                None,
+                [],
                 [],
                 [target, other].map(|account_id| RateLimitAccountBarrier {
+                    mode: crate::pretrade::RuleMode::Reject,
                     limit: RateLimit {
                         max_orders: 10,
                         window: Duration::from_secs(3600),
@@ -2234,7 +2456,7 @@ mod tests {
         }
         assert!(policy
             .per_account_timestamps
-            .with(&target, |_| ())
+            .with(&(target, RuleMode::Reject), |_| ())
             .is_some());
         let mut mutations = crate::Mutations::new();
         assert_eq!(
@@ -2262,7 +2484,7 @@ mod tests {
         let _ = mutations.rollback_all();
         assert!(policy
             .per_account_timestamps
-            .with(&target, |_| ())
+            .with(&(target, RuleMode::Reject), |_| ())
             .is_some());
 
         let mut mutations = crate::Mutations::new();
@@ -2275,9 +2497,12 @@ mod tests {
         assert!(!mutations.commit_all().failed());
         assert!(policy
             .per_account_timestamps
-            .with(&target, |_| ())
+            .with(&(target, RuleMode::Reject), |_| ())
             .is_none());
-        assert!(policy.per_account_timestamps.with(&other, |_| ()).is_some());
+        assert!(policy
+            .per_account_timestamps
+            .with(&(other, RuleMode::Reject), |_| ())
+            .is_some());
     }
 
     #[test]
@@ -2288,7 +2513,7 @@ mod tests {
         let eur = Asset::new("EUR").expect("valid asset");
         let policy = policy_from(
             RateLimitSettings::new(
-                None,
+                [],
                 [],
                 [],
                 [
@@ -2298,6 +2523,7 @@ mod tests {
                 ]
                 .map(|(account_id, settlement_asset)| {
                     RateLimitAccountAssetBarrier {
+                        mode: crate::pretrade::RuleMode::Reject,
                         limit: RateLimit {
                             max_orders: 10,
                             window: Duration::from_secs(3600),
@@ -2317,8 +2543,11 @@ mod tests {
         eur_order.instrument =
             Instrument::new(Asset::new("AAPL").expect("valid asset"), eur.clone());
         check_at(&policy, &eur_order, now).expect("EUR order passes");
-        let target_keys = [(target, usd.clone()), (target, eur)];
-        let other_key = (other, usd);
+        let target_keys = [
+            (target, usd.clone(), RuleMode::Reject),
+            (target, eur, RuleMode::Reject),
+        ];
+        let other_key = (other, usd, RuleMode::Reject);
         for key in &target_keys {
             assert!(policy
                 .per_account_asset_timestamps
@@ -2451,6 +2680,479 @@ mod tests {
 
     fn account(id: u64) -> AccountId {
         AccountId::from_u64(id)
+    }
+
+    fn review_limit(max_orders: usize) -> RateLimit {
+        RateLimit {
+            max_orders,
+            window: Duration::from_secs(3600),
+        }
+    }
+
+    fn mode_settings(
+        axis: usize,
+        rules: &[(RuleMode, usize)],
+    ) -> Result<RateLimitSettings, RateLimitPolicyError> {
+        let usd = Asset::new("USD").expect("valid asset");
+        RateLimitSettings::new(
+            rules
+                .iter()
+                .filter(|_| axis == 0)
+                .map(|&(mode, max)| RateLimitBrokerBarrier {
+                    mode,
+                    limit: review_limit(max),
+                }),
+            rules
+                .iter()
+                .filter(|_| axis == 1)
+                .map(|&(mode, max)| RateLimitAssetBarrier {
+                    mode,
+                    limit: review_limit(max),
+                    settlement_asset: usd.clone(),
+                }),
+            rules
+                .iter()
+                .filter(|_| axis == 2)
+                .map(|&(mode, max)| RateLimitAccountBarrier {
+                    mode,
+                    limit: review_limit(max),
+                    account_id: account(1),
+                }),
+            rules
+                .iter()
+                .filter(|_| axis == 3)
+                .map(|&(mode, max)| RateLimitAccountAssetBarrier {
+                    mode,
+                    limit: review_limit(max),
+                    account_id: account(1),
+                    settlement_asset: usd.clone(),
+                }),
+        )
+    }
+
+    fn set_mode_axis(
+        settings: &mut RateLimitSettings,
+        axis: usize,
+        rules: &[(RuleMode, usize)],
+    ) -> Result<(), RateLimitPolicyError> {
+        let usd = Asset::new("USD").expect("valid asset");
+        match axis {
+            0 => settings.set_broker_barriers(rules.iter().map(|&(mode, max)| {
+                RateLimitBrokerBarrier {
+                    mode,
+                    limit: review_limit(max),
+                }
+            })),
+            1 => settings.set_asset_barriers(rules.iter().map(|&(mode, max)| {
+                RateLimitAssetBarrier {
+                    mode,
+                    limit: review_limit(max),
+                    settlement_asset: usd.clone(),
+                }
+            })),
+            2 => settings.set_account_barriers(rules.iter().map(|&(mode, max)| {
+                RateLimitAccountBarrier {
+                    mode,
+                    limit: review_limit(max),
+                    account_id: account(1),
+                }
+            })),
+            3 => settings.set_account_asset_barriers(rules.iter().map(|&(mode, max)| {
+                RateLimitAccountAssetBarrier {
+                    mode,
+                    limit: review_limit(max),
+                    account_id: account(1),
+                    settlement_asset: usd.clone(),
+                }
+            })),
+            _ => panic!("unknown test axis"),
+        }
+    }
+
+    #[test]
+    fn review_mode_counts_independently_on_every_axis() {
+        for axis in 0..4 {
+            let policy = policy_from(
+                mode_settings(
+                    axis,
+                    &[(RuleMode::Reject, 3), (RuleMode::ReviewWithoutHold, 1)],
+                )
+                .expect("different modes are valid"),
+            );
+            let o = order(account(1));
+            let now = Instant::now();
+            check_at(&policy, &o, now).expect("first order passes");
+            for _ in 0..2 {
+                let marks = check_at(&policy, &o, now).expect_err("review threshold breached");
+                assert_eq!(marks.len(), 1, "axis {axis}: only one review mark");
+                assert_eq!(marks[0].mode, RuleMode::ReviewWithoutHold);
+                assert_eq!(marks[0].code, RejectCode::RateLimitExceeded);
+                assert_eq!(marks[0].scope, RejectScope::Order);
+            }
+            let entries = check_at(&policy, &o, now).expect_err("reject threshold breached");
+            assert_eq!(
+                entries.len(),
+                2,
+                "axis {axis}: reject and review returned together"
+            );
+            assert_eq!(entries[0].mode, RuleMode::Reject);
+            assert_eq!(entries[1].mode, RuleMode::ReviewWithoutHold);
+        }
+    }
+
+    #[test]
+    fn review_mode_duplicate_inputs_are_atomic_on_every_axis() {
+        for axis in 0..4 {
+            for mode in [
+                RuleMode::Reject,
+                RuleMode::ReviewWithHold,
+                RuleMode::ReviewWithoutHold,
+            ] {
+                let expected = match axis {
+                    0 => RateLimitPolicyError::DuplicateBrokerBarrier { mode },
+                    1 => RateLimitPolicyError::DuplicateAssetBarrier {
+                        asset: Asset::new("USD").unwrap(),
+                        mode,
+                    },
+                    2 => RateLimitPolicyError::DuplicateAccountBarrier {
+                        account_id: account(1),
+                        mode,
+                    },
+                    3 => RateLimitPolicyError::DuplicateAccountAssetBarrier {
+                        account_id: account(1),
+                        asset: Asset::new("USD").unwrap(),
+                        mode,
+                    },
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    mode_settings(axis, &[(mode, 99), (mode, 99)]).unwrap_err(),
+                    expected
+                );
+                assert!(expected.to_string().contains(mode.as_str()));
+                if axis == 1 || axis == 3 {
+                    assert!(expected.to_string().contains("USD"));
+                }
+                if axis == 2 || axis == 3 {
+                    assert!(!expected.to_string().contains(&account(1).to_string()));
+                }
+                let policy = policy_from(mode_settings(axis, &[(mode, 1)]).unwrap());
+                let o = order(account(1));
+                let now = Instant::now();
+                check_at(&policy, &o, now).unwrap();
+                let cell = policy.settings_cell();
+                cell.update(|settings| {
+                    let before = format!("{settings:?}");
+                    assert_eq!(
+                        set_mode_axis(settings, axis, &[(mode, 99), (mode, 99)]),
+                        Err(expected)
+                    );
+                    assert_eq!(
+                        format!("{settings:?}"),
+                        before,
+                        "failed setter changed settings"
+                    );
+                    Ok::<_, RateLimitPolicyError>(())
+                })
+                .unwrap();
+                assert_eq!(
+                    check_at(&policy, &o, now).unwrap_err()[0].mode,
+                    mode,
+                    "old counter survives failed setter"
+                );
+            }
+            let rules = [
+                (RuleMode::Reject, 5),
+                (RuleMode::ReviewWithHold, 5),
+                (RuleMode::ReviewWithoutHold, 5),
+            ];
+            let mut settings = mode_settings(axis, &rules).expect("same key with different modes");
+            set_mode_axis(&mut settings, axis, &rules).expect("setter accepts different modes");
+        }
+    }
+
+    #[test]
+    fn review_mode_confirmed_spends_every_rule() {
+        for axis in 0..4 {
+            for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
+                for confirmed in [true, false] {
+                    let rules = [(RuleMode::Reject, 4), (mode, 2)];
+                    let policy = policy_from(mode_settings(axis, &rules).unwrap());
+                    let o = order(account(1));
+                    let second = crate::WithOrderReview {
+                        inner: o.clone(),
+                        review: crate::OrderReview {
+                            confirmed,
+                            already_held: false,
+                        },
+                    };
+                    let now = Instant::now();
+                    check_at(&policy, &o, now).unwrap();
+                    check_at(&policy, &second, now).expect("second attempt is within both limits");
+                    for count in 3..=5 {
+                        let entries = check_at(&policy, &o, now)
+                            .expect_err("third and later attempts exceed the review threshold");
+                        let expected_modes = if count <= 4 {
+                            vec![mode]
+                        } else {
+                            vec![RuleMode::Reject, mode]
+                        };
+                        assert_eq!(
+                            entries.iter().map(|entry| entry.mode).collect::<Vec<_>>(),
+                            expected_modes,
+                            "axis {axis}: both thresholds include the second attempt"
+                        );
+                        for entry in entries.iter() {
+                            let max = if entry.mode == RuleMode::Reject { 4 } else { 2 };
+                            assert_eq!(
+                                entry.details,
+                                format!(
+                                    "submitted {count} orders in 3600s window, max allowed: {max}"
+                                ),
+                                "axis {axis}: exact count includes the second attempt"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn review_mode_reports_one_mark_per_mode_in_axis_priority() {
+        let modes = [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold];
+        let mut settings = mode_settings(0, &modes.map(|mode| (mode, 0))).unwrap();
+        for axis in 1..4 {
+            set_mode_axis(&mut settings, axis, &modes.map(|mode| (mode, 0))).unwrap();
+        }
+        let policy = policy_from(settings);
+        let o = order(account(1));
+        let now = Instant::now();
+        for (axis, reason) in [
+            "broker barrier",
+            "asset barrier",
+            "account barrier",
+            "account+asset barrier",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let marks = check_at(&policy, &o, now).unwrap_err();
+            assert_eq!(marks.len(), 2, "one mark for each review mode");
+            for (mark, mode) in marks.iter().zip(modes) {
+                assert_eq!(mark.mode, mode);
+                assert_eq!(mark.reason, format!("rate limit exceeded: {reason}"));
+            }
+            policy
+                .settings_cell()
+                .update(|settings| set_mode_axis(settings, axis, &[]))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn review_mode_dry_run_records_nothing_on_every_axis() {
+        for axis in 0..4 {
+            for mode in [
+                RuleMode::Reject,
+                RuleMode::ReviewWithHold,
+                RuleMode::ReviewWithoutHold,
+            ] {
+                let policy = policy_from(mode_settings(axis, &[(mode, 1)]).unwrap());
+                let o = order(account(1));
+                let now = Instant::now();
+                check_dry_run_at(&policy, &o, now).unwrap();
+                check_dry_run_at(&policy, &o, now).unwrap();
+                check_at(&policy, &o, now).expect("dry run did not spend budget");
+                let dry = check_dry_run_at(&policy, &o, now).unwrap_err();
+                let dry_again = check_dry_run_at(&policy, &o, now).unwrap_err();
+                assert_eq!(dry, dry_again);
+                assert_eq!(dry, check_at(&policy, &o, now).unwrap_err());
+                assert_eq!(dry[0].mode, mode);
+            }
+        }
+    }
+
+    #[test]
+    fn review_mode_retirement_refuses_and_clears_every_mode_log() {
+        for axis in 2..4 {
+            for mode in [
+                RuleMode::ReviewWithHold,
+                RuleMode::ReviewWithoutHold,
+                RuleMode::Reject,
+            ] {
+                let policy = policy_from(mode_settings(axis, &[(mode, 1)]).unwrap());
+                let o = order(account(1));
+                let now = Instant::now();
+                check_at(&policy, &o, now).unwrap();
+                let retire = |mutations: &mut crate::Mutations| {
+                    <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(&policy, account(1), mutations)
+                };
+                assert_eq!(
+                    retire(&mut crate::Mutations::new()),
+                    Err(crate::AccountRetirementRefusal::ConfigurationReferencesAccount)
+                );
+                policy
+                    .settings_cell()
+                    .update(|settings| set_mode_axis(settings, axis, &[]))
+                    .unwrap();
+                let mut mutations = crate::Mutations::new();
+                retire(&mut mutations).unwrap();
+                let _ = mutations.rollback_all();
+                policy
+                    .settings_cell()
+                    .update(|settings| set_mode_axis(settings, axis, &[(mode, 1)]))
+                    .unwrap();
+                check_at(&policy, &o, now).expect_err("rollback must retain log");
+                policy
+                    .settings_cell()
+                    .update(|settings| set_mode_axis(settings, axis, &[]))
+                    .unwrap();
+                let mut mutations = crate::Mutations::new();
+                retire(&mut mutations).unwrap();
+                assert!(!mutations.commit_all().failed());
+                policy
+                    .settings_cell()
+                    .update(|settings| set_mode_axis(settings, axis, &[(mode, 1)]))
+                    .unwrap();
+                check_at(&policy, &o, now).expect("retirement must clear this mode's log");
+            }
+
+            let rules = [
+                (RuleMode::Reject, 1),
+                (RuleMode::ReviewWithHold, 1),
+                (RuleMode::ReviewWithoutHold, 1),
+            ];
+            let policy = policy_from(mode_settings(axis, &rules).unwrap());
+            let o = order(account(1));
+            let now = Instant::now();
+            check_at(&policy, &o, now).unwrap();
+            policy
+                .settings_cell()
+                .update(|settings| set_mode_axis(settings, axis, &[]))
+                .unwrap();
+            let mut mutations = crate::Mutations::new();
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::LocalSync>>::retire_account(
+                &policy,
+                account(1),
+                &mut mutations,
+            )
+            .unwrap();
+            assert!(!mutations.commit_all().failed());
+            policy
+                .settings_cell()
+                .update(|settings| set_mode_axis(settings, axis, &rules))
+                .unwrap();
+            check_at(&policy, &o, now).expect("retirement must clear every mode's log at once");
+        }
+    }
+
+    #[test]
+    fn review_mode_broker_list_replacement_preserves_only_surviving_counters() {
+        for (remove, keep) in [
+            (RuleMode::Reject, RuleMode::ReviewWithHold),
+            (RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold),
+            (RuleMode::ReviewWithoutHold, RuleMode::Reject),
+        ] {
+            let policy = policy_from(mode_settings(0, &[(remove, 1), (keep, 1)]).unwrap());
+            let o = order(account(1));
+            let now = Instant::now();
+            check_at(&policy, &o, now).unwrap();
+            policy
+                .settings_cell()
+                .update(|settings| set_mode_axis(settings, 0, &[(keep, 1)]))
+                .unwrap();
+            let entries = check_at(&policy, &o, now).expect_err("surviving counter remains spent");
+            assert_eq!(entries.len(), 1, "replacement drops the removed mode");
+            assert_eq!(entries[0].mode, keep);
+            assert_eq!(
+                entries[0].details,
+                "submitted 2 orders in 3600s window, max allowed: 1"
+            );
+            policy
+                .settings_cell()
+                .update(|settings| set_mode_axis(settings, 0, &[(remove, 1), (keep, 3)]))
+                .unwrap();
+            check_at(&policy, &o, now).expect("re-added mode starts a fresh counter");
+            let entries = check_at(&policy, &o, now).unwrap_err();
+            assert_eq!(
+                entries.len(),
+                2,
+                "both modes eventually exceed their limits"
+            );
+            for entry in entries.iter() {
+                let (count, max) = if entry.mode == keep { (4, 3) } else { (2, 1) };
+                assert_eq!(
+                    entry.details,
+                    format!("submitted {count} orders in 3600s window, max allowed: {max}"),
+                    "replacement preserves surviving mode and resets re-added mode"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn review_mode_counts_all_axes_before_resolving() {
+        let modes = [
+            RuleMode::Reject,
+            RuleMode::ReviewWithHold,
+            RuleMode::ReviewWithoutHold,
+        ];
+        let mut settings = mode_settings(0, &modes.map(|mode| (mode, 0))).unwrap();
+        for axis in 1..4 {
+            set_mode_axis(&mut settings, axis, &modes.map(|mode| (mode, axis))).unwrap();
+        }
+        let policy = policy_from(settings);
+        let now = Instant::now();
+        let o = order(account(1));
+        for (axis, reason) in [
+            "broker barrier",
+            "asset barrier",
+            "account barrier",
+            "account+asset barrier",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let entries =
+                check_at(&policy, &o, now).expect_err("every axis counted earlier attempts");
+            assert_eq!(entries.len(), 3);
+            for entry in entries.iter() {
+                assert_eq!(entry.reason, format!("rate limit exceeded: {reason}"));
+            }
+            policy
+                .settings_cell()
+                .update(|settings| set_mode_axis(settings, axis, &[]))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn review_mode_fixed_counters_survive_retunes_and_detach_policy_clones() {
+        let rules = [
+            (RuleMode::Reject, 1),
+            (RuleMode::ReviewWithHold, 1),
+            (RuleMode::ReviewWithoutHold, 1),
+        ];
+        for axis in 0..2 {
+            let settings = mode_settings(axis, &rules).unwrap();
+            let policy = policy_from(settings.clone());
+            let now = Instant::now();
+            let o = order(account(1));
+            check_at(&policy, &o, now).unwrap();
+            let other = policy_from(policy.settings_cell().with(Clone::clone));
+            check_at(&other, &o, now).expect("new policy detaches all mode counters");
+            policy
+                .settings_cell()
+                .update(|settings| set_mode_axis(settings, axis, &rules.map(|(mode, _)| (mode, 2))))
+                .unwrap();
+            check_at(&policy, &o, now).unwrap();
+            assert_eq!(
+                check_at(&policy, &o, now).unwrap_err().len(),
+                3,
+                "retune keeps every mode counter"
+            );
+        }
     }
 
     // The fixed-window counter and the whole policy against independent
@@ -2591,17 +3293,25 @@ mod tests {
             let mut account_assets = Vec::new();
             for (barrier, limit) in barriers.iter().cloned() {
                 match barrier {
-                    Barrier::Broker => broker = Some(RateLimitBrokerBarrier { limit }),
+                    Barrier::Broker => {
+                        broker = Some(RateLimitBrokerBarrier {
+                            mode: crate::pretrade::RuleMode::Reject,
+                            limit,
+                        })
+                    }
                     Barrier::Asset(code) => assets.push(RateLimitAssetBarrier {
+                        mode: crate::pretrade::RuleMode::Reject,
                         limit,
                         settlement_asset: asset(code),
                     }),
                     Barrier::Account(id) => accounts.push(RateLimitAccountBarrier {
+                        mode: crate::pretrade::RuleMode::Reject,
                         limit,
                         account_id: account(id),
                     }),
                     Barrier::AccountAsset(id, code) => {
                         account_assets.push(RateLimitAccountAssetBarrier {
+                            mode: crate::pretrade::RuleMode::Reject,
                             limit,
                             account_id: account(id),
                             settlement_asset: asset(code),
@@ -2686,7 +3396,7 @@ mod tests {
                     ));
                 }
             }
-            verdict
+            verdict.map_err(Rejects::from)
         }
 
         proptest! {

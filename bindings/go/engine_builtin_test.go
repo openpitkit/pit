@@ -32,10 +32,327 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
+func TestBuiltinRateLimitReviewMode(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().Builtin(
+		policies.BuildRateLimit().BrokerBarriers(policies.RateLimitBrokerBarrier{
+			Mode:  reject.RuleModeReject,
+			Limit: policies.RateLimit{MaxOrders: 2, Window: time.Hour},
+		}).BrokerBarriers(policies.RateLimitBrokerBarrier{
+			Mode:  reject.RuleModeReviewWithoutHold,
+			Limit: policies.RateLimit{MaxOrders: 1, Window: time.Hour},
+		}),
+	).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+	order := rateLimitTestOrder(t, 1)
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, false)
+	assertRateLimitOrder(t, engine, order, 1, reject.RuleModeReviewWithoutHold, false)
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, true)
+}
+
+func TestBuiltinRateLimitConfirmedSpendsBothThresholdsAndDropsReviewMarks(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			engine, err := NewEngineBuilder().NoSync().Builtin(
+				policies.BuildRateLimit().BrokerBarriers(
+					policies.RateLimitBrokerBarrier{
+						Mode:  reject.RuleModeReject,
+						Limit: policies.RateLimit{MaxOrders: 4, Window: time.Hour},
+					},
+					policies.RateLimitBrokerBarrier{
+						Mode:  mode,
+						Limit: policies.RateLimit{MaxOrders: 2, Window: time.Hour},
+					},
+				),
+			).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			defer engine.Stop()
+			order := rateLimitTestOrder(t, 1)
+			assertRateLimitOrder(t, engine, order, 0, mode, false)
+
+			confirmed := rateLimitTestOrder(t, 1)
+			review := confirmed.EnsureReviewView()
+			review.SetConfirmed(true)
+			assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
+
+			assertRateLimitOrder(t, engine, order, 1, mode, false)
+			assertRateLimitOrder(t, engine, confirmed, 0, mode, false)
+			assertRateLimitOrder(t, engine, order, 0, mode, true)
+		})
+	}
+}
+
+func TestBuiltinRateLimitDuplicateKey(t *testing.T) {
+	limit := policies.RateLimit{MaxOrders: 0, Window: time.Hour}
+	broker := policies.RateLimitBrokerBarrier{Mode: reject.RuleModeReject, Limit: limit}
+	asset := policies.RateLimitAssetBarrier{
+		Mode: reject.RuleModeReject, Limit: limit, SettlementAsset: builtinTestAsset(t, "USD"),
+	}
+	for _, test := range []struct {
+		name   string
+		policy *policies.RateLimitReadyBuilder
+	}{
+		{"broker", policies.BuildRateLimit().BrokerBarriers(broker, broker)},
+		{"asset", policies.BuildRateLimit().AssetBarriers(asset, asset)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := NewEngineBuilder().NoSync().Builtin(test.policy).Build()
+			if engine != nil {
+				engine.Stop()
+			}
+			if err == nil || !strings.Contains(err.Error(), "Reject") {
+				t.Fatalf("Build() error = %v, want duplicate naming Reject", err)
+			}
+		})
+	}
+	reviewAsset := asset
+	reviewAsset.Mode = reject.RuleModeReviewWithoutHold
+	engine, err := NewEngineBuilder().NoSync().Builtin(
+		policies.BuildRateLimit().AssetBarriers(asset, reviewAsset),
+	).Build()
+	if err != nil {
+		t.Fatalf("different modes Build() error = %v", err)
+	}
+	defer engine.Stop()
+	// A valid broker update must not leak through a duplicate on another axis.
+	err = engine.Configure().RateLimit(policies.RateLimitPolicyName,
+		[]policies.RateLimitBrokerBarrier{broker},
+		[]policies.RateLimitAssetBarrier{reviewAsset, reviewAsset}, nil, nil)
+	var configErr *configure.Error
+	if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
+		t.Fatalf("RateLimit() error = %v, want Validation", err)
+	}
+	// The old USD reject barrier is still present, with no broker barrier.
+	order := orderSizeTestOrder(t, 1, "EUR", "1")
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, false)
+	assertRateLimitOrder(t, engine, rateLimitTestOrder(t, 1), 0, reject.RuleModeReviewWithoutHold, true)
+	err = engine.Configure().RateLimit(policies.RateLimitPolicyName,
+		[]policies.RateLimitBrokerBarrier{broker, broker}, nil, nil, nil)
+	if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
+		t.Fatalf("duplicate brokers RateLimit() error = %v, want Validation", err)
+	}
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, false)
+}
+
+func TestBuiltinRateLimitZeroModeIsReject(t *testing.T) {
+	limit := policies.RateLimit{MaxOrders: 1, Window: time.Hour}
+	asset := builtinTestAsset(t, "USD")
+	account := param.NewAccountIDFromUint64(1)
+	for _, test := range []struct {
+		name   string
+		policy *policies.RateLimitReadyBuilder
+	}{
+		{"broker", policies.BuildRateLimit().BrokerBarriers(
+			policies.RateLimitBrokerBarrier{Limit: limit},
+			policies.RateLimitBrokerBarrier{Limit: limit, Mode: reject.RuleModeReject},
+		)},
+		{"asset", policies.BuildRateLimit().AssetBarriers(
+			policies.RateLimitAssetBarrier{Limit: limit, SettlementAsset: asset},
+			policies.RateLimitAssetBarrier{Limit: limit, SettlementAsset: asset, Mode: reject.RuleModeReject},
+		)},
+		{"account", policies.BuildRateLimit().AccountBarriers(
+			policies.RateLimitAccountBarrier{Limit: limit, AccountID: account},
+			policies.RateLimitAccountBarrier{Limit: limit, AccountID: account, Mode: reject.RuleModeReject},
+		)},
+		{"account-asset", policies.BuildRateLimit().AccountAssetBarriers(
+			policies.RateLimitAccountAssetBarrier{Limit: limit, AccountID: account, SettlementAsset: asset},
+			policies.RateLimitAccountAssetBarrier{Limit: limit, AccountID: account, SettlementAsset: asset, Mode: reject.RuleModeReject},
+		)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := NewEngineBuilder().NoSync().Builtin(test.policy).Build()
+			if engine != nil {
+				engine.Stop()
+			}
+			if err == nil || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "Reject") {
+				t.Fatalf("Build() error = %v, want duplicate Reject for zero mode", err)
+			}
+		})
+	}
+}
+
+func TestConfigureRateLimitZeroModeIsRejectAndDuplicateIsAtomic(t *testing.T) {
+	limit := policies.RateLimit{MaxOrders: 100, Window: time.Hour}
+	asset := builtinTestAsset(t, "USD")
+	account := param.NewAccountIDFromUint64(1)
+	for _, test := range []struct {
+		name          string
+		brokers       []policies.RateLimitBrokerBarrier
+		assets        []policies.RateLimitAssetBarrier
+		accounts      []policies.RateLimitAccountBarrier
+		accountAssets []policies.RateLimitAccountAssetBarrier
+	}{
+		{name: "broker", brokers: []policies.RateLimitBrokerBarrier{
+			{Limit: limit}, {Limit: limit, Mode: reject.RuleModeReject},
+		}},
+		{name: "asset", assets: []policies.RateLimitAssetBarrier{
+			{Limit: limit, SettlementAsset: asset},
+			{Limit: limit, SettlementAsset: asset, Mode: reject.RuleModeReject},
+		}},
+		{name: "account", accounts: []policies.RateLimitAccountBarrier{
+			{Limit: limit, AccountID: account},
+			{Limit: limit, AccountID: account, Mode: reject.RuleModeReject},
+		}},
+		{name: "account-asset", accountAssets: []policies.RateLimitAccountAssetBarrier{
+			{Limit: limit, AccountID: account, SettlementAsset: asset},
+			{Limit: limit, AccountID: account, SettlementAsset: asset, Mode: reject.RuleModeReject},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := NewEngineBuilder().NoSync().Builtin(
+				policies.BuildRateLimit().BrokerBarriers(policies.RateLimitBrokerBarrier{
+					Limit: policies.RateLimit{MaxOrders: 1, Window: time.Hour},
+				}),
+			).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			defer engine.Stop()
+			order := rateLimitTestOrder(t, 1)
+			assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReject, false)
+			brokers := test.brokers
+			if brokers == nil {
+				brokers = []policies.RateLimitBrokerBarrier{{Limit: limit, Mode: reject.RuleModeReject}}
+			}
+			err = engine.Configure().RateLimit(policies.RateLimitPolicyName,
+				brokers, test.assets, test.accounts, test.accountAssets)
+			var configErr *configure.Error
+			if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation ||
+				!strings.Contains(configErr.Message, "duplicate") || !strings.Contains(configErr.Message, "Reject") {
+				t.Fatalf("RateLimit() error = %v, want Validation naming duplicate Reject for zero mode", err)
+			}
+			assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReject, true)
+		})
+	}
+}
+
+func TestBuiltinRateLimitInvalidMode(t *testing.T) {
+	for _, mode := range []reject.RuleMode{255} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			limit := policies.RateLimit{MaxOrders: 1, Window: time.Hour}
+			brokers := []policies.RateLimitBrokerBarrier{{Mode: mode, Limit: limit}}
+			assets := []policies.RateLimitAssetBarrier{{Mode: mode, Limit: limit, SettlementAsset: builtinTestAsset(t, "USD")}}
+			accounts := []policies.RateLimitAccountBarrier{{Mode: mode, Limit: limit, AccountID: param.NewAccountIDFromUint64(1)}}
+			accountAssets := []policies.RateLimitAccountAssetBarrier{{Mode: mode, Limit: limit, AccountID: param.NewAccountIDFromUint64(1), SettlementAsset: builtinTestAsset(t, "USD")}}
+			for _, axis := range []string{"broker", "asset", "account", "account-asset"} {
+				t.Run(axis, func(t *testing.T) {
+					var bs []policies.RateLimitBrokerBarrier
+					var as []policies.RateLimitAssetBarrier
+					var ac []policies.RateLimitAccountBarrier
+					var aa []policies.RateLimitAccountAssetBarrier
+					switch axis {
+					case "broker":
+						bs = brokers
+					case "asset":
+						as = assets
+					case "account":
+						ac = accounts
+					case "account-asset":
+						aa = accountAssets
+					}
+					engine, err := NewEngineBuilder().NoSync().Builtin(
+						policies.BuildRateLimit().BrokerBarriers(bs...).AssetBarriers(as...).AccountBarriers(ac...).AccountAssetBarriers(aa...),
+					).Build()
+					if engine != nil {
+						engine.Stop()
+					}
+					message := fmt.Sprintf("%s[0] has invalid mode %d", strings.ReplaceAll(axis, "-", "_"), mode)
+					if err == nil || !strings.Contains(err.Error(), message) {
+						t.Errorf("Build() error = %v, want %q", err, message)
+					}
+					engine, err = NewEngineBuilder().NoSync().Builtin(policies.BuildRateLimit().BrokerBarriers()).Build()
+					if err != nil {
+						t.Fatalf("empty Build() error = %v", err)
+					}
+					defer engine.Stop()
+					err = engine.Configure().RateLimit(policies.RateLimitPolicyName, bs, as, ac, aa)
+					var configErr *configure.Error
+					if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation {
+						t.Fatalf("RateLimit() error = %v, want Validation", err)
+					}
+					if !strings.Contains(configErr.Message, message) {
+						t.Errorf("RateLimit() error = %v, want %q", err, message)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestConfigureRateLimitBrokerModes(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().Builtin(policies.BuildRateLimit().BrokerBarriers()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+	barriers := []policies.RateLimitBrokerBarrier{
+		{Mode: reject.RuleModeReject, Limit: policies.RateLimit{MaxOrders: 2, Window: time.Hour}},
+		{Mode: reject.RuleModeReviewWithoutHold, Limit: policies.RateLimit{MaxOrders: 1, Window: time.Hour}},
+	}
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, barriers, nil, nil, nil); err != nil {
+		t.Fatalf("RateLimit(set) error = %v", err)
+	}
+	order := rateLimitTestOrder(t, 1)
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, false)
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, nil, nil, nil, nil); err != nil {
+		t.Fatalf("RateLimit(nil) error = %v", err)
+	}
+	assertRateLimitOrder(t, engine, order, 1, reject.RuleModeReviewWithoutHold, false)
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, true)
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, []policies.RateLimitBrokerBarrier{}, nil, nil, nil); err != nil {
+		t.Fatalf("RateLimit(clear) error = %v", err)
+	}
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, false)
+	// Removing the reject mode must remove it while retaining the review counter.
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, barriers, nil, nil, nil); err != nil {
+		t.Fatalf("RateLimit(reset) error = %v", err)
+	}
+	assertRateLimitOrder(t, engine, order, 0, reject.RuleModeReviewWithoutHold, false)
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName, barriers[1:], nil, nil, nil); err != nil {
+		t.Fatalf("RateLimit(replace) error = %v", err)
+	}
+	assertRateLimitOrder(t, engine, order, 1, reject.RuleModeReviewWithoutHold, false)
+	assertRateLimitOrder(t, engine, order, 1, reject.RuleModeReviewWithoutHold, false)
+}
+
+func assertRateLimitOrder(t *testing.T, engine *Engine, order model.Order, wantReviews int, wantMode reject.RuleMode, wantReject bool) {
+	t.Helper()
+	request, rejects, err := engine.StartPreTrade(order)
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request != nil {
+		defer request.Close()
+	}
+	if wantReject {
+		if request != nil || len(rejects) != 1 || rejects[0].Code != reject.CodeRateLimitExceeded || rejects[0].Mode != reject.RuleModeReject {
+			t.Fatalf("StartPreTrade() rejects = %v, want RateLimitExceeded Reject", rejects)
+		}
+		return
+	}
+	if request == nil || len(rejects) != 0 {
+		t.Fatalf("StartPreTrade() rejects = %v, want accepted request", rejects)
+	}
+	reviews, err := request.Reviews()
+	if err != nil || len(reviews) != wantReviews {
+		t.Fatalf("Reviews() = %v, %v, want %d marks", reviews, err, wantReviews)
+	}
+	for _, mark := range reviews {
+		if mark.Code != reject.CodeRateLimitExceeded || mark.Mode != wantMode {
+			t.Fatalf("review = %v, want RateLimitExceeded %v", mark, wantMode)
+		}
+	}
+}
+
 func TestBuiltinRateLimitBrokerAxisHappyAndReject(t *testing.T) {
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 1, Window: 60 * time.Second},
 			}),
 		).Build()
@@ -79,6 +396,7 @@ func TestBuiltinRateLimitAssetAxisHappyAndReject(t *testing.T) {
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
 			AssetBarriers(policies.RateLimitAssetBarrier{
+				Mode:            reject.RuleModeReject,
 				Limit:           policies.RateLimit{MaxOrders: 1, Window: 60 * time.Second},
 				SettlementAsset: usd,
 			}),
@@ -116,6 +434,7 @@ func TestBuiltinRateLimitAccountAxisHappyAndReject(t *testing.T) {
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
 			AccountBarriers(policies.RateLimitAccountBarrier{
+				Mode:      reject.RuleModeReject,
 				Limit:     policies.RateLimit{MaxOrders: 1, Window: 60 * time.Second},
 				AccountID: param.NewAccountIDFromUint64(1001),
 			}),
@@ -163,6 +482,7 @@ func TestBuiltinRateLimitAccountAssetAxisHappyAndReject(t *testing.T) {
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
 			AccountAssetBarriers(policies.RateLimitAccountAssetBarrier{
+				Mode:            reject.RuleModeReject,
 				Limit:           policies.RateLimit{MaxOrders: 1, Window: 60 * time.Second},
 				AccountID:       param.NewAccountIDFromUint64(1001),
 				SettlementAsset: usd,
@@ -210,18 +530,22 @@ func TestBuiltinRateLimitCombinedAxesHappyAndReject(t *testing.T) {
 	usd := builtinTestAsset(t, "USD")
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 1, Window: 60 * time.Second},
 			}).
 			AssetBarriers(policies.RateLimitAssetBarrier{
+				Mode:            reject.RuleModeReject,
 				Limit:           policies.RateLimit{MaxOrders: 5, Window: 60 * time.Second},
 				SettlementAsset: usd,
 			}).
 			AccountBarriers(policies.RateLimitAccountBarrier{
+				Mode:      reject.RuleModeReject,
 				Limit:     policies.RateLimit{MaxOrders: 5, Window: 60 * time.Second},
 				AccountID: param.NewAccountIDFromUint64(1001),
 			}).
 			AccountAssetBarriers(policies.RateLimitAccountAssetBarrier{
+				Mode:            reject.RuleModeReject,
 				Limit:           policies.RateLimit{MaxOrders: 5, Window: 60 * time.Second},
 				AccountID:       param.NewAccountIDFromUint64(1001),
 				SettlementAsset: usd,
@@ -259,7 +583,8 @@ func TestBuiltinRateLimitCombinedAxesHappyAndReject(t *testing.T) {
 func TestBuiltinRateLimitWithFullSyncDoesNotPanic(t *testing.T) {
 	engine, err := NewEngineBuilder().FullSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 10, Window: 60 * time.Second},
 			}),
 		).Build()
@@ -281,7 +606,8 @@ func TestBuiltinRateLimitWithFullSyncDoesNotPanic(t *testing.T) {
 func TestBuiltinRateLimitZeroWindowReturnsError(t *testing.T) {
 	_, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 1, Window: 0},
 			}),
 		).Build()
@@ -293,7 +619,8 @@ func TestBuiltinRateLimitZeroWindowReturnsError(t *testing.T) {
 func TestBuiltinRateLimitNegativeWindowReturnsError(t *testing.T) {
 	_, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 1, Window: -time.Second},
 			}),
 		).Build()
@@ -305,7 +632,8 @@ func TestBuiltinRateLimitNegativeWindowReturnsError(t *testing.T) {
 func TestBuiltinRateLimitSubMicrosecondWindowAccepted(t *testing.T) {
 	_, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 1, Window: 100 * time.Nanosecond},
 			}),
 		).Build()
@@ -317,7 +645,8 @@ func TestBuiltinRateLimitSubMicrosecondWindowAccepted(t *testing.T) {
 func TestConfigureRateLimitRejectsNegativeWindow(t *testing.T) {
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 10, Window: time.Minute},
 			}),
 		).Build()
@@ -328,9 +657,10 @@ func TestConfigureRateLimitRejectsNegativeWindow(t *testing.T) {
 
 	err = engine.Configure().RateLimit(
 		policies.RateLimitPolicyName,
-		&policies.RateLimitBrokerBarrier{
+		[]policies.RateLimitBrokerBarrier{{
+			Mode:  reject.RuleModeReject,
 			Limit: policies.RateLimit{MaxOrders: 1, Window: -time.Second},
-		},
+		}},
 		nil,
 		nil,
 		nil,
@@ -347,14 +677,16 @@ func TestConfigureRateLimitRejectsNegativeWindow(t *testing.T) {
 	}
 }
 
-func TestConfigureRateLimitUpdateClearsBrokerBarrier(t *testing.T) {
+func TestConfigureRateLimitClearsBrokerBarriers(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(1001)
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 1, Window: time.Minute},
 			}).
 			AccountBarriers(policies.RateLimitAccountBarrier{
+				Mode:      reject.RuleModeReject,
 				AccountID: accountID,
 				Limit:     policies.RateLimit{MaxOrders: 10, Window: time.Minute},
 			}),
@@ -381,15 +713,15 @@ func TestConfigureRateLimitUpdateClearsBrokerBarrier(t *testing.T) {
 		t.Fatalf("second StartPreTrade() rejects = %v, want broker reject", rejects)
 	}
 
-	err = engine.Configure().RateLimitUpdate(
+	err = engine.Configure().RateLimit(
 		policies.RateLimitPolicyName,
-		optional.Some[*policies.RateLimitBrokerBarrier](nil),
+		[]policies.RateLimitBrokerBarrier{},
 		nil,
 		nil,
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("Configure().RateLimitUpdate() error = %v", err)
+		t.Fatalf("Configure().RateLimit() error = %v", err)
 	}
 
 	request, rejects, err = engine.StartPreTrade(rateLimitTestOrder(t, 1001))
@@ -433,37 +765,37 @@ func TestEmptyPolicyLifecycleRateLimit(t *testing.T) {
 		name          string
 		accountID     uint64
 		settlement    string
-		broker        *policies.RateLimitBrokerBarrier
+		broker        []policies.RateLimitBrokerBarrier
 		assets        []policies.RateLimitAssetBarrier
 		accounts      []policies.RateLimitAccountBarrier
 		accountAssets []policies.RateLimitAccountAssetBarrier
 	}{
 		{name: "broker", accountID: 1001, settlement: "USD",
-			broker: &policies.RateLimitBrokerBarrier{Limit: limit}},
+			broker: []policies.RateLimitBrokerBarrier{{Mode: reject.RuleModeReject, Limit: limit}}},
 		{name: "asset", accountID: 1002, settlement: "EUR",
-			assets: []policies.RateLimitAssetBarrier{{Limit: limit, SettlementAsset: builtinTestAsset(t, "EUR")}}},
+			assets: []policies.RateLimitAssetBarrier{{Mode: reject.RuleModeReject, Limit: limit, SettlementAsset: builtinTestAsset(t, "EUR")}}},
 		{name: "account", accountID: 1003, settlement: "GBP",
-			accounts: []policies.RateLimitAccountBarrier{{Limit: limit, AccountID: param.NewAccountIDFromUint64(1003)}}},
+			accounts: []policies.RateLimitAccountBarrier{{Mode: reject.RuleModeReject, Limit: limit, AccountID: param.NewAccountIDFromUint64(1003)}}},
 		{name: "account-asset", accountID: 1004, settlement: "JPY",
-			accountAssets: []policies.RateLimitAccountAssetBarrier{{Limit: limit, AccountID: param.NewAccountIDFromUint64(1004), SettlementAsset: builtinTestAsset(t, "JPY")}}},
+			accountAssets: []policies.RateLimitAccountAssetBarrier{{Mode: reject.RuleModeReject, Limit: limit, AccountID: param.NewAccountIDFromUint64(1004), SettlementAsset: builtinTestAsset(t, "JPY")}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			order := orderSizeTestOrder(t, test.accountID, test.settlement, "1")
 			set := func() {
 				t.Helper()
-				if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
-					optional.From(test.broker, test.broker != nil), test.assets, test.accounts, test.accountAssets); err != nil {
-					t.Fatalf("Configure().RateLimitUpdate(set) error = %v", err)
+				if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+					test.broker, test.assets, test.accounts, test.accountAssets); err != nil {
+					t.Fatalf("Configure().RateLimit(set) error = %v", err)
 				}
 			}
 			clearAxis := func() {
 				t.Helper()
-				broker := optional.None[*policies.RateLimitBrokerBarrier]()
+				var broker []policies.RateLimitBrokerBarrier
 				var assets []policies.RateLimitAssetBarrier
 				var accounts []policies.RateLimitAccountBarrier
 				var accountAssets []policies.RateLimitAccountAssetBarrier
 				if test.broker != nil {
-					broker = optional.Some[*policies.RateLimitBrokerBarrier](nil)
+					broker = []policies.RateLimitBrokerBarrier{}
 				}
 				if test.assets != nil {
 					assets = []policies.RateLimitAssetBarrier{}
@@ -474,9 +806,9 @@ func TestEmptyPolicyLifecycleRateLimit(t *testing.T) {
 				if test.accountAssets != nil {
 					accountAssets = []policies.RateLimitAccountAssetBarrier{}
 				}
-				if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
+				if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
 					broker, assets, accounts, accountAssets); err != nil {
-					t.Fatalf("Configure().RateLimitUpdate(clear) error = %v", err)
+					t.Fatalf("Configure().RateLimit(clear) error = %v", err)
 				}
 			}
 			set()
@@ -501,20 +833,20 @@ func TestEmptyPolicyLifecycleRateLimit(t *testing.T) {
 
 	order := orderSizeTestOrder(t, 1005, "CHF", "1")
 	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
-		&policies.RateLimitBrokerBarrier{Limit: limit},
-		[]policies.RateLimitAssetBarrier{{Limit: limit, SettlementAsset: builtinTestAsset(t, "CHF")}}, nil, nil); err != nil {
+		[]policies.RateLimitBrokerBarrier{{Mode: reject.RuleModeReject, Limit: limit}},
+		[]policies.RateLimitAssetBarrier{{Mode: reject.RuleModeReject, Limit: limit, SettlementAsset: builtinTestAsset(t, "CHF")}}, nil, nil); err != nil {
 		t.Fatalf("Configure().RateLimit(two axes) error = %v", err)
 	}
 	check(t, order, false)
 	check(t, order, true)
-	if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
-		optional.Some[*policies.RateLimitBrokerBarrier](nil), nil, nil, nil); err != nil {
-		t.Fatalf("Configure().RateLimitUpdate(clear broker) error = %v", err)
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+		[]policies.RateLimitBrokerBarrier{}, nil, nil, nil); err != nil {
+		t.Fatalf("Configure().RateLimit(clear broker) error = %v", err)
 	}
 	check(t, order, true)
-	if err := engine.Configure().RateLimitUpdate(policies.RateLimitPolicyName,
-		optional.None[*policies.RateLimitBrokerBarrier](), []policies.RateLimitAssetBarrier{}, nil, nil); err != nil {
-		t.Fatalf("Configure().RateLimitUpdate(clear asset) error = %v", err)
+	if err := engine.Configure().RateLimit(policies.RateLimitPolicyName,
+		nil, []policies.RateLimitAssetBarrier{}, nil, nil); err != nil {
+		t.Fatalf("Configure().RateLimit(clear asset) error = %v", err)
 	}
 	check(t, order, false)
 	check(t, order, false)
@@ -1719,7 +2051,8 @@ func TestBuiltinSetAccountPnlWrongPolicyTypeReturnsTypeMismatch(t *testing.T) {
 
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
-			BrokerBarrier(policies.RateLimitBrokerBarrier{
+			BrokerBarriers(policies.RateLimitBrokerBarrier{
+				Mode:  reject.RuleModeReject,
 				Limit: policies.RateLimit{MaxOrders: 5, Window: 60 * time.Second},
 			}),
 		).Build()

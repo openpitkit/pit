@@ -225,9 +225,10 @@ fn rate_limit() -> RateLimit {
 
 fn broker_rate_settings() -> RateLimitSettings {
     RateLimitSettings::new(
-        Some(RateLimitBrokerBarrier {
+        [RateLimitBrokerBarrier {
+            mode: openpit::pretrade::RuleMode::Reject,
             limit: rate_limit(),
-        }),
+        }],
         [],
         [],
         [],
@@ -495,9 +496,10 @@ fn rate_engine(settings: RateLimitSettings) -> TestEngine {
 fn retire_rate_account_barrier_refuses_until_configuration_cleared() {
     let engine = rate_engine(
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: rate_limit(),
                 account_id: account(),
             }],
@@ -531,10 +533,11 @@ fn retire_rate_account_barrier_refuses_until_configuration_cleared() {
 fn retire_rate_account_asset_barrier_refuses_until_configuration_cleared() {
     let engine = rate_engine(
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [],
             [RateLimitAccountAssetBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: rate_limit(),
                 account_id: account(),
                 settlement_asset: asset("USD"),
@@ -686,9 +689,10 @@ fn retire_collects_multiple_refusals_in_registration_order() {
     let builder = Engine::builder::<OrderOperation, TestReport, TestAdjustment>().full_sync();
     let rate = RateLimitPolicy::<FullLocking>::new(
         RateLimitSettings::new(
-            None,
+            [],
             [],
             [RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: rate_limit(),
                 account_id: account(),
             }],

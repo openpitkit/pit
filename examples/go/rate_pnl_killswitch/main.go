@@ -176,8 +176,9 @@ func buildEngine(l Limits) (*openpit.Engine, error) {
 		// uses the broker (global) axis; see the Policies wiki page for
 		// per-asset and per-account axes.
 		Builtin(
-			policies.BuildRateLimit().BrokerBarrier(
+			policies.BuildRateLimit().BrokerBarriers(
 				policies.RateLimitBrokerBarrier{
+					Mode: reject.RuleModeReject,
 					Limit: policies.RateLimit{
 						MaxOrders: l.MaxOrdersBurst,
 						Window:    l.RateWindow,

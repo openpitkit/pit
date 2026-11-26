@@ -68,6 +68,10 @@ class RateLimit:
     ``2 * max_orders``. Account and account+asset barriers count them with a
     precise sliding-window log.
 
+    Every attempt that reaches the start hook counts on every threshold,
+    a confirmed re-run included; under ``confirmed`` the engine ignores
+    review marks.
+
     Args:
         max_orders: Maximum number of orders accepted within *window*.
         window: Length of the time window.
@@ -83,9 +87,11 @@ class RateLimitBrokerBarrier:
 
     Args:
         limit: The rate limit definition.
+        mode: Rule mode, part of the barrier's key. None means Reject.
     """
 
     limit: RateLimit
+    mode: RuleMode | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -95,10 +101,12 @@ class RateLimitAssetBarrier:
     Args:
         limit: The rate limit definition.
         settlement_asset: Settlement asset symbol this barrier tracks.
+        mode: Rule mode, part of the barrier's key. None means Reject.
     """
 
     limit: RateLimit
     settlement_asset: param.Asset
+    mode: RuleMode | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,10 +116,12 @@ class RateLimitAccountBarrier:
     Args:
         limit: The rate limit definition.
         account_id: Account this barrier applies to.
+        mode: Rule mode, part of the barrier's key. None means Reject.
     """
 
     limit: RateLimit
     account_id: param.AccountId
+    mode: RuleMode | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -122,11 +132,13 @@ class RateLimitAccountAssetBarrier:
         limit: The rate limit definition.
         account_id: Account this barrier applies to.
         settlement_asset: Settlement asset symbol this barrier tracks.
+        mode: Rule mode, part of the barrier's key. None means Reject.
     """
 
     limit: RateLimit
     account_id: param.AccountId
     settlement_asset: param.Asset
+    mode: RuleMode | None = None
 
 
 class RateLimitReadyBuilder:
@@ -136,10 +148,12 @@ class RateLimitReadyBuilder:
     methods.  All axis methods return ``self`` so they can be chained.
     Pass to ``SyncedEngineBuilder.builtin()`` or
     ``ReadyEngineBuilder.builtin()`` to register on an engine.
+    A mode is part of each barrier's key; repeated (key, mode) pairs fail
+    the engine build with ``ValueError``.
     """
 
     def __init__(self) -> None:
-        self._broker: RateLimitBrokerBarrier | None = None
+        self._broker: list[RateLimitBrokerBarrier] = []
         self._asset: list[RateLimitAssetBarrier] = []
         self._account: list[RateLimitAccountBarrier] = []
         self._account_asset: list[RateLimitAccountAssetBarrier] = []
@@ -150,9 +164,14 @@ class RateLimitReadyBuilder:
         self._policy_group_id = policy_group_id
         return self
 
-    def broker_barrier(self, barrier: RateLimitBrokerBarrier) -> RateLimitReadyBuilder:
-        """Set or replace the broker-wide rate limit."""
-        self._broker = barrier
+    def broker_barriers(
+        self, *barriers: RateLimitBrokerBarrier
+    ) -> RateLimitReadyBuilder:
+        """Append broker-wide barriers, one per mode.
+
+        A repeated mode fails the engine build with ``ValueError``.
+        """
+        self._broker.extend(barriers)
         return self
 
     def asset_barriers(self, *barriers: RateLimitAssetBarrier) -> RateLimitReadyBuilder:
@@ -182,49 +201,14 @@ class RateLimitReadyBuilder:
         mode: RuleMode | None = None,
     ) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
-
-        def _nanos(limit: RateLimit) -> int:
-            micros = limit.window // datetime.timedelta(microseconds=1)
-            return micros * 1_000
-
-        broker = None
-        if self._broker is not None:
-            b = self._broker
-            broker = (
-                b.limit.max_orders,
-                _nanos(b.limit),
-            )
-
         builder._add_builtin_rate_limit(
             name=name,
             mode=mode,
             policy_group_id=self._policy_group_id,
-            broker=broker,
-            asset_barriers=[
-                (
-                    b.settlement_asset,
-                    b.limit.max_orders,
-                    _nanos(b.limit),
-                )
-                for b in self._asset
-            ],
-            account_barriers=[
-                (
-                    b.account_id.value,
-                    b.limit.max_orders,
-                    _nanos(b.limit),
-                )
-                for b in self._account
-            ],
-            account_asset_barriers=[
-                (
-                    b.account_id.value,
-                    b.settlement_asset,
-                    b.limit.max_orders,
-                    _nanos(b.limit),
-                )
-                for b in self._account_asset
-            ],
+            broker_barriers=self._broker,
+            asset_barriers=self._asset,
+            account_barriers=self._account,
+            account_asset_barriers=self._account_asset,
         )
 
 
@@ -247,9 +231,14 @@ class RateLimitBuilder:
         self._ready.with_policy_group_id(policy_group_id)
         return self
 
-    def broker_barrier(self, barrier: RateLimitBrokerBarrier) -> RateLimitReadyBuilder:
-        """Set the broker-wide rate limit and return a ready builder."""
-        return self._ready.broker_barrier(barrier)
+    def broker_barriers(
+        self, *barriers: RateLimitBrokerBarrier
+    ) -> RateLimitReadyBuilder:
+        """Append broker-wide barriers, one per mode, and return a ready builder.
+
+        A repeated mode fails the engine build with ``ValueError``.
+        """
+        return self._ready.broker_barriers(*barriers)
 
     def asset_barriers(self, *barriers: RateLimitAssetBarrier) -> RateLimitReadyBuilder:
         """Add per-settlement-asset barriers and return a ready builder."""

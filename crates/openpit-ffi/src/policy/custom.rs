@@ -2313,6 +2313,7 @@ mod tests {
         );
         let barrier = crate::policy::rate_limit::OpenPitPretradePoliciesRateLimitAccountBarrier {
             account_id,
+            mode: crate::reject::OPENPIT_PRETRADE_RULE_MODE_REJECT,
             max_orders: 1,
             window_nanoseconds: 1_000_000_000,
         };
@@ -2321,6 +2322,7 @@ mod tests {
                 builder,
                 0,
                 std::ptr::null(),
+                0,
                 std::ptr::null(),
                 0,
                 &barrier,

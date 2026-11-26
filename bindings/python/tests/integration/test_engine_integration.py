@@ -211,7 +211,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             openpit.Engine.builder()
             .no_sync()
             .builtin(
-                policies.build_rate_limit().broker_barrier(
+                policies.build_rate_limit().broker_barriers(
                     policies.RateLimitBrokerBarrier(
                         limit=policies.RateLimit(
                             max_orders=1,

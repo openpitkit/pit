@@ -52,12 +52,15 @@ func ConfigureErrorGetMessage(err ConfigureError) string {
 func EngineConfigureRateLimit(
 	engine Engine,
 	name string,
-	broker *PretradePoliciesRateLimitBrokerBarrier,
-	hasBroker bool,
+	brokers []PretradePoliciesRateLimitBrokerBarrier,
 	assets []PretradePoliciesRateLimitAssetBarrier,
 	accounts []PretradePoliciesRateLimitAccountBarrier,
 	accountAssets []PretradePoliciesRateLimitAccountAssetBarrier,
 ) ConfigureError {
+	var brokersPtr *C.OpenPitPretradePoliciesRateLimitBrokerBarrier
+	if len(brokers) > 0 {
+		brokersPtr = (*C.OpenPitPretradePoliciesRateLimitBrokerBarrier)(unsafe.Pointer(&brokers[0]))
+	}
 	var assetsPtr *C.OpenPitPretradePoliciesRateLimitAssetBarrier
 	if len(assets) > 0 {
 		assetsPtr = (*C.OpenPitPretradePoliciesRateLimitAssetBarrier)(unsafe.Pointer(&assets[0]))
@@ -77,8 +80,9 @@ func EngineConfigureRateLimit(
 	ok := C.openpit_engine_configure_rate_limit(
 		engine,
 		importString(name),
-		broker,
-		C.bool(hasBroker),
+		brokersPtr,
+		C.size_t(len(brokers)),
+		C.bool(brokers != nil),
 		assetsPtr,
 		C.size_t(len(assets)),
 		C.bool(assets != nil),
@@ -90,6 +94,7 @@ func EngineConfigureRateLimit(
 		C.bool(accountAssets != nil),
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(brokers)
 	runtime.KeepAlive(assets)
 	runtime.KeepAlive(accounts)
 	runtime.KeepAlive(accountAssets)

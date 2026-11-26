@@ -464,12 +464,14 @@ func TestHandleRetentionAssetCopyLastReceiver(t *testing.T) {
 func newEphemeralRateLimitBuilder(t *testing.T) *policies.RateLimitReadyBuilder {
 	t.Helper()
 	return policies.BuildRateLimit().AssetBarriers(policies.RateLimitAssetBarrier{
+		Mode: reject.RuleModeReject,
 		Limit: policies.RateLimit{
 			MaxOrders: 1,
 			Window:    60 * time.Second,
 		},
 		SettlementAsset: builtinTestAsset(t, "USD"),
 	}).AccountAssetBarriers(policies.RateLimitAccountAssetBarrier{
+		Mode: reject.RuleModeReject,
 		Limit: policies.RateLimit{
 			MaxOrders: 1,
 			Window:    60 * time.Second,
@@ -605,6 +607,7 @@ func assertHandleRetentionOrderOperation(
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
 			AssetBarriers(policies.RateLimitAssetBarrier{
+				Mode: reject.RuleModeReject,
 				Limit: policies.RateLimit{
 					MaxOrders: 1,
 					Window:    60 * time.Second,

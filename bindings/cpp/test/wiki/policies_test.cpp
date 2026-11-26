@@ -65,6 +65,47 @@ TEST(Policies, RateLimitBrokerBarrier) {
   EXPECT_TRUE(static_cast<bool>(engine));
 }
 
+// Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy review modes
+TEST(Policies, RateLimitBrokerReview) {
+  using openpit::reject::RuleMode;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(
+      policies::RateLimitPolicy{}
+          .BrokerBarrier(policies::RateLimitBrokerBarrier(
+              policies::RateLimit(3, 3'600'000'000'000), RuleMode::Reject))
+          .BrokerBarrier(policies::RateLimitBrokerBarrier(
+              policies::RateLimit(1, 3'600'000'000'000),
+              RuleMode::ReviewWithoutHold)));
+  const openpit::Engine engine = builder.Build();
+  openpit::model::Order order;
+
+  const auto first = engine.StartPreTrade(order);
+  ASSERT_TRUE(first.Passed());
+  EXPECT_TRUE(first.request->Reviews().empty());
+  const auto second = engine.StartPreTrade(order);
+  ASSERT_TRUE(second.Passed());
+  const auto reviews = second.request->Reviews();
+  ASSERT_EQ(reviews.size(), 1u);
+  EXPECT_EQ(reviews.front().code,
+            openpit::pretrade::RejectCode::RateLimitExceeded);
+  EXPECT_EQ(reviews.front().mode, RuleMode::ReviewWithoutHold);
+
+  // Confirm the second order: no mark, but the attempt still counts.
+  order.review.emplace().confirmed = true;
+  const auto confirmed = engine.StartPreTrade(order);
+  ASSERT_TRUE(confirmed.Passed());
+  EXPECT_TRUE(confirmed.request->Reviews().empty());
+
+  // The third order is rejected after the confirmed attempt spent a unit.
+  order.review->confirmed = false;
+  const auto third = engine.StartPreTrade(order);
+  ASSERT_FALSE(third.Passed());
+  ASSERT_EQ(third.rejects.size(), 1u);
+  EXPECT_EQ(third.rejects.front().code,
+            openpit::pretrade::RejectCode::RateLimitExceeded);
+  EXPECT_EQ(third.rejects.front().mode, RuleMode::Reject);
+}
+
 // OrderSizeLimitPolicy: quantity follows the underlying asset and notional
 // follows the settlement asset, with an additive broker hard cap.
 TEST(Policies, OrderSizeLimitAssetAndBroker) {

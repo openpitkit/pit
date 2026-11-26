@@ -56,9 +56,9 @@ function makeRateLimitEngine(maxOrders: number = 1): Engine {
   return Engine.builder()
 
     .builtin(
-      buildRateLimit().brokerBarrier(
+      buildRateLimit().brokerBarriers([
         new RateLimitBrokerBarrier(new RateLimit(maxOrders, 60_000)),
-      ),
+      ]),
     )
     .build();
 }
@@ -160,9 +160,9 @@ describe("dry-run surface", () => {
     // - Use the Dry-Run Before a Real Call
     const engine = Engine.builder()
       .builtin(
-        buildRateLimit().brokerBarrier(
+        buildRateLimit().brokerBarriers([
           new RateLimitBrokerBarrier(new RateLimit(1, 60_000)),
-        ),
+        ]),
       )
       .build();
     const order = (): OrderInit => ({

@@ -41,7 +41,7 @@ def _make_rate_limit_engine(*, max_orders: int = 1) -> openpit.Engine:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_rate_limit().broker_barrier(
+            policies.build_rate_limit().broker_barriers(
                 policies.RateLimitBrokerBarrier(
                     limit=policies.RateLimit(
                         max_orders=max_orders,

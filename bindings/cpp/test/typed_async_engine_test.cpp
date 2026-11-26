@@ -911,9 +911,8 @@ TEST(TypedAsyncLifecycle, EmptyPolicyLifecycle) {
                     [&] {
                       engine.Configure().RateLimit(
                           policies::RateLimitPolicyName,
-                          policies::RateLimitBrokerBarrierUpdate::Set(
-                              policies::RateLimitBrokerBarrier(
-                                  policies::RateLimit(0, 3'600'000'000'000))));
+                          std::vector{policies::RateLimitBrokerBarrier(
+                              policies::RateLimit(0, 3'600'000'000'000))});
                     })
             .Await(kAwaitCap)
             .has_value());
@@ -924,7 +923,7 @@ TEST(TypedAsyncLifecycle, EmptyPolicyLifecycle) {
                     [&] {
                       engine.Configure().RateLimit(
                           policies::RateLimitPolicyName,
-                          policies::RateLimitBrokerBarrierUpdate::Clear());
+                          std::vector<policies::RateLimitBrokerBarrier>{});
                     })
             .Await(kAwaitCap)
             .has_value());

@@ -127,7 +127,8 @@ page.
 - [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
   \- structural integrity checks on every order.
 - [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-  \- throttle order flow per broker, asset, or account.
+  \- throttle order flow per broker, asset, account, or account-asset,
+  rejecting or flagging for review per rule.
 - [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
   \- fat-finger caps on quantity and notional.
 - [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)

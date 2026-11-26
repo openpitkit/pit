@@ -2673,8 +2673,7 @@ class Configurator:
         self,
         name: str,
         *,
-        broker: pretrade.policies.RateLimitBrokerBarrier | None = None,
-        clear_broker: bool = False,
+        broker_barriers: list[pretrade.policies.RateLimitBrokerBarrier] | None = None,
         asset_barriers: list[pretrade.policies.RateLimitAssetBarrier] | None = None,
         account_barriers: list[pretrade.policies.RateLimitAccountBarrier] | None = None,
         account_asset_barriers: (
@@ -2688,11 +2687,12 @@ class Configurator:
         Axes passed as ``None`` are left unchanged. A supplied list REPLACES
         that axis wholesale: an empty list clears it. Clearing every axis is
         valid; the policy then admits every order without reading order fields.
-        Barriers may be added and removed at runtime; a barrier key that
+        Barriers may be added and removed at runtime; a (key, mode) pair that
         survives a replacement keeps its live counter (no reset).
-        *broker* replaces the broker barrier when provided and leaves it
-        unchanged when ``None``. Pass
-        ``clear_broker=True`` to remove it.
+        *broker_barriers* replaces every mode on the broker axis; an empty
+        list clears all broker modes. Repeated (key, mode) pairs and invalid
+        modes raise ``PolicyConfigureError`` without changing any settings.
+        A barrier's omitted mode or ``None`` means ``Reject``.
         Clearing an account or account-and-asset barrier keeps its
         sliding-window log; re-adding the key resumes counting orders still in
         its window, including rejected orders. Re-added broker and asset

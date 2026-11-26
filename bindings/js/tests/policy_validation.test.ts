@@ -51,9 +51,9 @@ import {
 function buildBrokerRateLimit(windowMs: number): Engine {
   return Engine.builder()
     .builtin(
-      buildRateLimit().brokerBarrier(
+      buildRateLimit().brokerBarriers([
         new RateLimitBrokerBarrier(new RateLimit(1, windowMs)),
-      ),
+      ]),
     )
     .build();
 }
@@ -391,7 +391,7 @@ describe("rate-limit boundary conversion", () => {
     expect(() =>
       Engine.builder()
         .builtin(
-          buildRateLimit().brokerBarrier(new RateLimitBrokerBarrier(limit)),
+          buildRateLimit().brokerBarriers([new RateLimitBrokerBarrier(limit)]),
         )
         .build(),
     ).not.toThrow();

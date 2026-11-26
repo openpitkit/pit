@@ -1147,12 +1147,13 @@ fn build_rate_limited_engine() -> TestEngine {
     let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let rate_limit = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 1,
                     window: std::time::Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [],
             [],
@@ -1275,12 +1276,13 @@ fn fatal_drop_copy_rolls_back_spot_funds_but_spends_rate_limit_budget() {
     let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let rate_limit = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 2,
                     window: std::time::Duration::from_secs(60),
                 },
-            }),
+            }],
             [],
             [],
             [],

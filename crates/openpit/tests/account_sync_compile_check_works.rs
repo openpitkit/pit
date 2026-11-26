@@ -42,14 +42,16 @@ fn account_sync_engine_with_rate_limit_and_pnl_bounds_builds() {
 
     let rate_limit = RateLimitPolicy::new(
         RateLimitSettings::new(
-            Some(RateLimitBrokerBarrier {
+            [RateLimitBrokerBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 100,
                     window: Duration::from_secs(1),
                 },
-            }),
+            }],
             [],
             [RateLimitAccountBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 10,
                     window: Duration::from_secs(1),
@@ -57,6 +59,7 @@ fn account_sync_engine_with_rate_limit_and_pnl_bounds_builds() {
                 account_id: account,
             }],
             [RateLimitAccountAssetBarrier {
+                mode: openpit::pretrade::RuleMode::Reject,
                 limit: RateLimit {
                     max_orders: 5,
                     window: Duration::from_secs(1),
