@@ -605,6 +605,11 @@ fn get_policy_arc<P: ?Sized>(
 /// Contract:
 /// - `builder` must be a valid engine builder pointer.
 /// - `policy` must be a valid non-null pre-trade policy pointer.
+/// - `instance` supplies the registration name and mode.
+///   Register a policy that keeps its own state (Spot Funds, the rate limit,
+///   the P&L bounds kill switch, a custom policy that holds funds or counts) in
+///   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref OpenPitPolicyInstance::mode
+///   says what a review mode discards.
 ///
 /// Success:
 /// - returns `true` and the builder retains its own reference to the policy.

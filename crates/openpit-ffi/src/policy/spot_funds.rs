@@ -521,6 +521,11 @@ fn import_pricing_source(value: u8, out_error: OpenPitOutError) -> Option<SpotFu
 ///   `has_slippage_bps == false` is ignored. Slippage resolves
 ///   account -> account group -> instrument -> global per order.
 /// - `policy_group_id` tags the policy instance.
+/// - `instance` supplies the registration name and mode.
+///   Register a policy that keeps its own state (Spot Funds, the rate limit,
+///   the P&L bounds kill switch, a custom policy that holds funds or counts) in
+///   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref OpenPitPolicyInstance::mode
+///   says what a review mode discards.
 ///
 /// Mismatch guard: when `market_data` is non-null and the engine is
 /// multi-threaded (`Full` or `Account` sync mode) but the market-data service
@@ -694,6 +699,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
 /// - Each `currency` string view inside a barrier must be valid for the
 ///   duration of the call.
 /// - Barrier configuration never seeds or resets live account P&L.
+/// - `instance` supplies the registration name and mode.
+///   Register a policy that keeps its own state (Spot Funds, the rate limit,
+///   the P&L bounds kill switch, a custom policy that holds funds or counts) in
+///   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref OpenPitPolicyInstance::mode
+///   says what a review mode discards.
 ///
 /// Success / error: mirrors
 /// `openpit_engine_builder_add_builtin_spot_funds_policy`.

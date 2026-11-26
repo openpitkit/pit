@@ -2377,6 +2377,24 @@ class SyncedEngineBuilder:
 
         None mode means Reject.
         Mode strings use exact PascalCase; invalid modes raise ValueError.
+
+        A policy that keeps its own state - Spot Funds, the rate limit, the
+        P&L bounds kill switch, or a custom policy that holds funds or counts -
+        is registered in "Reject" mode; a custom one that needs review sets a
+        review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+        records it returns. Registered in a review mode, the changes it
+        records as main-stage
+        :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+        marks in pre-trade are rolled back, also after the reviewer confirms
+        that order; changes it makes at once, such as rate-limit counters, stay.
+        For Spot Funds this means nothing is held, no lock price is recorded,
+        balances and positions are not updated, and a later fill or cancel of
+        that order can block the account for a missing lock price. The rejects
+        and account blocks it returns become marks or are dropped unless their
+        code is an evaluation failure, so a P&L kill switch registered this way
+        does not block the account on a fill; a block it writes directly through
+        :class:`openpit.pretrade.AccountControl` and a block from an accepted
+        account adjustment latch in any mode.
         """
         _ = (policy, name, mode)
 
@@ -2391,6 +2409,24 @@ class SyncedEngineBuilder:
 
         None mode means Reject.
         Mode strings use exact PascalCase; invalid modes raise ValueError.
+
+        A policy that keeps its own state - Spot Funds, the rate limit, the
+        P&L bounds kill switch, or a custom policy that holds funds or counts -
+        is registered in "Reject" mode; a custom one that needs review sets a
+        review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+        records it returns. Registered in a review mode, the changes it
+        records as main-stage
+        :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+        marks in pre-trade are rolled back, also after the reviewer confirms
+        that order; changes it makes at once, such as rate-limit counters, stay.
+        For Spot Funds this means nothing is held, no lock price is recorded,
+        balances and positions are not updated, and a later fill or cancel of
+        that order can block the account for a missing lock price. The rejects
+        and account blocks it returns become marks or are dropped unless their
+        code is an evaluation failure, so a P&L kill switch registered this way
+        does not block the account on a fill; a block it writes directly through
+        :class:`openpit.pretrade.AccountControl` and a block from an accepted
+        account adjustment latch in any mode.
         """
         _ = (builtin_ready_builder, name, mode)
 
@@ -2412,6 +2448,24 @@ class ReadyEngineBuilder:
 
         None mode means Reject.
         Mode strings use exact PascalCase; invalid modes raise ValueError.
+
+        A policy that keeps its own state - Spot Funds, the rate limit, the
+        P&L bounds kill switch, or a custom policy that holds funds or counts -
+        is registered in "Reject" mode; a custom one that needs review sets a
+        review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+        records it returns. Registered in a review mode, the changes it
+        records as main-stage
+        :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+        marks in pre-trade are rolled back, also after the reviewer confirms
+        that order; changes it makes at once, such as rate-limit counters, stay.
+        For Spot Funds this means nothing is held, no lock price is recorded,
+        balances and positions are not updated, and a later fill or cancel of
+        that order can block the account for a missing lock price. The rejects
+        and account blocks it returns become marks or are dropped unless their
+        code is an evaluation failure, so a P&L kill switch registered this way
+        does not block the account on a fill; a block it writes directly through
+        :class:`openpit.pretrade.AccountControl` and a block from an accepted
+        account adjustment latch in any mode.
         """
         _ = (policy, name, mode)
 
@@ -2426,6 +2480,24 @@ class ReadyEngineBuilder:
 
         None mode means Reject.
         Mode strings use exact PascalCase; invalid modes raise ValueError.
+
+        A policy that keeps its own state - Spot Funds, the rate limit, the
+        P&L bounds kill switch, or a custom policy that holds funds or counts -
+        is registered in "Reject" mode; a custom one that needs review sets a
+        review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+        records it returns. Registered in a review mode, the changes it
+        records as main-stage
+        :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+        marks in pre-trade are rolled back, also after the reviewer confirms
+        that order; changes it makes at once, such as rate-limit counters, stay.
+        For Spot Funds this means nothing is held, no lock price is recorded,
+        balances and positions are not updated, and a later fill or cancel of
+        that order can block the account for a missing lock price. The rejects
+        and account blocks it returns become marks or are dropped unless their
+        code is an evaluation failure, so a P&L kill switch registered this way
+        does not block the account on a fill; a block it writes directly through
+        :class:`openpit.pretrade.AccountControl` and a block from an accepted
+        account adjustment latch in any mode.
         """
         _ = (builtin_ready_builder, name, mode)
 

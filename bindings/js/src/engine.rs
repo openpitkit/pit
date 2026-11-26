@@ -102,6 +102,23 @@ const POLICY_INSTANCE_TS: &str = r#"
  */
 export interface PolicyInstance {
   name?: string | null;
+  /**
+   * A policy that keeps its own state - Spot Funds, the rate limit, the P&L
+   * bounds kill switch, or a custom policy that holds funds or counts - is
+   * registered in `"Reject"` mode; a custom one that needs review sets a review
+   * mode in {@link PolicyReject.mode} on the reject records it returns.
+   * Registered in a review mode, the changes it records as main-stage
+   * {@link PolicyPreTradeResult.mutations} for an order it marks in pre-trade
+   * are rolled back, also after the reviewer confirms that order; changes it
+   * makes at once, such as rate-limit counters, stay. For Spot Funds this
+   * means nothing is held, no lock price is recorded, balances and positions
+   * are not updated, and a later fill or cancel of that order can block the
+   * account for a missing lock price. The rejects and account blocks it
+   * returns become marks or are dropped unless their code is an evaluation
+   * failure, so a P&L kill switch registered this way does not block the
+   * account on a fill; a block it writes directly through {@link AccountControl}
+   * and a block from an accepted account adjustment latch in any mode.
+   */
   mode?: import("../types.js").RuleMode | null;
 }
 "#;
@@ -1336,6 +1353,11 @@ impl JsEngineBuilder {
     /// An omitted, null, or empty name uses the policy name.
     /// Omitted or null mode is `Reject`.
     ///
+    /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+    /// the P&L bounds kill switch, a custom policy that holds funds or counts)
+    /// in `"Reject"` mode; {@link PolicyInstance.mode} says what a review mode
+    /// discards.
+    ///
     /// # Errors
     ///
     /// Throws `ParamError` when `policy` is not a valid `Policy` object.
@@ -1361,6 +1383,11 @@ impl JsEngineBuilder {
     /// The optional `instance` supplies the registration name and mode.
     /// An omitted, null, or empty name uses the policy name.
     /// Omitted or null mode is `Reject`.
+    ///
+    /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+    /// the P&L bounds kill switch, a custom policy that holds funds or counts)
+    /// in `"Reject"` mode; {@link PolicyInstance.mode} says what a review mode
+    /// discards.
     ///
     /// # Errors
     ///
@@ -1409,6 +1436,11 @@ impl JsReadyEngineBuilder {
     /// An omitted, null, or empty name uses the policy name.
     /// Omitted or null mode is `Reject`.
     ///
+    /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+    /// the P&L bounds kill switch, a custom policy that holds funds or counts)
+    /// in `"Reject"` mode; {@link PolicyInstance.mode} says what a review mode
+    /// discards.
+    ///
     /// # Errors
     ///
     /// Throws `ParamError` when `policy` is not a valid `Policy` object, or
@@ -1432,6 +1464,11 @@ impl JsReadyEngineBuilder {
     /// The optional `instance` supplies the registration name and mode.
     /// An omitted, null, or empty name uses the policy name.
     /// Omitted or null mode is `Reject`.
+    ///
+    /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+    /// the P&L bounds kill switch, a custom policy that holds funds or counts)
+    /// in `"Reject"` mode; {@link PolicyInstance.mode} says what a review mode
+    /// discards.
     ///
     /// # Errors
     ///

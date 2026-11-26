@@ -152,6 +152,10 @@ func (
 
 // PreTrade registers client pre-trade policies and advances the builder to
 // ClientReadyEngineBuilder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *ClientSyncedEngineBuilder[Order, Report, Adjustment]) PreTrade(
 	policy pretrade.ClientPreTradePolicy[Order, Report], options ...InstanceOption,
 ) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
@@ -161,6 +165,10 @@ func (b *ClientSyncedEngineBuilder[Order, Report, Adjustment]) PreTrade(
 }
 
 // Builtin registers a built-in entity on the builder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (
 	b *ClientSyncedEngineBuilder[Order, Report, Adjustment],
 ) Builtin(
@@ -202,6 +210,10 @@ func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) Build() (
 }
 
 // PreTrade appends additional client pre-trade policies to an already-ready builder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) PreTrade(
 	policy pretrade.ClientPreTradePolicy[Order, Report], options ...InstanceOption,
 ) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
@@ -210,6 +222,10 @@ func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) PreTrade(
 }
 
 // Builtin registers a built-in entity on the builder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (
 	b *ClientReadyEngineBuilder[Order, Report, Adjustment],
 ) Builtin(

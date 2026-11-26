@@ -65,6 +65,22 @@ class EngineBuilder;
 /// An empty name uses the policy name; the mode defaults to Reject.
 struct PolicyInstance {
   std::string name;
+  /// A policy that keeps its own state - Spot Funds, the rate limit, the P&L
+  /// bounds kill switch, or a custom policy that holds funds or counts - is
+  /// registered in `reject::RuleMode::Reject` mode; a custom one that needs
+  /// review sets a review mode in \ref reject::Reject::mode on the reject
+  /// records it returns. Registered in a review mode, the changes
+  /// it records as main-stage mutations for an order it marks in pre-trade are
+  /// rolled back, also after the reviewer confirms that order; changes it
+  /// makes at once, such as rate-limit counters, stay. For Spot Funds this
+  /// means nothing is held, no lock price is recorded, balances and positions
+  /// are not updated, and a later fill or cancel of that order can block the
+  /// account for a missing lock price. The rejects and account blocks it
+  /// returns become marks or are dropped unless their code is an evaluation
+  /// failure, so a P&L kill switch registered this way does not block the
+  /// account on a fill; a block it writes directly through
+  /// \ref openpit::accounts::AccountControl and a block from an accepted
+  /// account adjustment latch in any mode.
   reject::RuleMode mode = reject::RuleMode::Reject;
 };
 
@@ -684,6 +700,10 @@ class EngineBuilder {
   // A cast mode value above RuleMode::ReviewWithoutHold or a name that is not
   // valid UTF-8 throws `openpit::Error` from this call. A mode cast to zero
   // registers as RuleMode::Reject (the C ABI's "not set" value).
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   template <typename Policy>
   EngineBuilder& Add(const Policy& policy,
                      const PolicyInstance& instance = PolicyInstance{}) {
@@ -704,6 +724,10 @@ class EngineBuilder {
   // A cast mode value above RuleMode::ReviewWithoutHold or a name that is not
   // valid UTF-8 throws `openpit::Error` from this call. A mode cast to zero
   // registers as RuleMode::Reject (the C ABI's "not set" value).
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   template <typename Policy>
   EngineBuilder& AddPreTradePolicy(
       const Policy& policy, const PolicyInstance& instance = PolicyInstance{}) {

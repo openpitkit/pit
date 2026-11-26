@@ -41,6 +41,22 @@ func InstanceName(name string) InstanceOption {
 
 // InstanceMode sets the registration mode. Its zero value is RuleModeReject;
 // an unknown value is reported by Build.
+//
+// A policy that keeps its own state - Spot Funds, the rate limit, the P&L
+// bounds kill switch, or a custom policy that holds funds or counts - is
+// registered in reject.RuleModeReject mode; a custom one that needs review
+// sets a review mode in [reject.Reject.Mode] on the reject records it returns.
+// Registered in a review mode, the changes it records as main-stage
+// mutations for an order it marks in pre-trade are rolled back, also after the
+// reviewer confirms that order; changes it makes at once, such as rate-limit
+// counters, stay. For Spot Funds this means nothing is held, no lock price is
+// recorded, balances and positions are not updated, and a later fill or cancel
+// of that order can block the account for a missing lock price. The rejects and
+// account blocks it returns become marks or are dropped unless their code is
+// an evaluation failure, so a P&L kill switch registered this way does not block
+// the account on a fill; a block it writes directly through
+// [reject.AccountControl] and a block from an accepted account adjustment latch
+// in any mode.
 func InstanceMode(mode reject.RuleMode) InstanceOption {
 	return func(instance *native.PolicyInstance) { instance.Mode = native.PretradeRuleMode(mode) }
 }
@@ -139,6 +155,10 @@ func (b *SyncedEngineBuilder) MarketData(defaultTTL marketdata.QuoteTTL) *market
 
 // PreTrade registers pre-trade policies and advances the builder to
 // ReadyEngineBuilder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *SyncedEngineBuilder) PreTrade(policy pretrade.Policy, options ...InstanceOption) *ReadyEngineBuilder {
 	rb := newReadyEngineBuilder(b)
 	rb.addPreTradePolicy(policy, policyInstance(options))
@@ -146,6 +166,10 @@ func (b *SyncedEngineBuilder) PreTrade(policy pretrade.Policy, options ...Instan
 }
 
 // Builtin registers a built-in entity on the builder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *SyncedEngineBuilder) Builtin(builtinReadyBuilder builtinReadyBuilder, options ...InstanceOption) *ReadyEngineBuilder {
 	return newReadyEngineBuilder(b).Builtin(builtinReadyBuilder, options...)
 }
@@ -162,6 +186,10 @@ type AccountSyncedEngineBuilder struct {
 
 // PreTrade registers pre-trade policies and advances to
 // AccountSyncReadyEngineBuilder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *AccountSyncedEngineBuilder) PreTrade(
 	policy pretrade.Policy, options ...InstanceOption,
 ) *AccountSyncReadyEngineBuilder {
@@ -172,6 +200,10 @@ func (b *AccountSyncedEngineBuilder) PreTrade(
 
 // Builtin registers a built-in entity on the builder and advances to
 // AccountSyncReadyEngineBuilder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *AccountSyncedEngineBuilder) Builtin(
 	builtinReadyBuilder builtinReadyBuilder,
 	options ...InstanceOption,
@@ -294,12 +326,20 @@ func (e *EngineBuildError) Error() string {
 }
 
 // PreTrade appends additional pre-trade policies to an already-ready builder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *ReadyEngineBuilder) PreTrade(policy pretrade.Policy, options ...InstanceOption) *ReadyEngineBuilder {
 	b.addPreTradePolicy(policy, policyInstance(options))
 	return b
 }
 
 // Builtin registers a built-in entity on the builder.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *ReadyEngineBuilder) Builtin(builtinReadyBuilder builtinReadyBuilder, options ...InstanceOption) *ReadyEngineBuilder {
 	if b.err != nil {
 		return b
@@ -354,6 +394,10 @@ type AccountSyncReadyEngineBuilder struct {
 
 // PreTrade appends additional pre-trade policies and preserves the
 // AccountSync return type so the chain can still reach BuildAsync.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *AccountSyncReadyEngineBuilder) PreTrade(
 	policy pretrade.Policy, options ...InstanceOption,
 ) *AccountSyncReadyEngineBuilder {
@@ -363,6 +407,10 @@ func (b *AccountSyncReadyEngineBuilder) PreTrade(
 
 // Builtin registers a built-in entity and preserves the AccountSync
 // return type so the chain can still reach BuildAsync.
+//
+// Register a policy that keeps its own state (Spot Funds, the rate limit, the
+// P&L bounds kill switch, a custom policy that holds funds or counts) in
+// reject.RuleModeReject mode; [InstanceMode] says what a review mode discards.
 func (b *AccountSyncReadyEngineBuilder) Builtin(
 	builtinReadyBuilder builtinReadyBuilder,
 	options ...InstanceOption,

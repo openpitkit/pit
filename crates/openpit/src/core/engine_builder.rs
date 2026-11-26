@@ -213,6 +213,24 @@ pub struct PolicyInstance {
     /// Instance name; `None` uses the policy's [`PreTradePolicy::name`].
     pub name: Option<String>,
     /// Instance mode, defaulting to [`RuleMode::Reject`].
+    ///
+    /// A policy that keeps its own state - Spot Funds, the rate limit, the P&L
+    /// bounds kill switch, or a custom policy that holds funds or counts -
+    /// is registered in [`RuleMode::Reject`] mode; a custom one that needs
+    /// review sets a review mode in
+    /// [`Reject::mode`](crate::pretrade::Reject::mode) on the reject records it
+    /// returns. Registered in a review mode, the changes it records as main-stage
+    /// mutations for an order it marks in pre-trade are
+    /// rolled back, also after the reviewer confirms that order; changes it
+    /// makes at once, such as rate-limit counters, stay. For Spot Funds this
+    /// means nothing is held, no lock price is recorded, balances and positions
+    /// are not updated, and a later fill or cancel of that order can block the
+    /// account for a missing lock price. The rejects and account blocks it
+    /// returns become marks or are dropped unless their code is an evaluation
+    /// failure, so a P&L kill switch registered this way does not block the
+    /// account on a fill; a block it writes directly through
+    /// [`AccountControl`](crate::AccountControl) and a block from an accepted
+    /// account adjustment latch in any mode.
     pub mode: RuleMode,
 }
 
@@ -569,6 +587,11 @@ where
     /// policy's own name in their `policy` field. A mode other than
     /// [`RuleMode::Reject`] requires [`EngineBuilder::with_order_review`].
     ///
+    /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+    /// the P&L bounds kill switch, a custom policy that holds funds or counts)
+    /// in [`RuleMode::Reject`] mode; [`PolicyInstance::mode`] says what a
+    /// review mode discards.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -730,6 +753,11 @@ where
     /// configuration through [`Engine::configure`]. Reject records keep the
     /// policy's own name in their `policy` field. A mode other than
     /// [`RuleMode::Reject`] requires [`EngineBuilder::with_order_review`].
+    ///
+    /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+    /// the P&L bounds kill switch, a custom policy that holds funds or counts)
+    /// in [`RuleMode::Reject`] mode; [`PolicyInstance::mode`] says what a
+    /// review mode discards.
     pub fn pre_trade_instance<Policy>(mut self, policy: Policy, instance: PolicyInstance) -> Self
     where
         Policy: IntoPolicyObject<

@@ -4461,9 +4461,28 @@ impl PySyncedEngineBuilder {
 
 #[pymethods]
 impl PySyncedEngineBuilder {
-    /// Register a policy. None or empty name uses the policy name.
+    /// Register a policy; None or empty name uses the policy name.
+    ///
     /// None mode means Reject.
-    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    /// Mode strings use exact PascalCase; invalid modes raise ValueError.
+    ///
+    /// A policy that keeps its own state - Spot Funds, the rate limit, the
+    /// P&L bounds kill switch, or a custom policy that holds funds or counts -
+    /// is registered in "Reject" mode; a custom one that needs review sets a
+    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+    /// records it returns. Registered in a review mode, the changes it
+    /// records as main-stage
+    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+    /// marks in pre-trade are rolled back, also after the reviewer confirms
+    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// For Spot Funds this means nothing is held, no lock price is recorded,
+    /// balances and positions are not updated, and a later fill or cancel of
+    /// that order can block the account for a missing lock price. The rejects
+    /// and account blocks it returns become marks or are dropped unless their
+    /// code is an evaluation failure, so a P&L kill switch registered this way
+    /// does not block the account on a fill; a block it writes directly through
+    /// :class:`openpit.pretrade.AccountControl` and a block from an accepted
+    /// account adjustment latch in any mode.
     #[pyo3(signature = (policy, *, name=None, mode=None))]
     fn pre_trade(
         &self,
@@ -4476,9 +4495,28 @@ impl PySyncedEngineBuilder {
         Ok(rb)
     }
 
-    /// Register a built-in policy. None or empty name uses the policy name.
+    /// Register a built-in policy; None or empty name uses the policy name.
+    ///
     /// None mode means Reject.
-    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    /// Mode strings use exact PascalCase; invalid modes raise ValueError.
+    ///
+    /// A policy that keeps its own state - Spot Funds, the rate limit, the
+    /// P&L bounds kill switch, or a custom policy that holds funds or counts -
+    /// is registered in "Reject" mode; a custom one that needs review sets a
+    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+    /// records it returns. Registered in a review mode, the changes it
+    /// records as main-stage
+    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+    /// marks in pre-trade are rolled back, also after the reviewer confirms
+    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// For Spot Funds this means nothing is held, no lock price is recorded,
+    /// balances and positions are not updated, and a later fill or cancel of
+    /// that order can block the account for a missing lock price. The rejects
+    /// and account blocks it returns become marks or are dropped unless their
+    /// code is an evaluation failure, so a P&L kill switch registered this way
+    /// does not block the account on a fill; a block it writes directly through
+    /// :class:`openpit.pretrade.AccountControl` and a block from an accepted
+    /// account adjustment latch in any mode.
     #[pyo3(signature = (builtin_ready_builder, *, name=None, mode=None))]
     fn builtin(
         &self,
@@ -4616,9 +4654,28 @@ impl PyReadyEngineBuilder {
 
 #[pymethods]
 impl PyReadyEngineBuilder {
-    /// Register a policy. None or empty name uses the policy name.
+    /// Register a policy; None or empty name uses the policy name.
+    ///
     /// None mode means Reject.
-    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    /// Mode strings use exact PascalCase; invalid modes raise ValueError.
+    ///
+    /// A policy that keeps its own state - Spot Funds, the rate limit, the
+    /// P&L bounds kill switch, or a custom policy that holds funds or counts -
+    /// is registered in "Reject" mode; a custom one that needs review sets a
+    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+    /// records it returns. Registered in a review mode, the changes it
+    /// records as main-stage
+    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+    /// marks in pre-trade are rolled back, also after the reviewer confirms
+    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// For Spot Funds this means nothing is held, no lock price is recorded,
+    /// balances and positions are not updated, and a later fill or cancel of
+    /// that order can block the account for a missing lock price. The rejects
+    /// and account blocks it returns become marks or are dropped unless their
+    /// code is an evaluation failure, so a P&L kill switch registered this way
+    /// does not block the account on a fill; a block it writes directly through
+    /// :class:`openpit.pretrade.AccountControl` and a block from an accepted
+    /// account adjustment latch in any mode.
     #[pyo3(signature = (policy, *, name=None, mode=None))]
     fn pre_trade<'py>(
         slf: PyRef<'py, Self>,
@@ -4805,9 +4862,28 @@ impl PyReadyEngineBuilder {
         Ok(slf)
     }
 
-    /// Register a built-in policy. None or empty name uses the policy name.
+    /// Register a built-in policy; None or empty name uses the policy name.
+    ///
     /// None mode means Reject.
-    /// Mode strings are exact PascalCase; invalid modes raise ValueError.
+    /// Mode strings use exact PascalCase; invalid modes raise ValueError.
+    ///
+    /// A policy that keeps its own state - Spot Funds, the rate limit, the
+    /// P&L bounds kill switch, or a custom policy that holds funds or counts -
+    /// is registered in "Reject" mode; a custom one that needs review sets a
+    /// review mode in :attr:`openpit.pretrade.PolicyReject.mode` on the reject
+    /// records it returns. Registered in a review mode, the changes it
+    /// records as main-stage
+    /// :attr:`openpit.pretrade.PolicyPreTradeResult.mutations` for an order it
+    /// marks in pre-trade are rolled back, also after the reviewer confirms
+    /// that order; changes it makes at once, such as rate-limit counters, stay.
+    /// For Spot Funds this means nothing is held, no lock price is recorded,
+    /// balances and positions are not updated, and a later fill or cancel of
+    /// that order can block the account for a missing lock price. The rejects
+    /// and account blocks it returns become marks or are dropped unless their
+    /// code is an evaluation failure, so a P&L kill switch registered this way
+    /// does not block the account on a fill; a block it writes directly through
+    /// :class:`openpit.pretrade.AccountControl` and a block from an accepted
+    /// account adjustment latch in any mode.
     #[pyo3(signature = (builtin_ready_builder, *, name=None, mode=None))]
     fn builtin<'py>(
         slf: &Bound<'py, Self>,

@@ -2553,6 +2553,23 @@ struct OpenPitPretradeAccountBlockOutcome {
  */
 struct OpenPitPolicyInstance {
     OpenPitStringView name;
+    /**
+     * A policy that keeps its own state - Spot Funds, the rate limit, the P&L
+     * bounds kill switch, or a custom policy that holds funds or counts - is
+     * registered in `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; a custom one that
+     * needs review sets a review mode in \ref OpenPitPretradeReject::mode on the
+     * reject records it returns. Registered in a review mode, the changes it
+     * records as main-stage mutations for an order it marks in pre-trade are
+     * rolled back, also after the reviewer confirms that order; changes it makes
+     * at once, such as rate-limit counters, stay. For Spot Funds this means
+     * nothing is held, no lock price is recorded, balances and positions are not
+     * updated, and a later fill or cancel of that order can block the account for
+     * a missing lock price. The rejects and account blocks it returns become marks
+     * or are dropped unless their code is an evaluation failure, so a P&L kill
+     * switch registered this way does not block the account on a fill; a block it
+     * writes directly through \ref OpenPitAccountControl and a block from an
+     * accepted account adjustment latch in any mode.
+     */
     OpenPitPretradeRuleMode mode;
 };
 
@@ -7488,6 +7505,11 @@ OpenPitStringView openpit_pretrade_pre_trade_policy_get_name(
  * Contract:
  * - `builder` must be a valid engine builder pointer.
  * - `policy` must be a valid non-null pre-trade policy pointer.
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
  *
  * Success:
  * - returns `true` and the builder retains its own reference to the policy.
@@ -7559,6 +7581,11 @@ bool openpit_mutations_push(
  * - A null or already-consumed `builder` is a handled error.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for the
  *   default group).
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
  * - Every axis may be empty (null `broker`, zero array lengths). The policy
  *   then admits every order and can be configured later through
  *   `openpit_engine_configure_order_size_limit`.
@@ -7694,6 +7721,11 @@ bool openpit_engine_configure_order_size_limit(
  * - `builder` must be a valid engine builder pointer.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for
  *   default).
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
  *
  * Success:
  * - returns `true`; the builder retains the policy.
@@ -7731,6 +7763,11 @@ bool openpit_engine_builder_add_builtin_order_validation_policy(
  * - `builder` must be a valid engine builder pointer.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for
  *   default).
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
  * - At least one barrier must be provided: `broker_len > 0` or `account_len
  *   > 0`.
  * - When a length is greater than zero the corresponding pointer must point
@@ -7860,6 +7897,11 @@ bool openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
  * - `builder` must be a valid engine builder pointer.
  * - `policy_group_id` assigns the policy to a policy group (pass `0` for
  *   default).
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
  * - Every axis may be empty (zero lengths, pointers may be null). The policy
  *   then admits every order and can be configured later through
  *   `openpit_engine_configure_rate_limit`.
@@ -7982,6 +8024,11 @@ bool openpit_engine_configure_rate_limit(
  *   `has_slippage_bps == false` is ignored. Slippage resolves account ->
  *   account group -> instrument -> global per order.
  * - `policy_group_id` tags the policy instance.
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
  *
  * Mismatch guard: when `market_data` is non-null and the engine is
  * multi-threaded (`Full` or `Account` sync mode) but the market-data service
@@ -8033,6 +8080,11 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
  * - Each `currency` string view inside a barrier must be valid for the
  *   duration of the call.
  * - Barrier configuration never seeds or resets live account P&L.
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
  *
  * Success / error: mirrors
  * `openpit_engine_builder_add_builtin_spot_funds_policy`.

@@ -258,6 +258,10 @@ class OrderSizeLimitPolicy {
   }
 
   // Registers the policy on `builder`. Throws `openpit::Error` on failure.
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   void AddTo(::openpit::EngineBuilder& builder,
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
@@ -327,6 +331,10 @@ class OrderValidationPolicy {
     return *this;
   }
 
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   void AddTo(::openpit::EngineBuilder& builder,
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
@@ -433,6 +441,10 @@ class PnlBoundsKillSwitchPolicy {
     return *this;
   }
 
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   void AddTo(::openpit::EngineBuilder& builder,
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
@@ -597,6 +609,10 @@ class RateLimitPolicy {
     return *this;
   }
 
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   void AddTo(::openpit::EngineBuilder& builder,
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
@@ -876,6 +892,10 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
   }
 
   /// Registers the policy on `builder`.
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   void AddTo(::openpit::EngineBuilder& builder,
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
@@ -957,6 +977,10 @@ class SpotFundsPolicy {
     return *this;
   }
 
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
   void AddTo(::openpit::EngineBuilder& builder,
              const ::openpit::PolicyInstance& instance = {}) const {
     const auto rawInstance =
