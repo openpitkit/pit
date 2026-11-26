@@ -25,7 +25,8 @@
 //! macOS it sets the install name to `@rpath/libopenpit_ffi.dylib` for the
 //! same reason, at link time: the linker then signs the final binary, and that
 //! signature survives later edits of the load commands, which a post-link
-//! `codesign` one does not.
+//! `codesign` one does not. A release build on macOS also strips local symbols
+//! at link time, since rustc's own post-link strip is turned off there.
 
 use std::env;
 
@@ -66,6 +67,13 @@ fn main() {
         println!("cargo:rustc-cdylib-link-arg=-Wl,-install_name,@rpath/libopenpit_ffi.dylib");
         // The linker signs arm64 output on its own and leaves x86_64 unsigned.
         println!("cargo:rustc-cdylib-link-arg=-Wl,-adhoc_codesign");
+        // The linker drops local symbols and debug-map entries the way
+        // `strip -x` would, because `.cargo/config.toml` turns off rustc's own
+        // strip on macOS.
+        if profile == "release" {
+            println!("cargo:rustc-cdylib-link-arg=-Wl,-x");
+            println!("cargo:rustc-cdylib-link-arg=-Wl,-S");
+        }
     }
 
     // Keep the embedded values correct when the profile or the rustflags change.

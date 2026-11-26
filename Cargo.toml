@@ -22,5 +22,6 @@ publish = false
 opt-level = 3
 lto = true
 codegen-units = 1
+# On macOS this pass is replaced by link-time stripping, see .cargo/config.toml.
 strip = "symbols"
 panic = "abort"

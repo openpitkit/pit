@@ -1,0 +1,7 @@
+# rustc strips an Apple image after linking with its bundled llvm-objcopy,
+# which leaves the __LINKEDIT string table only 4-byte aligned; dyld on
+# macOS 27 refuses to load such an image built against the macOS 27 SDK.
+# Turn that pass off here; the release cdylibs drop the same symbols at link
+# time in their build scripts instead.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "strip=none"]
