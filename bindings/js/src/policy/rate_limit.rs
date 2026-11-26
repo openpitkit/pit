@@ -36,7 +36,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::domain::{
     collect_cloned_wrappers, extract_cloned_wrapper, is_plain_object, parse_asset,
-    parse_bounded_number, resolve_account_id, AccountIdLike, IntegerNumber,
+    parse_bounded_number, reject_unknown_keys, resolve_account_id, AccountIdLike, IntegerNumber,
 };
 use crate::error::{engine_build_configuration_error, make_error, ErrorKind};
 use crate::param::ids::JsAccountId;
@@ -45,7 +45,7 @@ use crate::param::ids::JsAccountId;
 const RATE_LIMIT_INIT_TS: &'static str = r#"
 /**
  * Plain-object form of {@link RateLimit}. `windowMs` is the window length in
- * milliseconds.
+ * milliseconds. Unknown keys throw `TypeError`.
  */
 export interface RateLimitInit {
   maxOrders: number;
@@ -141,6 +141,7 @@ impl JsRateLimit {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError` when the value has the wrong shape or a required
     /// field is missing or non-numeric, and `RangeError` when a numeric field
     /// is outside its supported boundary. Getter and wrapper `clone()`
@@ -150,6 +151,7 @@ impl JsRateLimit {
             return Ok(wrapped);
         }
         if is_plain_object(&value) {
+            reject_unknown_keys(&value, "RateLimit init", &["maxOrders", "windowMs"])?;
             let max_orders = read_usize_field(&value, "maxOrders")?;
             let window_ms = read_f64_field(&value, "windowMs")?;
             return JsRateLimit::from_values(max_orders, window_ms);
@@ -197,6 +199,7 @@ impl JsRateLimitBrokerBarrier {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError` for a malformed limit shape or missing/non-numeric
     /// field, and `RangeError` for an invalid numeric boundary. Exceptions from
     /// plain-object getters or a wrapper's `clone()` propagate unchanged.
@@ -254,6 +257,7 @@ impl JsRateLimitAssetBarrier {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError`/`RangeError` for an invalid limit, or `AssetError`
     /// when `settlementAsset` is empty. Exceptions from plain-object getters or
     /// a wrapper's `clone()` propagate unchanged.
@@ -317,6 +321,7 @@ impl JsRateLimitAccountBarrier {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError`/`RangeError` for an invalid limit, or
     /// `AccountIdError` for an invalid identifier. Exceptions from plain-object
     /// getters or a wrapper's `clone()` propagate unchanged.
@@ -378,6 +383,7 @@ impl JsRateLimitAccountAssetBarrier {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError`/`RangeError` for an invalid limit, `AccountIdError`
     /// for an invalid identifier, or `AssetError` when `settlementAsset` is
     /// empty. Exceptions from plain-object getters or a wrapper's `clone()`

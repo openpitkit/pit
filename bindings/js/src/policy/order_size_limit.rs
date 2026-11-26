@@ -36,8 +36,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::domain::{
     collect_cloned_wrappers, extract_cloned_wrapper, is_plain_object, parse_asset, read_field,
-    resolve_account_id, resolve_optional_quantity, resolve_optional_volume, AccountIdLike,
-    IntegerNumber, OptionalQuantityLike, OptionalVolumeLike,
+    reject_unknown_keys, resolve_account_id, resolve_optional_quantity, resolve_optional_volume,
+    AccountIdLike, IntegerNumber, OptionalQuantityLike, OptionalVolumeLike,
 };
 use crate::error::{engine_build_configuration_error, make_error, ErrorKind};
 use crate::param::ids::JsAccountId;
@@ -45,7 +45,7 @@ use crate::param::ids::JsAccountId;
 #[wasm_bindgen(typescript_custom_section)]
 const ORDER_SIZE_INIT_TS: &'static str = r#"
 /**
- * Plain-object form of {@link OrderSizeLimit}.
+ * Plain-object form of {@link OrderSizeLimit}. Unknown keys throw `TypeError`.
  *
  * `maxQuantity` is keyed by underlying asset and `maxNotional` by settlement
  * asset. Either cap may be absent and then constrains nothing. A resolution
@@ -139,6 +139,7 @@ impl JsOrderSizeLimit {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
     /// unsupported number, or `ParamError` for an invalid cap. The core
     /// validates that at least one cap is present when the policy is built.
@@ -147,6 +148,11 @@ impl JsOrderSizeLimit {
             return Ok(wrapped);
         }
         if is_plain_object(&value) {
+            reject_unknown_keys(
+                &value,
+                "OrderSizeLimit init",
+                &["maxQuantity", "maxNotional"],
+            )?;
             return Ok(Self {
                 max_quantity: resolve_optional_quantity(read_field(&value, "maxQuantity")?)?,
                 max_notional: resolve_optional_volume(read_field(&value, "maxNotional")?)?,
@@ -180,6 +186,7 @@ impl JsOrderSizeBrokerBarrier {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
     /// unsupported number, or `ParamError` for an invalid cap.
     #[wasm_bindgen(constructor)]
@@ -223,6 +230,7 @@ impl JsOrderSizeAssetBarrier {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
     /// unsupported number, or `ParamError` for an invalid cap. An empty asset
     /// throws `AssetError`.
@@ -269,6 +277,7 @@ impl JsOrderSizeAccountAssetBarrier {
     ///
     /// # Errors
     ///
+    /// An unknown init key throws `TypeError`.
     /// Throws `TypeError` for a malformed limit or field, `RangeError` for an
     /// unsupported number, or `ParamError` for an invalid cap. An empty asset
     /// throws `AssetError` and an invalid account throws `AccountIdError`.

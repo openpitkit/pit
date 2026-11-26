@@ -390,6 +390,7 @@ check-semgrep: _ensure-python-env
     {{ semgrep_path }} --test --config checks/semgrep/fallbacks-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/fallbacks-rust.rs
     {{ semgrep_path }} --test --config checks/semgrep/async-exceptions-cpp.yml --metrics=off --disable-version-check checks/semgrep/tests/async-exceptions-cpp.cpp
     {{ semgrep_path }} --test --config checks/semgrep/resolve-once-rust.yml --metrics=off --disable-version-check checks/semgrep/tests/resolve-once-rust.rs
+    {{ semgrep_path }} --test --config checks/semgrep/unknown-keys-js.yml --metrics=off --disable-version-check checks/semgrep/tests/unknown-keys-js.rs
     {{ semgrep_path }} --test --config checks/semgrep/naming.yml --metrics=off --disable-version-check checks/semgrep/tests/naming.rs
     {{ semgrep_path }} --test --config checks/semgrep/naming.yml --metrics=off --disable-version-check checks/semgrep/tests/naming.go
     {{ semgrep_path }} --test --config checks/semgrep/naming.yml --metrics=off --disable-version-check checks/semgrep/tests/naming.cpp

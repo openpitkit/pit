@@ -47,9 +47,9 @@ use openpit_interop::{EngineHandle, EngineLocking, SyncMode};
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
-    extract_cloned_wrapper, is_plain_object, parse_asset, resolve_account_group_id,
-    resolve_account_id, resolve_instrument_id, resolve_optional_price, AccountGroupIdLike,
-    AccountIdLike, InstrumentIdLike,
+    extract_cloned_wrapper, is_plain_object, parse_asset, read_field, reject_unknown_keys,
+    resolve_account_group_id, resolve_account_id, resolve_instrument_id, resolve_optional_price,
+    AccountGroupIdLike, AccountIdLike, InstrumentIdLike,
 };
 use crate::error::{make_error, make_error_with, make_quote_expired_error, ErrorKind};
 use crate::param::ids::{JsAccountGroupId, JsInstrumentId};
@@ -60,6 +60,7 @@ use crate::policy::CallbackErrorScope;
 const MARKET_DATA_INIT_TS: &'static str = r#"
 /**
  * Plain-object form of {@link Instrument}. Both assets are required.
+ * Unknown keys throw `TypeError`.
  */
 export interface InstrumentInit {
   underlyingAsset: string;
@@ -69,6 +70,7 @@ export interface InstrumentInit {
 /**
  * Options accepted by the {@link Quote} constructor. Each price field accepts a
  * `Price` wrapper or a `DecimalInput`; an omitted field is absent.
+ * Unknown keys throw `TypeError`.
  */
 export interface QuoteInit {
   mark?: Price | string | number | bigint;
@@ -91,8 +93,8 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "Instrument | InstrumentInit")]
     pub type InstrumentLike;
 
-    /// Options for the `Quote` constructor: a `QuoteInit` literal or nothing.
-    #[wasm_bindgen(typescript_type = "QuoteInit | null | undefined")]
+    /// A `Quote` to copy, a `QuoteInit` literal, or no options.
+    #[wasm_bindgen(typescript_type = "Quote | QuoteInit | null | undefined")]
     pub type QuoteInitLike;
 
     /// A `Quote` wrapper or a plain `QuoteInit` literal.
@@ -320,12 +322,18 @@ impl JsInstrument {
     /// # Errors
     ///
     /// Throws `AssetError` on an empty asset, or `TypeError` when the value is
-    /// neither an `Instrument` nor a plain object with both assets.
+    /// neither an `Instrument` nor a plain object with both assets, or an init
+    /// key is unknown.
     pub(crate) fn coerce(value: JsValue) -> Result<Instrument, JsValue> {
         if let Some(wrapped) = extract_cloned_wrapper::<JsInstrument>(&value)? {
             return Ok(wrapped.inner());
         }
         if is_plain_object(&value) {
+            reject_unknown_keys(
+                &value,
+                "Instrument init",
+                &["underlyingAsset", "settlementAsset"],
+            )?;
             let underlying = read_required_asset(&value, "underlyingAsset")?;
             let settlement = read_required_asset(&value, "settlementAsset")?;
             return Ok(Instrument::new(underlying, settlement));
@@ -446,7 +454,7 @@ pub struct JsQuote {
 
 #[wasm_bindgen(js_class = Quote)]
 impl JsQuote {
-    /// Constructs a quote from an options object `{ mark?, bid?, ask? }`.
+    /// Copies an existing quote or constructs one from `{ mark?, bid?, ask? }`.
     ///
     /// Each field accepts a `Price` value object or a `DecimalInput`
     /// (`string | number | bigint`); an omitted/`null`/`undefined` field is
@@ -454,28 +462,27 @@ impl JsQuote {
     ///
     /// # Errors
     ///
-    /// Throws the price boundary error on an invalid price, or `TypeError` on a
-    /// non-object argument.
+    /// Throws the price boundary error for an invalid price or `TypeError` for
+    /// a non-object argument or an unknown option key.
     #[wasm_bindgen(constructor)]
     pub fn new(options: QuoteInitLike) -> Result<JsQuote, JsValue> {
         let options: JsValue = options.into();
-        let mut quote = Quote::new();
         if options.is_undefined() || options.is_null() {
-            return Ok(Self { inner: quote });
+            return Ok(Self {
+                inner: Quote::new(),
+            });
         }
-        let mark = read_optional_field(&options, "mark")?;
-        let bid = read_optional_field(&options, "bid")?;
-        let ask = read_optional_field(&options, "ask")?;
-        if let Some(mark) = resolve_optional_price(mark)? {
-            quote = quote.with_mark(mark);
+        if let Some(wrapped) = extract_cloned_wrapper::<Self>(&options)? {
+            return Ok(wrapped);
         }
-        if let Some(bid) = resolve_optional_price(bid)? {
-            quote = quote.with_bid(bid);
+        if !options.is_object() {
+            return Err(make_error(
+                ErrorKind::Type,
+                "quote options must be an object with optional mark/bid/ask",
+                None,
+            ));
         }
-        if let Some(ask) = resolve_optional_price(ask)? {
-            quote = quote.with_ask(ask);
-        }
-        Ok(Self { inner: quote })
+        Self::from_options(&options)
     }
 
     /// Returns the mark price, or `undefined` when absent.
@@ -528,13 +535,14 @@ impl JsQuote {
     /// # Errors
     ///
     /// Throws the price boundary error on an invalid field, or `TypeError` when
-    /// the value is neither a `Quote` nor a plain object.
+    /// the value is neither a `Quote` nor a plain object or has an unknown
+    /// init key.
     fn coerce(value: JsValue) -> Result<Quote, JsValue> {
         if let Some(wrapped) = extract_cloned_wrapper::<JsQuote>(&value)? {
             return Ok(wrapped.inner());
         }
         if is_plain_object(&value) {
-            return Ok(JsQuote::new(value.unchecked_into())?.inner());
+            return Ok(Self::from_options(&value)?.inner());
         }
         Err(make_error(
             ErrorKind::Type,
@@ -542,21 +550,24 @@ impl JsQuote {
             None,
         ))
     }
-}
 
-/// Reads `field` off a JS options object, returning `undefined` when absent.
-///
-/// A non-object argument throws `TypeError`. Getter exceptions propagate
-/// unchanged.
-fn read_optional_field(options: &JsValue, field: &str) -> Result<JsValue, JsValue> {
-    if !options.is_object() {
-        return Err(make_error(
-            ErrorKind::Type,
-            "quote options must be an object with optional mark/bid/ask",
-            None,
-        ));
+    fn from_options(options: &JsValue) -> Result<Self, JsValue> {
+        reject_unknown_keys(options, "Quote options", &["mark", "bid", "ask"])?;
+        let mark = read_field(options, "mark")?;
+        let bid = read_field(options, "bid")?;
+        let ask = read_field(options, "ask")?;
+        let mut quote = Quote::new();
+        if let Some(mark) = resolve_optional_price(mark)? {
+            quote = quote.with_mark(mark);
+        }
+        if let Some(bid) = resolve_optional_price(bid)? {
+            quote = quote.with_bid(bid);
+        }
+        if let Some(ask) = resolve_optional_price(ask)? {
+            quote = quote.with_ask(ask);
+        }
+        Ok(Self { inner: quote })
     }
-    Reflect::get(options, &JsValue::from_str(field))
 }
 
 // ─── QuoteResolution ───────────────────────────────────────────────────────
@@ -768,6 +779,7 @@ impl JsMarketDataService {
     /// Throws `AlreadyRegistered` when the instrument is already registered, or
     /// `TypeError` for a malformed instrument or `AssetError` for an invalid
     /// asset.
+    /// Unknown instrument init keys throw `TypeError`.
     #[wasm_bindgen(js_name = register)]
     pub fn register(&self, instrument: InstrumentLike) -> Result<JsInstrumentId, JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;
@@ -788,6 +800,7 @@ impl JsMarketDataService {
     /// Throws `AlreadyRegistered` when the instrument is already registered, or
     /// `TypeError` for a malformed instrument or `AssetError` for an invalid
     /// asset.
+    /// Unknown instrument init keys throw `TypeError`.
     #[wasm_bindgen(js_name = registerWithTtl)]
     pub fn register_with_ttl(
         &self,
@@ -812,6 +825,7 @@ impl JsMarketDataService {
     /// Throws `RegistrationError` when the id or instrument already exists, or
     /// `TypeError` for a malformed instrument, `AssetError` for an invalid
     /// asset, or `ParamError` for an invalid identifier.
+    /// Unknown instrument init keys throw `TypeError`.
     #[wasm_bindgen(js_name = registerWithId)]
     pub fn register_with_id(
         &self,
@@ -837,6 +851,7 @@ impl JsMarketDataService {
     /// Throws `RegistrationError` when the id or instrument already exists, or
     /// `TypeError` for a malformed instrument, `AssetError` for an invalid
     /// asset, or `ParamError` for an invalid identifier.
+    /// Unknown instrument init keys throw `TypeError`.
     #[wasm_bindgen(js_name = registerWithIdAndTtl)]
     pub fn register_with_id_and_ttl(
         &self,
@@ -862,6 +877,7 @@ impl JsMarketDataService {
     ///
     /// Throws `TypeError` for a malformed instrument or `AssetError` for an
     /// invalid asset.
+    /// Unknown instrument init keys throw `TypeError`.
     #[wasm_bindgen(js_name = resolve)]
     pub fn resolve(&self, instrument: InstrumentLike) -> Result<Option<JsInstrumentId>, JsValue> {
         CallbackErrorScope::ensure_not_poisoned()?;
@@ -1116,6 +1132,7 @@ impl JsMarketDataService {
     /// `TypeError` for a malformed quote, `ParamError` for an invalid
     /// identifier or domain price, or `RangeError` for an unsupported numeric
     /// price or non-finite `sourceAgeMs`.
+    /// Unknown quote init keys throw `TypeError`.
     #[wasm_bindgen(js_name = push)]
     pub fn push(
         &self,
@@ -1147,6 +1164,7 @@ impl JsMarketDataService {
     /// an invalid asset, `ParamError` for an invalid domain price, or
     /// `RangeError` for an unsupported numeric price or non-finite
     /// `sourceAgeMs`.
+    /// Unknown instrument or quote init keys throw `TypeError`.
     #[wasm_bindgen(js_name = pushByInstrument)]
     pub fn push_by_instrument(
         &self,
@@ -1183,6 +1201,7 @@ impl JsMarketDataService {
     /// numeric price, or for non-finite `sourceAgeMs`, `ParamError` for an
     /// invalid instrument or group identifier or invalid domain price, or
     /// `AccountIdError` for an invalid account.
+    /// Unknown quote init keys throw `TypeError`.
     #[wasm_bindgen(js_name = pushFor)]
     pub fn push_for(
         &self,

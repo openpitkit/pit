@@ -30,6 +30,7 @@ import {
   ParamError,
   PolicyConfigureError,
 } from "@openpit/engine";
+import { QuoteTtl } from "@openpit/engine/marketdata";
 import {
   AccountGroupId,
   AdjustmentAmount,
@@ -67,6 +68,7 @@ import {
   type ReviewRuleConfigureOptions,
   SpotFundsBuilder,
   SpotFundsLimitMode,
+  SpotFundsOverride,
   SpotFundsPnlBoundsAccountBarrier,
   SpotFundsPnlBoundsAccountGroupBarrier,
   SpotFundsPnlBoundsBarrier,
@@ -148,6 +150,21 @@ function expectConfigureError(
   expect((error as PolicyConfigureError).kind).toBe(kind);
 }
 
+function expectUnknownOption(
+  configure: () => unknown,
+  label: string,
+  key: string,
+): void {
+  let caught: unknown;
+  try {
+    configure();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(TypeError);
+  expect(caught).toHaveProperty("message", `${label} has unknown key "${key}"`);
+}
+
 describe("review-rule configuration", () => {
   it("replaces, keeps, and clears each level atomically", () => {
     const name = ReviewRuleBuilder.NAME;
@@ -176,6 +193,13 @@ describe("review-rule configuration", () => {
     }
 
     check(1001n, "AAPL", false);
+    const misspelled = { accountGroupRules: [group], accountGroupsRules: [] };
+    expectUnknownOption(
+      () => configurator.reviewRule(name, misspelled),
+      "reviewRule options",
+      "accountGroupsRules",
+    );
+    check(1001n, "MSFT", false);
     configurator.reviewRule(name, { accountGroupRules: new Set([group]) });
     check(1001n, "MSFT", true);
     check(1002n, "MSFT", false);
@@ -307,6 +331,43 @@ describe("P&L-bounds kill switch", () => {
       pnl,
     });
   }
+
+  it("rejects a misspelled generic P&L accumulator option", () => {
+    const engine = buildBroker();
+    const configure = engine.configure();
+    const pnl = { account: ACCOUNT, settlementAsset: "USD", pnl: "-150" };
+    const misspelledPnl = { ...pnl, settlement: "USD" };
+    expectUnknownOption(
+      () => configure.setAccountPnl(name, misspelledPnl),
+      "setAccountPnl options",
+      "settlement",
+    );
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+    configure.setAccountPnl(name, pnl);
+    expect(engine.startPreTrade(makeOrder()).rejects[0]?.code).toBe(
+      "PnlKillSwitchTriggered",
+    );
+  });
+
+  it("rejects a misspelled generic P&L barrier option", () => {
+    const engine = buildBroker();
+    const configure = engine.configure();
+    const brokerBarriers = [
+      new PnlBoundsBrokerBarrier("USD", "-50", undefined),
+    ];
+    const misspelledBarriers = { brokerBarriers, brokerBarrier: [] };
+    expectUnknownOption(
+      () => configure.pnlBoundsKillswitch(name, misspelledBarriers),
+      "pnlBoundsKillswitch options",
+      "brokerBarrier",
+    );
+    setPnl(engine, "-75");
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+    configure.pnlBoundsKillswitch(name, { brokerBarriers });
+    expect(engine.startPreTrade(makeOrder()).rejects[0]?.code).toBe(
+      "PnlKillSwitchTriggered",
+    );
+  });
 
   it.each([
     { label: "omitted mode", build: () => buildBroker() },
@@ -943,13 +1004,52 @@ describe("runtime configurator", () => {
       )
       .build();
 
-    engine.configure().rateLimit(RateLimitBuilder.NAME, { brokerBarriers: [] });
+    const configure = engine.configure();
+    const name = RateLimitBuilder.NAME;
+    const misspelled = { brokerBarriers: [], brokerBarrier: undefined };
+    expectUnknownOption(
+      () => configure.rateLimit(name, misspelled),
+      "rateLimit options",
+      "brokerBarrier",
+    );
+
+    const options = { brokerBarriers: [], [Symbol("metadata")]: true };
+    Object.setPrototypeOf(options, { inherited: true });
+    Object.defineProperty(options, "hidden", { value: true });
+    configure.rateLimit(name, options);
 
     for (let index = 0; index < 2; index += 1) {
       const result = engine.executePreTrade(makeOrder());
       expect(result.ok).toBe(true);
       result.reservation!.commit();
     }
+  });
+
+  it("propagates a throwing ownKeys trap before reading a rate-limit field", () => {
+    const failure = new Error("could not enumerate options");
+    const options = new Proxy(
+      {
+        get brokerBarriers(): never {
+          throw new Error("read broker barriers before enumerating keys");
+        },
+      },
+      {
+        ownKeys() {
+          throw failure;
+        },
+      },
+    );
+    const engine = Engine.builder()
+      .builtin(buildRateLimit().brokerBarriers([]))
+      .build();
+
+    let caught: unknown;
+    try {
+      engine.configure().rateLimit(RateLimitBuilder.NAME, options);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
   });
 
   it("leaves a rate-limit broker barrier unchanged when omitted", () => {
@@ -990,6 +1090,17 @@ describe("runtime configurator", () => {
     const oversized = engine.startPreTrade(makeOrder("2"));
     expect(oversized.ok).toBe(false);
     expect(oversized.rejects[0]!.code).toBe("OrderQtyExceedsLimit");
+
+    const misspelled = { clearBroker: true, clearBrokers: true };
+    expectUnknownOption(
+      () =>
+        engine
+          .configure()
+          .orderSizeLimit(OrderSizeLimitBuilder.NAME, misspelled),
+      "orderSizeLimit options",
+      "clearBrokers",
+    );
+    expect(engine.startPreTrade(makeOrder("2")).ok).toBe(false);
 
     engine.configure().orderSizeLimit(OrderSizeLimitBuilder.NAME, {
       clearBroker: true,
@@ -1533,6 +1644,120 @@ describe("runtime configurator", () => {
     expect(result.rejects[0]!.reason).toBe("spot funds insufficient");
   });
 
+  it("rejects a misspelled spot-funds option before changing the policy", () => {
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+    const configure = engine.configure();
+    const name = SpotFundsBuilder.NAME;
+    const options = { globalLimitMode: SpotFundsLimitMode.TrackOnly };
+    const invalid = { ...options, globalLimitModes: undefined };
+
+    expectUnknownOption(
+      () => configure.spotFunds(name, invalid),
+      "spotFunds options",
+      "globalLimitModes",
+    );
+    expect(engine.executePreTradeDryRun(makeOrder()).isPass).toBe(false);
+    configure.spotFunds(name, options);
+    expect(engine.executePreTradeDryRun(makeOrder()).isPass).toBe(true);
+  });
+
+  it.each([
+    ["globalSlippageBps", 65_536, RangeError],
+    ["pricingSource", "Mid", RangeError],
+    [
+      "overrides",
+      [{}],
+      expect.objectContaining({
+        constructor: TypeError,
+        message: "overrides contains an invalid entry",
+      }),
+    ],
+  ] as const)(
+    "rejects an invalid spot-funds %s update",
+    (key, value, error) => {
+      const engine = Engine.builder().builtin(buildSpotFunds()).build();
+
+      expect(() =>
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, { [key]: value }),
+      ).toThrow(error);
+    },
+  );
+
+  it("retunes slippage, overrides, and pricing for the next market order", () => {
+    const builder = Engine.builder();
+    const marketData = builder.marketData(QuoteTtl.infinite()).build();
+    const instrumentId = marketData.register({
+      underlyingAsset: "AAPL",
+      settlementAsset: "USD",
+    }).value;
+    marketData.push(instrumentId, { mark: "100", bid: "90", ask: "110" }, 0);
+    const engine = builder
+      .builtin(buildSpotFunds().marketData(marketData, 0, "Mark", undefined))
+      .build();
+    const adjustment = engine.applyAccountAdjustment(ACCOUNT, [
+      {
+        operation: { asset: "USD" },
+        amount: { balance: AdjustmentAmount.absolute("105") },
+      },
+    ]);
+    expect(adjustment.ok).toBe(true);
+
+    const order: OrderInit = {
+      operation: {
+        underlyingAsset: "AAPL",
+        settlementAsset: "USD",
+        accountId: ACCOUNT,
+        side: "BUY",
+        tradeAmount: TradeAmount.quantity("1"),
+      },
+    };
+    const configure = engine.configure();
+    const name = SpotFundsBuilder.NAME;
+
+    expect(engine.executePreTradeDryRun(order).isPass).toBe(true);
+    configure.spotFunds(name, { globalSlippageBps: 1_000 });
+    expect(engine.executePreTradeDryRun(order).isPass).toBe(false);
+    configure.spotFunds(name, {
+      overrides: [new SpotFundsOverride(instrumentId, null, null, 0)],
+    });
+    expect(engine.executePreTradeDryRun(order).isPass).toBe(true);
+    configure.spotFunds(name, { pricingSource: "BookTop" });
+    expect(engine.executePreTradeDryRun(order).isPass).toBe(false);
+  });
+
+  it.each([
+    {
+      field: "accountLimitModes",
+      identity: { accountId: ACCOUNT },
+    },
+    {
+      field: "accountGroupLimitModes",
+      identity: { accountGroupId: 7 },
+    },
+  ] as const)("rejects a misspelled mode in $field", ({ field, identity }) => {
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+    engine.accounts().registerGroup([ACCOUNT], 7);
+    const configure = engine.configure();
+    const name = SpotFundsBuilder.NAME;
+    const mode = SpotFundsLimitMode.TrackOnly;
+    const invalid = { [field]: [{ ...identity, modes: mode }] };
+
+    expect(() => configure.spotFunds(name, { [field]: [false] })).toThrow(
+      expect.objectContaining({
+        name: "TypeError",
+        message: `${field} must be a plain object`,
+      }),
+    );
+    expectUnknownOption(
+      () => configure.spotFunds(name, invalid),
+      `${field} entry`,
+      "modes",
+    );
+    expect(engine.executePreTradeDryRun(makeOrder()).isPass).toBe(false);
+    configure.spotFunds(name, { [field]: [{ ...identity, mode }] });
+    expect(engine.executePreTradeDryRun(makeOrder()).isPass).toBe(true);
+  });
+
   it("reconfigures a spot-funds position limit for the next order", () => {
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
     const adjustment = engine.applyAccountAdjustment(ACCOUNT, [
@@ -1543,8 +1768,17 @@ describe("runtime configurator", () => {
     ]);
     expect(adjustment.ok).toBe(true);
 
+    const entry = { accountId: ACCOUNT, asset: "AAPL", limit: "1" };
+    const invalid = { positionLimits: [{ ...entry, limits: "1" }] };
+    expectUnknownOption(
+      () => engine.configure().spotFunds(SpotFundsBuilder.NAME, invalid),
+      "positionLimits entry",
+      "limits",
+    );
+    expect(engine.executePreTradeDryRun(makeOrder("2")).isPass).toBe(true);
+
     engine.configure().spotFunds(SpotFundsBuilder.NAME, {
-      positionLimits: [{ accountId: ACCOUNT, asset: "AAPL", limit: "1" }],
+      positionLimits: [entry],
     });
     const rejected = engine.executePreTrade(makeOrder("2"));
     expect(rejected.ok).toBe(false);
@@ -1804,7 +2038,6 @@ describe("runtime configurator", () => {
     });
     for (const entry of [
       { accountId: ACCOUNT, asset: "AAPL" },
-      { accountId: ACCOUNT, asset: "AAPL", limt: "3" },
       { accountId: ACCOUNT, asset: "AAPL", limit: undefined },
     ]) {
       expect(() =>
@@ -1813,6 +2046,16 @@ describe("runtime configurator", () => {
         }),
       ).toThrow("limit is required");
     }
+    expectUnknownOption(
+      () =>
+        engine.configure().spotFunds(SpotFundsBuilder.NAME, {
+          positionLimits: [
+            { accountId: ACCOUNT, asset: "AAPL", limt: "3" } as never,
+          ],
+        }),
+      "positionLimits entry",
+      "limt",
+    );
 
     const rejected = engine.executePreTrade(makeOrder("2"));
     expect(rejected.ok).toBe(false);
@@ -2136,6 +2379,65 @@ describe("runtime configurator", () => {
     });
     expect(afterClear.ok).toBe(true);
     afterClear.reservation!.rollback();
+  });
+
+  it("rejects the singular spot-funds P&L barrier before applying any key", () => {
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+    const configure = engine.configure();
+    const name = SpotFundsBuilder.NAME;
+    const globalBarriers = [
+      new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+    ];
+    const pnl = { account: ACCOUNT, state: "-20" };
+    const seeded = configure.setSpotFundsAccountPnl(name, pnl);
+    expect(seeded.accountBlocks).toHaveLength(0);
+
+    const removedOption = { globalBarrier: globalBarriers };
+    expectUnknownOption(
+      () =>
+        configure.spotFundsPnlBoundsKillswitch(name, removedOption as never),
+      "spotFundsPnlBoundsKillswitch options",
+      "globalBarrier",
+    );
+    const mixedOptions = { ...removedOption, globalBarriers };
+    expectUnknownOption(
+      () => configure.spotFundsPnlBoundsKillswitch(name, mixedOptions),
+      "spotFundsPnlBoundsKillswitch options",
+      "globalBarrier",
+    );
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+
+    const patched = configure.spotFundsPnlBoundsKillswitch(name, {
+      globalBarriers,
+    });
+    expect(patched.accountBlocks).toHaveLength(1);
+    expect(patched.accountBlocks[0]?.accountId.value).toBe(ACCOUNT);
+  });
+
+  it("rejects a misspelled spot-funds P&L accumulator option", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildSpotFundsPnlBoundsKillswitch().globalBarriers([
+          new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
+        ]),
+      )
+      .build();
+    const configure = engine.configure();
+    const name = SpotFundsPnlBoundsKillswitchBuilder.NAME;
+    const pnl = { account: ACCOUNT, state: "-20" };
+    const misspelled = { ...pnl, pnl: "-20" };
+    expectUnknownOption(
+      () => configure.setSpotFundsAccountPnl(name, misspelled),
+      "setSpotFundsAccountPnl options",
+      "pnl",
+    );
+    expect(engine.startPreTrade(makeOrder()).ok).toBe(true);
+    const result = configure.setSpotFundsAccountPnl(name, pnl);
+    expect(result.accountBlocks).toHaveLength(1);
+    expect(result.accountBlocks[0]?.reason).toBe("pnl kill switch triggered");
+    expect(engine.startPreTrade(makeOrder()).rejects[0]?.code).toBe(
+      "PnlKillSwitchTriggered",
+    );
   });
 
   it("retunes spot-funds pnl barriers and force-sets the live accumulator", () => {

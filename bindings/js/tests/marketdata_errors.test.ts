@@ -31,6 +31,7 @@ import {
 import {
   AlreadyRegistered as MarketDataAlreadyRegistered,
   MarketDataError as MarketDataBaseError,
+  Quote,
   QuoteExpired as MarketDataQuoteExpired,
   QuoteUnavailable as MarketDataQuoteUnavailable,
   RegistrationError as MarketDataRegistrationError,
@@ -266,6 +267,55 @@ describe("QuoteTtl.within", () => {
 });
 
 describe("market-data publication", () => {
+  it("rejects an unknown instrument init key", () => {
+    const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
+    const instrument = { underlyingAsset: "AAPL", settlementAsset: "USD" };
+    const invalidInstrument = { ...instrument, settlement: "USD" };
+
+    expect(() => service.register(invalidInstrument)).toThrow(
+      expect.objectContaining({
+        name: "TypeError",
+        message: 'Instrument init has unknown key "settlement"',
+      }),
+    );
+    const id = service.register(instrument);
+    expect(service.resolve(instrument)?.value).toBe(id.value);
+  });
+
+  it("rejects an unknown quote init key", () => {
+    const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
+    const id = service.register({
+      underlyingAsset: "AAPL",
+      settlementAsset: "USD",
+    });
+    const invalidQuote = { mark: "10", marks: undefined };
+    expect(() => new Quote(invalidQuote)).toThrow(
+      expect.objectContaining({
+        name: "TypeError",
+        message: 'Quote options has unknown key "marks"',
+      }),
+    );
+    expect(() => service.push(id, invalidQuote, 0)).toThrow(
+      expect.objectContaining({
+        name: "TypeError",
+        message: 'Quote options has unknown key "marks"',
+      }),
+    );
+  });
+
+  it("copies all prices from an existing quote and leaves it usable", () => {
+    const original = new Quote({ mark: "10", bid: "9", ask: "11" });
+    const copy = new Quote(original);
+
+    expect(copy.mark?.toString()).toBe("10");
+    expect(copy.bid?.toString()).toBe("9");
+    expect(copy.ask?.toString()).toBe("11");
+    copy.free();
+    expect(original.mark?.toString()).toBe("10");
+    expect(original.bid?.toString()).toBe("9");
+    expect(original.ask?.toString()).toBe("11");
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
     "rejects a non-finite source age: %s",
     (sourceAgeMs) => {

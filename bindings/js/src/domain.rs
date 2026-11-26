@@ -590,6 +590,42 @@ pub fn is_plain_object(value: &JsValue) -> bool {
     is_plain_record_js(value)
 }
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(catch, js_namespace = Object, js_name = keys)]
+    fn object_keys(value: &JsValue) -> Result<js_sys::Array<js_sys::JsString>, JsValue>;
+}
+
+/// Rejects the first unknown own enumerable string key with a `TypeError`.
+pub(crate) fn reject_unknown_keys(
+    value: &JsValue,
+    label: &str,
+    known_keys: &[&str],
+) -> Result<(), JsValue> {
+    reject_unknown_keys_with(value, label, known_keys, |message| {
+        make_error(ErrorKind::Type, message, None)
+    })
+}
+
+/// Uses the caller's error class for an unknown key. Enumeration exceptions
+/// propagate unchanged.
+pub(crate) fn reject_unknown_keys_with(
+    value: &JsValue,
+    label: &str,
+    known_keys: &[&str],
+    unknown_key_error: impl FnOnce(&str) -> JsValue,
+) -> Result<(), JsValue> {
+    for key in object_keys(value)?.iter() {
+        let key = String::from(key);
+        if !known_keys.contains(&key.as_str()) {
+            return Err(unknown_key_error(&format!(
+                "{label} has unknown key {key:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Returns whether `value` carries its own (not inherited) property named
 /// `field`, distinguishing a present-but-`undefined` field from an absent one.
 pub fn has_own_field(value: &JsValue, field: &str) -> Result<bool, JsValue> {

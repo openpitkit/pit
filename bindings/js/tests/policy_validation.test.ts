@@ -269,6 +269,32 @@ describe("policy instances", () => {
     expect(() => ready.build()).not.toThrow();
   });
 
+  it.each(
+    [false, true].flatMap((custom) =>
+      [false, true].map((alreadyReady) => ({ custom, alreadyReady })),
+    ),
+  )(
+    "rejects an unknown instance key, custom=$custom, ready=$alreadyReady",
+    ({ custom, alreadyReady }) => {
+      const builder = alreadyReady
+        ? Engine.builder().preTrade(accepting)
+        : Engine.builder();
+      const instance = { name: "custom-instance", modes: undefined };
+      let caught: unknown;
+      try {
+        if (custom) builder.preTrade(rejecting, instance);
+        else builder.builtin(builtin(), instance);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(EngineBuildError);
+      expect(caught).toMatchObject({
+        kind: "InvalidConfiguration",
+        message: 'instance has unknown key "modes"',
+      });
+    },
+  );
+
   it("rejects duplicate default names", () => {
     const duplicates = Engine.builder().builtin(builtin());
     duplicates.builtin(builtin());
@@ -881,6 +907,42 @@ describe("spot-funds pricing-source compatibility", () => {
 });
 
 describe("native JS validation categories", () => {
+  it.each([
+    [
+      "OrderSizeLimit",
+      () => {
+        const limit = { maxQuantity: "1", maxNotional: "10", maxQty: "1" };
+        return new OrderSizeBrokerBarrier(limit);
+      },
+      'OrderSizeLimit init has unknown key "maxQty"',
+    ],
+    [
+      "RateLimit",
+      () => {
+        const limit = { maxOrders: 1, windowMs: 1_000, window: 1_000 };
+        return new RateLimitBrokerBarrier(limit);
+      },
+      'RateLimit init has unknown key "window"',
+    ],
+    [
+      "ReviewRule",
+      () => {
+        const init = { accountId: 1n, instrument: [] };
+        return new ReviewRule(init);
+      },
+      'ReviewRule options has unknown key "instrument"',
+    ],
+  ] as const)("rejects an unknown %s init key", (_type, read, message) => {
+    let caught: unknown;
+    try {
+      read();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(TypeError);
+    expect(caught).toHaveProperty("message", message);
+  });
+
   it("uses TypeError for a malformed policy object", () => {
     expect(() => Engine.builder().preTrade(null as unknown as Policy)).toThrow(
       TypeError,

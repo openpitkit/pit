@@ -26,8 +26,8 @@ use openpit::pretrade::PolicyGroupId;
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
-    collect_cloned_wrappers, is_plain_object, read_field, resolve_optional_account_group_id,
-    resolve_optional_account_id, IntegerNumber,
+    collect_cloned_wrappers, is_plain_object, read_field, reject_unknown_keys,
+    resolve_optional_account_group_id, resolve_optional_account_id, IntegerNumber,
 };
 use crate::engine::StorageFactory;
 use crate::error::{engine_build_configuration_error, make_error, ErrorKind};
@@ -35,7 +35,10 @@ use crate::marketdata::JsInstrument;
 
 #[wasm_bindgen(typescript_custom_section)]
 const REVIEW_RULE_INIT_TS: &str = r#"
-/** The account scope and instrument selection of a review rule. */
+/**
+ * The account scope and instrument selection of a review rule.
+ * Unknown keys throw `TypeError`.
+ */
 export interface ReviewRuleInit {
   /** Required only for an account rule. */
   accountId?: AccountId | number | bigint | string | null;
@@ -71,6 +74,7 @@ impl JsReviewRule {
     ///
     /// # Errors
     ///
+    /// Unknown keys in the options or an instrument init throw `TypeError`.
     /// Throws `TypeError` for non-object options, a non-iterable instrument
     /// selection or a malformed instrument. Throws `AssetError` for an empty
     /// asset, `AccountIdError` for an invalid account ID, and `ParamError`
@@ -92,6 +96,11 @@ impl JsReviewRule {
                 None,
             ));
         }
+        reject_unknown_keys(
+            &init,
+            "ReviewRule options",
+            &["accountId", "accountGroupId", "instruments"],
+        )?;
         let account = read_field(&init, "accountId")?;
         let group = read_field(&init, "accountGroupId")?;
         let instruments = read_field(&init, "instruments")?;

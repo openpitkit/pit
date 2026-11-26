@@ -94,9 +94,18 @@ a test is the message a user sees.
     `case` label, a constructor call and an angle-bracket assertion
     (`todook` fixtures in `tests/naming.ts`). An unnamed generic call
     signature can be reported on the line above it.
+- `semgrep/unknown-keys-js.yml` - closed JS options and init readers check
+  for unknown keys on the object they read. Open payload adapters and protocol
+  probes have named exemptions. Readers of closed custom-policy callback
+  results are outside the rule's scope. The rule recognizes
+  direct literal reads and calls to known reader helpers. It looks for a
+  guard in an enclosing block on the same receiver expression. Known limits
+  include aliases, calls across functions, check order, and whether the
+  allowlist matches the set of keys read.
 - `semgrep/tests/` - regression fixtures for `financial-types-rust.yml`,
-  `fallbacks-rust.yml`, `async-exceptions-cpp.yml`, `resolve-once-rust.yml` and
-  `naming.yml`, plus comment-width fixtures for `text-style.yml`.
+  `fallbacks-rust.yml`, `async-exceptions-cpp.yml`, `resolve-once-rust.yml`,
+  `naming.yml` and `unknown-keys-js.yml`, plus comment-width fixtures for
+  `text-style.yml`.
   `errors-go.yml` has no fixture.
   `just check-semgrep` runs `semgrep --test` over them after the repository
   scan; they hold deliberate violations.
