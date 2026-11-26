@@ -477,14 +477,21 @@ package-runtime target goos goarch lib_name:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p dist
-    SRC="target/{{ target }}/release/{{ lib_name }}"
+    target="{{ target }}"
+    SRC="target/${target}/release/{{ lib_name }}"
 
-    if command -v strip >/dev/null 2>&1; then
-      if strip --help 2>&1 | grep -q -- '--strip-unneeded'; then
-        strip --strip-unneeded "${SRC}" || true
-      else
-        strip -x "${SRC}" || true
+    strip_tool=strip
+    if [[ "{{ goos }}" == "linux" ]]; then
+      target_arch="${target%%-*}"
+      host_arch="$(uname -m)"
+      if [[ "${target_arch}" != "${host_arch}" ]]; then
+        strip_tool="${target_arch}-linux-gnu-strip"
       fi
+    fi
+    if "${strip_tool}" --help 2>&1 | grep -q -- '--strip-unneeded'; then
+      "${strip_tool}" --strip-unneeded "${SRC}"
+    else
+      "${strip_tool}" -x "${SRC}"
     fi
 
     DST="dist/openpit-ffi--{{ goos }}-{{ goarch }}-{{ lib_name }}"
@@ -499,6 +506,23 @@ package-runtime target goos goarch lib_name:
       install_name_tool -add_rpath @loader_path "${probe}"
       codesign --verify "${probe}"
       rm -f "${probe}"
+      # dyld on macOS 27 rejects images built against its SDK whose string
+      # table is not 8-byte aligned. Release runners' older dyld loads them,
+      # so check alignment directly.
+      if ! stroff="$(otool -l "${DST}" | awk '
+        $1 == "Load" && $2 == "command" { symtab = 0 }
+        $1 == "cmd" { symtab = ($2 == "LC_SYMTAB") }
+        symtab && $1 == "stroff" { print $2 }
+      ')" || [[ ! "${stroff}" =~ ^[0-9]+$ ]]; then
+        printf 'Cannot read LC_SYMTAB stroff from %s\n' "${DST}" >&2
+        exit 1
+      fi
+      if (( 10#${stroff} % 8 != 0 )); then
+        printf 'LC_SYMTAB stroff %s in %s is not 8-byte aligned\n' "${stroff}" "${DST}" >&2
+        exit 1
+      fi
+      # codesign can accept an image that dyld refuses to load.
+      {{ bootstrap_python }} -I -c 'import ctypes, sys; ctypes.CDLL(sys.argv[1])' "${PWD}/${DST}"
     fi
     cp bindings/c/openpit.h dist/openpit.h
     cp LICENSE dist/LICENSE
