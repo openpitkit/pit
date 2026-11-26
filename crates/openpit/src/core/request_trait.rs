@@ -101,8 +101,8 @@ has_request_field_trait!(
 );
 
 has_request_field_trait!(
-    /// Provides the caller's assertion that the order's reservation is already
-    /// held by an earlier committed with-hold review run.
+    /// Provides the caller's assertion that Spot Funds already holds this
+    /// order's funds from an earlier committed review.
     ///
     /// An absent value means `false`. An access failure is returned as a
     /// [`RequestFieldAccessError`].

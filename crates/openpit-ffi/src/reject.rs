@@ -38,8 +38,17 @@ pub type OpenPitPretradeRuleMode = u8;
 
 /// Reject the order when the rule is breached.
 pub const OPENPIT_PRETRADE_RULE_MODE_REJECT: OpenPitPretradeRuleMode = 1;
-/// Require human review. The reservation retains holds and policy results
-/// only if every review mark in the run is with-hold.
+/// Require human review. The reservation retains holds and policy results only
+/// if every review mark in the run is with-hold. A policy instance registered
+/// in a review mode that marked the order in its main-stage check retains none
+/// of its own. Commit immediately and keep the order unsent.
+///
+/// On approval, rerun with `OpenPitOrderReview.confirmed` set to
+/// `OPENPIT_TRI_BOOL_TRUE`. Set `already_held` to `OPENPIT_TRI_BOOL_TRUE` only
+/// if Spot Funds kept its own hold in the committed review. A Spot Funds
+/// instance registered in a review mode that marked the order holds nothing.
+/// After such a review, set `confirmed` only. See
+/// `openpit_pretrade_pre_trade_reservation_get_reviews` for the lifecycle.
 pub const OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD: OpenPitPretradeRuleMode = 2;
 /// Require human review and discard the reservation's holds and policy results.
 pub const OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITHOUT_HOLD: OpenPitPretradeRuleMode = 3;

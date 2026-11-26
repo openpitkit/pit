@@ -24,7 +24,7 @@ import { Engine } from "@openpit/engine";
 import { AdjustmentAmount, TradeAmount } from "@openpit/engine/param";
 import { type OrderInit } from "@openpit/engine/model";
 import { type Policy } from "@openpit/engine/pretrade";
-import { RuleMode } from "@openpit/engine/reject";
+import { RejectCode, RuleMode } from "@openpit/engine/reject";
 import {
   buildOrderValidation,
   buildRateLimit,
@@ -294,5 +294,43 @@ describe("dry-run surface", () => {
     const real = engine.executePreTrade(makeOrder("30", "2000"));
     expect(real.ok).toBe(true);
     real.reservation!.rollback();
+  });
+});
+
+describe("Spot Funds review with an existing hold", () => {
+  it("passes without reserving funds again", () => {
+    const engine = makeSpotFundsEngine();
+    const order = makeOrder("6", "10000");
+    const initial = engine.executePreTrade(order);
+    expect(initial.ok, "expected the initial 60000 USD order").toBe(true);
+    const initialReservation = initial.reservation;
+    if (initialReservation === undefined) {
+      throw new Error("expected the initial 60000 USD reservation");
+    }
+    initialReservation.commit();
+
+    order.review = { confirmed: true };
+    const rejected = engine.executePreTrade(order);
+    expect(rejected.reservation).toBeUndefined();
+    expect(rejected.rejects.map((reject) => reject.code)).toEqual([
+      RejectCode.InsufficientFunds,
+    ]);
+
+    order.review = { confirmed: true, alreadyHeld: true };
+    const held = engine.executePreTrade(order);
+    expect(held.ok, "expected the already-held order to pass").toBe(true);
+    const heldReservation = held.reservation;
+    if (heldReservation === undefined) {
+      throw new Error("expected the already-held order's reservation");
+    }
+    heldReservation.commit();
+
+    const remaining = engine.executePreTrade(makeOrder("4", "10000"));
+    expect(remaining.ok, "expected the remaining 40000 USD").toBe(true);
+    const remainingReservation = remaining.reservation;
+    if (remainingReservation === undefined) {
+      throw new Error("expected a reservation for the remaining 40000 USD");
+    }
+    remainingReservation.rollback();
   });
 });

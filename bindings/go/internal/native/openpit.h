@@ -729,7 +729,16 @@ typedef uint8_t OpenPitSettlementUnit;
 
 /**
  * Require human review. The reservation retains holds and policy results only
- * if every review mark in the run is with-hold.
+ * if every review mark in the run is with-hold. A policy instance registered
+ * in a review mode that marked the order in its main-stage check retains none
+ * of its own. Commit immediately and keep the order unsent.
+ *
+ * On approval, rerun with `OpenPitOrderReview.confirmed` set to
+ * `OPENPIT_TRI_BOOL_TRUE`. Set `already_held` to `OPENPIT_TRI_BOOL_TRUE` only
+ * if Spot Funds kept its own hold in the committed review. A Spot Funds
+ * instance registered in a review mode that marked the order holds nothing.
+ * After such a review, set `confirmed` only. See
+ * `openpit_pretrade_pre_trade_reservation_get_reviews` for the lifecycle.
  */
 #define OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD \
     ((OpenPitPretradeRuleMode) 2)
@@ -1706,8 +1715,8 @@ struct OpenPitOrderReview {
      */
     OpenPitTriBool confirmed;
     /**
-     * Whether an earlier committed with-hold review run already holds the order's
-     * reservation. `NOT_SET` means not held.
+     * Whether the caller asserts that Spot Funds already holds this order's funds
+     * from an earlier committed review. `NOT_SET` means not held.
      */
     OpenPitTriBool already_held;
 };
@@ -3210,12 +3219,21 @@ typedef OpenPitPretradeRejectList *
  *   push carries a `policy_group_id`; the engine assigns the policy group.
  *   The callback must not store or use `out_result` after return.
  * - An effective reject discards every review mark in live pre-trade and
- *   dry-run. Live pre-trade also discards all holds and policy results.
- *   Dry-run still reports its collected lock and outcomes. Without an
- *   effective reject, a without-hold mark in either stage clears all holds
- *   and policy results. Otherwise, they are kept. Drop-copy keeps results
- *   with review marks of either mode and with ordinary, non-enforcing
- *   rejects. Evaluation failures abort drop-copy and discard the results.
+ *   dry-run. Live pre-trade discards all holds and policy results on an
+ *   effective reject. It keeps them on acceptance and when the only reported
+ *   marks are with-hold. A reported without-hold mark in either stage clears
+ *   all live holds and results and empties the dry-run lock and adjustments.
+ *   A confirmed rerun reports no marks, so its marks do not trigger this
+ *   clearing step. If this callback returns only review marks and the
+ *   instance is registered in a review mode, live pre-trade and dry-run
+ *   discard that instance's contributions, even on a confirmed rerun. Live
+ *   pre-trade rolls back its discarded mutations. Dry-run never applies or
+ *   rolls back mutations. It reports the lock prices and account adjustments
+ *   live pre-trade would keep on a successful run and still reports the
+ *   results it collected on an effective main-stage reject. Drop-copy keeps
+ *   results with review marks of either mode and with ordinary,
+ *   non-enforcing rejects. An evaluation failure aborts drop-copy and
+ *   discards the results.
  * - Return a non-null empty list to accept the order.
  * - Return a non-empty list of rejects or review marks. Review modes request
  *   human review; effective rejects stop the order.
@@ -6011,8 +6029,32 @@ void openpit_pretrade_pre_trade_reservation_rollback(
  *   there are no marks; release it with
  *   `openpit_destroy_pretrade_reject_list`;
  * - marks require a human decision before submission. With-hold marks retain
- *   policy results; any without-hold mark leaves the reservation without
- *   them.
+ *   policy results, except that a policy instance registered in a review
+ *   mode that marked the order in its main-stage check retains none of its
+ *   own. Any without-hold mark leaves the reservation without policy
+ *   results.
+ *
+ * Lifecycle for review with hold:
+ * - Keep the order unsent and commit immediately with
+ *   `openpit_pretrade_pre_trade_reservation_commit`. Save the first run's
+ *   lock from `openpit_pretrade_pre_trade_reservation_get_lock` before
+ *   destroying the reservation.
+ * - On approval, rerun with `OpenPitOrderReview.confirmed` set to
+ *   `OPENPIT_TRI_BOOL_TRUE`. Set `already_held` to `OPENPIT_TRI_BOOL_TRUE`
+ *   only if Spot Funds kept its own hold. It did so only when every mark was
+ *   with-hold and no Spot Funds instance registered in a review mode marked
+ *   the order. Send the order only if the rerun has no rejects.
+ * - After committing an already-held rerun, use its lock for execution
+ *   reports and append only the first run's Spot Funds group prices. Read
+ *   each group's prices with `openpit_pretrade_pre_trade_lock_prices_of` and
+ *   `openpit_pretrade_pre_trade_lock_prices_view`, then append each price
+ *   under its group ID with `openpit_pretrade_pre_trade_lock_push`. If Spot
+ *   Funds is the only policy that locks prices, use the first lock directly.
+ * - Until the rerun is committed, use the first run's lock. If an order with
+ *   a committed Spot Funds hold ends without a committed rerun, send a final
+ *   cancel report with the first run's lock and the remaining reserved
+ *   quantity via `openpit_engine_apply_execution_report` to release that
+ *   hold.
  *
  * Lifetime contract:
  * - the returned list is detached from the reservation state.

@@ -42,8 +42,11 @@ discards the holds and policy results.
 A reservation is explicit and single-use. Inspect `reviews` before sending.
 When marks are present, commit the reservation and keep the order unsent.
 After approval, rerun with `OrderReview(confirmed=True)` and set
-`already_held=True` if the earlier run retained a hold. For ordinary orders,
-commit after successful submission or roll back when submission fails.
+`already_held=True` only if Spot Funds kept its own hold in the committed
+review. A Spot Funds instance registered in a review mode that marked the order
+holds nothing. After such a review, rerun with `confirmed=True` only. For
+ordinary orders, commit after successful submission or roll back when submission
+fails.
 
 ## Post-trade feedback
 

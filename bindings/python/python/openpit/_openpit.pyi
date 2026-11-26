@@ -1067,10 +1067,10 @@ class OrderMargin:
     def auto_borrow(self, value: bool) -> None: ...
 
 class OrderReview:
-    """Confirmation supplied by the caller for a fresh pre-trade run.
+    """Review flags supplied by the caller for a pre-trade run.
 
-    ``already_held`` is the caller's assertion that this order's reservation
-    is already held by an earlier committed with-hold run.
+    ``already_held`` is the caller's assertion that Spot Funds already holds
+    this order's funds from an earlier committed review.
     """
 
     def __init__(
@@ -1078,13 +1078,14 @@ class OrderReview:
     ) -> None: ...
     @property
     def confirmed(self) -> bool:
-        """Whether the caller has confirmed the order."""
+        """Whether the caller has confirmed the order. Defaults to ``False``."""
 
     @confirmed.setter
     def confirmed(self, value: bool) -> None: ...
     @property
     def already_held(self) -> bool:
-        """Whether an earlier committed with-hold run holds the reservation.
+        """Whether the caller asserts that Spot Funds already holds this order's
+        funds from an earlier committed review.
 
         Defaults to ``False``.
         """
@@ -1743,6 +1744,51 @@ class Reservation:
     Finalize the reserved state with ``commit`` or ``rollback``.
     A without-hold review carries no reserved state.
 
+    If ``reviews`` is non-empty, leave the order unsent and call ``commit``
+    immediately. The reservation retains holds only when every mark is
+    ``RuleMode.REVIEW_WITH_HOLD``.
+    A policy instance registered in a review mode that marked the order in its
+    main-stage check retains none of its own. Save the first run's ``lock``
+    before committing.
+    ``already_held`` asserts Spot Funds' own hold. Spot Funds kept it only when
+    every mark is with-hold and no Spot Funds instance registered in a review
+    mode marked the order. On approval, rerun with ``confirmed=True``, and also
+    set ``already_held=True`` only if Spot Funds kept its hold. Otherwise the
+    rerun carries ``confirmed=True`` only.
+    With ``already_held=True``, Spot Funds runs every check against the current
+    balance with this order's own hold given back, writes nothing, and adds no
+    prices to the rerun's lock. For a market order, this run prices the hold it
+    gives back, so a price move since the first run shifts that amount. Keep a
+    clean rerun's reservation until sending, and commit once the venue accepts
+    the order. If it is not sent or the venue does not accept it, call
+    ``rollback`` and, if Spot Funds kept its hold in the review, release that
+    hold as described below.
+
+    Once an already-held rerun is committed, for each report of the order use
+    the rerun's lock supplemented with the first run's Spot Funds prices. Read
+    each Spot Funds group's prices with ``Lock.prices_of`` and append them with
+    ``Lock.push_many``. Merging the whole first lock would duplicate prices for
+    groups recorded in both runs. If Spot Funds is the only policy that locks
+    prices, use the first lock directly. Passing only the rerun's lock blocks
+    the account with ``RejectCode.MISSING_REQUIRED_FIELD``.
+
+    Once a review in which Spot Funds kept its hold is committed, only a final
+    cancel execution report carrying the remaining reserved quantity releases
+    that hold. Send it whenever the order ends without a committed rerun: the
+    reviewer rejects it, the rerun rejects it, or the rerun is rolled back
+    because the order is not sent or the venue does not accept it.
+    That report carries the first run's lock.
+    Rolling back or rejecting the rerun does not touch the first run's hold.
+    A without-hold review holds nothing and needs no cancel report.
+    When a Spot Funds instance registered in a review mode marked the order,
+    that instance holds nothing, and a final cancel report that carries the
+    first run's lock and a remaining reserved quantity blocks the account with
+    ``RejectCode.MISSING_REQUIRED_FIELD``, because that lock has no price for
+    that instance.
+    The engine trusts ``already_held`` without checking whether a matching hold
+    exists. Setting it when Spot Funds kept no hold leaves the order without a
+    Spot Funds hold.
+
     Finalization must not fail. A mutation callable that raises is re-raised to
     the caller once the rest of the batch has run, and independently arms the
     engine kill switch: every :class:`openpit.Mutation` registered from Python
@@ -1764,10 +1810,12 @@ class Reservation:
         """Marks requiring a human decision before submission.
 
         If there are review marks, commit immediately and keep the order
-        unsent. The reservation keeps holds and policy results only if every
-        review mark is with-hold. To approve, run the order again with
-        ``OrderReview(confirmed=True)``. Raises ``RuntimeError`` once the
-        reservation is finalized.
+        unsent. On approval, rerun with ``confirmed=True`` and add
+        ``already_held=True`` only if Spot Funds kept its own hold in the
+        committed review.
+        See ``Reservation`` for the lifecycle.
+
+        Raises ``RuntimeError`` once the reservation is finalized.
         """
 
     def commit(self) -> None:
@@ -1898,7 +1946,7 @@ class StartResult:
     def reviews(self) -> list[Reject]:
         """Start-stage marks requiring a human decision before submission.
 
-        Execute the request to get the final verdict. See ``Reservation.reviews``
+        Execute the request to get the final verdict. See ``Reservation``
         for the review lifecycle.
         """
 
@@ -1910,7 +1958,7 @@ class ExecuteResult:
     Result of ``Request.execute`` or ``Engine.execute_pre_trade``.
 
     Carries the effective rejects or the single-use reservation and its review
-    marks. See ``Reservation.reviews`` for the review lifecycle.
+    marks. See ``Reservation`` for the review lifecycle.
     """
 
     @property
@@ -1929,7 +1977,7 @@ class ExecuteResult:
     def reviews(self) -> list[Reject]:
         """Marks requiring a human decision before submission.
 
-        See ``Reservation.reviews`` for the review lifecycle.
+        See ``Reservation`` for the review lifecycle.
         """
 
     def __bool__(self) -> bool:
@@ -1955,7 +2003,7 @@ class DryRunReport:
     def reviews(self) -> list[Reject]:
         """Marks a live run would return, requiring a decision before submission.
 
-        See ``Reservation.reviews`` for the live review lifecycle.
+        See ``Reservation`` for the live review lifecycle.
         """
 
     @property

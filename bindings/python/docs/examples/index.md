@@ -26,9 +26,10 @@ is intended to be copied into a Python file after installing `openpit`.
 
 Use this when integrating OpenPit around a real order-submission path.
 If the result has review marks, commit the reservation immediately and
-keep the order unsent. After approval, rerun with `confirmed=True`, and
-set `already_held=True` if the reservation retained a hold. If the result
-is successful and has no marks, commit after the downstream send succeeds.
+keep the order unsent. After approval, rerun with `confirmed=True` and add
+`already_held=True` only if Spot Funds kept its own hold in the committed
+review. If the result is successful and has no marks, commit after the
+downstream send succeeds.
 
 ```python
 import datetime
@@ -116,8 +117,9 @@ order = openpit.Order(
 
 result = engine.execute_pre_trade(order=order)
 if result.reviews:
-    # Keep the order unsent; after approval, rerun with
-    # OrderReview(confirmed=True).
+    # Leave unsent. On approval, rerun with OrderReview(confirmed=True).
+    # Add already_held=True only if Spot Funds kept its own hold in the
+    # committed review.
     result.reservation.commit()
 elif result.ok:
     try:

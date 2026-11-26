@@ -469,8 +469,8 @@ struct OrderPosition {
 struct OrderReview {
   /// Whether a human confirmed the order. An absent value is unconfirmed.
   std::optional<bool> confirmed;
-  /// Whether an earlier committed with-hold review run already holds the
-  /// order's reservation. An absent value is not held.
+  /// Whether the caller asserts that Spot Funds already holds this order's
+  /// funds from an earlier committed review. An absent value is not held.
   std::optional<bool> alreadyHeld;
 
  private:

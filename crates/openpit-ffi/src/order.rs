@@ -151,8 +151,8 @@ pub struct OpenPitOrderMargin {
 pub struct OpenPitOrderReview {
     /// Whether the caller confirmed the order. `NOT_SET` means not confirmed.
     pub confirmed: OpenPitTriBool,
-    /// Whether an earlier committed with-hold review run already holds the
-    /// order's reservation. `NOT_SET` means not held.
+    /// Whether the caller asserts that Spot Funds already holds this order's
+    /// funds from an earlier committed review. `NOT_SET` means not held.
     pub already_held: OpenPitTriBool,
 }
 

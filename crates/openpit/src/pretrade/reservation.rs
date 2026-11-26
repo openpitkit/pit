@@ -57,18 +57,54 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 ///
 /// # Lifecycle guidance
 ///
-/// Inspect [`reviews`](Self::reviews) before submission. With-hold review is
-/// committed immediately without sending the order; do not keep the reservation
-/// open while awaiting a human decision. Without-hold review has nothing to
-/// release. Confirmation is a fresh pre-trade attempt with `confirmed` set.
+/// Inspect [`reviews`](Self::reviews) before submission. Keep a reviewed order
+/// unsent and commit the reservation immediately. It retains holds only when
+/// every mark is [`RuleMode::ReviewWithHold`](super::RuleMode::ReviewWithHold).
+/// A policy instance registered in a review mode that marked the order in its
+/// main-stage check retains none of its own. Save that first run's
+/// [`lock`](Self::lock).
+/// `already_held` asserts Spot Funds' own hold. Spot Funds kept it only when
+/// every mark is with-hold and no Spot Funds instance registered in a review
+/// mode marked the order. On approval, rerun with `confirmed`, and also set
+/// `already_held` only if Spot Funds kept its hold. Otherwise the rerun carries
+/// `confirmed` only.
+/// With `already_held`, Spot Funds runs every check against the current balance
+/// with this order's own hold given back, writes nothing, and adds no prices
+/// to the rerun's lock. For a market order, this run prices the hold it gives
+/// back, so a price move since the first run shifts that amount.
+///
+/// Once an already-held rerun is committed, for each report of the order use
+/// the rerun's lock supplemented with the Spot Funds prices from the first run.
+/// Read each Spot Funds group's prices with [`PreTradeLock::prices_of`] and
+/// append them with [`PreTradeLock::push_many`]. Merging the whole first lock
+/// would duplicate prices for groups recorded in both runs. If Spot Funds is
+/// the only policy that locks prices, use the first lock directly. Passing only
+/// the rerun's lock blocks the account with `MissingRequiredField`.
+///
+/// Once a review in which Spot Funds kept its hold is committed, only a final
+/// cancel execution report carrying the remaining reserved quantity releases
+/// that hold. Send it whenever the order ends without a committed rerun: the
+/// reviewer rejects it, the rerun rejects it, or the rerun is rolled back
+/// because the order is not sent or the venue does not accept it.
+/// That report carries the first run's lock.
+/// Rolling back or rejecting the rerun does not touch the first run's hold.
+/// A without-hold review holds nothing and needs no cancel report.
+/// When a Spot Funds instance registered in a review mode marked the order,
+/// that instance holds nothing, and a final cancel report that carries the
+/// first run's lock and a remaining reserved quantity blocks the account with
+/// `MissingRequiredField`, because that lock has no price for that instance.
+/// The engine trusts `already_held` without checking whether a matching hold
+/// exists. Setting it when Spot Funds kept no hold leaves the order without a
+/// Spot Funds hold.
 ///
 /// When there are no review marks:
 ///
 /// - Keep the `PreTradeReservation` alive until the order is actually sent.
 /// - Call [`PreTradeReservation::commit`] only after the venue accepted the order and
 ///   the reservation must become durable engine state.
-/// - Call [`PreTradeReservation::rollback`] if submission fails and reserved state must
-///   be reverted immediately.
+/// - Call [`PreTradeReservation::rollback`] if submission fails and reserved
+///   state must be reverted immediately. After a review in which Spot Funds
+///   kept its hold, also release that hold as described above.
 /// - After commit, persist [`PreTradeReservation::lock`] if later execution-report
 ///   processing depends on reservation-time policy context.
 ///
@@ -131,12 +167,15 @@ pub(crate) trait ReservationHandle {
 }
 
 impl PreTradeReservation {
-    /// Returns review marks from the stages that ran, in stage and policy order.
+    /// Returns review marks from the stages that ran, in stage and policy
+    /// order.
     ///
     /// A nonempty slice requires a human decision before submission. Any
-    /// [`super::RuleMode::ReviewWithoutHold`] mark means this reservation has no
-    /// mutations, lock prices, or account adjustments. With-hold review retains
-    /// them: commit the reservation for review without sending the order.
+    /// [`super::RuleMode::ReviewWithoutHold`] mark means this reservation has
+    /// no mutations, lock prices, or account adjustments. Otherwise, the
+    /// reservation retains them, except that a policy instance registered in a
+    /// review mode that marked the order in its main-stage check retains none
+    /// of its own. Commit the reservation for review without sending the order.
     pub fn reviews(&self) -> &[super::Reject] {
         &self.reviews
     }

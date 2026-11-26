@@ -126,8 +126,15 @@ class PolicyReject:
             marks, the run keeps its holds and policy results (mutations,
             lock prices, and account adjustments). Commit the reservation
             immediately. Any ``"ReviewWithoutHold"`` mark discards those
-            holds and results. Send only after a fresh run with the order
-            confirmed and no review marks or rejects.
+            holds and results. On approval, rerun with ``confirmed=True`` and
+            add ``already_held=True`` only if Spot Funds kept its own hold in
+            the committed review.
+            A policy instance registered in a review mode that marked the order
+            in its main-stage check retains none of its own.
+            A Spot Funds instance registered in a review mode that marked the
+            order holds nothing. After such a review, rerun with
+            ``confirmed=True`` only.
+            Send only if the rerun has no rejects.
             Both stages report evaluation failures as ``"Reject"``.
             Any account-adjustment entry rejects the batch and is reported as
             ``"Reject"``. Drop copy applies bookkeeping in every mode,
@@ -162,10 +169,17 @@ class PolicyDecision:
     """
     Return type of :meth:`Policy.perform_pre_trade_check`.
 
-    Live pre-trade keeps the mutations only when the run has no rejects
-    and every review mark in it, if any, is with-hold.
-    Drop-copy keeps them alongside ordinary, non-enforcing rejects.
-    An evaluation-failure reject aborts drop-copy and discards the mutations.
+    Live pre-trade keeps mutations on acceptance and when every reported review
+    mark is with-hold. An effective reject or a reported without-hold mark
+    clears them. When an instance registered in a review mode returns only
+    review marks from its main-stage check, live pre-trade and dry-run discard
+    that instance's contributions, even on a confirmed rerun, which reports no
+    marks. Live pre-trade rolls back its discarded mutations. Dry-run never
+    applies or rolls back mutations.
+
+    Drop-copy keeps mutations with review marks of either mode and with
+    ordinary, non-enforcing rejects. An evaluation failure aborts drop-copy and
+    discards the mutations.
 
     Attributes:
         rejects: Rejects and review marks produced by the policy.
@@ -252,9 +266,21 @@ class PolicyPreTradeResult:
         """
         Build a pre-trade result with rejects or review marks.
 
-        Live pre-trade keeps the contribution only when the run has no
-        rejects and every review mark in it is with-hold.
-        Drop-copy retains it when every reject is non-enforcing.
+        Live pre-trade keeps contributions on acceptance and when every reported
+        review mark is with-hold. An effective reject or a reported without-hold
+        mark clears them. When an instance registered in a review mode returns
+        only review marks from its main-stage check, live pre-trade and dry-run
+        discard that instance's contributions, even on a confirmed rerun, which
+        reports no marks. Live pre-trade rolls back its discarded mutations.
+
+        Dry-run never applies or rolls back mutations. It reports the lock
+        prices and account adjustments live pre-trade would keep on success.
+        With another instance's main-stage reject, it still reports the results
+        collected from instances that kept theirs.
+
+        Drop-copy keeps contributions with review marks of either mode and with
+        ordinary, non-enforcing rejects. An evaluation failure aborts drop-copy
+        and discards the contributions.
         """
         return cls(
             rejects=tuple(rejects),

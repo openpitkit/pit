@@ -1015,9 +1015,9 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 		t.Fatalf("Reviews() error = %v", err)
 	}
 	if len(reviews) > 0 {
-		// Leave unsent. After approval, set confirmation and rerun the order:
-		// review := order.EnsureReviewView()
-		// review.SetConfirmed(true)
+		// Leave unsent. On approval, rerun with Confirmed set.
+		// Add AlreadyHeld only if Spot Funds kept its own hold in the committed
+		// review.
 		reservation.Commit()
 		return
 	}

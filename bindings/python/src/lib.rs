@@ -2396,7 +2396,9 @@ impl PyExecuteResult {
     /// human decision before submission. Commit the reservation immediately
     /// and keep the order unsent. The reservation keeps holds and policy
     /// results only if every review mark is with-hold.
-    /// To approve, run the order again with `OrderReview(confirmed=True)`.
+    /// On approval, rerun with `confirmed=True` and add `already_held=True`
+    /// only if Spot Funds kept its own hold in the committed review.
+    /// See `Reservation` for the lifecycle.
     #[getter]
     fn reviews(&self) -> Vec<PyReject> {
         self.reviews.clone()
@@ -8053,7 +8055,9 @@ impl PyReservation {
     /// human decision before submission. Commit this reservation immediately
     /// and keep the order unsent. The reservation keeps holds and policy
     /// results only if every review mark is with-hold.
-    /// To approve, run the order again with `OrderReview(confirmed=True)`.
+    /// On approval, rerun with `confirmed=True` and add `already_held=True`
+    /// only if Spot Funds kept its own hold in the committed review.
+    /// See `Reservation` for the lifecycle.
     ///
     /// Raises `RuntimeError` once this reservation has been finalized.
     #[getter]

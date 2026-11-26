@@ -250,8 +250,8 @@ impl_request_has_field_passthrough!(
 pub struct OrderReview {
     /// Whether the caller has already confirmed the order for pre-trade review.
     pub confirmed: bool,
-    /// Whether the order's reservation is already held by an earlier committed
-    /// with-hold review run.
+    /// Whether the caller asserts that Spot Funds already holds this order's
+    /// funds from an earlier committed review.
     pub already_held: bool,
 }
 

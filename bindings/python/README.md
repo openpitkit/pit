@@ -165,9 +165,9 @@ order = openpit.Order(
 
 result = engine.execute_pre_trade(order=order)
 if result.reviews:
-    # Keep the order unsent; after approval, rerun with
-    # OrderReview(confirmed=True). Set already_held=True if the
-    # reservation retained a hold.
+    # Leave unsent. On approval, rerun with OrderReview(confirmed=True).
+    # Add already_held=True only if Spot Funds kept its own hold in the
+    # committed review.
     result.reservation.commit()
 elif result.ok:
     # Send the order to the venue, then commit or roll the reservation back.

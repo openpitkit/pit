@@ -192,10 +192,14 @@ class OrderMargin:
         """Whether auto-borrow may cover a temporary collateral shortage."""
 
 class OrderReview:
-    """Confirmation for a fresh run. Policies still evaluate reject rules.
+    """Review flags supplied by the caller for a pre-trade run.
 
-    ``already_held`` is the caller's assertion that this order's reservation
-    is already held by an earlier committed with-hold run.
+    The engine reads ``confirmed`` and ``already_held`` through its order
+    review reader. For a confirmed order, every policy instance still runs
+    and the engine discards review marks. Reject-mode instances and evaluation
+    failures still reject.
+    ``already_held`` is the caller's assertion that Spot Funds already holds
+    this order's funds from an earlier committed review.
     """
 
     def __init__(
@@ -207,7 +211,8 @@ class OrderReview:
 
     @property
     def already_held(self) -> bool:
-        """Whether an earlier committed with-hold run holds the reservation.
+        """Whether the caller asserts that Spot Funds already holds this order's
+        funds from an earlier committed review.
 
         Defaults to ``False``.
         """

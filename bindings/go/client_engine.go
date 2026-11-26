@@ -225,7 +225,10 @@ func (r *ClientRequest) Close() {
 // Reviews returns a copy of the start-stage review marks. A non-empty list
 // requires a human decision before sending the order.
 // If Execute returns a hold for review, commit the reservation to retain the
-// hold and keep the order unsent until approval and a fresh run with Confirmed.
+// hold and keep the order unsent. On approval, rerun with Confirmed and add
+// AlreadyHeld only if Spot Funds kept its own hold in the committed review.
+//
+// See [pretrade.Reservation] for the lifecycle.
 //
 // After Execute, read the marks from the returned reservation. Reviews returns
 // the native error after Execute and ErrClientRequestClosed after Close.

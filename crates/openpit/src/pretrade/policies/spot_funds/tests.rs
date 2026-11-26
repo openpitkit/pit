@@ -17,6 +17,7 @@
 
 //! Unit tests for [`SpotFundsPolicy`].
 
+mod already_held;
 mod position_limit;
 mod properties;
 mod review_pnl;

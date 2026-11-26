@@ -81,10 +81,21 @@ namespace openpit::pretrade {
 
 class Result {
  public:
-  // Live pre-trade and dry-run keep these contributions on acceptance and
-  // when the only findings are with-hold review marks.
-  // Drop-copy also keeps them with ordinary, non-enforcing rejects;
-  // evaluation-failure rejects abort drop-copy and discard them.
+  // Live pre-trade keeps the lock prices and account adjustments pushed into
+  // this result on acceptance and when the only reported marks are with-hold.
+  // An effective reject or a reported without-hold mark clears the result. If
+  // the main-stage callback returns only review marks and the instance is
+  // registered in a review mode, live pre-trade and dry-run discard this
+  // result, even on a confirmed rerun, which reports no marks.
+  //
+  // Dry-run never applies or rolls back mutations. It reports the lock prices
+  // and account adjustments live pre-trade would keep on a successful run. With
+  // another instance's main-stage reject, it still reports the results
+  // collected from the instances that kept theirs.
+  //
+  // Drop-copy keeps this result with review marks of either mode and with
+  // ordinary, non-enforcing rejects. An evaluation failure aborts drop-copy and
+  // discards the results.
   Result(const Result&) = delete;
   Result& operator=(const Result&) = delete;
   Result(Result&&) = delete;

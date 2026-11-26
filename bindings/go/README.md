@@ -105,8 +105,9 @@ if err != nil {
  log.Fatal(err)
 }
 if len(reviews) > 0 {
- // Leave unsent. After approval, rerun with confirmation set.
- // Set AlreadyHeld as well if this reservation retained a hold.
+ // Leave unsent. On approval, rerun with Confirmed set.
+ // Add AlreadyHeld only if Spot Funds kept its own hold in the committed
+ // review.
  reservation.Commit()
  return
 }

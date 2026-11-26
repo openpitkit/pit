@@ -75,7 +75,10 @@ func newAsyncRequest(
 // request, so read the final marks from the returned reservation. A closed
 // request returns pretrade.ErrRequestClosed.
 // If Execute returns a hold for review, commit the reservation to retain the
-// hold and keep the order unsent until approval and a fresh run with Confirmed.
+// hold and keep the order unsent. On approval, rerun with Confirmed and add
+// AlreadyHeld only if Spot Funds kept its own hold in the committed review.
+//
+// See [pretrade.Reservation] for the lifecycle.
 func (r *AsyncRequest) Reviews() ([]reject.Reject, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -50,7 +50,12 @@ enum class RuleMode : std::uint8_t {
   Reject = OPENPIT_PRETRADE_RULE_MODE_REJECT,
   /// Requires human review. Only an all-with-hold run retains holds and
   /// policy results. Any without-hold mark clears both. Commit immediately
-  /// and rerun pre-trade with the order confirmed before sending it.
+  /// and keep the order unsent.
+  /// On approval, rerun with `confirmed` and add `alreadyHeld` only if Spot
+  /// Funds kept its own hold in the committed review.
+  /// A Spot Funds instance registered in a review mode that marked the order
+  /// holds nothing. After such a review, rerun with `confirmed` only.
+  /// See the `pretrade::Reservation` class documentation for the lifecycle.
   ReviewWithHold = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
   /// Requires human review. The returned reservation carries no holds or
   /// policy results. A start-stage mark skips the main stage.

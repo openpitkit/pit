@@ -94,8 +94,10 @@ func (r *DryRunReport) Rejects() ([]reject.Reject, error) {
 // Reviews returns a copy of the review marks the order would have collected.
 // A non-empty list requires a human decision before sending the order.
 // If a live run returns a hold for review, commit its reservation to retain
-// the hold and keep the order unsent until approval and a fresh run
-// with Confirmed.
+// the hold and keep the order unsent. On approval, rerun with Confirmed and
+// add AlreadyHeld only if Spot Funds kept its own hold in the committed review.
+// See [Reservation] for the lifecycle.
+//
 // Returns ErrDryRunReportClosed after Close.
 func (r *DryRunReport) Reviews() ([]reject.Reject, error) {
 	if r.handle == nil {

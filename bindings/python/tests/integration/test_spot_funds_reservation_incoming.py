@@ -16,9 +16,11 @@
 # Please see https://openpit.dev and the OWNERS file for details.
 
 """Prove that the incoming bucket on reservation outcomes surfaces through
-the Python binding's Reservation.account_adjustments without any new
-binding code - only engine-side behavior is under test."""
+the Python binding's Reservation.account_adjustments.
+Also verify that a confirmed review with an existing hold reserves funds once.
+"""
 
+import conftest
 import openpit
 import pytest
 
@@ -230,3 +232,60 @@ def test_spot_funds_priceless_sell_without_market_data_bundle_rejects() -> None:
     priced_result = engine.execute_pre_trade(order=priced_order)
     assert priced_result.ok, f"priced sell failed after reject: {priced_result.rejects}"
     priced_result.reservation.rollback()
+
+
+@pytest.mark.integration
+def test_spot_funds_already_held_does_not_reserve_again() -> None:
+    """A confirmed, already-held buy passes without reserving another 600 USD.
+    The final order asks for exactly the remaining 400 USD: a second hold
+    would leave less available and cause that order to reject."""
+    account_id = openpit.param.AccountId.from_int(99224416)
+    engine = _build_spot_funds_engine()
+    _seed_balance(engine, account_id, "USD", 1000)
+
+    price = openpit.param.Price("100")
+    order = conftest.make_order(
+        account_id=account_id,
+        trade_amount=openpit.param.TradeAmount.quantity("6"),
+        price=price,
+    )
+    operation = order.operation
+    assert operation is not None, "expected the initial buy order's operation"
+    initial = engine.execute_pre_trade(order=order)
+    assert initial.ok, f"expected initial 600 USD order to pass: {initial.rejects}"
+    reservation = initial.reservation
+    assert reservation is not None, "expected the initial 600 USD reservation"
+    reservation.commit()
+
+    rejected = engine.execute_pre_trade(
+        order=openpit.Order(
+            operation=operation, review=openpit.OrderReview(confirmed=True)
+        )
+    )
+    assert rejected.reservation is None, "expected insufficient funds without hold flag"
+    assert [reject.code for reject in rejected.rejects] == [
+        openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS
+    ]
+
+    held = engine.execute_pre_trade(
+        order=openpit.Order(
+            operation=operation,
+            review=openpit.OrderReview(confirmed=True, already_held=True),
+        )
+    )
+    assert held.ok, f"expected already-held order to pass: {held.rejects}"
+    reservation = held.reservation
+    assert reservation is not None, "expected the already-held order's reservation"
+    reservation.commit()
+
+    remaining = engine.execute_pre_trade(
+        order=conftest.make_order(
+            account_id=account_id,
+            trade_amount=openpit.param.TradeAmount.quantity("4"),
+            price=price,
+        )
+    )
+    assert remaining.ok, f"expected remaining 400 USD: {remaining.rejects}"
+    reservation = remaining.reservation
+    assert reservation is not None, "expected a reservation for the remaining 400 USD"
+    reservation.rollback()

@@ -67,11 +67,23 @@ type Policy interface {
 	// Policies may inspect the order, append mutations to be committed or
 	// rolled back later, fill the result collector with lock prices and
 	// account-adjustment outcomes, and return zero or more rejects or marks.
-	// An empty list means accept. Use the collector even when returning marks:
-	// the engine retains the result for review with hold and discards it for
-	// review without hold. Drop-copy also keeps it with ordinary,
-	// non-enforcing rejects; evaluation-failure rejects discard it and abort the
-	// drop-copy operation.
+	// An empty list means accept. Use the collector to provide a result even when
+	// returning marks. Live pre-trade keeps the result on acceptance and when the
+	// only reported marks are with-hold. An effective reject or a reported
+	// without-hold mark clears the result. If this callback returns only review
+	// marks and the instance was registered in a review mode via InstanceMode,
+	// live pre-trade and dry-run discard that instance's contributions, even on a
+	// confirmed rerun, which reports no marks. Live pre-trade rolls back its
+	// discarded mutations.
+	//
+	// Dry-run never applies or rolls back mutations. It reports the lock prices
+	// and account-adjustment outcomes live pre-trade would keep on a successful
+	// run. With another instance's main-stage reject, it still reports the results
+	// collected from the instances that kept theirs.
+	//
+	// Drop-copy keeps the result with review marks of either mode and with
+	// ordinary, non-enforcing rejects. An evaluation failure aborts drop-copy and
+	// discards the results.
 	//
 	// The order is a view of engine memory and is valid only during this hook.
 	// Its string fields and model values derived from it, including nested

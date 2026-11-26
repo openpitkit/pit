@@ -173,8 +173,11 @@ impl JsExecuteResult {
     }
 
     /// Marks from the stages that ran. A non-empty array requires a human
-    /// decision before sending. Commit the reservation now, leave the order
-    /// unsent, and run it again with `review.confirmed` after approval.
+    /// decision before sending. Commit the reservation now and leave the order
+    /// unsent. On approval, rerun with `review.confirmed` and add
+    /// `review.alreadyHeld` only if Spot Funds kept its own hold in the
+    /// committed review.
+    /// See `Reservation.reviews()` for the lifecycle.
     #[wasm_bindgen(getter, js_name = reviews)]
     pub fn reviews(&self) -> Vec<JsReject> {
         self.reviews.clone()
@@ -319,9 +322,51 @@ pub struct JsReservation {
 #[wasm_bindgen(js_class = Reservation)]
 impl JsReservation {
     /// Returns the marks from the stages that ran. A non-empty array requires
-    /// a human decision before sending. Commit now, leave the order unsent,
-    /// and run it again with `review.confirmed` after approval. This applies
-    /// even to a reservation with no holds.
+    /// a human decision before sending. Leave the order unsent and call
+    /// `commit()` immediately. The reservation retains holds only when every
+    /// mark is `ReviewWithHold`.
+    /// A policy instance registered in a review mode that marked the order in
+    /// its main-stage check retains none of its own. Save the first run's
+    /// `lock()` before committing.
+    /// `review.alreadyHeld` asserts Spot Funds' own hold. Spot Funds kept it
+    /// only when every mark is with-hold and no Spot Funds instance registered
+    /// in a review mode marked the order. On approval, rerun with
+    /// `review.confirmed`, and also set `review.alreadyHeld` only if Spot Funds
+    /// kept its hold. Otherwise the rerun carries `review.confirmed` only.
+    /// With `review.alreadyHeld`, Spot Funds runs every check against the
+    /// current balance with this order's own hold given back, writes nothing,
+    /// and adds no prices to the rerun's lock. For a market order, this run
+    /// prices the hold it gives back, so a price move since the first run
+    /// shifts that amount. Keep a clean rerun's reservation until sending, and
+    /// call `commit()` once the venue accepts the order. If it is not sent or
+    /// the venue does not accept it, call `rollback()` and, if Spot Funds kept
+    /// its hold in the review, release that hold as described below.
+    ///
+    /// Once an already-held rerun is committed, for each report of the order
+    /// use the rerun's lock supplemented with the first run's Spot Funds
+    /// prices. Read each Spot Funds group's prices with `Lock.pricesOf()` and
+    /// append them with `Lock.pushMany()`. Merging the whole first lock would
+    /// duplicate prices for groups recorded in both runs. If Spot Funds is the
+    /// only policy that locks prices, use the first lock directly. Passing only
+    /// the rerun's lock blocks the account with `MissingRequiredField`.
+    ///
+    /// Once a review in which Spot Funds kept its hold is committed, only a
+    /// final cancel execution report carrying the remaining reserved quantity
+    /// releases that hold. Send it whenever the order ends without a committed
+    /// rerun: the reviewer rejects it, the rerun rejects it, or the rerun is
+    /// rolled back because the order is not sent or the venue does not accept
+    /// it.
+    /// That report carries the first run's lock. Rolling back or rejecting the
+    /// rerun does not touch the first run's hold.
+    /// A without-hold review holds nothing and needs no cancel report.
+    /// When a Spot Funds instance registered in a review mode marked the order,
+    /// that instance holds nothing, and a final cancel report that carries the
+    /// first run's lock and a remaining reserved quantity blocks the account
+    /// with `MissingRequiredField`, because that lock has no price for that
+    /// instance.
+    /// The engine trusts `review.alreadyHeld` without checking whether a
+    /// matching hold exists. Setting it when Spot Funds kept no hold leaves the
+    /// order without a Spot Funds hold.
     ///
     /// # Errors
     ///

@@ -125,12 +125,20 @@ pub type OpenPitPretradePreTradePolicyCheckPreTradeStartFn =
 ///   carries a `policy_group_id`; the engine assigns the policy group. The
 ///   callback must not store or use `out_result` after return.
 /// - An effective reject discards every review mark in live pre-trade and
-///   dry-run. Live pre-trade also discards all holds and policy results.
-///   Dry-run still reports its collected lock and outcomes. Without an
-///   effective reject, a without-hold mark in either stage clears all holds
-///   and policy results. Otherwise, they are kept. Drop-copy keeps results
-///   with review marks of either mode and with ordinary, non-enforcing rejects.
-///   Evaluation failures abort drop-copy and discard the results.
+///   dry-run. Live pre-trade discards all holds and policy results on an
+///   effective reject. It keeps them on acceptance and when the only reported
+///   marks are with-hold. A reported without-hold mark in either stage clears
+///   all live holds and results and empties the dry-run lock and adjustments. A
+///   confirmed rerun reports no marks, so its marks do not trigger this
+///   clearing step. If this callback returns only review marks and the instance
+///   is registered in a review mode, live pre-trade and dry-run discard that
+///   instance's contributions, even on a confirmed rerun. Live pre-trade rolls
+///   back its discarded mutations. Dry-run never applies or rolls back
+///   mutations. It reports the lock prices and account adjustments live
+///   pre-trade would keep on a successful run and still reports the results it
+///   collected on an effective main-stage reject. Drop-copy keeps results with
+///   review marks of either mode and with ordinary, non-enforcing rejects. An
+///   evaluation failure aborts drop-copy and discards the results.
 /// - Return a non-null empty list to accept the order.
 /// - Return a non-empty list of rejects or review marks. Review modes request
 ///   human review; effective rejects stop the order.

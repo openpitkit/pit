@@ -50,6 +50,8 @@ pub(super) struct OrderRequestView<'i> {
     pub(super) side: Side,
     pub(super) trade_amount: TradeAmount,
     pub(super) price: Option<Price>,
+    /// The caller asserts that Spot Funds already holds this order's funds.
+    pub(super) already_held: bool,
 }
 
 /// View over an account adjustment payload, with every field already read.

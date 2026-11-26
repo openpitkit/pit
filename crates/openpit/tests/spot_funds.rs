@@ -30,7 +30,8 @@ use openpit::pretrade::policies::{
 use openpit::pretrade::SpotFundsLimitMode;
 use openpit::pretrade::{
     DropCopyOperation, PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock,
-    PreTradePolicy, Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
+    PreTradePolicy, PreTradeReservation, Reject, RejectCode, RejectScope, Rejects, RuleMode,
+    DEFAULT_POLICY_GROUP_ID,
 };
 use openpit::{
     Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
@@ -38,14 +39,15 @@ use openpit::{
     HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
     HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-    HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
-    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity, HasSide, Instrument, Mutations,
-    OrderOperation, OutcomeAmount, RequestFieldAccessError, SpotFundsMarketData, SyncMode,
+    HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasAlreadyHeld, HasBalanceAsset,
+    HasConfirmed, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    HasExecutionReportLastTrade, HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity,
+    HasSide, Instrument, Mutations, OrderOperation, OrderReview, OutcomeAmount, ReadyEngineBuilder,
+    RequestFieldAccessError, SpotFundsMarketData, SyncMode, WithOrderOperation, WithOrderReview,
 };
 
 type TestOrder = OrderOperation;
-type TestEngine = FullSyncEngine<TestOrder, TestReport, TestAdjustment>;
+type TestEngine<Order = TestOrder> = FullSyncEngine<Order, TestReport, TestAdjustment>;
 
 const ACC: u64 = 99224416;
 
@@ -146,6 +148,7 @@ struct TestAdjustment {
     balance_lower: Option<PositionSize>,
     balance_upper: Option<PositionSize>,
     held: Option<AdjustmentAmount>,
+    incoming: Option<AdjustmentAmount>,
 }
 
 impl HasBalanceAsset for TestAdjustment {
@@ -210,7 +213,7 @@ impl HasAccountAdjustmentHeldUpperBound for TestAdjustment {
 
 impl HasAccountAdjustmentIncoming for TestAdjustment {
     fn incoming(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
-        Ok(None)
+        Ok(self.incoming)
     }
 }
 
@@ -306,6 +309,7 @@ fn balance_adjustment(asset_code: &str, amount: AdjustmentAmount) -> TestAdjustm
         balance_lower: None,
         balance_upper: None,
         held: None,
+        incoming: None,
     }
 }
 
@@ -319,6 +323,7 @@ fn held_adj(asset_code: &str, amount: AdjustmentAmount) -> TestAdjustment {
         balance_lower: None,
         balance_upper: None,
         held: Some(amount),
+        incoming: None,
     }
 }
 
@@ -337,6 +342,7 @@ fn adj_with_avg(
         balance_lower: None,
         balance_upper: None,
         held: None,
+        incoming: None,
     }
 }
 
@@ -350,6 +356,7 @@ fn position_pnl_adjustment(asset_code: &str, value: Pnl) -> TestAdjustment {
         balance_lower: None,
         balance_upper: None,
         held: None,
+        incoming: None,
     }
 }
 
@@ -365,6 +372,7 @@ fn account_pnl_adjustment(value: Pnl) -> TestAdjustment {
         balance_lower: None,
         balance_upper: None,
         held: None,
+        incoming: None,
     }
 }
 
@@ -383,13 +391,28 @@ fn bounded_balance_adjustment(
         balance_lower: None,
         balance_upper: Some(upper),
         held: None,
+        incoming: None,
     }
 }
 
 // ── engine builder ────────────────────────────────────────────────────────────
 
 fn build_engine() -> TestEngine {
-    let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    spot_funds_builder(None).build().expect("engine must build")
+}
+
+fn spot_funds_builder<
+    Order: HasAccountId + HasInstrument + HasConfirmed + HasAlreadyHeld + 'static,
+>(
+    broker_max_orders: Option<usize>,
+) -> ReadyEngineBuilder<Order, TestReport, TestAdjustment, FullSync>
+where
+    SpotFundsPolicy<FullSync, FullSync>:
+        PreTradePolicy<Order, TestReport, TestAdjustment, FullSync>,
+{
+    let builder = Engine::builder::<Order, TestReport, TestAdjustment>()
+        .with_order_review()
+        .full_sync();
     let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
         .expect("settings must build");
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
@@ -397,13 +420,30 @@ fn build_engine() -> TestEngine {
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
     );
-    builder
-        .pre_trade(policy)
-        .build()
-        .expect("engine must build")
+    if let Some(max_orders) = broker_max_orders {
+        let rate_limit = RateLimitPolicy::new(
+            RateLimitSettings::new(
+                [RateLimitBrokerBarrier {
+                    mode: RuleMode::Reject,
+                    limit: RateLimit {
+                        max_orders,
+                        window: std::time::Duration::from_secs(60),
+                    },
+                }],
+                [],
+                [],
+                [],
+            )
+            .expect("rate-limit settings must build"),
+            builder.storage_builder(),
+        );
+        builder.pre_trade(rate_limit).pre_trade(policy)
+    } else {
+        builder.pre_trade(policy)
+    }
 }
 
-fn seed(engine: &TestEngine, asset_code: &str, amount: &str) {
+fn seed<Order: 'static>(engine: &TestEngine<Order>, asset_code: &str, amount: &str) {
     let adj = balance_adjustment(asset_code, AdjustmentAmount::Absolute(ps(amount)));
     engine
         .apply_account_adjustment(account(), &[adj])
@@ -1144,32 +1184,7 @@ fn negative_held_blocks_buy_despite_positive_available() {
 // Engine wiring both an immediate-side-effect start-stage policy (rate limit,
 // broker max 1) and an immediate-side-effect main-stage policy (spot funds).
 fn build_rate_limited_engine() -> TestEngine {
-    let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
-    let rate_limit = RateLimitPolicy::new(
-        RateLimitSettings::new(
-            [RateLimitBrokerBarrier {
-                mode: openpit::pretrade::RuleMode::Reject,
-                limit: RateLimit {
-                    max_orders: 1,
-                    window: std::time::Duration::from_secs(60),
-                },
-            }],
-            [],
-            [],
-            [],
-        )
-        .expect("rate-limit settings must build"),
-        builder.storage_builder(),
-    );
-    let spot_funds = SpotFundsPolicy::<FullSync, FullSync>::new(
-        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
-            .expect("spot-funds settings must build"),
-        None::<SpotFundsMarketData<FullSync>>,
-        builder.storage_builder(),
-    );
-    builder
-        .pre_trade(rate_limit)
-        .pre_trade(spot_funds)
+    spot_funds_builder(Some(1))
         .build()
         .expect("engine must build")
 }
@@ -1791,7 +1806,21 @@ fn fill_with_fee(
 /// account-group tier is most specific for members of `grp` and wins over the
 /// global tier.
 fn build_pnl_killswitch_engine(grp: AccountGroupId) -> TestEngine {
-    let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    pnl_killswitch_builder(grp)
+        .build()
+        .expect("engine must build")
+}
+
+fn pnl_killswitch_builder<Order: HasConfirmed + HasAlreadyHeld + 'static>(
+    grp: AccountGroupId,
+) -> ReadyEngineBuilder<Order, TestReport, TestAdjustment, FullSync>
+where
+    SpotFundsPolicy<FullSync, FullSync>:
+        PreTradePolicy<Order, TestReport, TestAdjustment, FullSync>,
+{
+    let builder = Engine::builder::<Order, TestReport, TestAdjustment>()
+        .with_order_review()
+        .full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
         [SpotFundsPnlBoundsBarrier {
             currency: asset("USD"),
@@ -1813,10 +1842,7 @@ fn build_pnl_killswitch_engine(grp: AccountGroupId) -> TestEngine {
         builder.storage_builder(),
     )
     .expect("P&L kill-switch preset must build");
-    builder
-        .pre_trade(policy)
-        .build()
-        .expect("engine must build")
+    builder.pre_trade(policy)
 }
 
 fn pnl_value(s: &str) -> Pnl {
@@ -2281,4 +2307,273 @@ fn repeated_engine_blocks_do_not_displace_the_operators_reason() {
         rejects[0].reason, "under manual review",
         "repeated blocks must not displace the first cause"
     );
+}
+
+// ── review with hold ──────────────────────────────────────────────────────────
+
+type ReviewOrder = WithOrderOperation<WithOrderReview<()>>;
+
+const INITIAL_REVIEW: OrderReview = OrderReview {
+    confirmed: false,
+    already_held: false,
+};
+const HELD_RERUN: OrderReview = OrderReview {
+    confirmed: true,
+    already_held: true,
+};
+const REVIEW_QUANTITY: &str = "10";
+
+struct ReviewWithHoldPolicy;
+
+impl PreTradePolicy<ReviewOrder, TestReport, TestAdjustment, FullSync> for ReviewWithHoldPolicy {
+    fn name(&self) -> &str {
+        "ReviewWithHoldPolicy"
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<FullSync as SyncMode>::StorageLockingPolicyFactory>,
+        order: &ReviewOrder,
+    ) -> Result<(), Rejects> {
+        if order
+            .confirmed()
+            .expect("review confirmation must be present")
+        {
+            return Ok(());
+        }
+        Err(Reject::new(
+            self.name(),
+            RejectScope::Order,
+            RejectCode::RiskLimitExceeded,
+            "operator review required",
+            "test policy reviews every unconfirmed order",
+        )
+        .with_mode(RuleMode::ReviewWithHold)
+        .into())
+    }
+}
+
+fn build_review_engine(
+    builder: ReadyEngineBuilder<ReviewOrder, TestReport, TestAdjustment, FullSync>,
+) -> TestEngine<ReviewOrder> {
+    let engine = builder
+        .pre_trade(ReviewWithHoldPolicy)
+        .build()
+        .expect("review engine must build");
+    seed(&engine, "USD", "10000");
+    seed(&engine, "AAPL", "3");
+    engine
+}
+
+fn make_review_order(review: OrderReview) -> ReviewOrder {
+    WithOrderOperation {
+        operation: make_order(
+            Side::Buy,
+            instr("AAPL", "USD"),
+            TradeAmount::Quantity(qty(REVIEW_QUANTITY)),
+            Some(px("200")),
+        ),
+        inner: WithOrderReview { review, inner: () },
+    }
+}
+
+fn commit_review_run(engine: &TestEngine<ReviewOrder>, review: OrderReview) -> PreTradeReservation {
+    let mut reservation = engine
+        .execute_pre_trade(make_review_order(review))
+        .expect("review order must reserve successfully");
+    reservation.commit();
+    reservation
+}
+
+fn review_cancel_report(lock: &PreTradeLock) -> TestReport {
+    TestReport {
+        lock: lock.clone(),
+        ..make_report(
+            instr("AAPL", "USD"),
+            Side::Buy,
+            None,
+            qty(REVIEW_QUANTITY),
+            true,
+            None,
+        )
+    }
+}
+
+fn assert_review_balances(engine: &TestEngine<ReviewOrder>, usd: [&str; 3], aapl: [&str; 3]) {
+    // Zero deltas expose the stored balances in the public adjustment outcome.
+    let zero = AdjustmentAmount::Delta(PositionSize::ZERO);
+    let adjustments = ["USD", "AAPL"].map(|asset_code| TestAdjustment {
+        held: Some(zero),
+        incoming: Some(zero),
+        ..balance_adjustment(asset_code, zero)
+    });
+    let balances = engine
+        .apply_account_adjustment(account(), &adjustments)
+        .expect("zero-delta balance read must succeed");
+    assert_eq!(balances.outcomes.len(), 2);
+
+    for (asset_code, [available, held, incoming]) in [("USD", usd), ("AAPL", aapl)] {
+        let entry = &balances
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.entry.asset == asset(asset_code))
+            .expect("asset outcome must be present")
+            .entry;
+        assert_eq!(
+            entry
+                .balance
+                .expect("available outcome must be present")
+                .absolute,
+            ps(available),
+            "{asset_code} available"
+        );
+        assert_eq!(
+            entry.held.expect("held outcome must be present").absolute,
+            ps(held),
+            "{asset_code} held"
+        );
+        assert_eq!(
+            entry
+                .incoming
+                .expect("incoming outcome must be present")
+                .absolute,
+            ps(incoming),
+            "{asset_code} incoming"
+        );
+    }
+}
+
+#[test]
+fn review_with_hold_records_the_hold() {
+    let engine = build_review_engine(spot_funds_builder(None));
+    let mut reservation = engine
+        .execute_pre_trade(make_review_order(INITIAL_REVIEW))
+        .expect("review with hold must return a reservation");
+    assert_eq!(reservation.reviews().len(), 1);
+    assert_eq!(reservation.reviews()[0].mode, RuleMode::ReviewWithHold);
+    assert_eq!(reservation.reviews()[0].policy, "ReviewWithHoldPolicy");
+    reservation.commit();
+
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+    let mut prices = reservation.lock().prices_of(DEFAULT_POLICY_GROUP_ID);
+    assert_eq!(prices.len(), 1);
+    assert_eq!(
+        prices.next().expect("Spot Funds price must be present"),
+        px("200")
+    );
+}
+
+#[test]
+fn rerun_with_both_flags_leaves_balances_unchanged() {
+    let engine = build_review_engine(spot_funds_builder(None));
+    commit_review_run(&engine, INITIAL_REVIEW);
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+
+    let rerun = commit_review_run(&engine, HELD_RERUN);
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+    assert!(rerun.reviews().is_empty());
+    assert!(rerun
+        .lock()
+        .prices_of(DEFAULT_POLICY_GROUP_ID)
+        .next()
+        .is_none());
+    assert!(rerun.account_adjustments().is_empty());
+}
+
+#[test]
+fn rerun_rejects_on_a_breached_pnl_barrier_and_keeps_the_hold() {
+    let group = AccountGroupId::from_u32(17).expect("valid group id");
+    let engine = build_review_engine(pnl_killswitch_builder(group));
+    engine
+        .accounts()
+        .register_group(&[account()], group)
+        .expect("account group registration must succeed");
+    engine.accounts().set_currency(account(), asset("USD"));
+    commit_review_run(&engine, INITIAL_REVIEW);
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+
+    let result = engine
+        .apply_account_adjustment(account(), &[account_pnl_adjustment(pnl("-50"))])
+        .expect("force-set account P&L must commit");
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::PnlKillSwitchTriggered);
+    // Clear the latched block so the rerun itself must evaluate the barrier.
+    engine.accounts().unblock(account());
+
+    let rejects = engine
+        .execute_pre_trade(make_review_order(HELD_RERUN))
+        .err()
+        .expect("rerun must reject on the breached P&L barrier");
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0], Reject::from(block.clone()));
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+}
+
+#[test]
+fn cancel_with_the_first_lock_releases_the_held_review() {
+    let engine = build_review_engine(spot_funds_builder(None));
+    assert_review_balances(&engine, ["10000", "0", "0"], ["3", "0", "0"]);
+    let first = commit_review_run(&engine, INITIAL_REVIEW);
+    assert_eq!(first.reviews().len(), 1);
+    assert_eq!(first.reviews()[0].mode, RuleMode::ReviewWithHold);
+    commit_review_run(&engine, HELD_RERUN);
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+
+    let report = review_cancel_report(first.lock());
+    let post = engine.apply_execution_report(&report);
+    assert!(
+        post.account_blocks.is_empty(),
+        "cancel with the first lock must succeed"
+    );
+    assert_review_balances(&engine, ["10000", "0", "0"], ["3", "0", "0"]);
+}
+
+#[test]
+fn execution_report_with_the_rerun_lock_blocks_loudly() {
+    let engine = build_review_engine(spot_funds_builder(None));
+    commit_review_run(&engine, INITIAL_REVIEW);
+    let rerun = commit_review_run(&engine, HELD_RERUN);
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+
+    let report = review_cancel_report(rerun.lock());
+    let post = engine.apply_execution_report(&report);
+    assert_eq!(post.account_blocks.len(), 1);
+    assert_eq!(
+        post.account_blocks[0].code,
+        RejectCode::MissingRequiredField
+    );
+    assert_eq!(
+        post.account_blocks[0].reason,
+        "pre-trade lock has no price for settlement release"
+    );
+    assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+}
+
+#[test]
+fn review_run_and_rerun_each_spend_rate_limit() {
+    for max_orders in [1, 2] {
+        let engine = build_review_engine(spot_funds_builder(Some(max_orders)));
+        let first = commit_review_run(&engine, INITIAL_REVIEW);
+        assert_eq!(first.reviews().len(), 1);
+        assert_eq!(first.reviews()[0].mode, RuleMode::ReviewWithHold);
+        let rerun = engine.execute_pre_trade(make_review_order(HELD_RERUN));
+        let rejects = if max_orders == 1 {
+            rerun
+                .err()
+                .expect("the review run already spent the broker rate limit budget")
+        } else {
+            let mut rerun = rerun.expect("rerun must fit within the two-order broker rate limit");
+            assert!(rerun.reviews().is_empty());
+            rerun.commit();
+            engine
+                .execute_pre_trade(make_review_order(INITIAL_REVIEW))
+                .err()
+                .expect("third order must exceed the broker rate limit")
+        };
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+        assert_eq!(rejects[0].mode, RuleMode::Reject);
+        assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+    }
 }

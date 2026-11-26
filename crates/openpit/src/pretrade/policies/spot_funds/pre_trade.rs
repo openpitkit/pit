@@ -244,12 +244,16 @@ where
         let price = order
             .price()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "price", &e)))?;
+        let already_held = ctx
+            .already_held()
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "already held", &e)))?;
         Ok(OrderRequestView {
             instrument,
             account_id,
             side,
             trade_amount,
             price,
+            already_held,
         })
     }
 
@@ -470,6 +474,10 @@ where
             Err(rejects) => return Err(rejects),
         };
 
+        if request.already_held {
+            return self.check_reservation_dry_run(ctx, settings, request, marks);
+        }
+
         let legs = self
             .compute_reservation_legs(&request, &account_group, ctx, settings)
             .map_err(Rejects::from)?;
@@ -554,9 +562,20 @@ where
         request: OrderRequestView<'_>,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         let account_group = ctx.account_group();
-        let mut marks =
+        let marks =
             self.reject_halted_account_pnl(ctx, settings, request.account_id, account_group)?;
 
+        self.check_reservation_dry_run(ctx, settings, request, marks)
+    }
+
+    fn check_reservation_dry_run(
+        &self,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        settings: &SpotFundsSettings,
+        request: OrderRequestView<'_>,
+        mut marks: Vec<Reject>,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        let account_group = ctx.account_group();
         let legs = self
             .compute_reservation_legs(&request, &account_group, ctx, settings)
             .map_err(Rejects::from)?;
@@ -584,6 +603,54 @@ where
         // held and incoming, matching the mutating path byte-for-byte.
         let [first, second] = steps;
         let [first_position_limit, second_position_limit] = position_limits;
+        let rebuild = |step: &ReservationStep, other: Option<&ReservationStep>| {
+            if !request.already_held {
+                return Ok(None);
+            }
+            let asset = &step.asset;
+            let overflow = |details| {
+                Rejects::from(arithmetic_overflow_reject(
+                    Self::NAME,
+                    RejectScope::Order,
+                    details,
+                ))
+            };
+            let (held, incoming) = match other {
+                Some(other) => (
+                    step.held.checked_add(other.held).map_err(|_| {
+                        overflow(format!(
+                            "pre-trade hold rebuild sum overflow: asset {asset}, held {} + {}",
+                            step.held, other.held,
+                        ))
+                    })?,
+                    step.incoming.checked_add(other.incoming).map_err(|_| {
+                        overflow(format!(
+                            "pre-trade hold rebuild sum overflow: asset {asset}, incoming {} + {}",
+                            step.incoming, other.incoming,
+                        ))
+                    })?,
+                ),
+                None => (step.held, step.incoming),
+            };
+            if held.is_zero() && incoming.is_zero() {
+                return Ok(None);
+            }
+            let current = self
+                .holdings
+                .get(&(request.account_id, step.asset.clone()))
+                .unwrap_or_else(Holdings::zero);
+            current
+                .apply_delta_rollback(-held, held, incoming)
+                .map(Some)
+                .map_err(|_| {
+                    overflow(format!(
+                        "pre-trade hold rebuild rollback overflow: asset {asset}, \
+                         held {held}, incoming {incoming}, slot {current:?}",
+                    ))
+                })
+        };
+        // A shared slot must have both legs undone before either check runs.
+        let first_current = rebuild(&first, (first.asset == second.asset).then_some(&second))?;
         let first_after = self.reserve_asset_dry_run(
             request.account_id,
             &first.asset,
@@ -591,14 +658,14 @@ where
             first.incoming,
             limit_mode,
             first_position_limit,
-            None,
+            first_current,
             &mut outcome,
             &mut marks,
         )?;
         let second_current = if first.asset == second.asset {
             first_after
         } else {
-            None
+            rebuild(&second, None)?
         };
         self.reserve_asset_dry_run(
             request.account_id,
@@ -612,6 +679,9 @@ where
             &mut marks,
         )?;
 
+        if request.already_held {
+            return Ok(None);
+        }
         if let Some(p) = legs.lock_price {
             outcome.lock_prices.push(p);
         }

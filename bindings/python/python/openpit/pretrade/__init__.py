@@ -103,7 +103,7 @@ Attributes:
     reservation: ``Reservation`` on success, otherwise ``None``.
     rejects: Ordered list of business rejects when ``ok`` is ``False``.
     reviews: Ordered review marks. A non-empty list requires a human decision
-        before submission. See ``Reservation.reviews`` for the review lifecycle.
+        before submission. See ``Reservation`` for the review lifecycle.
 
 If there are review marks, commit the reservation immediately and keep the
 order unsent. The reservation keeps holds and policy results only if every
@@ -200,15 +200,55 @@ transport accepts the order. Call ``rollback`` if submission fails or the
 order will not be sent. Calling either finalizer more than once raises
 ``RuntimeError``. Read the accessors before finalizing the reservation.
 
+If ``reviews`` is non-empty, leave the order unsent and call ``commit``
+immediately. The reservation retains holds only when every mark is
+``RuleMode.REVIEW_WITH_HOLD``.
+A policy instance registered in a review mode that marked the order in its
+main-stage check retains none of its own. Save the first run's ``lock`` before
+committing.
+``already_held`` asserts Spot Funds' own hold. Spot Funds kept it only when
+every mark is with-hold and no Spot Funds instance registered in a review mode
+marked the order. On approval, rerun with ``confirmed=True``, and also set
+``already_held=True`` only if Spot Funds kept its hold. Otherwise the rerun
+carries ``confirmed=True`` only.
+With ``already_held=True``, Spot Funds runs every check against the current
+balance with this order's own hold given back, writes nothing, and adds no
+prices to the rerun's lock. For a market order, this run prices the hold it
+gives back, so a price move since the first run shifts that amount. Keep a clean
+rerun's reservation until sending, and commit once the venue accepts the order.
+If it is not sent or the venue does not accept it, call ``rollback`` and, if
+Spot Funds kept its hold in the review, release that hold as described below.
+
+Once an already-held rerun is committed, for each report of the order use the
+rerun's lock supplemented with the first run's Spot Funds prices. Read each Spot
+Funds group's prices with ``Lock.prices_of`` and append them with
+``Lock.push_many``. Merging the whole first lock would duplicate prices for
+groups recorded in both runs. If Spot Funds is the only policy that locks
+prices, use the first lock directly. Passing only the rerun's lock blocks the
+account with ``RejectCode.MISSING_REQUIRED_FIELD``.
+
+Once a review in which Spot Funds kept its hold is committed, only a final
+cancel execution report carrying the remaining reserved quantity releases that
+hold. Send it whenever the order ends without a committed rerun: the reviewer
+rejects it, the rerun rejects it, or the rerun is rolled back because the order
+is not sent or the venue does not accept it.
+That report carries the first run's lock.
+Rolling back or rejecting the rerun does not touch the first run's hold.
+A without-hold review holds nothing and needs no cancel report.
+When a Spot Funds instance registered in a review mode marked the order, that
+instance holds nothing, and a final cancel report that carries the first run's
+lock and a remaining reserved quantity blocks the account with
+``RejectCode.MISSING_REQUIRED_FIELD``, because that lock has no price for that
+instance.
+The engine trusts ``already_held`` without checking whether a matching hold
+exists. Setting it when Spot Funds kept no hold leaves the order without a Spot
+Funds hold.
+
 Attributes:
     lock: Current reservation ``Lock`` payload.
     account_adjustments: List of ``AccountAdjustmentOutcome`` objects captured
         by the reservation.
-    reviews: Review marks from the evaluated stages. A non-empty list requires
-        a human decision before submission. Commit immediately and keep the
-        order unsent. The reservation keeps holds and policy results only if
-        every review mark is with-hold. Approval requires a fresh run with
-        ``OrderReview(confirmed=True)``.
+    reviews: Marks from the evaluated stages requiring a human decision.
 """
 
 DropCopyOperation.__doc__ = """
@@ -297,7 +337,7 @@ Attributes:
         otherwise ``None``.
     reviews: Review marks that a live run would return. A non-empty list
         requires a human decision before submission. In a live run, follow
-        the lifecycle described by ``Reservation.reviews``.
+        the lifecycle described by ``Reservation``.
     lock: ``Lock`` the main stage would have produced. Empty when the start
         stage would have rejected or no policy locks a price.
     account_adjustments: List of ``AccountAdjustmentOutcome`` objects the

@@ -185,7 +185,9 @@ TEST(GettingStartedWiki, BuildAnEngine) {
   openpit::pretrade::Reservation reservation = std::move(*executed.reservation);
 
   if (!reservation.Reviews().empty()) {
-    // Leave unsent. After approval, rerun with OrderReview::confirmed set.
+    // Leave unsent. On approval, rerun with `order.review->confirmed` set.
+    // Add `alreadyHeld` only if Spot Funds kept its own hold in the committed
+    // review.
     reservation.Commit();
     return;
   }

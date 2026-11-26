@@ -70,8 +70,9 @@ func (r *Request) Close() {
 // Reviews returns a copy of the start-stage review marks. A non-empty list
 // requires a human decision before sending the order.
 // If the main stage returns a hold for review, commit the reservation to
-// retain the hold and keep the order unsent until approval and a fresh run
-// with Confirmed.
+// retain the hold and keep the order unsent. On approval, rerun with
+// Confirmed and add AlreadyHeld only if Spot Funds kept its own hold in the
+// committed review. See [Reservation] for the lifecycle.
 //
 // After Execute, read the marks from the returned reservation. Reviews returns
 // the native error after Execute and ErrRequestClosed after Close.

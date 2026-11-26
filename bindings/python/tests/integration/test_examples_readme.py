@@ -104,9 +104,9 @@ def test_readme_hello_world() -> None:
 
     result = engine.execute_pre_trade(order=order)
     if result.reviews:
-        # Keep the order unsent; after approval, rerun with
-        # OrderReview(confirmed=True). Set already_held=True if the
-        # reservation retained a hold.
+        # Leave unsent. On approval, rerun with OrderReview(confirmed=True).
+        # Add already_held=True only if Spot Funds kept its own hold in the
+        # committed review.
         result.reservation.commit()
     elif result.ok:
         # Send the order to the venue, then commit or roll the reservation back.
@@ -238,7 +238,9 @@ def test_readme_quickstart() -> None:
 
     # 5. Commit on successful submission and roll back on failure.
     if execute_result.reviews:
-        # Leave unsent. After approval, rerun with OrderReview(confirmed=True).
+        # Leave unsent. On approval, rerun with OrderReview(confirmed=True).
+        # Add already_held=True only if Spot Funds kept its own hold in the
+        # committed review.
         reservation.commit()
     else:
         try:
@@ -506,9 +508,9 @@ def test_docs_guides_engine_finalize_reservations() -> None:
         _ = order
 
     if execute_result.reviews:
-        # Keep the order unsent; after approval, rerun with
-        # OrderReview(confirmed=True). Set already_held=True if the
-        # reservation retained a hold.
+        # Leave unsent. On approval, rerun with OrderReview(confirmed=True).
+        # Add already_held=True only if Spot Funds kept its own hold in the
+        # committed review.
         execute_result.reservation.commit()
     elif execute_result.ok:
         reservation = execute_result.reservation

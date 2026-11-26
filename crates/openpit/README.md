@@ -80,8 +80,10 @@ let order = OrderOperation {
 
 match engine.execute_pre_trade(order) {
     Ok(mut reservation) if !reservation.reviews().is_empty() => {
-        // Leave unsent. After approval, rerun with the order-review reader
-        // enabled, confirmed set, and already_held set if a hold was kept.
+        // Leave unsent. On approval, rerun with the order-review reader
+        // enabled and `confirmed` set.
+        // Add `already_held` only if Spot Funds kept its own hold in the
+        // committed review.
         reservation.commit();
     }
     Ok(mut reservation) => {

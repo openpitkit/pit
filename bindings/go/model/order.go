@@ -676,8 +676,8 @@ func (v *OrderPositionView) UnsetClosePosition() {
 // The engine reads Confirmed and AlreadyHeld through its order review reader.
 // For confirmed orders, every policy instance still runs; the engine discards
 // review marks. Reject-mode instances and evaluation failures still reject.
-// AlreadyHeld is the caller's assertion that an earlier committed with-hold
-// review run already holds the order's reservation.
+// AlreadyHeld is the caller's assertion that Spot Funds already holds this
+// order's funds from an earlier committed review.
 type OrderReview struct{ value native.OrderReview }
 
 // OrderReviewValues holds the optional confirmation and already-held flags.
@@ -740,15 +740,15 @@ func (r *OrderReview) UnsetConfirmed() {
 	native.OrderReviewSetConfirmed(&r.value, native.TriBoolNotSet)
 }
 
-// AlreadyHeld returns the caller's optional assertion that an earlier committed
-// with-hold review run already holds the order's reservation. An unset flag
+// AlreadyHeld returns the caller's optional assertion that Spot Funds already
+// holds this order's funds from an earlier committed review. An unset flag
 // means not held.
 func (r OrderReview) AlreadyHeld() optional.Bool {
 	return convert.NewBoolOptionFromNative(native.OrderReviewGetAlreadyHeld(r.value))
 }
 
-// SetAlreadyHeld sets the caller's assertion that an earlier committed with-hold
-// review run already holds the order's reservation.
+// SetAlreadyHeld sets the caller's assertion that Spot Funds already holds this
+// order's funds from an earlier committed review.
 func (r *OrderReview) SetAlreadyHeld(alreadyHeld bool) {
 	native.OrderReviewSetAlreadyHeld(&r.value, convert.NewNativeTriBool(alreadyHeld))
 }
@@ -781,15 +781,15 @@ func (v *OrderReviewView) UnsetConfirmed() {
 	native.OrderReviewSetConfirmed(v.ref, native.TriBoolNotSet)
 }
 
-// AlreadyHeld returns the caller's optional assertion on the view that an
-// earlier committed with-hold review run already holds the order's reservation.
-// An unset flag means not held.
+// AlreadyHeld returns the caller's optional assertion on the view that Spot
+// Funds already holds this order's funds from an earlier committed review. An
+// unset flag means not held.
 func (v OrderReviewView) AlreadyHeld() optional.Bool {
 	return convert.NewBoolOptionFromNative(native.OrderReviewGetAlreadyHeld(*v.ref))
 }
 
-// SetAlreadyHeld sets the caller's assertion on the view that an earlier
-// committed with-hold review run already holds the order's reservation.
+// SetAlreadyHeld sets the caller's assertion on the view that Spot Funds
+// already holds this order's funds from an earlier committed review.
 func (v *OrderReviewView) SetAlreadyHeld(alreadyHeld bool) {
 	native.OrderReviewSetAlreadyHeld(v.ref, convert.NewNativeTriBool(alreadyHeld))
 }

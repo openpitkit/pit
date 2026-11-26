@@ -69,8 +69,9 @@ order = openpit.Order(
 
 result = engine.execute_pre_trade(order=order)
 if result.reviews:
-    # Keep the order unsent; after approval, rerun with
-    # OrderReview(confirmed=True).
+    # Leave unsent. On approval, rerun with OrderReview(confirmed=True).
+    # Add already_held=True only if Spot Funds kept its own hold in the
+    # committed review.
     result.reservation.commit()
 elif result.ok:
     try:

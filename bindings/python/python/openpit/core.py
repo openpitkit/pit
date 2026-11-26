@@ -349,14 +349,14 @@ class OrderMargin(_OrderMargin):
 
 
 class OrderReview(_OrderReview):
-    """Confirmation supplied by the caller for a fresh pre-trade run.
+    """Review flags supplied by the caller for a pre-trade run.
 
     The engine reads ``confirmed`` and ``already_held`` through its order
     review reader. For a confirmed order, every policy instance still runs
     and the engine discards review marks. Reject-mode instances and evaluation
     failures still reject.
-    ``already_held`` is the caller's assertion that this order's reservation
-    is already held by an earlier committed with-hold run.
+    ``already_held`` is the caller's assertion that Spot Funds already holds
+    this order's funds from an earlier committed review.
     """
 
     # @typing.override
@@ -378,7 +378,8 @@ class OrderReview(_OrderReview):
     # @typing.override
     @property
     def already_held(self) -> bool:
-        """Whether an earlier committed with-hold run holds the reservation.
+        """Whether the caller asserts that Spot Funds already holds this order's
+        funds from an earlier committed review.
 
         Defaults to ``False``.
         """

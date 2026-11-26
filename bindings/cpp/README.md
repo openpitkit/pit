@@ -153,8 +153,9 @@ int main() {
   }
 
   if (!result.reservation->Reviews().empty()) {
-    // Leave unsent. After approval, rerun with order.review->confirmed set.
-    // Set alreadyHeld as well if this reservation retained a hold.
+    // Leave unsent. On approval, rerun with `order.review->confirmed` set.
+    // Add `alreadyHeld` only if Spot Funds kept its own hold in the committed
+    // review.
     result.reservation->Commit();
     return 0;
   }

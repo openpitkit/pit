@@ -833,6 +833,58 @@ func TestSpotFundsWithoutPnlBarriersExecutesNormalOrder(t *testing.T) {
 	}
 }
 
+func TestSpotFundsAlreadyHeldDoesNotReserveAgain(t *testing.T) {
+	account := param.NewAccountIDFromUint64(83024)
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	seedSpotFundsLifecycleAccount(t, engine, account, mustAsset(t, "USD"))
+	order := spotFundsLifecycleOrder(t, account)
+	operation := order.EnsureOperationView()
+	operation.SetTradeAmount(param.NewQuantityTradeAmount(mustQuantity(t, "6")))
+
+	reserve := func(phase string, order model.Order) *pretrade.Reservation {
+		t.Helper()
+		reservation, rejects, err := engine.ExecutePreTrade(order)
+		if err != nil || len(rejects) != 0 || reservation == nil {
+			if reservation != nil {
+				reservation.RollbackAndClose()
+			}
+			t.Fatalf("%s: expected a reservation without rejects, got reservation = %v, rejects = %v, error = %v",
+				phase, reservation, rejects, err)
+		}
+		return reservation
+	}
+	reserve("initial 600 USD order", order).CommitAndClose()
+
+	review := order.EnsureReviewView()
+	review.SetConfirmed(true)
+	reservation, rejects, err := engine.ExecutePreTrade(order)
+	if reservation != nil {
+		reservation.RollbackAndClose()
+		t.Fatal("confirmed order without already_held: expected insufficient funds, got a reservation")
+	}
+	if err != nil {
+		t.Fatalf("confirmed order without already_held: ExecutePreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeInsufficientFunds {
+		t.Fatalf("confirmed order without already_held: expected one insufficient-funds reject, got %v", rejects)
+	}
+
+	review.SetAlreadyHeld(true)
+	reserve("confirmed order with already_held", order).CommitAndClose()
+
+	remaining := spotFundsLifecycleOrder(t, account)
+	remainingOperation := remaining.EnsureOperationView()
+	remainingOperation.SetTradeAmount(param.NewQuantityTradeAmount(mustQuantity(t, "4")))
+	reserve("order for the remaining 400 USD", remaining).RollbackAndClose()
+}
+
 func TestSpotFundsWithoutPnlBarriersReturnsFeeInclusiveAccountPnl(t *testing.T) {
 	usd := mustAsset(t, "USD")
 	account := param.NewAccountIDFromUint64(83016)

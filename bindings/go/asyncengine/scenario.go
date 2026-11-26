@@ -77,8 +77,9 @@ type DropCopyResult interface {
 // check. Passed, Rejects and Reviews remain readable after the hook returns.
 // Lock, AccountAdjustments and AccountBlock are available during the hook.
 // If a live run returns a hold for review, commit its reservation to retain
-// the hold and keep the order unsent until approval and a fresh run
-// with Confirmed.
+// the hold and keep the order unsent. On approval, rerun with Confirmed and
+// add AlreadyHeld only if Spot Funds kept its own hold in the committed review.
+// See [pretrade.Reservation] for the lifecycle.
 type OrderCheckResult interface {
 	BlockingOperationResult
 	Passed() bool

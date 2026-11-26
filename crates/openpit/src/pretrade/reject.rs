@@ -87,6 +87,11 @@ pub enum RuleMode {
     Reject,
     /// Request a human decision. Keep the run's holds and policy results only
     /// if every review mark is `ReviewWithHold`.
+    /// On approval, rerun with `confirmed` and add `already_held` only if Spot
+    /// Funds kept its own hold in the committed review.
+    /// A Spot Funds instance registered in a review mode that marked the order
+    /// holds nothing. After such a review, rerun with `confirmed` only.
+    /// See [`super::PreTradeReservation`].
     ReviewWithHold,
     /// Request a human decision. Any `ReviewWithoutHold` mark makes the
     /// reservation discard the run's holds and policy results.

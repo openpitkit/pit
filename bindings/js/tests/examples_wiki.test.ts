@@ -502,14 +502,15 @@ describe("Getting-Started.md wiki examples", () => {
     // const execute = engine.executePreTrade(order);
 
     // 5. If the request is successfully sent to the venue, commit; roll back
-    // otherwise to revert all performed reservations. A review mark is not
-    // permission to send: commit now, keep the order unsent, and run it again
-    // with review.confirmed after approval.
+    // otherwise to revert all performed reservations.
     const reservation = execute.reservation;
     if (reservation === undefined) {
       throw new Error("accepted execute result is missing its reservation");
     }
     if (execute.reviews.length > 0) {
+      // Leave unsent. On approval, rerun with `review.confirmed` set.
+      // Add `review.alreadyHeld` only if Spot Funds kept its own hold in the
+      // committed review.
       reservation.commit();
     } else {
       try {

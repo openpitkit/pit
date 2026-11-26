@@ -234,10 +234,12 @@ Raises:
 Check ``result.reviews`` before submission. If there are review marks, commit
 the reservation immediately and keep the order unsent. The reservation keeps
 holds and policy results only if every review mark is with-hold. Committing
-an empty reservation is harmless. After approval, rerun with
-``OrderReview(confirmed=True)``. If the result is successful and there are no
-review marks, commit after successful submission or roll back if the order
-will not be sent.
+an empty reservation is harmless. On approval, rerun with ``confirmed=True``
+and add ``already_held=True`` only if Spot Funds kept its own hold in the
+committed review.
+See :class:`openpit.pretrade.Reservation`. If the result is successful and
+there are no review marks, commit after successful submission or roll back
+if the order will not be sent.
     """,
 )
 _set_doc(

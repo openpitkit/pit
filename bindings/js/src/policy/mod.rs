@@ -187,10 +187,24 @@ export interface PolicyDecision {
  * The result of {@link Policy.performPreTradeCheck}. Carries rejects or review
  * marks and mutations (as in {@link PolicyDecision}) plus optional account
  * adjustments and lock prices. Returning `null`/`undefined` accepts the order
- * with no contribution. Pre-trade keeps contributions when there are no
- * rejects and either there are no marks or every mark is `"ReviewWithHold"`.
- * Drop-copy also keeps them with ordinary, non-enforcing rejects.
- * Evaluation-failure rejects abort the operation and discard contributions.
+ * with no contribution.
+ *
+ * Live pre-trade keeps contributions on acceptance and when the only reported
+ * marks are `"ReviewWithHold"`. An effective reject or a reported
+ * `"ReviewWithoutHold"` mark clears all contributions. If this callback returns
+ * only review marks and `PolicyInstance.mode` is a review mode, live pre-trade
+ * and dry-run discard this instance's contributions, even on a confirmed rerun,
+ * which reports no marks. Live pre-trade rolls back its discarded mutations.
+ *
+ * Dry-run never applies or rolls back mutations. Through `lock()` and
+ * `accountAdjustments()`, it reports the lock prices and account adjustments
+ * live pre-trade would keep on a successful run. With another instance's
+ * main-stage reject, it still reports the results collected from the instances
+ * that kept theirs.
+ *
+ * Drop-copy keeps contributions with review marks of either mode and with
+ * ordinary, non-enforcing rejects. An evaluation failure aborts drop-copy and
+ * discards the results.
  */
 export interface PolicyPreTradeResult {
   rejects?: Iterable<PolicyReject>;

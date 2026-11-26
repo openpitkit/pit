@@ -24,8 +24,8 @@ use openpit::{HasAlreadyHeld, HasConfirmed, RequestFieldAccessError};
 pub struct PopulatedOrderReview {
     /// Whether the caller has already confirmed the order for pre-trade review.
     pub confirmed: bool,
-    /// Whether an earlier committed with-hold review run already holds the
-    /// reservation.
+    /// Whether the caller asserts that Spot Funds already holds this order's
+    /// funds from an earlier committed review.
     pub already_held: bool,
 }
 

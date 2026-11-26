@@ -589,8 +589,10 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
     // let reservation = engine.execute_pre_trade(order)?;
 
     if !reservation.reviews().is_empty() {
-        // Leave unsent. After approval, rerun with the order-review reader
-        // enabled, confirmed set, and already_held set if a hold was kept.
+        // Leave unsent. On approval, rerun with the order-review reader enabled
+        // and `confirmed` set.
+        // Add `already_held` only if Spot Funds kept its own hold in the
+        // committed review.
         reservation.commit();
         return Ok(());
     }

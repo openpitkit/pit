@@ -147,6 +147,12 @@ export const RuleMode = {
   /**
    * Require a human decision. The reservation keeps the run's holds and policy
    * results only if every review mark is `ReviewWithHold`.
+   * Commit the reservation now and keep the order unsent.
+   * On approval, rerun with `review.confirmed` and add `review.alreadyHeld`
+   * only if Spot Funds kept its own hold in the committed review.
+   * A Spot Funds instance registered in a review mode that marked the order
+   * holds nothing. After such a review, rerun with `review.confirmed` only.
+   * See `Reservation.reviews()` for the lifecycle.
    */
   ReviewWithHold: "ReviewWithHold",
   /**

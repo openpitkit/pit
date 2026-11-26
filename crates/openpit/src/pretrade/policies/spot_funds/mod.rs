@@ -989,6 +989,17 @@ where
         self.apply_execution_request_impl(ctx, request)
     }
 
+    /// Checks and reserves the order's funds and projected position.
+    ///
+    /// Reads `already_held` through [`PreTradeContext::already_held`].
+    ///
+    /// When the flag is true, checks the caller-asserted existing hold
+    /// read-only by undoing this run's reservation legs in temporary holdings.
+    /// Drop-copy price validation and P&L handling still run first. All funds,
+    /// position-limit and arithmetic checks run without writing slots or
+    /// registering rollback, and success returns `Ok(None)` with no outcome
+    /// entries or lock price. The flag does not validate the hold or require
+    /// `confirmed`; a rejection leaves the existing hold untouched.
     fn perform_pre_trade_check(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
@@ -1006,6 +1017,8 @@ where
     /// override emulates the same verdict, lock prices, and outcome entries
     /// read-only: it touches no storage and pushes nothing to `mutations`, so a
     /// dry-run never moves engine state.
+    ///
+    /// See [`Self::perform_pre_trade_check`] for `already_held` handling.
     fn perform_pre_trade_check_dry_run(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,

@@ -1430,12 +1430,13 @@ TEST(CustomPolicy, DropCopyKeepsGatedBookkeepingUnderBusinessReject) {
 // Built-in policy configuration construction + registration.
 
 [[nodiscard]] openpit::model::Order SpotFundsLifecycleOrder(
-    const openpit::param::AccountId accountId) {
+    const openpit::param::AccountId accountId,
+    const Quantity quantity = Quantity::FromString("1")) {
   return openpit::model::Order::Limit(
       openpit::model::Instrument(::openpit::param::Asset("AAPL"),
                                  ::openpit::param::Asset("USD")),
       accountId, openpit::model::Side::Buy,
-      openpit::model::TradeAmount::OfQuantity(Quantity::FromString("1")),
+      openpit::model::TradeAmount::OfQuantity(quantity),
       Price::FromString("100"));
 }
 
@@ -2110,6 +2111,40 @@ TEST(BuiltinPolicy, SpotFundsWithoutPnlBarriersExecutesNormalOrder) {
 
   SeedSpotFundsLifecycleAccount(engine, account);
   EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, account).empty());
+}
+
+TEST(BuiltinPolicy, SpotFundsAlreadyHeldDoesNotReserveAgain) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  const openpit::Engine engine = builder.Build();
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83024);
+  ASSERT_NO_FATAL_FAILURE(SeedSpotFundsLifecycleAccount(engine, account));
+
+  openpit::model::Order order =
+      SpotFundsLifecycleOrder(account, Quantity::FromString("6"));
+  auto initial = engine.ExecutePreTrade(order);
+  ASSERT_TRUE(initial.Passed()) << "Expected the initial 600 USD reservation";
+  initial.reservation->Commit();
+
+  auto& review = order.review.emplace();
+  review.confirmed = true;
+  const auto rejected = engine.ExecutePreTrade(order);
+  ASSERT_FALSE(rejected.Passed())
+      << "Expected insufficient funds without a hold flag";
+  ASSERT_EQ(rejected.rejects.size(), 1u);
+  EXPECT_EQ(rejected.rejects.front().code, RejectCode::InsufficientFunds);
+
+  review.alreadyHeld = true;
+  auto held = engine.ExecutePreTrade(order);
+  ASSERT_TRUE(held.Passed()) << "Expected the already-held order to pass";
+  held.reservation->Commit();
+
+  auto remaining = engine.ExecutePreTrade(
+      SpotFundsLifecycleOrder(account, Quantity::FromString("4")));
+  ASSERT_TRUE(remaining.Passed())
+      << "Expected the remaining 400 USD to be available";
+  remaining.reservation->Rollback();
 }
 
 TEST(BuiltinPolicy, SpotFundsAbsentFillLockBlocksAccount) {

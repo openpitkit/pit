@@ -1218,9 +1218,33 @@ pub extern "C" fn openpit_pretrade_pre_trade_reservation_rollback(
 /// - `reservation` must be a valid non-null pointer;
 /// - violating the pointer contract aborts the call;
 /// - always returns a caller-owned `OpenPitPretradeRejectList`, empty when
-///   there are no marks; release it with `openpit_destroy_pretrade_reject_list`;
+///   there are no marks; release it with
+///   `openpit_destroy_pretrade_reject_list`;
 /// - marks require a human decision before submission. With-hold marks retain
-///   policy results; any without-hold mark leaves the reservation without them.
+///   policy results, except that a policy instance registered in a review mode
+///   that marked the order in its main-stage check retains none of its own. Any
+///   without-hold mark leaves the reservation without policy results.
+///
+/// Lifecycle for review with hold:
+/// - Keep the order unsent and commit immediately with
+///   `openpit_pretrade_pre_trade_reservation_commit`. Save the first run's lock
+///   from `openpit_pretrade_pre_trade_reservation_get_lock` before destroying
+///   the reservation.
+/// - On approval, rerun with `OpenPitOrderReview.confirmed` set to
+///   `OPENPIT_TRI_BOOL_TRUE`. Set `already_held` to `OPENPIT_TRI_BOOL_TRUE`
+///   only if Spot Funds kept its own hold. It did so only when every mark was
+///   with-hold and no Spot Funds instance registered in a review mode marked
+///   the order. Send the order only if the rerun has no rejects.
+/// - After committing an already-held rerun, use its lock for execution reports
+///   and append only the first run's Spot Funds group prices. Read each group's
+///   prices with `openpit_pretrade_pre_trade_lock_prices_of` and
+///   `openpit_pretrade_pre_trade_lock_prices_view`, then append each price
+///   under its group ID with `openpit_pretrade_pre_trade_lock_push`. If Spot
+///   Funds is the only policy that locks prices, use the first lock directly.
+/// - Until the rerun is committed, use the first run's lock. If an order with a
+///   committed Spot Funds hold ends without a committed rerun, send a final
+///   cancel report with the first run's lock and the remaining reserved
+///   quantity via `openpit_engine_apply_execution_report` to release that hold.
 ///
 /// Lifetime contract:
 /// - the returned list is detached from the reservation state.

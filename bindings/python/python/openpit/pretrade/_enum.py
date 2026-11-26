@@ -115,8 +115,13 @@ RuleMode.REJECT.__doc__ = "Reject the order and roll back prepared mutations."
 RuleMode.REVIEW_WITH_HOLD.__doc__ = (
     "Require a human decision. If all marks are with-hold, the reservation "
     "keeps the run's holds and policy results (mutations, lock prices, and "
-    "account adjustments). Commit immediately and send only after a fresh run "
-    "with the order confirmed and no review marks or rejects."
+    "account adjustments). Commit immediately. On approval, rerun with "
+    "``confirmed=True`` and add ``already_held=True`` only if Spot Funds kept "
+    "its own hold in the committed review. A policy instance registered in a "
+    "review mode that marked the order in its main-stage check retains none of "
+    "its own. A Spot Funds instance registered in a review mode that marked "
+    "the order holds nothing. After such a review, rerun with "
+    "``confirmed=True`` only. Send only if the rerun has no rejects."
 )
 RuleMode.REVIEW_WITHOUT_HOLD.__doc__ = (
     "Require a human decision and return a reservation without holds, "

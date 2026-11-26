@@ -39,6 +39,50 @@ var ErrReservationClosed = errors.New("pre-trade reservation already closed")
 // dropped without Close leaks both the native handle and the state it holds
 // reserved for the remainder of the process.
 //
+// Use [Reservation.Reviews] before sending. Keep a reviewed order unsent and
+// commit the reservation immediately. It retains holds only when every mark is
+// [reject.RuleModeReviewWithHold].
+// A policy instance registered in a review mode that marked the order in its
+// main-stage check retains none of its own. Save the first run's
+// [Reservation.Lock] before closing.
+// AlreadyHeld asserts Spot Funds' own hold. Spot Funds kept it only when every
+// mark is with-hold and no Spot Funds instance registered in a review mode
+// marked the order. On approval, rerun with Confirmed, and also set AlreadyHeld
+// only if Spot Funds kept its hold. Otherwise the rerun carries Confirmed only.
+// With AlreadyHeld, Spot Funds runs every check against the current balance
+// with this order's own hold given back, writes nothing, and adds no prices to
+// the rerun's lock. For a market order, this run prices the hold it gives back,
+// so a price move since the first run shifts that amount. Keep a clean rerun's
+// reservation until sending, and commit once the venue accepts the order. If it
+// is not sent or the venue does not accept it, call [Reservation.Rollback] and,
+// if Spot Funds kept its hold in the review, release that hold as described
+// below.
+//
+// Once an already-held rerun is committed, for each report of the order use the
+// rerun's lock supplemented with the first run's Spot Funds prices. Read each
+// Spot Funds group's prices with [Lock.PricesOf] and append them as grouped
+// entries with [Lock.PushMany]. Merging the whole first lock would duplicate
+// prices for groups recorded in both runs. If Spot Funds is the only policy
+// that locks prices, use the first lock directly. Passing only the rerun's lock
+// blocks the account with [reject.CodeMissingRequiredField].
+//
+// Once a review in which Spot Funds kept its hold is committed, only a final
+// cancel execution report carrying the remaining reserved quantity releases
+// that hold. Send it whenever the order ends without a committed rerun: the
+// reviewer rejects it, the rerun rejects it, or the rerun is rolled back
+// because the order is not sent or the venue does not accept it.
+// That report carries the first run's lock.
+// Rolling back or rejecting the rerun does not touch the first run's hold.
+// A without-hold review holds nothing and needs no cancel report.
+// When a Spot Funds instance registered in a review mode marked the order, that
+// instance holds nothing, and a final cancel report that carries the first
+// run's lock and a remaining reserved quantity blocks the account with
+// [reject.CodeMissingRequiredField], because that lock has no price for that
+// instance.
+// The engine trusts AlreadyHeld without checking whether a matching hold
+// exists. Setting it when Spot Funds kept no hold leaves the order without a
+// Spot Funds hold.
+//
 // Concurrency: callers must serialize methods on the same reservation. Commit
 // and Rollback are mutually exclusive: whichever runs first resolves the
 // reservation, and any later Commit or Rollback on the same value has no
@@ -173,8 +217,9 @@ func (r *Reservation) Lock() (Lock, error) {
 
 // Reviews returns a copy of the review marks from both pre-trade stages.
 // A non-empty list requires a human decision before sending the order.
-// For review with a hold, commit the reservation to retain the hold and keep
-// the order unsent until approval and a fresh run with Confirmed.
+// On approval, rerun with Confirmed and add AlreadyHeld only if Spot Funds kept
+// its own hold in the committed review.
+// See [Reservation] for the lifecycle.
 // Returns ErrReservationClosed after Close.
 func (r *Reservation) Reviews() ([]reject.Reject, error) {
 	if r.handle == nil {

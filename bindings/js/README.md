@@ -133,8 +133,9 @@ const result = engine.executePreTrade({
 });
 
 if (result.reviews.length > 0) {
-  // Leave unsent. After approval, rerun with review.confirmed set.
-  // Set review.alreadyHeld as well if this reservation retained a hold.
+  // Leave unsent. On approval, rerun with `review.confirmed` set.
+  // Add `review.alreadyHeld` only if Spot Funds kept its own hold in the
+  // committed review.
   result.reservation?.commit();
 } else if (result.ok) {
   // Send the order to the venue, then commit or roll the reservation back.

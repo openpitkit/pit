@@ -39,7 +39,10 @@ const (
 	RuleModeReject RuleMode = native.RuleModeReject
 	// RuleModeReviewWithHold requires human review. Commit to keep holds
 	// only if every mark is with-hold. Any without-hold mark clears them.
-	// Keep the order unsent until approval and a fresh run with Confirmed.
+	// Keep the order unsent. On approval, rerun with Confirmed and add
+	// AlreadyHeld only if Spot Funds kept its own hold in the committed review.
+	// A Spot Funds instance registered in a review mode that marked the order
+	// holds nothing. After such a review, rerun with Confirmed only.
 	RuleModeReviewWithHold RuleMode = native.RuleModeReviewWithHold
 	// RuleModeReviewWithoutHold requires human review with nothing held.
 	// The reservation carries no mutations.

@@ -85,7 +85,10 @@ export interface OrderMarginInit {
 export interface OrderReviewInit {
   /** Whether a human has confirmed the order. Defaults to `false`. */
   confirmed?: boolean;
-  /** Whether an earlier committed with-hold run holds the reservation. Defaults to `false`. */
+  /**
+   * Whether the caller asserts that Spot Funds already holds this order's funds
+   * from an earlier committed review. Defaults to `false`.
+   */
   alreadyHeld?: boolean;
 }
 
@@ -624,8 +627,8 @@ impl JsOrderMargin {
 /// engine discards review marks. Reject-mode instances and evaluation failures
 /// still reject.
 ///
-/// `alreadyHeld` asserts that an earlier committed with-hold run already holds
-/// this order's reservation.
+/// `alreadyHeld` is the caller's assertion that Spot Funds already holds this
+/// order's funds from an earlier committed review.
 #[wasm_bindgen(js_name = OrderReview)]
 #[derive(Clone, Default)]
 pub struct JsOrderReview {
@@ -653,13 +656,15 @@ impl JsOrderReview {
         self.confirmed = value;
     }
 
-    /// Whether an earlier committed with-hold run holds the reservation.
+    /// Whether the caller asserts that Spot Funds already holds this order's
+    /// funds from an earlier committed review.
     #[wasm_bindgen(getter, js_name = alreadyHeld)]
     pub fn already_held(&self) -> bool {
         self.already_held
     }
 
-    /// Sets whether the reservation is already held.
+    /// Sets the caller's assertion that Spot Funds already holds this order's
+    /// funds from an earlier committed review.
     #[wasm_bindgen(setter, js_name = alreadyHeld)]
     pub fn set_already_held(&mut self, value: bool) {
         self.already_held = value;
