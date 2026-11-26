@@ -166,11 +166,13 @@ blocked individually in place.
   `REVIEW_WITH_HOLD` and `REVIEW_WITHOUT_HOLD`. The review modes return an
   `InsufficientFunds` review mark on a shortfall, with the corresponding
   `RuleMode`. `REVIEW_WITH_HOLD` records the full hold, allowing available
-  funds to go negative; `REVIEW_WITHOUT_HOLD` leaves no hold for the order.
+  funds to go negative; `REVIEW_WITHOUT_HOLD` leaves no hold from that run.
   Sufficient funds produce a normal hold without a mark. Confirmed orders
   and drop-copy use `TRACK_ONLY` without a mark. An `already_held` order
-  changes no balances and produces no funds review mark. Overflow remains
-  a reject.
+  changes no balances: without `confirmed`, a shortfall still returns the funds
+  review mark, with no hold, lock price or account adjustment, and the hold an
+  earlier review kept stays; with `confirmed`, it behaves as `TRACK_ONLY`
+  without a mark. Overflow remains a reject.
 - `build_spot_funds_pnl_bounds_killswitch()`: enables account P&L bounds with
   Spot Funds in `TRACK_ONLY` mode. This preset records reservations but disables
   the insufficient-funds gate, so available funds may go negative instead of

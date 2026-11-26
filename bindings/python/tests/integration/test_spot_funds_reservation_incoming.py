@@ -468,7 +468,7 @@ def test_spot_funds_cancel_with_rerun_lock_blocks_without_releasing_usd() -> Non
 
 
 @pytest.mark.integration
-def test_spot_funds_already_held_omits_breached_review_rules() -> None:
+def test_spot_funds_already_held_review_rule_marks_until_confirmed() -> None:
     policies = openpit.pretrade.policies
     account = openpit.param.AccountId.from_int(99224416)
     engine = _build_spot_funds_engine()
@@ -524,6 +524,29 @@ def test_spot_funds_already_held_omits_breached_review_rules() -> None:
     before = {
         asset: _spot_funds_amounts(engine, account, asset) for asset in ("USD", "AAPL")
     }
+    held_order = openpit.Order(
+        operation=order.operation,
+        review=openpit.OrderReview(confirmed=False, already_held=True),
+    )
+    held_dry = engine.execute_pre_trade_dry_run(order=held_order)
+    assert held_dry
+    expected_marks = [(mark.code, mark.mode) for mark in dry.reviews]
+    assert [(mark.code, mark.mode) for mark in held_dry.reviews] == expected_marks
+    assert len(held_dry.lock) == 0
+    assert held_dry.account_adjustments == []
+    for asset, amounts in before.items():
+        assert _spot_funds_amounts(engine, account, asset) == amounts
+    unconfirmed = engine.execute_pre_trade(order=held_order)
+    assert unconfirmed.ok and unconfirmed.reservation is not None
+    assert [(mark.code, mark.mode) for mark in unconfirmed.reviews] == expected_marks
+    assert [
+        (mark.code, mark.mode) for mark in unconfirmed.reservation.reviews
+    ] == expected_marks
+    assert len(unconfirmed.reservation.lock) == 0
+    assert unconfirmed.reservation.account_adjustments == []
+    unconfirmed.reservation.commit()
+    for asset, amounts in before.items():
+        assert _spot_funds_amounts(engine, account, asset) == amounts
     rerun = engine.execute_pre_trade(
         order=openpit.Order(
             operation=order.operation,

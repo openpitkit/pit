@@ -120,8 +120,9 @@ RuleMode.REVIEW_WITH_HOLD.__doc__ = (
     "its own hold in the committed review. A policy instance registered in a "
     "review mode that marked the order in its main-stage check retains none of "
     "its own. A Spot Funds instance registered in a review mode that marked "
-    "the order holds nothing. After such a review, rerun with "
-    "``confirmed=True`` only. Send only if the rerun has no rejects."
+    "the order holds nothing. After such a first review, rerun with "
+    "``confirmed=True`` only. A review of an already-held rerun changes no "
+    "Spot Funds hold. Send only if the rerun has no rejects."
 )
 RuleMode.REVIEW_WITHOUT_HOLD.__doc__ = (
     "Require a human decision and return a reservation without holds, "

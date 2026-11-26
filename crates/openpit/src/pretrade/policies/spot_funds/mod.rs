@@ -1012,8 +1012,8 @@ where
     /// entries or lock price. The flag does not validate the hold or require
     /// `confirmed`; a rejection leaves the existing hold untouched.
     /// A breached review-mode P&L barrier, position limit or fund control
-    /// yields no review mark under `already_held`: the result is `Ok(None)`
-    /// and nothing is written.
+    /// returns review marks under `already_held` without a policy result,
+    /// lock price or writes. Only a run with no marks returns `Ok(None)`.
     fn perform_pre_trade_check(
         &self,
         ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,

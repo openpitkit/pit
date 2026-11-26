@@ -42,10 +42,11 @@ const (
 	// Keep the order unsent. On approval, rerun with Confirmed and add
 	// AlreadyHeld only if Spot Funds kept its own hold in the committed review.
 	// A Spot Funds instance registered in a review mode that marked the order
-	// holds nothing. After such a review, rerun with Confirmed only.
+	// holds nothing. After such a first review, rerun with Confirmed only.
+	// A review of an already-held rerun changes no Spot Funds hold.
 	RuleModeReviewWithHold RuleMode = native.RuleModeReviewWithHold
-	// RuleModeReviewWithoutHold requires human review with nothing held.
-	// The reservation carries no mutations.
+	// RuleModeReviewWithoutHold requires human review. The reservation
+	// carries no holds or mutations.
 	RuleModeReviewWithoutHold RuleMode = native.RuleModeReviewWithoutHold
 )
 

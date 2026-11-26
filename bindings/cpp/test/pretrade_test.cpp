@@ -2857,7 +2857,7 @@ TEST(BuiltinPolicy, SpotFundsAlreadyHeldCancelNeedsFirstLock) {
   EXPECT_EQ(after.incoming.value().absolute, before.incoming.value().absolute);
 }
 
-TEST(BuiltinPolicy, SpotFundsAlreadyHeldOmitsBreachedReviewRules) {
+TEST(BuiltinPolicy, SpotFundsAlreadyHeldReviewRuleMarksUntilConfirmed) {
   for (const auto mode :
        {RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold}) {
     SCOPED_TRACE(static_cast<int>(mode));
@@ -2904,6 +2904,28 @@ TEST(BuiltinPolicy, SpotFundsAlreadyHeldOmitsBreachedReviewRules) {
                             }),
               1);
     const auto before = SpotFundsBalances(engine, account);
+    order.review.emplace().alreadyHeld = true;
+    const auto heldDry = engine.ExecutePreTradeDryRun(order);
+    ASSERT_TRUE(heldDry.Passed());
+    const auto heldMarks = heldDry.Reviews();
+    ASSERT_EQ(heldMarks.size(), 2u);
+    EXPECT_TRUE(heldDry.Lock().IsEmpty());
+    EXPECT_TRUE(heldDry.AccountAdjustments().empty());
+    EXPECT_EQ(SpotFundsBalances(engine, account), before);
+    auto unconfirmed = engine.ExecutePreTrade(order);
+    ASSERT_TRUE(unconfirmed.Passed());
+    const auto liveMarks = unconfirmed.reservation->Reviews();
+    ASSERT_EQ(liveMarks.size(), 2u);
+    for (std::size_t index = 0; index < marks.size(); ++index) {
+      EXPECT_EQ(heldMarks[index].code, marks[index].code);
+      EXPECT_EQ(heldMarks[index].mode, marks[index].mode);
+      EXPECT_EQ(liveMarks[index].code, marks[index].code);
+      EXPECT_EQ(liveMarks[index].mode, marks[index].mode);
+    }
+    EXPECT_TRUE(unconfirmed.reservation->Lock().IsEmpty());
+    EXPECT_TRUE(unconfirmed.reservation->AccountAdjustments().empty());
+    unconfirmed.reservation->Commit();
+    EXPECT_EQ(SpotFundsBalances(engine, account), before);
     order.review.emplace().confirmed = true;
     order.review->alreadyHeld = true;
     auto rerun = engine.ExecutePreTrade(order);

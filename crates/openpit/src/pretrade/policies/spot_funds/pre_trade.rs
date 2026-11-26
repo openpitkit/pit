@@ -684,7 +684,11 @@ where
         )?;
 
         if request.already_held {
-            return Ok(None);
+            return if marks.is_empty() {
+                Ok(None)
+            } else {
+                Err(Rejects::new(marks))
+            };
         }
         if let Some(p) = legs.lock_price {
             outcome.lock_prices.push(p);

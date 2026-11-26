@@ -52,10 +52,10 @@ namespace openpit::pretrade {
 // A policy instance registered in a review mode that marked the order in its
 // main-stage check retains none of its own. Save the first run's `Lock()`.
 // `alreadyHeld` asserts Spot Funds' own hold. Spot Funds kept it only when
-// every mark is with-hold and no Spot Funds instance registered in a review
-// mode marked the order. On approval, rerun with `confirmed`, and also set
-// `alreadyHeld` only if Spot Funds kept its hold. Otherwise the rerun carries
-// `confirmed` only.
+// every mark of that first run is with-hold and no Spot Funds instance
+// registered in a review mode marked the order. On approval, rerun with
+// `confirmed`, and also set `alreadyHeld` only if Spot Funds kept its hold.
+// Otherwise the rerun carries `confirmed` only.
 // With `alreadyHeld`, Spot Funds runs every check against the current balance
 // with this order's own hold given back, writes nothing, and adds no prices
 // to the rerun's lock. For a market order, this run prices the hold it gives
@@ -80,12 +80,18 @@ namespace openpit::pretrade {
 // because the order is not sent or the venue does not accept it.
 // That report carries the first run's lock.
 // Rolling back or rejecting the rerun does not touch the first run's hold.
-// A without-hold review holds nothing and needs no cancel report.
-// When a Spot Funds instance registered in a review mode marked the order, that
-// instance holds nothing, and a final cancel report that carries the first
-// run's lock and a remaining reserved quantity blocks the account with
-// `RejectCode::MissingRequiredField`, because that lock has no price for that
-// instance.
+// A without-hold review of a first run holds nothing and needs no cancel
+// report.
+// When a Spot Funds instance registered in a review mode marked the order in a
+// first run, that instance holds nothing, and a final cancel report that
+// carries the first run's lock and a remaining reserved quantity blocks the
+// account with `RejectCode::MissingRequiredField`, because that lock has no
+// price for that instance.
+// A review of an already-held rerun changes no Spot Funds hold: whatever its
+// marks, the hold the first review kept stays. On approval, rerun with
+// `confirmed` and `alreadyHeld` again; if the order ends without a committed
+// approval rerun, release that hold with a final cancel report carrying the
+// remaining reserved quantity and the first run's Spot Funds lock prices.
 // The engine trusts `alreadyHeld` without checking whether a matching hold
 // exists. Setting it when Spot Funds kept no hold leaves the order without a
 // Spot Funds hold.

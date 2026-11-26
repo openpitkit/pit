@@ -54,7 +54,8 @@ enum class RuleMode : std::uint8_t {
   /// On approval, rerun with `confirmed` and add `alreadyHeld` only if Spot
   /// Funds kept its own hold in the committed review.
   /// A Spot Funds instance registered in a review mode that marked the order
-  /// holds nothing. After such a review, rerun with `confirmed` only.
+  /// holds nothing. After such a first review, rerun with `confirmed` only.
+  /// A review of an already-held rerun changes no Spot Funds hold.
   /// See the `pretrade::Reservation` class documentation for the lifecycle.
   ReviewWithHold = OPENPIT_PRETRADE_RULE_MODE_REVIEW_WITH_HOLD,
   /// Requires human review. The returned reservation carries no holds or

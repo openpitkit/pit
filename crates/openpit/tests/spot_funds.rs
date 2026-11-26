@@ -43,7 +43,8 @@ use openpit::{
     HasConfirmed, HasExecutionReportFillFee, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasInstrument, HasPreTradeLock, HasRemainingReservedQuantity,
     HasSide, Instrument, Mutations, OrderOperation, OrderReview, OutcomeAmount, ReadyEngineBuilder,
-    RequestFieldAccessError, SpotFundsMarketData, SyncMode, WithOrderOperation, WithOrderReview,
+    RequestFieldAccessError, SpotFundsMarketData, StorageBuilder, SyncMode, WithOrderOperation,
+    WithOrderReview,
 };
 
 type TestOrder = OrderOperation;
@@ -403,6 +404,20 @@ fn build_engine() -> TestEngine {
         .expect("engine must build")
 }
 
+fn spot_funds_policy(
+    storage_builder: &StorageBuilder<<FullSync as SyncMode>::StorageLockingPolicyFactory>,
+    limit_mode: SpotFundsLimitMode,
+) -> SpotFundsPolicy<FullSync, FullSync> {
+    let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+        .expect("settings must build");
+    settings.set_global_limit_mode(limit_mode);
+    SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        None::<SpotFundsMarketData<FullSync>>,
+        storage_builder,
+    )
+}
+
 fn spot_funds_builder<
     Order: HasAccountId + HasInstrument + HasConfirmed + HasAlreadyHeld + 'static,
 >(
@@ -421,14 +436,7 @@ where
         builder
     }
     .full_sync();
-    let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
-        .expect("settings must build");
-    settings.set_global_limit_mode(limit_mode);
-    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
-        settings,
-        None::<SpotFundsMarketData<FullSync>>,
-        builder.storage_builder(),
-    );
+    let policy = spot_funds_policy(builder.storage_builder(), limit_mode);
     if let Some(max_orders) = broker_max_orders {
         let rate_limit = RateLimitPolicy::new(
             RateLimitSettings::new(
@@ -2618,6 +2626,127 @@ fn funds_review_already_held_rerun_keeps_the_first_hold() {
     );
     assert!(rerun.account_adjustments().is_empty());
     assert_review_balances(&engine, ["-1900", "2000", "0"], ["3", "0", "10"]);
+}
+
+#[test]
+fn already_held_funds_review_returns_marks_without_a_policy_result() {
+    let engine = build_review_engine(
+        spot_funds_builder(None, SpotFundsLimitMode::ReviewWithHold, true),
+        false,
+    );
+    seed(&engine, "USD", "100");
+    commit_review_run(&engine, INITIAL_REVIEW);
+    let review = OrderReview {
+        confirmed: false,
+        already_held: true,
+    };
+    let dry = engine.execute_pre_trade_dry_run(make_review_order(review.clone()));
+    assert!(dry.is_pass());
+    assert_eq!(
+        dry.reviews().len(),
+        1,
+        "already-held dry run must keep the funds mark"
+    );
+    let rerun = commit_review_run(&engine, review);
+    assert_eq!(rerun.reviews().len(), 1);
+    let mark = &rerun.reviews()[0];
+    assert_eq!(mark.code, RejectCode::InsufficientFunds);
+    assert_eq!(mark.mode, RuleMode::ReviewWithHold);
+    assert_eq!(mark.scope, RejectScope::Order);
+    assert_eq!(mark.policy, SpotFundsPolicy::<FullSync, FullSync>::NAME);
+    assert_eq!(dry.reviews(), rerun.reviews());
+    assert!(dry.lock().is_empty());
+    assert!(dry.account_adjustments().is_empty());
+    assert!(rerun.lock().is_empty());
+    assert!(rerun.account_adjustments().is_empty());
+    assert_review_balances(&engine, ["-1900", "2000", "0"], ["3", "0", "10"]);
+}
+
+fn assert_already_held_review_lifecycle(rule_mode: RuleMode, instance_mode: RuleMode) {
+    for approve in [true, false] {
+        let builder = Engine::builder::<ReviewOrder, TestReport, TestAdjustment>()
+            .with_order_review()
+            .full_sync();
+        let policy = spot_funds_policy(builder.storage_builder(), SpotFundsLimitMode::Enforce);
+        let engine = build_review_engine(
+            builder.pre_trade_instance(
+                policy,
+                openpit::PolicyInstance {
+                    mode: instance_mode,
+                    ..openpit::PolicyInstance::default()
+                },
+            ),
+            true,
+        );
+        assert_review_balances(&engine, ["10000", "0", "0"], ["3", "0", "0"]);
+        let first = commit_review_run(&engine, INITIAL_REVIEW);
+        assert_eq!(first.reviews().len(), 1);
+        assert_eq!(first.reviews()[0].policy, "ReviewWithHoldPolicy");
+        assert!(!first.lock().is_empty());
+        assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+        engine
+            .configure()
+            .spot_funds(SpotFundsPolicy::<FullSync, FullSync>::NAME, |settings| {
+                settings.set_position_limit(account(), asset("AAPL"), rule_mode, Some(qty("12")));
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .expect("position limit must update");
+        let review = OrderReview {
+            confirmed: false,
+            already_held: true,
+        };
+        let dry = engine.execute_pre_trade_dry_run(make_review_order(review.clone()));
+        assert!(dry.is_pass());
+        let rerun = commit_review_run(&engine, review);
+        let marks: Vec<_> = rerun
+            .reviews()
+            .iter()
+            .filter(|mark| mark.policy == SpotFundsPolicy::<FullSync, FullSync>::NAME)
+            .collect();
+        assert_eq!(
+            marks.len(),
+            1,
+            "already-held rerun must carry its own Spot Funds mark"
+        );
+        assert_eq!(marks[0].code, RejectCode::PositionLimitExceeded);
+        assert_eq!(marks[0].scope, RejectScope::Order);
+        assert_eq!(marks[0].mode, rule_mode);
+        assert_eq!(dry.reviews(), rerun.reviews());
+        assert!(dry.lock().is_empty());
+        assert!(dry.account_adjustments().is_empty());
+        assert!(rerun.lock().is_empty());
+        assert!(rerun.account_adjustments().is_empty());
+        assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+        if approve {
+            let approved = commit_review_run(&engine, HELD_RERUN);
+            assert!(approved.reviews().is_empty());
+            assert!(approved.lock().is_empty());
+            assert!(approved.account_adjustments().is_empty());
+            assert_review_balances(&engine, ["8000", "2000", "0"], ["3", "0", "10"]);
+        } else {
+            let post = engine.apply_execution_report(&review_cancel_report(first.lock()));
+            assert!(
+                post.account_blocks.is_empty(),
+                "held review cancel must succeed"
+            );
+            assert_review_balances(&engine, ["10000", "0", "0"], ["3", "0", "0"]);
+        }
+    }
+}
+
+#[test]
+fn already_held_review_with_hold_survives_commit_approval_and_cancel() {
+    assert_already_held_review_lifecycle(RuleMode::ReviewWithHold, RuleMode::Reject);
+}
+
+#[test]
+fn already_held_review_without_hold_survives_commit_approval_and_cancel() {
+    assert_already_held_review_lifecycle(RuleMode::ReviewWithoutHold, RuleMode::Reject);
+}
+
+#[test]
+fn already_held_review_instance_survives_commit_approval_and_cancel() {
+    assert_already_held_review_lifecycle(RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold);
 }
 
 #[test]

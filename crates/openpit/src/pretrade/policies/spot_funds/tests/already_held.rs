@@ -255,11 +255,8 @@ fn already_held_comes_from_context_instead_of_order() {
     assert_eq!(snapshot(&policy, &order.inner), before);
 }
 
-// Pins the current contract: under the already-held flag a breached
-// review-mode rule's mark is not returned; the result stays `Ok(None)`.
-// Changing this behaviour must update this test.
 #[test]
-fn rerun_returns_none_despite_breached_pnl_review_rules() {
+fn rerun_returns_breached_pnl_review_marks_without_a_policy_result() {
     for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
         let policy = build_policy_with_pnl_global_barrier(SpotFundsPnlBoundsBarrier {
             mode,
@@ -278,15 +275,20 @@ fn rerun_returns_none_despite_breached_pnl_review_rules() {
         assert_eq!(marks[0].scope, RejectScope::Account);
         assert_eq!(marks[0].mode, mode);
         let order = reviewed(order, false);
-        rerun(&policy, &order).unwrap();
+        for result in run_rerun_checks(&policy, &order, || snapshot(&policy, &order.inner)).unwrap()
+        {
+            let (rerun_marks, outcome) = result.unwrap_err().into_parts();
+            assert_eq!(rerun_marks, marks.clone().into_vec());
+            assert!(
+                outcome.is_none(),
+                "already-held review must carry no policy result"
+            );
+        }
     }
 }
 
-// Pins the current contract: under the already-held flag a breached
-// review-mode rule's mark is not returned; the result stays `Ok(None)`.
-// Changing this behaviour must update this test.
 #[test]
-fn rerun_returns_none_despite_breached_position_review_rules() {
+fn rerun_returns_breached_position_review_marks_without_a_policy_result() {
     for mode in [RuleMode::ReviewWithHold, RuleMode::ReviewWithoutHold] {
         let mut configured = settings(0);
         configured.set_position_limit(account(1), asset("AAPL"), mode, Some(qty("2")));
@@ -306,7 +308,15 @@ fn rerun_returns_none_despite_breached_position_review_rules() {
         assert_eq!(marks[0].scope, RejectScope::Order);
         assert_eq!(marks[0].mode, mode);
         let order = reviewed(order, false);
-        rerun(&policy, &order).unwrap();
+        for result in run_rerun_checks(&policy, &order, || snapshot(&policy, &order.inner)).unwrap()
+        {
+            let (rerun_marks, outcome) = result.unwrap_err().into_parts();
+            assert_eq!(rerun_marks, marks.clone().into_vec());
+            assert!(
+                outcome.is_none(),
+                "already-held review must carry no policy result"
+            );
+        }
     }
 }
 

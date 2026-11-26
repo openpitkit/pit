@@ -44,9 +44,14 @@ When marks are present, commit the reservation and keep the order unsent.
 After approval, rerun with `OrderReview(confirmed=True)` and set
 `already_held=True` only if Spot Funds kept its own hold in the committed
 review. A Spot Funds instance registered in a review mode that marked the order
-holds nothing. After such a review, rerun with `confirmed=True` only. For
-ordinary orders, commit after successful submission or roll back when submission
-fails.
+holds nothing. After such a first review, rerun with `confirmed=True` only. A
+review of an already-held rerun changes no Spot Funds hold: whatever its
+marks, the hold the first review kept stays. On approval, rerun with
+`confirmed=True` and `already_held=True` again; if the order ends without a
+committed approval rerun, release that hold with a final cancel report
+carrying the remaining reserved quantity and the first run's Spot Funds lock
+prices. For ordinary orders, commit after successful submission or roll back
+when submission fails.
 
 ## Post-trade feedback
 
