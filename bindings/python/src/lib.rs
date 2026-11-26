@@ -117,20 +117,33 @@ thread_local! {
     /// operation keeps that ownership exact: a nested engine or market-data
     /// call made from inside a callback owns its own frame, so it can neither
     /// consume nor overwrite the exception of the operation that encloses it.
-    static PY_CALLBACK_ERRORS: RefCell<Vec<Option<PyErr>>> = const { RefCell::new(Vec::new()) };
+    // Each entry pairs the original exception with its mutation-origin tag.
+    static PY_CALLBACK_ERRORS: RefCell<Vec<Option<(PyErr, bool)>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Records the first callback exception of the innermost running operation.
+/// Records the first non-mutation callback exception of this operation.
+/// It takes precedence over an earlier mutation callback exception.
 ///
 /// Without an active operation the exception is dropped on purpose: no caller
 /// is left to receive it, and carrying it into a later unrelated call would
 /// report the failure against the wrong operation.
 fn set_python_callback_error(error: PyErr) {
-    PY_CALLBACK_ERRORS.with(|frames| {
-        if let Some(frame) = frames.borrow_mut().last_mut() {
-            if frame.is_none() {
-                *frame = Some(error);
-            }
+    set_python_callback_failure(error, false);
+}
+
+fn set_python_callback_failure(error: PyErr, mutation_origin: bool) {
+    // The exception that is not kept, displaced or new, is dropped only after
+    // the borrow ends: its finalizer may run Python code that re-enters the
+    // SDK and opens a callback scope.
+    let _unkept = PY_CALLBACK_ERRORS.with(|frames| {
+        let mut frames = frames.borrow_mut();
+        let Some(frame) = frames.last_mut() else {
+            return Some((error, mutation_origin));
+        };
+        if frame.is_none() || matches!(frame, Some((_, true))) && !mutation_origin {
+            frame.replace((error, mutation_origin))
+        } else {
+            Some((error, mutation_origin))
         }
     });
 }
@@ -149,18 +162,43 @@ impl PythonCallbackScope {
     /// Ends the operation and returns the exception it owns, if any.
     fn finish(mut self) -> Option<PyErr> {
         self.active = false;
-        PY_CALLBACK_ERRORS.with(|frames| frames.borrow_mut().pop().flatten())
+        PY_CALLBACK_ERRORS
+            .with(|frames| frames.borrow_mut().pop().flatten())
+            .map(|(error, _)| error)
+    }
+
+    /// Ends a rejected execute and returns the exception it must raise, if any.
+    ///
+    /// A parked mutation callback exception is not raised when the rejects
+    /// carry the engine's reserved review-rollback report.
+    fn finish_execute(mut self, rejects: &Rejects) -> Option<PyErr> {
+        self.active = false;
+        match PY_CALLBACK_ERRORS.with(|frames| frames.borrow_mut().pop().flatten()) {
+            Some((_, true)) if has_review_rollback_reject(rejects) => None,
+            failure => failure.map(|(error, _)| error),
+        }
     }
 }
 
 impl Drop for PythonCallbackScope {
     fn drop(&mut self) {
         if self.active {
-            PY_CALLBACK_ERRORS.with(|frames| {
-                frames.borrow_mut().pop();
-            });
+            // The popped exception is dropped only after the borrow ends, as
+            // in set_python_callback_failure.
+            let _popped = PY_CALLBACK_ERRORS.with(|frames| frames.borrow_mut().pop());
         }
     }
+}
+
+// The engine's reserved review-rollback report must stay equal to
+// new_review_rollback_reject in the core.
+fn has_review_rollback_reject(rejects: &Rejects) -> bool {
+    rejects.iter().any(|reject| {
+        reject.policy == "Engine"
+            && reject.scope == RejectScope::Order
+            && reject.code == RejectCode::SystemUnavailable
+            && reject.reason == "review rollback failed"
+    })
 }
 
 struct DetachedFromGil<DetachedValue>(DetachedValue);
@@ -1241,6 +1279,22 @@ impl PyEngine {
         }
     }
 
+    /// Run start- and main-stage pre-trade checks.
+    ///
+    /// If discarding a review instance's tentative state fails, returns a
+    /// rejected ExecuteResult with policy "Engine", scope RejectScope.ORDER,
+    /// code RejectCode.SYSTEM_UNAVAILABLE, and reason "review rollback failed",
+    /// instead of raising the rollback callback's exception. The kill switch is
+    /// armed and later policies still ran. A policy callback exception raised
+    /// in the same call still propagates with its original type and wins.
+    /// Other mutation rollback failures, including ordinary reject
+    /// compensation, still propagate with their original type, unless a review
+    /// rollback in the same call also failed: then the full reject list is
+    /// returned and nothing is raised.
+    ///
+    /// This identity is the engine's reserved report. A custom policy emitting
+    /// it is treated as the engine: a mutation rollback exception parked in
+    /// the same call is then not raised.
     #[pyo3(signature = (order))]
     fn execute_pre_trade(
         &self,
@@ -1257,7 +1311,7 @@ impl PyEngine {
                 PyExecuteResult::from_reservation(py, reservation)
             }
             Err(rejects) => {
-                if let Some(error) = scope.finish() {
+                if let Some(error) = scope.finish_execute(&rejects) {
                     return Err(error);
                 }
                 Ok(PyExecuteResult {
@@ -3908,7 +3962,7 @@ fn parse_policy_mutation(value: &Bound<'_, PyAny>) -> PyResult<Mutation> {
             Python::attach(|py| {
                 if let Err(error) = commit_callable.bind(py).call0() {
                     let details = error.to_string();
-                    set_python_callback_error(error);
+                    set_python_callback_failure(error, true);
                     Err(details)
                 } else {
                     Ok(())
@@ -3919,7 +3973,7 @@ fn parse_policy_mutation(value: &Bound<'_, PyAny>) -> PyResult<Mutation> {
             Python::attach(|py| {
                 if let Err(error) = rollback_callable.bind(py).call0() {
                     let details = error.to_string();
-                    set_python_callback_error(error);
+                    set_python_callback_failure(error, true);
                     Err(details)
                 } else {
                     Ok(())
@@ -8184,6 +8238,21 @@ impl PyRequest {
 
     /// Run main-stage pre-trade checks.
     ///
+    /// If discarding a review instance's tentative state fails, returns a
+    /// rejected ExecuteResult with policy "Engine", scope RejectScope.ORDER,
+    /// code RejectCode.SYSTEM_UNAVAILABLE, and reason "review rollback failed",
+    /// instead of raising the rollback callback's exception. The kill switch is
+    /// armed and later policies still ran. A policy callback exception raised
+    /// in the same call still propagates with its original type and wins.
+    /// Other mutation rollback failures, including ordinary reject
+    /// compensation, still propagate with their original type, unless a review
+    /// rollback in the same call also failed: then the full reject list is
+    /// returned and nothing is raised.
+    ///
+    /// This identity is the engine's reserved report. A custom policy emitting
+    /// it is treated as the engine: a mutation rollback exception parked in
+    /// the same call is then not raised.
+    ///
     /// Raises:
     ///     RuntimeError: If the request has already been executed.
     ///     TypeError: If a policy return value has a non-iterable collection
@@ -8195,10 +8264,9 @@ impl PyRequest {
     ///     AttributeError: If a policy return value lacks a required attribute.
     ///     OverflowError: If a policy return value has a `user_data` token that
     ///         fits in 64 bits but exceeds the platform's word size.
-    ///     Exception: Exceptions from policy callbacks, from mutation rollback
-    ///     callbacks,
-    ///         or from Python code invoked while reading policy return values
-    ///         keep their original type.
+    ///     Exception: Policy callback errors, other mutation rollback errors,
+    ///         and errors while reading policy return values keep their
+    ///         original type, subject to the reserved report above.
     fn execute(&self, py: Python<'_>) -> PyResult<PyExecuteResult> {
         let request = self
             .inner
@@ -8215,7 +8283,7 @@ impl PyRequest {
                 PyExecuteResult::from_reservation(py, reservation)
             }
             Err(rejects) => {
-                if let Some(error) = scope.finish() {
+                if let Some(error) = scope.finish_execute(&rejects) {
                     return Err(error);
                 }
                 Ok(PyExecuteResult {

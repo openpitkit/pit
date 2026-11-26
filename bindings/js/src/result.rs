@@ -239,14 +239,30 @@ impl JsRequest {
 
     /// Runs the main stage and returns a [`JsExecuteResult`].
     ///
+    /// If discarding a review instance's tentative state fails, returns a
+    /// rejected `ExecuteResult` with policy "Engine", scope "order", code
+    /// "SystemUnavailable", and reason "review rollback failed", instead of
+    /// throwing for the rollback callback. The engine kill switch is armed and
+    /// later policies still ran. A policy callback exception in the same call
+    /// still wins: `PolicyCallbackError` carries its original value as `cause`.
+    /// Other mutation rollback failures, including ordinary reject
+    /// compensation, still throw `PolicyCallbackError` with the original value
+    /// and type preserved in `cause`, unless a review rollback in the same call
+    /// also failed: then the full reject list is returned and nothing is
+    /// thrown.
+    ///
+    /// This identity is the engine's reserved report. A custom policy emitting
+    /// it is treated as the engine: a mutation rollback exception parked in
+    /// the same call is then not thrown.
+    ///
     /// # Errors
     ///
     /// Throws `LifecycleError` when the request has already been executed or
     /// this request's owning engine is re-entered from one of its callbacks.
-    /// Throws `PolicyCallbackError` on callback failure. A malformed return
-    /// has a `TypeError` cause for a missing field or wrong type, `RangeError`
-    /// for an invalid scope, mode, or numeric bound, `ParamError` for an
-    /// invalid domain value, or `AssetError` for an invalid asset.
+    /// Throws `PolicyCallbackError` on other callback failures. A malformed
+    /// return has a `TypeError` cause for a missing field or wrong type,
+    /// `RangeError` for an invalid scope, mode, or numeric bound, `ParamError`
+    /// for an invalid domain value, or `AssetError` for an invalid asset.
     #[wasm_bindgen(js_name = execute)]
     pub fn execute(&self) -> Result<JsExecuteResult, JsValue> {
         let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
@@ -255,14 +271,20 @@ impl JsRequest {
             .borrow_mut()
             .take()
             .ok_or_else(|| lifecycle_error("request has already been executed"))?;
-        let result = match request.execute() {
-            Ok(reservation) => JsExecuteResult::accepted(reservation, lifecycle.clone()),
+        let (result, failure) = match request.execute() {
+            Ok(reservation) => (
+                JsExecuteResult::accepted(reservation, lifecycle.clone()),
+                callback_scope.finish(),
+            ),
             Err(rejects) => {
                 lifecycle.invalidate();
-                JsExecuteResult::rejected(&rejects)
+                (
+                    JsExecuteResult::rejected(&rejects),
+                    callback_scope.finish_execute(&rejects),
+                )
             }
         };
-        if let Some(failure) = callback_scope.finish() {
+        if let Some(failure) = failure {
             return Err(failure.into_error(JsValue::UNDEFINED));
         }
         Ok(result)

@@ -1667,6 +1667,21 @@ class Request:
     def execute(self) -> ExecuteResult:
         """Run main-stage pre-trade checks.
 
+        If discarding a review instance's tentative state fails, returns a
+        rejected ExecuteResult with policy "Engine", scope RejectScope.ORDER,
+        code RejectCode.SYSTEM_UNAVAILABLE, and reason "review rollback failed",
+        instead of raising the rollback callback's exception. The kill switch is
+        armed and later policies still ran. A policy callback exception raised
+        in the same call still propagates with its original type and wins.
+        Other mutation rollback failures, including ordinary reject
+        compensation, still propagate with their original type, unless a review
+        rollback in the same call also failed: then the full reject list is
+        returned and nothing is raised.
+
+        This identity is the engine's reserved report. A custom policy emitting
+        it is treated as the engine: a mutation rollback exception parked in
+        the same call is then not raised.
+
         Raises:
             RuntimeError: If the request has already been executed.
             TypeError: If a policy return value has a non-iterable collection
@@ -1679,10 +1694,9 @@ class Request:
             OverflowError: If a policy return value has a ``user_data`` token
             that
                 fits in 64 bits but exceeds the platform's word size.
-            Exception: Exceptions from policy callbacks, from mutation rollback
-                callbacks, or from Python code invoked while reading policy
-                return
-                values keep their original type.
+            Exception: Policy callback errors, other mutation rollback errors,
+                and errors while reading policy return values keep their
+                original type, subject to the reserved report above.
         """
 
 PolicyGroupId: typing.TypeAlias = int
@@ -2617,7 +2631,25 @@ class Engine:
                 while reading their return values keep their original type.
         """
 
-    def execute_pre_trade(self, order: object) -> ExecuteResult: ...
+    def execute_pre_trade(self, order: object) -> ExecuteResult:
+        """Run start- and main-stage pre-trade checks.
+
+        If discarding a review instance's tentative state fails, returns a
+        rejected ExecuteResult with policy "Engine", scope RejectScope.ORDER,
+        code RejectCode.SYSTEM_UNAVAILABLE, and reason "review rollback failed",
+        instead of raising the rollback callback's exception. The kill switch is
+        armed and later policies still ran. A policy callback exception raised
+        in the same call still propagates with its original type and wins.
+        Other mutation rollback failures, including ordinary reject
+        compensation, still propagate with their original type, unless a review
+        rollback in the same call also failed: then the full reject list is
+        returned and nothing is raised.
+
+        This identity is the engine's reserved report. A custom policy emitting
+        it is treated as the engine: a mutation rollback exception parked in
+        the same call is then not raised.
+        """
+
     def apply_drop_copy(
         self,
         order: object,

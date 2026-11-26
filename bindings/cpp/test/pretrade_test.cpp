@@ -1036,6 +1036,8 @@ struct ReviewPolicy {
   int expectedPreviousRollbacks = 0;
   RejectScope scope = RejectScope::Order;
   RejectCode code = RejectCode::Custom;
+  const char* policyName = "ReviewPolicy";
+  const char* reason = "review order";
   const char* price = "100";
   const char* asset = "USD";
 
@@ -1047,7 +1049,7 @@ struct ReviewPolicy {
     if (!startMode) {
       return std::nullopt;
     }
-    Reject mark("ReviewPolicy", scope, code, "review order", "start stage");
+    Reject mark(policyName, scope, code, reason, "start stage");
     mark.mode = *startMode;
     return mark;
   }
@@ -1078,7 +1080,7 @@ struct ReviewPolicy {
         openpit::accountadjustment::AccountOutcomeEntry(
             openpit::param::Asset(asset)));
     if (mainMode) {
-      Reject mark("ReviewPolicy", scope, code, "review order", "main stage");
+      Reject mark(policyName, scope, code, reason, "main stage");
       mark.mode = *mainMode;
       decision.Push(std::move(mark));
     }
@@ -1320,9 +1322,22 @@ TEST(CustomPolicy, ReviewInstanceDryRunAccountMark) {
   }
 }
 
+openpit::pretrade::ExecuteResult ExecuteReviewOrder(
+    const openpit::Engine& engine, bool viaRequest) {
+  if (!viaRequest) {
+    return engine.ExecutePreTrade(MakeDryRunHookOrder());
+  }
+  auto start = engine.StartPreTrade(MakeDryRunHookOrder());
+  EXPECT_TRUE(start.Passed());
+  return start.request.value().Execute();
+}
+
 TEST(CustomPolicy, ReviewInstanceRollbackFailure) {
-  for (const bool rollbackAll : {false, true}) {
-    SCOPED_TRACE(rollbackAll);
+  for (const auto [rollbackAll, viaRequest] :
+       {std::pair{false, false}, std::pair{false, true}, std::pair{true, false},
+        std::pair{true, true}}) {
+    SCOPED_TRACE(testing::Message() << "rollbackAll=" << rollbackAll
+                                    << " viaRequest=" << viaRequest);
     ReviewMutationState review, later;
     review.failRollback = true;
     ReviewPolicy policy{std::nullopt, rollbackAll ? RuleMode::ReviewWithoutHold
@@ -1338,9 +1353,17 @@ TEST(CustomPolicy, ReviewInstanceRollbackFailure) {
     builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", laterPolicy),
                 openpit::PolicyInstance{"later"});
     const auto engine = builder.Build();
-    EXPECT_THROW(
-        static_cast<void>(engine.ExecutePreTrade(MakeDryRunHookOrder())),
-        std::runtime_error);
+    EXPECT_NO_THROW({
+      const auto result = ExecuteReviewOrder(engine, viaRequest);
+      EXPECT_FALSE(result.Passed());
+      EXPECT_FALSE(result.reservation.has_value());
+      ASSERT_EQ(result.rejects.size(), 1u);
+      EXPECT_EQ(result.rejects.front().policy, "Engine");
+      EXPECT_EQ(result.rejects.front().scope, RejectScope::Order);
+      EXPECT_EQ(result.rejects.front().code, RejectCode::SystemUnavailable);
+      EXPECT_EQ(result.rejects.front().reason, "review rollback failed");
+      EXPECT_EQ(result.rejects.front().mode, RuleMode::Reject);
+    });
     EXPECT_EQ(review.rollbacks, 1);
     EXPECT_EQ(later.main, 1);
     auto order = MakeDryRunHookOrder();
@@ -1350,11 +1373,152 @@ TEST(CustomPolicy, ReviewInstanceRollbackFailure) {
     ASSERT_EQ(blocked.rejects.size(), 1u);
     EXPECT_EQ(blocked.rejects.front().code, RejectCode::SystemUnavailable);
     EXPECT_EQ(blocked.rejects.front().policy, "Engine");
+    EXPECT_EQ(blocked.rejects.front().reason, "mutation finalizer failed");
     EXPECT_EQ(blocked.rejects.front().mode, RuleMode::Reject);
     EXPECT_EQ(review.rollbacks, 1);
     EXPECT_EQ(review.commits, 0);
     EXPECT_EQ(later.rollbacks, 1);
     EXPECT_EQ(later.commits, 0);
+  }
+}
+
+struct ReviewCallbackError : std::logic_error {
+  using std::logic_error::logic_error;
+};
+
+struct ThrowingReviewPolicy : ReviewPolicy {
+  void PerformPreTradeCheck(const Context&, openpit::tx::Mutations&,
+                            openpit::pretrade::Result&, PolicyDecision&) const {
+    throw ReviewCallbackError("policy callback failed");
+  }
+};
+
+TEST(CustomPolicy, EarlierPolicyExceptionWinsOverReviewRollbackFailure) {
+  for (const bool viaRequest : {false, true}) {
+    SCOPED_TRACE(viaRequest);
+    ReviewMutationState review;
+    review.failRollback = true;
+    ReviewPolicy policy{std::nullopt, RuleMode::Reject};
+    policy.state = &review;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ThrowingReviewPolicy>("ThrowingReviewPolicy",
+                                                   ThrowingReviewPolicy{}));
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+                openpit::PolicyInstance{"review", RuleMode::ReviewWithHold});
+    const auto engine = builder.Build();
+    EXPECT_THROW(static_cast<void>(ExecuteReviewOrder(engine, viaRequest)),
+                 ReviewCallbackError);
+    EXPECT_EQ(review.rollbacks, 1);
+  }
+}
+
+TEST(CustomPolicy, LaterPolicyExceptionWinsOverReviewRollbackFailure) {
+  for (const bool viaRequest : {false, true}) {
+    SCOPED_TRACE(viaRequest);
+    ReviewMutationState review;
+    review.failRollback = true;
+    ReviewPolicy policy{std::nullopt, RuleMode::Reject};
+    policy.state = &review;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+                openpit::PolicyInstance{"review", RuleMode::ReviewWithHold});
+    builder.Add(CustomPolicy<ThrowingReviewPolicy>("ThrowingReviewPolicy",
+                                                   ThrowingReviewPolicy{}));
+    const auto engine = builder.Build();
+    EXPECT_THROW(static_cast<void>(ExecuteReviewOrder(engine, viaRequest)),
+                 ReviewCallbackError);
+    EXPECT_EQ(review.rollbacks, 1);
+  }
+}
+
+TEST(CustomPolicy, OrdinaryRejectRollbackFailureKeepsException) {
+  for (const bool viaRequest : {false, true}) {
+    SCOPED_TRACE(viaRequest);
+    ReviewMutationState state;
+    state.failRollback = true;
+    ReviewPolicy policy{std::nullopt, RuleMode::Reject};
+    policy.state = &state;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy));
+    const auto engine = builder.Build();
+    try {
+      static_cast<void>(ExecuteReviewOrder(engine, viaRequest));
+      FAIL() << "expected the ordinary rollback exception";
+    } catch (const std::runtime_error& error) {
+      EXPECT_STREQ(error.what(), "review rollback exploded");
+    }
+    EXPECT_EQ(state.rollbacks, 1);
+    auto order = MakeDryRunHookOrder();
+    order.operation->accountId = openpit::param::AccountId::FromUint64(43);
+    const auto blocked = engine.StartPreTrade(order);
+    ASSERT_EQ(blocked.rejects.size(), 1u);
+    EXPECT_EQ(blocked.rejects.front().policy, "Engine");
+    EXPECT_EQ(blocked.rejects.front().code, RejectCode::SystemUnavailable);
+    EXPECT_EQ(blocked.rejects.front().reason, "mutation finalizer failed");
+  }
+}
+
+TEST(CustomPolicy, NearReviewRollbackRejectKeepsException) {
+  for (const auto& field : {"reason", "scope", "code"}) {
+    SCOPED_TRACE(field);
+    const std::string_view changedField(field);
+    ReviewMutationState state;
+    state.failRollback = true;
+    ReviewPolicy policy{std::nullopt, RuleMode::Reject};
+    policy.state = &state;
+    policy.policyName = "Engine";
+    policy.reason = changedField == "reason" ? "different rollback failure"
+                                             : "review rollback failed";
+    policy.scope =
+        changedField == "scope" ? RejectScope::Account : RejectScope::Order;
+    policy.code = changedField == "code" ? RejectCode::Custom
+                                         : RejectCode::SystemUnavailable;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("Engine", policy));
+    const auto engine = builder.Build();
+    try {
+      static_cast<void>(engine.ExecutePreTrade(MakeDryRunHookOrder()));
+      FAIL() << "expected the near-identity rollback exception";
+    } catch (const std::runtime_error& error) {
+      EXPECT_STREQ(error.what(), "review rollback exploded");
+    }
+    EXPECT_EQ(state.rollbacks, 1);
+  }
+}
+
+TEST(CustomPolicy, ReviewAndRejectRollbackFailuresReturnFullRejectList) {
+  for (const bool viaRequest : {false, true}) {
+    SCOPED_TRACE(viaRequest);
+    ReviewMutationState review, later;
+    review.failRollback = later.failRollback = true;
+    ReviewPolicy policy{std::nullopt, RuleMode::Reject};
+    policy.state = &review;
+    ReviewPolicy laterPolicy{std::nullopt, RuleMode::Reject};
+    laterPolicy.state = &later;
+    openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", policy),
+                openpit::PolicyInstance{"review", RuleMode::ReviewWithHold});
+    builder.Add(CustomPolicy<ReviewPolicy>("ReviewPolicy", laterPolicy),
+                openpit::PolicyInstance{"later"});
+    const auto engine = builder.Build();
+    EXPECT_NO_THROW({
+      const auto result = ExecuteReviewOrder(engine, viaRequest);
+      EXPECT_FALSE(result.Passed());
+      EXPECT_FALSE(result.reservation.has_value());
+      ASSERT_EQ(result.rejects.size(), 2u);
+      EXPECT_EQ(result.rejects[0].policy, "Engine");
+      EXPECT_EQ(result.rejects[0].scope, RejectScope::Order);
+      EXPECT_EQ(result.rejects[0].code, RejectCode::SystemUnavailable);
+      EXPECT_EQ(result.rejects[0].reason, "review rollback failed");
+      EXPECT_EQ(result.rejects[0].mode, RuleMode::Reject);
+      EXPECT_EQ(result.rejects[1].policy, "ReviewPolicy");
+      EXPECT_EQ(result.rejects[1].scope, RejectScope::Order);
+      EXPECT_EQ(result.rejects[1].code, RejectCode::Custom);
+      EXPECT_EQ(result.rejects[1].reason, "review order");
+      EXPECT_EQ(result.rejects[1].mode, RuleMode::Reject);
+    });
+    EXPECT_EQ(review.rollbacks, 1);
+    EXPECT_EQ(later.rollbacks, 1);
   }
 }
 

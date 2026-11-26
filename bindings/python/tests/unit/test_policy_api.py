@@ -17,6 +17,7 @@
 
 import dataclasses
 import gc
+import sys
 import typing
 
 import conftest
@@ -735,10 +736,20 @@ def test_review_instance_effective_reject_discards_marks_and_mutations(
     ]
 
 
+def execute_review_order(engine, via_request):
+    if not via_request:
+        return engine.execute_pre_trade(order=conftest.make_order())
+    start = engine.start_pre_trade(order=conftest.make_order())
+    assert start.ok
+    assert start.request is not None
+    return start.request.execute()
+
+
 @pytest.mark.unit
+@pytest.mark.parametrize("via_request", [False, True])
 @pytest.mark.parametrize("rollback_all", [False, True])
 def test_review_instance_rollback_failure_calls_later_hook_and_kills_engine(
-    rollback_all,
+    rollback_all, via_request
 ) -> None:
     review = ReviewInstancePolicy(
         record_mode=(
@@ -759,9 +770,18 @@ def test_review_instance_rollback_failure_calls_later_hook_and_kills_engine(
         .pre_trade(later, name="later")
         .build()
     )
-    with pytest.raises(RuntimeError, match="^review mutation rollback failed$"):
-        engine.execute_pre_trade(order=conftest.make_order())
-
+    result = execute_review_order(engine, via_request)
+    assert not result.ok
+    assert result.reservation is None
+    assert [(r.policy, r.scope, r.code, r.reason, r.mode) for r in result.rejects] == [
+        (
+            "Engine",
+            openpit.pretrade.RejectScope.ORDER,
+            openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE,
+            "review rollback failed",
+            "Reject",
+        )
+    ]
     blocked = engine.start_pre_trade(
         order=conftest.make_order(account_id=openpit.param.AccountId.from_int(99224417))
     )
@@ -783,6 +803,189 @@ def test_review_instance_rollback_failure_calls_later_hook_and_kills_engine(
         1,
         0,
     )
+
+
+class ReviewCallbackError(LookupError):
+    pass
+
+
+class ThrowingReviewPolicy(ReviewInstancePolicy):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    def perform_pre_trade_check(self, ctx, order):
+        raise self.error
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("via_request", [False, True])
+@pytest.mark.parametrize("earlier", [False, True])
+def test_policy_exception_wins_over_review_rollback_failure(via_request, earlier):
+    thrown = ReviewCallbackError("policy callback failed")
+    callback = ThrowingReviewPolicy(thrown)
+    review = ReviewInstancePolicy(fail_rollback=True)
+    ready = openpit.Engine.builder().no_sync()
+    if earlier:
+        ready = ready.pre_trade(callback, name="throwing")
+    ready = ready.pre_trade(review, name="review", mode="ReviewWithHold")
+    if not earlier:
+        ready = ready.pre_trade(callback, name="throwing")
+    engine = ready.build()
+    with pytest.raises(ReviewCallbackError) as caught:
+        execute_review_order(engine, via_request)
+    assert caught.value is thrown
+    assert review.rollbacks == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("via_request", [False, True])
+def test_ordinary_reject_rollback_failure_keeps_exception(via_request):
+    policy = ReviewInstancePolicy(fail_rollback=True)
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy).build()
+    with pytest.raises(RuntimeError, match="^review mutation rollback failed$"):
+        execute_review_order(engine, via_request)
+    assert policy.rollbacks == 1
+    blocked = engine.start_pre_trade(
+        order=conftest.make_order(account_id=openpit.param.AccountId.from_int(99224417))
+    )
+    assert not blocked.ok
+    assert [(r.policy, r.code, r.reason) for r in blocked.rejects] == [
+        (
+            "Engine",
+            openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE,
+            "mutation finalizer failed",
+        )
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("changed_field", ["reason", "scope", "code"])
+def test_near_review_rollback_reject_keeps_exception(changed_field):
+    class NearReviewRollbackPolicy(ReviewInstancePolicy):
+        @property
+        def name(self) -> str:
+            return "Engine"
+
+        def _reject(self) -> openpit.pretrade.PolicyReject:
+            return openpit.pretrade.PolicyReject(
+                details="instance contribution",
+                code=(
+                    openpit.pretrade.RejectCode.CUSTOM
+                    if changed_field == "code"
+                    else openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE
+                ),
+                scope=(
+                    openpit.pretrade.RejectScope.ACCOUNT
+                    if changed_field == "scope"
+                    else openpit.pretrade.RejectScope.ORDER
+                ),
+                reason=(
+                    "different rollback failure"
+                    if changed_field == "reason"
+                    else "review rollback failed"
+                ),
+            )
+
+    policy = NearReviewRollbackPolicy(fail_rollback=True)
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy).build()
+    with pytest.raises(RuntimeError, match="^review mutation rollback failed$"):
+        engine.execute_pre_trade(order=conftest.make_order())
+    assert policy.rollbacks == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("via_request", [False, True])
+def test_review_and_reject_rollback_failures_return_full_reject_list(via_request):
+    review = ReviewInstancePolicy(fail_rollback=True)
+    later = ReviewInstancePolicy(fail_rollback=True)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(review, name="review", mode="ReviewWithHold")
+        .pre_trade(later, name="later")
+        .build()
+    )
+    result = execute_review_order(engine, via_request)
+    assert not result.ok
+    assert result.reservation is None
+    assert [(r.policy, r.scope, r.code, r.reason, r.mode) for r in result.rejects] == [
+        (
+            "Engine",
+            openpit.pretrade.RejectScope.ORDER,
+            openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE,
+            "review rollback failed",
+            "Reject",
+        ),
+        (
+            "FullParityPolicy",
+            openpit.pretrade.RejectScope.ORDER,
+            openpit.pretrade.RejectCode.CUSTOM,
+            "review boundary",
+            "Reject",
+        ),
+    ]
+    assert (review.rollbacks, later.rollbacks) == (1, 1)
+
+
+class ReentrantFinalizerError(RuntimeError):
+    def __init__(self, probe, outcomes: list) -> None:
+        super().__init__("review mutation rollback failed")
+        self.probe = probe
+        self.outcomes = outcomes
+
+    def __del__(self) -> None:
+        try:
+            self.probe.start_pre_trade(order=conftest.make_order())
+        except BaseException as error:
+            self.outcomes.append(error)
+        else:
+            self.outcomes.append(None)
+
+
+class ReentrantFinalizerReviewPolicy(ReviewInstancePolicy):
+    def __init__(self, probe, outcomes: list) -> None:
+        super().__init__()
+        self.probe = probe
+        self.outcomes = outcomes
+
+    def perform_pre_trade_check(self, ctx, order):
+        result = super().perform_pre_trade_check(ctx, order)
+
+        def rollback() -> None:
+            self.rollbacks += 1
+            raise ReentrantFinalizerError(self.probe, self.outcomes)
+
+        return dataclasses.replace(
+            result,
+            mutations=(openpit.Mutation(commit=lambda: None, rollback=rollback),),
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("via_request", [False, True])
+def test_displaced_rollback_exception_finalizer_may_reenter_sdk(
+    via_request, monkeypatch
+):
+    unraisable = []
+    monkeypatch.setattr(sys, "unraisablehook", unraisable.append)
+    outcomes: list = []
+    probe = openpit.Engine.builder().no_sync().pre_trade(FullParityPolicy()).build()
+    thrown = ReviewCallbackError("policy callback failed")
+    review = ReentrantFinalizerReviewPolicy(probe, outcomes)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(review, name="review", mode="ReviewWithHold")
+        .pre_trade(ThrowingReviewPolicy(thrown), name="throwing")
+        .build()
+    )
+    with pytest.raises(ReviewCallbackError) as caught:
+        execute_review_order(engine, via_request)
+    assert caught.value is thrown
+    assert review.rollbacks == 1
+    assert outcomes == [None]
+    assert unraisable == []
 
 
 @pytest.mark.unit
