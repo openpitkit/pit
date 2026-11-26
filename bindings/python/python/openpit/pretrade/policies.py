@@ -25,11 +25,12 @@ import enum
 import typing
 
 from .. import _enum, marketdata
-from .._openpit import OrderSizeLimit
+from .._openpit import OrderSizeLimit, _check_review_rule_level
 from ._enum import RuleMode
 
 if typing.TYPE_CHECKING:
     from .. import param
+    from ..core import Instrument
     from ._enum import RuleMode
 
 DEFAULT_POLICY_GROUP_ID = 0
@@ -477,6 +478,123 @@ def build_order_size_limit() -> OrderSizeLimitBuilder:
     the engine's configurator.
     """
     return OrderSizeLimitBuilder()
+
+
+# ---------------------------------------------------------------------------
+# Review rules
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class ReviewRule:
+    """Match orders at one account, account-group, or global level.
+
+    Set only the ID required by the chosen level. Global rules have neither
+    ID. With no instrument list, the rule matches every instrument. A list
+    matches exact instrument pairs and must be non-empty and contain no
+    duplicates.
+    """
+
+    account_id: param.AccountId | None = None
+    account_group_id: param.AccountGroupId | None = None
+    instruments: list[Instrument] | None = None
+
+
+class ReviewRuleReadyBuilder:
+    """Review-rule policy builder ready for ``builtin()``.
+
+    A matching order yields one ``COMPLIANCE_RESTRICTION`` per instance. Its
+    registration mode determines whether it rejects the order or marks it for
+    review.
+    """
+
+    def __init__(self) -> None:
+        self._global: ReviewRule | None = None
+        self._groups: list[ReviewRule] = []
+        self._accounts: list[ReviewRule] = []
+        self._policy_group_id = DEFAULT_POLICY_GROUP_ID
+
+    def with_policy_group_id(self, policy_group_id: int) -> ReviewRuleReadyBuilder:
+        """Assign the policy group tag."""
+        self._policy_group_id = policy_group_id
+        return self
+
+    def global_rule(self, rule: ReviewRule) -> ReviewRuleReadyBuilder:
+        """Set or replace the rule for all accounts."""
+        _check_review_rule_level(rule, "global")
+        self._global = rule
+        return self
+
+    def account_group_rules(self, *rules: ReviewRule) -> ReviewRuleReadyBuilder:
+        """Append rules keyed by account group."""
+        for rule in rules:
+            _check_review_rule_level(rule, "account group")
+        self._groups.extend(rules)
+        return self
+
+    def account_rules(self, *rules: ReviewRule) -> ReviewRuleReadyBuilder:
+        """Append rules keyed by account."""
+        for rule in rules:
+            _check_review_rule_level(rule, "account")
+        self._accounts.extend(rules)
+        return self
+
+    def _build(
+        self,
+        builder: typing.Any,
+        *,
+        name: str | None = None,
+        mode: RuleMode | None = None,
+    ) -> None:
+        """Register this instance through the engine builder."""
+        builder._add_builtin_review_rule(
+            name=name,
+            mode=mode,
+            policy_group_id=self._policy_group_id,
+            global_rule=self._global,
+            account_group_rules=self._groups,
+            account_rules=self._accounts,
+        )
+
+
+class ReviewRuleBuilder:
+    """Entry point for building a review-rule policy.
+
+    Use a rule method to obtain a :class:`ReviewRuleReadyBuilder`.
+    """
+
+    #: Default registration name used for runtime configuration.
+    NAME: str = "ReviewRulePolicy"
+
+    def __init__(self) -> None:
+        self._ready = ReviewRuleReadyBuilder()
+
+    def with_policy_group_id(self, policy_group_id: int) -> ReviewRuleBuilder:
+        """Assign the policy group tag."""
+        self._ready.with_policy_group_id(policy_group_id)
+        return self
+
+    def global_rule(self, rule: ReviewRule) -> ReviewRuleReadyBuilder:
+        """Set a global rule and return a ready builder."""
+        return self._ready.global_rule(rule)
+
+    def account_group_rules(self, *rules: ReviewRule) -> ReviewRuleReadyBuilder:
+        """Add account-group rules and return a ready builder."""
+        return self._ready.account_group_rules(*rules)
+
+    def account_rules(self, *rules: ReviewRule) -> ReviewRuleReadyBuilder:
+        """Add account rules and return a ready builder."""
+        return self._ready.account_rules(*rules)
+
+
+def build_review_rule() -> ReviewRuleBuilder:
+    """Return a new review-rule policy builder.
+
+    Call ``account_group_rules()`` or ``account_rules()`` without rules to
+    register an empty policy. It admits every order and can be configured
+    later through the engine's configurator.
+    """
+    return ReviewRuleBuilder()
 
 
 # ---------------------------------------------------------------------------
@@ -1226,6 +1344,10 @@ __all__ = [
     "OrderSizeLimitReadyBuilder",
     "OrderSizeLimitBuilder",
     "build_order_size_limit",
+    "ReviewRule",
+    "ReviewRuleBuilder",
+    "ReviewRuleReadyBuilder",
+    "build_review_rule",
     "PnlBoundsBrokerBarrier",
     "PnlBoundsAccountAssetBarrier",
     "PnlBoundsAccountAssetBarrierUpdate",

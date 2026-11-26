@@ -169,6 +169,12 @@ typedef struct OpenPitPretradePoliciesRateLimitAssetBarrier
     OpenPitPretradePoliciesRateLimitAssetBarrier;
 typedef struct OpenPitPretradePoliciesRateLimitBrokerBarrier
     OpenPitPretradePoliciesRateLimitBrokerBarrier;
+typedef struct OpenPitPretradePoliciesReviewRuleAccountGroupRule
+    OpenPitPretradePoliciesReviewRuleAccountGroupRule;
+typedef struct OpenPitPretradePoliciesReviewRuleAccountRule
+    OpenPitPretradePoliciesReviewRuleAccountRule;
+typedef struct OpenPitPretradePoliciesReviewRuleGlobalRule
+    OpenPitPretradePoliciesReviewRuleGlobalRule;
 typedef struct OpenPitPretradePoliciesSpotFundsOverride
     OpenPitPretradePoliciesSpotFundsOverride;
 typedef struct OpenPitPretradePoliciesSpotFundsOverrideTarget
@@ -1985,6 +1991,68 @@ struct OpenPitPretradePoliciesRateLimitAccountBarrier {
      * Window duration in nanoseconds.
      */
     int64_t window_nanoseconds;
+};
+
+/**
+ * Global review rule. The verdict comes from the registered policy instance.
+ */
+struct OpenPitPretradePoliciesReviewRuleGlobalRule {
+    /**
+     * Exact instrument pairs, borrowed for the call; ignored for all instruments.
+     */
+    const OpenPitInstrument * instruments;
+    /**
+     * Number of exact instruments; must be nonzero when `has_instruments` is true.
+     */
+    size_t instruments_len;
+    /**
+     * False covers all instruments; true selects a nonempty, distinct exact list.
+     */
+    bool has_instruments;
+};
+
+/**
+ * Review rule for one account group. Group keys must be distinct in a level.
+ */
+struct OpenPitPretradePoliciesReviewRuleAccountGroupRule {
+    /**
+     * Account group covered by this rule.
+     */
+    OpenPitParamAccountGroupId account_group_id;
+    /**
+     * Exact instrument pairs, borrowed for the call; ignored for all instruments.
+     */
+    const OpenPitInstrument * instruments;
+    /**
+     * Number of exact instruments; must be nonzero when `has_instruments` is true.
+     */
+    size_t instruments_len;
+    /**
+     * False covers all instruments; true selects a nonempty, distinct exact list.
+     */
+    bool has_instruments;
+};
+
+/**
+ * Review rule for one account. Account keys must be distinct in a level.
+ */
+struct OpenPitPretradePoliciesReviewRuleAccountRule {
+    /**
+     * Account covered by this rule.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Exact instrument pairs, borrowed for the call; ignored for all instruments.
+     */
+    const OpenPitInstrument * instruments;
+    /**
+     * Number of exact instruments; must be nonzero when `has_instruments` is true.
+     */
+    size_t instruments_len;
+    /**
+     * False covers all instruments; true selects a nonempty, distinct exact list.
+     */
+    bool has_instruments;
 };
 
 /**
@@ -8064,6 +8132,105 @@ bool openpit_engine_configure_rate_limit(
     const OpenPitPretradePoliciesRateLimitAccountAssetBarrier * account_asset,
     size_t account_asset_len,
     bool has_account_asset,
+    OpenPitConfigureError ** out_error
+);
+
+/**
+ * Adds the built-in review-rule policy to the engine builder.
+ *
+ * Contract:
+ * - A null or already-consumed `builder` is a handled error.
+ * - `policy_group_id` assigns the policy group; pass 0 for the default
+ *   group.
+ * - `instance` supplies the registration name and mode. Register a policy
+ *   that keeps its own state (Spot Funds, the rate limit, the P&L bounds
+ *   kill switch, a custom policy that holds funds or counts) in
+ *   `OPENPIT_PRETRADE_RULE_MODE_REJECT` mode; \ref
+ *   OpenPitPolicyInstance::mode says what a review mode discards.
+ * - Null `global` means no global rule. Empty array levels contain no rules.
+ *   An empty policy admits orders and may be configured later.
+ * - `has_instruments == false` covers all instruments, ignoring pointer and
+ *   length. Otherwise the list must be nonempty, contain complete instrument
+ *   pairs, and have no duplicates. Group and account keys must be distinct.
+ *
+ * # Safety
+ *
+ * - A non-null `builder` must point to a live, aligned, initialized builder.
+ * - Non-null `global` and `instance` must point to aligned, initialized,
+ *   readable values for the call; instance name bytes must be readable.
+ * - Arrays with nonzero lengths must be non-null, aligned, initialized and
+ *   readable for their lengths. This includes each exact instrument array.
+ * - All supplied bool fields must contain valid bool values. Each non-null
+ *   instrument string view must point to its length of readable bytes.
+ * - `out_error` may be null; otherwise it must point to aligned, writable
+ *   storage for an `OpenPitSharedString` handle.
+ *
+ * Success:
+ * - Returns true; the builder retains the policy with owned rules.
+ *
+ * Error:
+ * - Returns false on invalid rules, parsing, instance or builder errors;
+ *   nothing is registered. If `out_error` is non-null, writes a caller-owned
+ *   error handle; release it with `openpit_destroy_shared_string`.
+ */
+bool openpit_engine_builder_add_builtin_review_rule_policy(
+    OpenPitEngineBuilder * builder,
+    uint16_t policy_group_id,
+    const OpenPitPretradePoliciesReviewRuleGlobalRule * global,
+    const OpenPitPretradePoliciesReviewRuleAccountGroupRule * account_group_rules,
+    size_t account_group_rules_len,
+    const OpenPitPretradePoliciesReviewRuleAccountRule * account_rules,
+    size_t account_rules_len,
+    const OpenPitPolicyInstance * instance,
+    OpenPitOutError out_error
+);
+
+/**
+ * Updates the named review-rule policy, replacing each supplied level.
+ *
+ * Contract:
+ * - A null `engine` is a handled error. `name` must be UTF-8 and selects the
+ *   registration name (the default is "ReviewRulePolicy").
+ * - False `has_*` keeps that level, ignoring its pointer and length.
+ * - True `has_global` with null `global` clears the global rule. A supplied
+ *   array level replaces that whole level; length zero clears it.
+ * - Instrument filters and distinct keys follow the registration contract.
+ *   Parsing and validation are atomic across all supplied levels.
+ *
+ * # Safety
+ *
+ * - A non-null `engine` must point to a live, aligned, initialized engine.
+ * - All bool arguments and supplied bool fields must hold valid bool values.
+ * - Non-null `name.ptr` must point to `name.len` readable bytes for the
+ *   call.
+ * - When its `has_*` is true, non-null `global` must point to one readable,
+ *   aligned, initialized rule. Array levels of nonzero length must point to
+ *   that many readable, aligned, initialized rules. Each exact instrument
+ *   array and its string views must remain readable for the call.
+ * - `out_error` may be null; otherwise it must point to aligned, writable
+ *   storage for an `OpenPitConfigureError` pointer.
+ *
+ * Success:
+ * - Returns true; the new rules apply to subsequent orders.
+ *
+ * Error:
+ * - Returns false without changing settings. Parsing or rule errors return
+ *   Validation; unknown names and settings type mismatches retain their
+ *   kind.
+ * - If `out_error` is non-null, writes a caller-owned error; release it with
+ *   `openpit_destroy_configure_error`.
+ */
+bool openpit_engine_configure_review_rule(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    const OpenPitPretradePoliciesReviewRuleGlobalRule * global,
+    bool has_global,
+    const OpenPitPretradePoliciesReviewRuleAccountGroupRule * account_group_rules,
+    size_t account_group_rules_len,
+    bool has_account_group_rules,
+    const OpenPitPretradePoliciesReviewRuleAccountRule * account_rules,
+    size_t account_rules_len,
+    bool has_account_rules,
     OpenPitConfigureError ** out_error
 );
 

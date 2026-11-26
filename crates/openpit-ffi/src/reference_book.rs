@@ -24,7 +24,7 @@ use openpit::{
     SettlementUnit, UnknownReferenceBookInstrumentId,
 };
 
-use crate::instrument::{import_instrument, OpenPitInstrument};
+use crate::instrument::{import_instrument, import_required_instrument, OpenPitInstrument};
 use crate::last_error::{write_error, OpenPitOutError};
 use crate::marketdata::OpenPitInstrumentId;
 
@@ -131,23 +131,6 @@ pub struct OpenPitReferenceBook {
     inner: ReferenceBook,
 }
 
-fn import_required_instrument(
-    instrument: &OpenPitInstrument,
-    out_error: OpenPitOutError,
-) -> Option<openpit::Instrument> {
-    match import_instrument(instrument) {
-        Ok(Some(instrument)) => Some(instrument),
-        Ok(None) => {
-            write_error(out_error, "instrument is not set");
-            None
-        }
-        Err(message) => {
-            write_error(out_error, message.as_str());
-            None
-        }
-    }
-}
-
 /// Creates an empty core instrument reference book.
 ///
 /// The returned handle is caller-owned and must be released with
@@ -193,7 +176,9 @@ pub extern "C" fn openpit_reference_book_register(
         write_error(out_error, "out_id is null");
         return OpenPitReferenceBookRegisterStatus::Error;
     }
-    let Some(instrument) = import_required_instrument(unsafe { &*instrument }, out_error) else {
+    let Ok(instrument) = import_required_instrument(unsafe { &*instrument })
+        .map_err(|message| write_error(out_error, &message))
+    else {
         return OpenPitReferenceBookRegisterStatus::Error;
     };
     match unsafe { &mut *book }.inner.register(instrument) {
@@ -238,7 +223,9 @@ pub extern "C" fn openpit_reference_book_register_with_id(
         write_error(out_error, "out_id is null");
         return OpenPitReferenceBookRegisterStatus::Error;
     }
-    let Some(instrument) = import_required_instrument(unsafe { &*instrument }, out_error) else {
+    let Ok(instrument) = import_required_instrument(unsafe { &*instrument })
+        .map_err(|message| write_error(out_error, &message))
+    else {
         return OpenPitReferenceBookRegisterStatus::Error;
     };
     match unsafe { &mut *book }

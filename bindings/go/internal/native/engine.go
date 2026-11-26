@@ -267,6 +267,38 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 	return nil
 }
 
+// EngineBuilderAddBuiltinReviewRule copies the rules into the builder.
+// Nil global omits the global rule; nil instrument lists cover all instruments.
+func EngineBuilderAddBuiltinReviewRule(
+	builder EngineBuilder,
+	groupID PolicyGroupID,
+	global *ReviewRuleGlobalRule,
+	groups []ReviewRuleAccountGroupRule,
+	accounts []ReviewRuleAccountRule,
+	instance *PolicyInstance,
+) error {
+	cInstance, release, err := newPolicyInstance(instance)
+	if err != nil {
+		return err
+	}
+	defer release()
+	args := newReviewRuleArguments(global, groups, accounts)
+	defer args.release()
+	var outError SharedString
+	if !C.openpit_engine_builder_add_builtin_review_rule_policy(
+		builder, groupID, args.global,
+		args.groups, C.size_t(len(groups)),
+		args.accounts, C.size_t(len(accounts)),
+		cInstance,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return consumeSharedStringAsError(
+			outError, "openpit_engine_builder_add_builtin_review_rule_policy failed",
+		)
+	}
+	return nil
+}
+
 func EngineBuilderAddBuiltinPnlBoundsKillSwitch(
 	builder EngineBuilder,
 	groupID PolicyGroupID,

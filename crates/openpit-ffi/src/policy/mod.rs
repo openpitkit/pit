@@ -54,6 +54,7 @@ mod order_size_limit;
 mod order_validation;
 mod pnl_bounds_killswitch;
 mod rate_limit;
+mod review_rule;
 mod spot_funds;
 pub use spot_funds::OpenPitPretradePoliciesSpotFundsLimitMode;
 

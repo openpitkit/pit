@@ -50,6 +50,10 @@ use openpit::pretrade::policies::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
 };
+use openpit::pretrade::policies::{
+    ReviewRuleAccountGroupRule, ReviewRuleAccountRule, ReviewRuleInstruments, ReviewRulePolicy,
+    ReviewRulePolicyError, ReviewRuleSettings,
+};
 use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
     DropCopyOperation, DropCopyStartMutationRecorder, PolicyAccountAdjustmentResult,
@@ -1643,6 +1647,69 @@ impl PyConfigurator {
         py.detach(|| {
             self.inner
                 .set_account_pnl(name, account, settlement_asset, pnl)
+        })
+        .map_err(convert_configure_error)
+    }
+
+    /// Retune the rules of a named review-rule policy.
+    ///
+    /// None keeps a level. A list replaces all rules at that level, and an
+    /// empty list clears it. Set clear_global_rule=True to remove the global
+    /// rule. Invalid settings leave every level unchanged.
+    ///
+    /// Raises:
+    ///     ValueError: Rule IDs do not match the level, or global_rule and
+    ///         clear_global_rule are given together.
+    ///     PolicyConfigureError: The policy name, type, or rules are invalid.
+    #[pyo3(signature = (name, *, global_rule = None, clear_global_rule = false, account_group_rules = None, account_rules = None))]
+    fn review_rule<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+        global_rule: Option<Bound<'py, PyAny>>,
+        clear_global_rule: bool,
+        account_group_rules: Option<Vec<Bound<'py, PyAny>>>,
+        account_rules: Option<Vec<Bound<'py, PyAny>>>,
+    ) -> PyResult<()> {
+        if clear_global_rule && global_rule.is_some() {
+            return Err(PyValueError::new_err(
+                "global_rule and clear_global_rule cannot both be provided",
+            ));
+        }
+        let global = global_rule
+            .as_ref()
+            .map(|rule| parse_review_rule_instruments(rule, "global"))
+            .transpose()?;
+        let groups = account_group_rules
+            .map(|rules| {
+                rules
+                    .iter()
+                    .map(parse_review_rule_group)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
+        let accounts = account_rules
+            .map(|rules| {
+                rules
+                    .iter()
+                    .map(parse_review_rule_account)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        py.detach(|| {
+            self.inner.review_rule(name, |settings| {
+                if clear_global_rule || global.is_some() {
+                    settings.set_global(global)?;
+                }
+                if let Some(groups) = groups {
+                    settings.set_account_group_rules(groups)?;
+                }
+                if let Some(accounts) = accounts {
+                    settings.set_account_rules(accounts)?;
+                }
+                Ok::<(), ReviewRulePolicyError>(())
+            })
         })
         .map_err(convert_configure_error)
     }
@@ -4420,6 +4487,17 @@ impl PyBuilderState {
         })
     }
 
+    fn add_configurable_review_rule(
+        self,
+        policy: ReviewRulePolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
+    ) -> Self {
+        PyBuilderState::Ready(match self {
+            Self::Synced(builder) => builder.pre_trade_instance(policy, instance),
+            Self::Ready(builder) => builder.pre_trade_instance(policy, instance),
+        })
+    }
+
     fn add_configurable_spot_funds(
         self,
         policy: SpotFundsPolicy<openpit_interop::EngineLocking, openpit_interop::EngineLocking>,
@@ -4615,6 +4693,14 @@ impl PyReadyEngineBuilder {
         self.with_state(|state| state.add_configurable_order_size_limit(policy, instance))
     }
 
+    fn add_configurable_review_rule(
+        &self,
+        policy: ReviewRulePolicy<openpit_interop::StorageLockingPolicyFactory>,
+        instance: openpit::PolicyInstance,
+    ) -> PyResult<()> {
+        self.with_state(|state| state.add_configurable_review_rule(policy, instance))
+    }
+
     fn add_configurable_spot_funds(
         &self,
         policy: SpotFundsPolicy<openpit_interop::EngineLocking, openpit_interop::EngineLocking>,
@@ -4749,6 +4835,36 @@ impl PyReadyEngineBuilder {
             account_asset_barriers,
         )?;
         slf.add_configurable_order_size_limit(policy, parse_policy_instance(name, mode)?)?;
+        Ok(slf)
+    }
+
+    #[pyo3(name = "_add_builtin_review_rule", signature = (*, policy_group_id = 0, global_rule = None, account_group_rules = vec![], account_rules = vec![], name = None, mode = None))]
+    fn add_builtin_review_rule<'py>(
+        slf: PyRef<'py, Self>,
+        policy_group_id: u16,
+        global_rule: Option<Bound<'_, PyAny>>,
+        account_group_rules: Vec<Bound<'_, PyAny>>,
+        account_rules: Vec<Bound<'_, PyAny>>,
+        name: Option<String>,
+        mode: Option<&str>,
+    ) -> PyResult<PyRef<'py, Self>> {
+        let global = global_rule
+            .as_ref()
+            .map(|rule| parse_review_rule_instruments(rule, "global"))
+            .transpose()?;
+        let groups = account_group_rules
+            .iter()
+            .map(parse_review_rule_group)
+            .collect::<PyResult<Vec<_>>>()?;
+        let accounts = account_rules
+            .iter()
+            .map(parse_review_rule_account)
+            .collect::<PyResult<Vec<_>>>()?;
+        let settings = ReviewRuleSettings::new(global, groups, accounts)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let policy = ReviewRulePolicy::new(settings)
+            .with_policy_group_id(PolicyGroupId::new(policy_group_id));
+        slf.add_configurable_review_rule(policy, parse_policy_instance(name, mode)?)?;
         Ok(slf)
     }
 
@@ -5109,6 +5225,54 @@ fn parse_order_size_limit(limit: &PyOrderSizeLimit) -> PyResult<OrderSizeLimit> 
             .as_deref()
             .map(parse_volume)
             .transpose()?,
+    })
+}
+
+#[pyfunction]
+fn _check_review_rule_level(rule: &Bound<'_, PyAny>, level: &str) -> PyResult<()> {
+    ensure_policy_entity(rule, "ReviewRule")?;
+    let has_account = !rule.getattr("account_id")?.is_none();
+    let has_group = !rule.getattr("account_group_id")?.is_none();
+    if !matches!(
+        (level, has_account, has_group),
+        ("global", false, false) | ("account group", false, true) | ("account", true, false)
+    ) {
+        return Err(PyValueError::new_err(format!(
+            "ReviewRule has incompatible IDs for the {level} level"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_review_rule_instruments(
+    value: &Bound<'_, PyAny>,
+    level: &str,
+) -> PyResult<ReviewRuleInstruments> {
+    _check_review_rule_level(value, level)?;
+    let instruments = value.getattr("instruments")?;
+    if instruments.is_none() {
+        return Ok(ReviewRuleInstruments::All);
+    }
+    instruments
+        .try_iter()?
+        .map(|instrument| parse_instrument_input(&instrument?))
+        .collect::<PyResult<Vec<_>>>()
+        .map(ReviewRuleInstruments::Exact)
+}
+
+fn parse_review_rule_group(value: &Bound<'_, PyAny>) -> PyResult<ReviewRuleAccountGroupRule> {
+    let instruments = parse_review_rule_instruments(value, "account group")?;
+    Ok(ReviewRuleAccountGroupRule {
+        instruments,
+        account_group_id: parse_account_group_id_input(&value.getattr("account_group_id")?)?,
+    })
+}
+
+fn parse_review_rule_account(value: &Bound<'_, PyAny>) -> PyResult<ReviewRuleAccountRule> {
+    let instruments = parse_review_rule_instruments(value, "account")?;
+    Ok(ReviewRuleAccountRule {
+        instruments,
+        account_id: parse_account_id_input(&value.getattr("account_id")?)?,
     })
 }
 
@@ -10060,6 +10224,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("_LEVERAGE_MAX", Leverage::MAX)?;
     module.add("_LEVERAGE_STEP", Leverage::STEP)?;
     module.add_function(wrap_pyfunction!(_validate_asset, module)?)?;
+    module.add_function(wrap_pyfunction!(_check_review_rule_level, module)?)?;
     module.add_function(wrap_pyfunction!(
         _reject_code_is_evaluation_failure,
         module

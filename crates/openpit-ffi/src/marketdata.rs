@@ -36,7 +36,7 @@ use openpit::InstrumentId;
 use openpit_interop::{EngineHandle, EngineLocking, SyncMode};
 
 use crate::account_group_id::OpenPitParamAccountGroupId;
-use crate::instrument::{import_instrument, OpenPitInstrument};
+use crate::instrument::{import_instrument, import_required_instrument, OpenPitInstrument};
 use crate::last_error::{write_error, OpenPitOutError};
 use crate::param::{OpenPitParamAccountId, OpenPitParamPrice, OpenPitParamPriceOptional};
 
@@ -492,23 +492,6 @@ pub extern "C" fn openpit_marketdata_service_clone(
 //--------------------------------------------------------------------------------------------------
 // Registration
 
-fn import_required_instrument(
-    instrument: &OpenPitInstrument,
-    out_error: OpenPitOutError,
-) -> Option<openpit::Instrument> {
-    match import_instrument(instrument) {
-        Ok(Some(instrument)) => Some(instrument),
-        Ok(None) => {
-            write_error(out_error, "instrument is not set");
-            None
-        }
-        Err(message) => {
-            write_error(out_error, message.as_str());
-            None
-        }
-    }
-}
-
 /// Registers `instrument` with the service-wide default TTL.
 ///
 /// Status:
@@ -537,7 +520,9 @@ pub extern "C" fn openpit_marketdata_service_register(
         write_error(out_error, "out_id is null");
         return OpenPitMarketDataRegisterStatus::Error;
     }
-    let Some(parsed) = import_required_instrument(unsafe { &*instrument }, out_error) else {
+    let Ok(parsed) = import_required_instrument(unsafe { &*instrument })
+        .map_err(|message| write_error(out_error, &message))
+    else {
         return OpenPitMarketDataRegisterStatus::Error;
     };
     match unsafe { &*service }.handle.register(parsed) {
@@ -572,7 +557,9 @@ pub extern "C" fn openpit_marketdata_service_register_with_ttl(
         write_error(out_error, "out_id is null");
         return OpenPitMarketDataRegisterStatus::Error;
     }
-    let Some(parsed) = import_required_instrument(unsafe { &*instrument }, out_error) else {
+    let Ok(parsed) = import_required_instrument(unsafe { &*instrument })
+        .map_err(|message| write_error(out_error, &message))
+    else {
         return OpenPitMarketDataRegisterStatus::Error;
     };
     match unsafe { &*service }
@@ -618,7 +605,9 @@ pub extern "C" fn openpit_marketdata_service_register_with_id(
         write_error(out_error, "out_id is null");
         return OpenPitMarketDataRegisterStatus::Error;
     }
-    let Some(parsed) = import_required_instrument(unsafe { &*instrument }, out_error) else {
+    let Ok(parsed) = import_required_instrument(unsafe { &*instrument })
+        .map_err(|message| write_error(out_error, &message))
+    else {
         return OpenPitMarketDataRegisterStatus::Error;
     };
     match unsafe { &*service }
@@ -667,7 +656,9 @@ pub extern "C" fn openpit_marketdata_service_register_with_id_and_ttl(
         write_error(out_error, "out_id is null");
         return OpenPitMarketDataRegisterStatus::Error;
     }
-    let Some(parsed) = import_required_instrument(unsafe { &*instrument }, out_error) else {
+    let Ok(parsed) = import_required_instrument(unsafe { &*instrument })
+        .map_err(|message| write_error(out_error, &message))
+    else {
         return OpenPitMarketDataRegisterStatus::Error;
     };
     match unsafe { &*service }.handle.register_with_id_and_ttl(
@@ -1159,7 +1150,8 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument(
         write_error(out_error, "out_id is null");
         return false;
     }
-    let Some(parsed_instrument) = import_required_instrument(unsafe { &*instrument }, out_error)
+    let Ok(parsed_instrument) = import_required_instrument(unsafe { &*instrument })
+        .map_err(|message| write_error(out_error, &message))
     else {
         return false;
     };

@@ -70,6 +70,14 @@ def test_builtins_policies_have_rust_like_module_paths() -> None:
     assert not hasattr(openpit, "PnlBoundsBrokerBarrier")
     assert not hasattr(openpit, "PnlBoundsAccountAssetBarrier")
     assert not hasattr(openpit, "PnlBoundsAccountAssetBarrierUpdate")
+    assert not hasattr(openpit, "ReviewRule")
+    assert not hasattr(openpit, "ReviewRuleBuilder")
+    assert not hasattr(openpit, "ReviewRuleReadyBuilder")
+    assert not hasattr(openpit, "build_review_rule")
+    assert not hasattr(openpit.pretrade, "ReviewRule")
+    assert not hasattr(openpit.pretrade, "ReviewRuleBuilder")
+    assert not hasattr(openpit.pretrade, "ReviewRuleReadyBuilder")
+    assert not hasattr(openpit.pretrade, "build_review_rule")
 
     assert policies.OrderSizeLimit.__module__ == "openpit.pretrade.policies"
     assert policies.PnlBoundsBrokerBarrier.__module__ == "openpit.pretrade.policies"
@@ -80,6 +88,10 @@ def test_builtins_policies_have_rust_like_module_paths() -> None:
         policies.PnlBoundsAccountAssetBarrierUpdate.__module__
         == "openpit.pretrade.policies"
     )
+    assert policies.ReviewRule.__module__ == "openpit.pretrade.policies"
+    assert policies.ReviewRuleBuilder.__module__ == "openpit.pretrade.policies"
+    assert policies.ReviewRuleReadyBuilder.__module__ == "openpit.pretrade.policies"
+    assert policies.build_review_rule.__module__ == "openpit.pretrade.policies"
     assert (
         policies.SpotFundsOverrideTargetInstrument.__module__
         == "openpit.pretrade.policies"

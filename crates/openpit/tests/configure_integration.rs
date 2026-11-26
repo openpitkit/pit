@@ -28,7 +28,8 @@ use std::time::Duration;
 
 use openpit::marketdata::{InstrumentId, MarketDataBuilder, Quote, QuoteTtl};
 use openpit::param::{
-    AccountId, AdjustmentAmount, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side, TradeAmount,
+    AccountGroupId, AccountId, AdjustmentAmount, Asset, Fee, Pnl, PositionSize, Price, Quantity,
+    Side, TradeAmount,
 };
 use openpit::pretrade::policies::pnl_bounds_killswitch::PnlBoundsAccountAssetBarrierUpdate;
 use openpit::pretrade::policies::{
@@ -38,8 +39,10 @@ use openpit::pretrade::policies::{
     PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings, RateLimit,
     RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
-    SpotFundsLimitMode, SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPnlBoundsAxis,
-    SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings,
+    ReviewRuleAccountGroupRule, ReviewRuleAccountRule, ReviewRuleInstruments, ReviewRulePolicy,
+    ReviewRulePolicyError, ReviewRuleSettings, SpotFundsLimitMode, SpotFundsOverride,
+    SpotFundsOverrideTarget, SpotFundsPnlBoundsAxis, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
+    SpotFundsPricingSource, SpotFundsSettings,
 };
 use openpit::pretrade::{PreTradePolicy, RejectCode, RejectScope, DEFAULT_POLICY_GROUP_ID};
 use openpit::storage::{FullLocking, IndexLocking, NoLocking};
@@ -1658,6 +1661,235 @@ fn empty_policy_lifecycle_order_size_untouched_axis_survives_clear() {
             .execute_pre_trade(order_with_price(1, "11", "100"))
             .expect("empty policy must pass");
     }
+}
+
+// ─── Review-rule ──────────────────────────────────────────────────────────────
+
+fn review_rule_engine(settings: ReviewRuleSettings) -> FullSyncEngine<OrderOperation> {
+    Engine::builder::<OrderOperation, (), ()>()
+        .full_sync()
+        .pre_trade(ReviewRulePolicy::<FullLocking>::new(settings))
+        .build()
+        .expect("engine must build")
+}
+
+fn review_account_rule(account: u64, instruments: ReviewRuleInstruments) -> ReviewRuleAccountRule {
+    ReviewRuleAccountRule {
+        instruments,
+        account_id: AccountId::from_u64(account),
+    }
+}
+
+fn review_group() -> AccountGroupId {
+    AccountGroupId::from_u32(7).expect("group id must be valid")
+}
+
+fn review_group_rule(instruments: ReviewRuleInstruments) -> ReviewRuleAccountGroupRule {
+    ReviewRuleAccountGroupRule {
+        instruments,
+        account_group_id: review_group(),
+    }
+}
+
+fn review_instrument(underlying: &str) -> Instrument {
+    Instrument::new(
+        Asset::new(underlying).expect("asset code must be valid"),
+        Asset::new("USD").expect("asset code must be valid"),
+    )
+}
+
+/// The AAPL/USD order of `account` is rejected by a rule as an order-scoped
+/// compliance restriction.
+fn assert_review_rule_rejects(engine: &FullSyncEngine<OrderOperation>, account: u64) {
+    let rejects = engine
+        .execute_pre_trade(order(account))
+        .err()
+        .expect("the rule must reject the order");
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0].policy, ReviewRulePolicy::<FullLocking>::NAME);
+    assert_eq!(rejects[0].code, RejectCode::ComplianceRestriction);
+    assert_eq!(rejects[0].scope, RejectScope::Order);
+    assert_eq!(rejects[0].mode, openpit::pretrade::RuleMode::Reject);
+}
+
+fn assert_review_rule_passes(engine: &FullSyncEngine<OrderOperation>, account: u64) {
+    engine
+        .execute_pre_trade(order(account))
+        .expect("no rule covers the order")
+        .rollback();
+}
+
+#[test]
+fn empty_policy_lifecycle_review_rule_levels() {
+    let engine = review_rule_engine(
+        ReviewRuleSettings::new(None, [], []).expect("empty settings must be valid"),
+    );
+    let name = ReviewRulePolicy::<FullLocking>::NAME;
+    assert_review_rule_passes(&engine, 1001);
+    assert_review_rule_passes(&engine, 1002);
+
+    // Account level: add, replace as a whole, narrow, clear.
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| {
+            settings.set_account_rules([review_account_rule(1001, ReviewRuleInstruments::All)])
+        })
+        .expect("adding an account rule must publish");
+    assert_review_rule_rejects(&engine, 1001);
+    assert_review_rule_passes(&engine, 1002);
+
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| {
+            settings.set_account_rules([review_account_rule(1002, ReviewRuleInstruments::All)])
+        })
+        .expect("replacing the account level must publish");
+    assert_review_rule_passes(&engine, 1001);
+    assert_review_rule_rejects(&engine, 1002);
+
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| {
+            settings.set_account_rules([review_account_rule(
+                1002,
+                ReviewRuleInstruments::Exact(vec![review_instrument("MSFT")]),
+            )])
+        })
+        .expect("narrowing the instruments must publish");
+    assert_review_rule_passes(&engine, 1002);
+
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| {
+            settings.set_account_rules([review_account_rule(
+                1002,
+                ReviewRuleInstruments::Exact(vec![review_instrument("AAPL")]),
+            )])
+        })
+        .expect("listing the instrument must publish");
+    assert_review_rule_rejects(&engine, 1002);
+
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| settings.set_account_rules([]))
+        .expect("clearing the account level must publish");
+    assert_review_rule_passes(&engine, 1001);
+    assert_review_rule_passes(&engine, 1002);
+
+    // Group level.
+    engine
+        .accounts()
+        .register_group(&[AccountId::from_u64(1001)], review_group())
+        .expect("group must register");
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| {
+            settings.set_account_group_rules([review_group_rule(ReviewRuleInstruments::All)])
+        })
+        .expect("adding a group rule must publish");
+    assert_review_rule_rejects(&engine, 1001);
+    assert_review_rule_passes(&engine, 1002);
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| settings.set_account_group_rules([]))
+        .expect("clearing the group level must publish");
+    assert_review_rule_passes(&engine, 1001);
+
+    // Global level: set, then None clears it.
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| {
+            settings.set_global(Some(ReviewRuleInstruments::All))
+        })
+        .expect("setting the global rule must publish");
+    assert_review_rule_rejects(&engine, 1001);
+    assert_review_rule_rejects(&engine, 1002);
+    engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| settings.set_global(None))
+        .expect("clearing the global rule must publish");
+    assert_review_rule_passes(&engine, 1001);
+    assert_review_rule_passes(&engine, 1002);
+}
+
+#[test]
+fn configure_review_rule_type_mismatch_is_reported_both_ways() {
+    let engine = Engine::builder::<OrderOperation, (), ()>()
+        .full_sync()
+        .pre_trade(ReviewRulePolicy::<FullLocking>::new(
+            ReviewRuleSettings::new(None, [], []).expect("empty settings must be valid"),
+        ))
+        .pre_trade(OrderSizeLimitPolicy::<FullLocking>::new(
+            OrderSizeLimitSettings::new(None, [], []).expect("empty settings must be valid"),
+        ))
+        .build()
+        .expect("engine must build");
+    let review_name = ReviewRulePolicy::<FullLocking>::NAME;
+    let size_name = OrderSizeLimitPolicy::<FullLocking>::NAME;
+
+    let error = engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(size_name, |_settings| Ok(()))
+        .expect_err("review_rule on an order-size policy must fail");
+    assert!(
+        matches!(&error, ConfigureError::PolicyTypeMismatch { name, .. } if name == size_name),
+        "expected PolicyTypeMismatch, got {error:?}"
+    );
+
+    let error = engine
+        .configure()
+        .order_size_limit::<OrderSizeLimitPolicyError>(review_name, |_settings| Ok(()))
+        .expect_err("order_size_limit on a review-rule policy must fail");
+    assert!(
+        matches!(&error, ConfigureError::PolicyTypeMismatch { name, .. } if name == review_name),
+        "expected PolicyTypeMismatch, got {error:?}"
+    );
+}
+
+#[test]
+fn configure_review_rule_failed_update_is_rolled_back_as_a_whole() {
+    let engine = review_rule_engine(
+        ReviewRuleSettings::new(
+            None,
+            [],
+            [review_account_rule(1001, ReviewRuleInstruments::All)],
+        )
+        .expect("settings must be valid"),
+    );
+    let name = ReviewRulePolicy::<FullLocking>::NAME;
+    assert_review_rule_rejects(&engine, 1001);
+    assert_review_rule_passes(&engine, 1002);
+
+    let error = engine
+        .configure()
+        .review_rule::<ReviewRulePolicyError>(name, |settings| {
+            // Valid on its own: moves the rule from account 1001 to
+            // account 1002.
+            settings.set_account_rules([review_account_rule(1002, ReviewRuleInstruments::All)])?;
+            // Invalid: the same group twice.
+            settings.set_account_group_rules([
+                review_group_rule(ReviewRuleInstruments::All),
+                review_group_rule(ReviewRuleInstruments::Exact(vec![review_instrument(
+                    "AAPL",
+                )])),
+            ])
+        })
+        .expect_err("a duplicate group must fail the whole update");
+    let expected = ReviewRulePolicyError::DuplicateAccountGroupRule {
+        account_group_id: review_group(),
+    }
+    .to_string();
+    assert!(
+        matches!(
+            &error,
+            ConfigureError::Validation { name: n, message } if n == name && *message == expected
+        ),
+        "expected Validation with {expected:?}, got {error:?}"
+    );
+
+    // The account rules in force before the call still apply.
+    assert_review_rule_rejects(&engine, 1001);
+    assert_review_rule_passes(&engine, 1002);
 }
 
 // Tighten the account+asset barrier for account 1 via configure.  An order

@@ -19,7 +19,7 @@
 
 use openpit::pretrade::policies::{
     OrderSizeLimitPolicyError, PnlBoundsKillSwitchPolicyError, RateLimitPolicyError,
-    SpotFundsConfigError,
+    ReviewRulePolicyError, SpotFundsConfigError,
 };
 use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
@@ -42,6 +42,7 @@ use crate::policy::rate_limit::{
     JsRateLimitAccountAssetBarrier, JsRateLimitAccountBarrier, JsRateLimitAssetBarrier,
     JsRateLimitBrokerBarrier,
 };
+use crate::policy::review_rule::JsReviewRule;
 use crate::policy::spot_funds::{
     parse_limit_mode, parse_pricing_source, JsSpotFundsOverride,
     JsSpotFundsPnlBoundsAccountBarrier, JsSpotFundsPnlBoundsAccountGroupBarrier,
@@ -96,6 +97,18 @@ export interface OrderSizeLimitConfigureOptions {
   clearBroker?: boolean;
   assetBarriers?: Iterable<OrderSizeAssetBarrier> | null;
   accountAssetBarriers?: Iterable<OrderSizeAccountAssetBarrier> | null;
+}
+
+/**
+ * Runtime review-rule configuration. Omitted or null rules keep their level.
+ * A supplied iterable replaces its entire level, and an empty one clears it.
+ * Set `clearGlobalRule` to remove the global rule.
+ */
+export interface ReviewRuleConfigureOptions {
+  globalRule?: ReviewRule | null;
+  clearGlobalRule?: boolean;
+  accountGroupRules?: Iterable<ReviewRule> | null;
+  accountRules?: Iterable<ReviewRule> | null;
 }
 
 /** Spot-funds per-account limit-mode runtime entry. */
@@ -195,6 +208,9 @@ extern "C" {
 
     #[wasm_bindgen(typescript_type = "OrderSizeLimitConfigureOptions")]
     pub type OrderSizeLimitConfigureOptionsLike;
+
+    #[wasm_bindgen(typescript_type = "ReviewRuleConfigureOptions")]
+    pub type ReviewRuleConfigureOptionsLike;
 
     #[wasm_bindgen(typescript_type = "SpotFundsConfigureOptions")]
     pub type SpotFundsConfigureOptionsLike;
@@ -409,6 +425,70 @@ impl JsConfigurator {
                     )?;
                 }
                 Ok::<(), OrderSizeLimitPolicyError>(())
+            })
+            .map_err(configure_error_to_js)
+    }
+
+    /// Updates the rules of a named review-rule policy.
+    ///
+    /// # Errors
+    ///
+    /// Throws `ParamError` for conflicting global options or a rule placed
+    /// at the wrong level. Throws `PolicyConfigureError` for invalid rules,
+    /// an unknown name, or a different policy type. Throws `TypeError` for
+    /// malformed options. Throws `LifecycleError` when the owning engine is
+    /// re-entered synchronously from one of its policy callbacks.
+    /// An error leaves every level unchanged.
+    #[wasm_bindgen(js_name = reviewRule)]
+    pub fn review_rule(
+        &self,
+        name: &str,
+        options: ReviewRuleConfigureOptionsLike,
+    ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
+        let options = options.into();
+        require_object(&options, "reviewRule options")?;
+        let global = optional_wrapper_field::<JsReviewRule>(&options, "globalRule")?;
+        let clear_global = optional_bool_field(&options, "clearGlobalRule")? == Some(true);
+        if global.is_some() && clear_global {
+            return Err(review_rule_shape_error(
+                "globalRule and clearGlobalRule cannot be used together".to_owned(),
+            ));
+        }
+        let global = global
+            .map(JsReviewRule::into_global)
+            .transpose()
+            .map_err(review_rule_shape_error)?;
+        let groups = optional_wrapper_iter_field::<JsReviewRule>(&options, "accountGroupRules")?
+            .map(|rules| {
+                rules
+                    .into_iter()
+                    .map(JsReviewRule::into_account_group)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(review_rule_shape_error)?;
+        let accounts = optional_wrapper_iter_field::<JsReviewRule>(&options, "accountRules")?
+            .map(|rules| {
+                rules
+                    .into_iter()
+                    .map(JsReviewRule::into_account)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(review_rule_shape_error)?;
+        self.inner
+            .review_rule(name, |settings| {
+                if clear_global || global.is_some() {
+                    settings.set_global(global)?;
+                }
+                if let Some(groups) = groups {
+                    settings.set_account_group_rules(groups)?;
+                }
+                if let Some(accounts) = accounts {
+                    settings.set_account_rules(accounts)?;
+                }
+                Ok::<(), ReviewRulePolicyError>(())
             })
             .map_err(configure_error_to_js)
     }
@@ -713,6 +793,10 @@ where
             None,
         )
     })
+}
+
+fn review_rule_shape_error(message: String) -> JsValue {
+    make_error(ErrorKind::Param, &message, Some("Other"))
 }
 
 fn iterable_error(field: &str) -> JsValue {

@@ -68,6 +68,7 @@ pub mod order_size_limit;
 pub mod order_validation;
 pub mod pnl_killswitch;
 pub mod rate_limit;
+pub mod review_rule;
 pub mod spot_funds;
 
 #[wasm_bindgen(inline_js = r#"
@@ -339,6 +340,24 @@ export interface OrderSizeLimitReadyBuilder extends OrderSizeLimitBuilder {
   clone(): OrderSizeLimitReadyBuilder;
 }
 
+/** Review-rule builder ready after a rule-axis call. */
+export interface ReviewRuleReadyBuilder extends ReviewRuleBuilder {
+  readonly [builtinReadyBuilderBrand]: true;
+  globalRule(
+    ...args: Parameters<ReviewRuleBuilder["globalRule"]>
+  ): ReviewRuleReadyBuilder;
+  accountGroupRules(
+    ...args: Parameters<ReviewRuleBuilder["accountGroupRules"]>
+  ): ReviewRuleReadyBuilder;
+  accountRules(
+    ...args: Parameters<ReviewRuleBuilder["accountRules"]>
+  ): ReviewRuleReadyBuilder;
+  withPolicyGroupId(
+    ...args: Parameters<ReviewRuleBuilder["withPolicyGroupId"]>
+  ): ReviewRuleReadyBuilder;
+  clone(): ReviewRuleReadyBuilder;
+}
+
 /**
  * Rate-limit builder ready after at least one axis call.
  * The call may pass no barriers to register an empty policy that admits every
@@ -437,7 +456,7 @@ extern "C" {
     /// [`build_builtin_policy`](crate::engine). Builders that require at least
     /// one barrier enter the union only through their branded ready type.
     #[wasm_bindgen(
-        typescript_type = "OrderValidationReadyBuilder | OrderSizeLimitReadyBuilder | RateLimitReadyBuilder | PnlBoundsKillswitchReadyBuilder | SpotFundsReadyBuilder | SpotFundsPnlBoundsKillswitchReadyBuilder"
+        typescript_type = "OrderValidationReadyBuilder | OrderSizeLimitReadyBuilder | ReviewRuleReadyBuilder | RateLimitReadyBuilder | PnlBoundsKillswitchReadyBuilder | SpotFundsReadyBuilder | SpotFundsPnlBoundsKillswitchReadyBuilder"
     )]
     pub type BuiltinReadyBuilder;
 }

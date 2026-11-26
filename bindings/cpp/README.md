@@ -181,6 +181,9 @@ page.
   rejecting or flagging for review per rule](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
 - `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
 - `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
+- `ReviewRulePolicy` -
+  [reject or flag for review every order matching a rule set per account,
+  group, or globally](https://wiki.openpit.dev/Review-Rules/)
 - [Custom C++ policies](https://wiki.openpit.dev/Policy-API/#c-interface)
   \- the primary integration model.
 - [Account Blocking](https://wiki.openpit.dev/Account-Blocking/),

@@ -1254,6 +1254,91 @@ TEST(EngineConfigure, EmptyPolicyLifecycleOrderSizeLimit) {
   check(order, std::nullopt);
 }
 
+TEST(EngineConfigure, ReviewRuleUsesDefaultName) {
+  EngineBuilder builder(SyncPolicy::None);
+  builder.Add(policies::ReviewRulePolicy{});
+  const auto engine = builder.Build();
+  EXPECT_TRUE(engine.ExecutePreTrade(TestOrder(1001)).Passed());
+  engine.Configure().ReviewRule(policies::ReviewRulePolicyName,
+                                policies::ReviewRuleGlobalRuleUpdate::Set(
+                                    policies::ReviewRuleInstruments::All()));
+  EXPECT_FALSE(engine.ExecutePreTrade(TestOrder(1001)).Passed());
+}
+
+TEST(EngineConfigure, ReviewRuleKeepsClearsAndReplacesLevels) {
+  using Filter = policies::ReviewRuleInstruments;
+  using Global = policies::ReviewRuleGlobalRuleUpdate;
+  using Group = policies::ReviewRuleAccountGroupRule;
+  using Account = policies::ReviewRuleAccountRule;
+  EngineBuilder builder(SyncPolicy::None);
+  policies::ReviewRulePolicy{}.AddTo(builder, {"rules"});
+  const auto engine = builder.Build();
+  ASSERT_FALSE(engine.Accounts()
+                   .RegisterGroup({AccountId::FromUint64(1001)},
+                                  openpit::param::AccountGroupId::FromUint32(7))
+                   .has_value());
+  const auto check = [&](bool blocked, const char* symbol = "AAPL") {
+    auto order = TestOrder(1001);
+    order.operation->instrument = openpit::model::Instrument(
+        openpit::param::Asset(symbol), openpit::param::Asset("USD"));
+    auto result = engine.ExecutePreTrade(order);
+    EXPECT_EQ(result.Passed(), !blocked);
+    if (blocked) {
+      ASSERT_EQ(result.rejects.size(), 1u);
+      EXPECT_EQ(result.rejects.front().code, RejectCode::ComplianceRestriction);
+    }
+  };
+  check(false);
+  for (int level = 0; level < 3; ++level) {
+    SCOPED_TRACE(level);
+    const auto set = [&](Filter filter) {
+      engine.Configure().ReviewRule(
+          "rules", level == 0 ? Global::Set(filter) : Global::Unchanged(),
+          level == 1
+              ? std::optional<std::vector<Group>>({Group{
+                    openpit::param::AccountGroupId::FromUint32(7), filter}})
+              : std::nullopt,
+          level == 2 ? std::optional<std::vector<Account>>(
+                           {Account{AccountId::FromUint64(1001), filter}})
+                     : std::nullopt);
+    };
+    set(Filter::All());
+    check(true);
+    check(true, "MSFT");
+    engine.Configure().ReviewRule("rules");
+    check(true);
+    set(Filter::Exact({openpit::model::Instrument(
+        openpit::param::Asset("AAPL"), openpit::param::Asset("USD"))}));
+    check(true);
+    check(false, "MSFT");
+    EXPECT_THROW(set(Filter::Exact({})), openpit::ConfigureError);
+    check(true);
+    check(false, "MSFT");
+    engine.Configure().ReviewRule("rules", Global::Clear(),
+                                  std::vector<Group>{}, std::vector<Account>{});
+    check(false);
+  }
+  const Account account{AccountId::FromUint64(1001), Filter::All()};
+  engine.Configure().ReviewRule("rules", Global::Unchanged(), std::nullopt,
+                                std::vector{account});
+  try {
+    engine.Configure().ReviewRule("rules", Global::Set(Filter::All()),
+                                  std::vector<Group>{},
+                                  std::vector{account, account});
+    FAIL() << "duplicate account must throw ConfigureError";
+  } catch (const openpit::ConfigureError& error) {
+    EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Validation);
+  }
+  check(true);
+  EXPECT_TRUE(engine.ExecutePreTrade(TestOrder(1002)).Passed());
+  try {
+    engine.Configure().ReviewRule("missing");
+    FAIL() << "Configure().ReviewRule should have thrown";
+  } catch (const openpit::ConfigureError& error) {
+    EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Unknown);
+  }
+}
+
 TEST(EngineConfigure, RateLimitUpdateChangesRuntimeBudget) {
   Engine engine = SingleOrderEngine();
 
@@ -1723,6 +1808,111 @@ TEST(EngineConfigure,
               AccountId::FromUint64(2), ::openpit::param::Asset("AAPL"))});
 
   EXPECT_TRUE(engine.StartPreTrade(SizedOrder("5", "100", 2)).Passed());
+}
+
+TEST(ReviewRule, AccountInstanceVerdicts) {
+  using openpit::reject::RuleMode;
+  for (const auto mode : {RuleMode::Reject, RuleMode::ReviewWithHold}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    EngineBuilder builder(SyncPolicy::None);
+    policies::ReviewRulePolicy{}
+        .PolicyGroupId(3)
+        .AccountRule({AccountId::FromUint64(1001),
+                      policies::ReviewRuleInstruments::All()})
+        .AddTo(builder, {"account-rules", mode});
+    const auto engine = builder.Build();
+    for (const auto* asset : {"AAPL", "MSFT"}) {
+      auto order = TestOrder(1001);
+      order.operation->instrument = openpit::model::Instrument(
+          openpit::param::Asset(asset), openpit::param::Asset("USD"));
+      auto result = engine.ExecutePreTrade(order);
+      ASSERT_EQ(result.Passed(), mode != RuleMode::Reject);
+      const auto records = mode == RuleMode::Reject
+                               ? result.rejects
+                               : result.reservation->Reviews();
+      ASSERT_EQ(records.size(), 1u);
+      EXPECT_EQ(records.front().code, RejectCode::ComplianceRestriction);
+      EXPECT_EQ(records.front().mode, mode);
+      EXPECT_EQ(records.front().scope, openpit::reject::RejectScope::Order);
+    }
+    auto other = engine.ExecutePreTrade(TestOrder(1002));
+    ASSERT_TRUE(other.Passed());
+    EXPECT_TRUE(other.reservation->Reviews().empty());
+  }
+}
+
+TEST(ReviewRule, GroupAndExactInstruments) {
+  const auto aapl = openpit::model::Instrument(openpit::param::Asset("AAPL"),
+                                               openpit::param::Asset("USD"));
+  for (int level = 0; level < 3; ++level) {
+    SCOPED_TRACE(level);
+    EngineBuilder builder(SyncPolicy::None);
+    policies::ReviewRulePolicy policy;
+    const auto exact = policies::ReviewRuleInstruments::Exact({aapl});
+    if (level == 0) policy.GlobalRule(exact);
+    if (level == 1)
+      policy.AccountGroupRule(
+          {openpit::param::AccountGroupId::FromUint32(7), exact});
+    if (level == 2) policy.AccountRule({AccountId::FromUint64(1001), exact});
+    builder.Add(policy);
+    const auto engine = builder.Build();
+    ASSERT_FALSE(
+        engine.Accounts()
+            .RegisterGroup({AccountId::FromUint64(1001)},
+                           openpit::param::AccountGroupId::FromUint32(7))
+            .has_value());
+    auto match = engine.ExecutePreTrade(TestOrder(1001));
+    ASSERT_FALSE(match.Passed());
+    ASSERT_EQ(match.rejects.size(), 1u);
+    EXPECT_EQ(match.rejects.front().code, RejectCode::ComplianceRestriction);
+    auto other = engine.ExecutePreTrade(TestOrder(1002));
+    EXPECT_EQ(other.Passed(), level != 0);
+    auto msft = TestOrder(1001);
+    msft.operation->instrument = openpit::model::Instrument(
+        openpit::param::Asset("MSFT"), openpit::param::Asset("USD"));
+    EXPECT_TRUE(engine.ExecutePreTrade(msft).Passed());
+  }
+}
+
+TEST(ReviewRule, InvalidRegistrationThrowsAndRegistersNothing) {
+  const auto aapl = openpit::model::Instrument(openpit::param::Asset("AAPL"),
+                                               openpit::param::Asset("USD"));
+  for (int level = 0; level < 3; ++level) {
+    for (const auto& list :
+         {std::vector<openpit::model::Instrument>{}, std::vector{aapl, aapl}}) {
+      SCOPED_TRACE(level);
+      EngineBuilder builder(SyncPolicy::None);
+      policies::ReviewRulePolicy invalid;
+      const auto filter = policies::ReviewRuleInstruments::Exact(list);
+      if (level == 0) invalid.GlobalRule(filter);
+      if (level == 1)
+        invalid.AccountGroupRule(
+            {openpit::param::AccountGroupId::FromUint32(7), filter});
+      if (level == 2)
+        invalid.AccountRule({AccountId::FromUint64(1001), filter});
+      EXPECT_THROW(invalid.AddTo(builder), openpit::Error);
+      builder.Add(policies::ReviewRulePolicy{});
+      const auto engine = builder.Build();
+      EXPECT_TRUE(engine.ExecutePreTrade(TestOrder(1001)).Passed());
+    }
+  }
+  for (const bool groups : {false, true}) {
+    EngineBuilder builder(SyncPolicy::None);
+    policies::ReviewRulePolicy invalid;
+    for (int i = 0; i < 2; ++i) {
+      if (groups) {
+        invalid.AccountGroupRule({openpit::param::AccountGroupId::FromUint32(7),
+                                  policies::ReviewRuleInstruments::All()});
+      } else {
+        invalid.AccountRule({AccountId::FromUint64(1001),
+                             policies::ReviewRuleInstruments::All()});
+      }
+    }
+    EXPECT_THROW(invalid.AddTo(builder), openpit::Error);
+    builder.Add(policies::ReviewRulePolicy{});
+    const auto engine = builder.Build();
+    EXPECT_TRUE(engine.ExecutePreTrade(TestOrder(1001)).Passed());
+  }
 }
 
 TEST(OrderSizeLimit, QuantityOnlyBrokerEnforcesBoundaryAndPreservesAbsence) {

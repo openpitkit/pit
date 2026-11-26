@@ -60,6 +60,7 @@ _LEVERAGE_MAX: int
 _LEVERAGE_STEP: float
 
 def _validate_asset(value: str) -> None: ...
+def _check_review_rule_level(rule: object, level: str) -> None: ...
 
 class RejectError(Exception):
     """Base exception type raised by the library."""
@@ -2877,6 +2878,27 @@ class Configurator:
         Raises:
             PolicyConfigureError: If the policy is not found or has a different
                 type than a P&L bounds kill-switch policy.
+        """
+
+    def review_rule(
+        self,
+        name: str,
+        *,
+        global_rule: pretrade.policies.ReviewRule | None = None,
+        clear_global_rule: bool = False,
+        account_group_rules: list[pretrade.policies.ReviewRule] | None = None,
+        account_rules: list[pretrade.policies.ReviewRule] | None = None,
+    ) -> None:
+        """Update the rules of a named review-rule policy.
+
+        None keeps the corresponding level. A list replaces the entire
+        level and an empty list clears it. Set clear_global_rule=True to
+        remove the global rule.
+
+        Raises:
+            ValueError: A rule has incompatible IDs for its level, or
+                global_rule and clear_global_rule are given together.
+            PolicyConfigureError: The policy name, type, or rules are invalid.
         """
 
     def order_size_limit(

@@ -40,6 +40,7 @@ import {
   buildOrderSizeLimit,
   buildPnlBoundsKillswitch,
   buildRateLimit,
+  buildReviewRule,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
   OrderSizeAssetBarrier,
@@ -48,12 +49,30 @@ import {
   PnlBoundsAccountAssetBarrier,
   PnlBoundsAccountAssetBarrierUpdate,
   PnlBoundsBrokerBarrier,
+  ReviewRule,
+  type ReviewRuleInit,
+  type ReviewRuleReadyBuilder,
   SpotFundsPnlBoundsBarrier,
 } from "@openpit/engine/pretrade/policies";
 import { type AccountAdjustmentContext } from "@openpit/engine/accountadjustment";
 import { type MarketDataService } from "@openpit/engine/marketdata";
 import { RejectCode, RejectScope, RuleMode } from "@openpit/engine/reject";
 import { Mutation } from "@openpit/engine/tx";
+
+const reviewInit: ReviewRuleInit = {
+  accountId: 1001n,
+  instruments: new Set([{ underlyingAsset: "AAPL", settlementAsset: "USD" }]),
+};
+const reviewReady: ReviewRuleReadyBuilder = buildReviewRule()
+  .accountRules([new ReviewRule(reviewInit)])
+  .withPolicyGroupId(3)
+  .clone();
+Engine.builder().builtin(reviewReady);
+Engine.builder().builtin(buildReviewRule().accountGroupRules([]));
+// @ts-expect-error A review-rule token needs a rule-axis call.
+Engine.builder().builtin(buildReviewRule().withPolicyGroupId(3));
+// @ts-expect-error Mode is set on the registration, not the rule.
+new ReviewRule({ mode: RuleMode.ReviewWithHold });
 
 // A fully-typed custom policy implementing every hook. Each body uses its
 // typed parameters through the public API so the argument types are exercised.

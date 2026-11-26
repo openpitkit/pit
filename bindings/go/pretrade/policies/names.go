@@ -26,6 +26,8 @@ const (
 	// OrderSizeLimitPolicyName is the registration name of the order-size-limit
 	// policy.
 	OrderSizeLimitPolicyName = "OrderSizeLimitPolicy"
+	// ReviewRulePolicyName is the registration name of the review-rule policy.
+	ReviewRulePolicyName = "ReviewRulePolicy"
 	// PnlBoundsKillSwitchPolicyName is the registration name of the P&L bounds
 	// kill-switch policy.
 	PnlBoundsKillSwitchPolicyName = "PnlBoundsKillSwitchPolicy"

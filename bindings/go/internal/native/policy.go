@@ -19,6 +19,8 @@ package native
 
 /*
 #include "openpit.h"
+#include <stdlib.h>
+#include <string.h>
 */
 import "C"
 
@@ -136,6 +138,123 @@ func NewPretradePoliciesOrderSizeAccountAssetBarrier(
 		account_id: accountID,
 		asset:      importString(asset),
 	}
+}
+
+//------------------------------------------------------------------------------
+// BuiltinReviewRulePolicy
+
+// ReviewRuleGlobalRule covers all instruments when Instruments is nil.
+// A non-nil empty list is invalid, as is a list with duplicate instruments.
+type ReviewRuleGlobalRule struct {
+	Instruments []Instrument
+}
+
+// ReviewRuleAccountGroupRule targets one group and an optional exact list.
+type ReviewRuleAccountGroupRule struct {
+	AccountGroupID ParamAccountGroupID
+	Instruments    []Instrument
+}
+
+// ReviewRuleAccountRule targets one account and an optional exact list.
+type ReviewRuleAccountRule struct {
+	AccountID   ParamAccountID
+	Instruments []Instrument
+}
+
+// Every pointer in the raw rules targets C memory, including the nested
+// instrument arrays and asset bytes. Registration and configuration copy them;
+// release all allocations immediately after the synchronous ABI call.
+type reviewRuleArguments struct {
+	global      *PretradePoliciesReviewRuleGlobalRule
+	groups      *PretradePoliciesReviewRuleAccountGroupRule
+	accounts    *PretradePoliciesReviewRuleAccountRule
+	allocations []unsafe.Pointer
+}
+
+func (args *reviewRuleArguments) allocate(size uintptr) unsafe.Pointer {
+	ptr := C.malloc(C.size_t(size))
+	C.memset(ptr, 0, C.size_t(size))
+	args.allocations = append(args.allocations, ptr)
+	return ptr
+}
+
+func (args *reviewRuleArguments) release() {
+	for _, ptr := range args.allocations {
+		C.free(ptr)
+	}
+}
+
+func (args *reviewRuleArguments) copyString(view C.OpenPitStringView) C.OpenPitStringView {
+	if view.ptr == nil {
+		return C.OpenPitStringView{}
+	}
+	ptr := C.CBytes([]byte(newStringView(view).Unsafe()))
+	args.allocations = append(args.allocations, ptr)
+	return C.OpenPitStringView{ptr: (*C.uint8_t)(ptr), len: view.len}
+}
+
+func (args *reviewRuleArguments) instruments(
+	instruments []Instrument,
+) PretradePoliciesReviewRuleGlobalRule {
+	var raw PretradePoliciesReviewRuleGlobalRule
+	raw.has_instruments = C.bool(instruments != nil)
+	raw.instruments_len = C.size_t(len(instruments))
+	if len(instruments) > 0 {
+		raw.instruments = (*C.OpenPitInstrument)(args.allocate(
+			uintptr(len(instruments)) * unsafe.Sizeof(C.OpenPitInstrument{}),
+		))
+		entries := unsafe.Slice(raw.instruments, len(instruments))
+		for i, instrument := range instruments {
+			entries[i] = C.OpenPitInstrument{
+				underlying_asset: args.copyString(instrument.underlying_asset),
+				settlement_asset: args.copyString(instrument.settlement_asset),
+			}
+		}
+	}
+	return raw
+}
+
+func newReviewRuleArguments(
+	global *ReviewRuleGlobalRule,
+	groups []ReviewRuleAccountGroupRule,
+	accounts []ReviewRuleAccountRule,
+) reviewRuleArguments {
+	var args reviewRuleArguments
+	if global != nil {
+		args.global = (*PretradePoliciesReviewRuleGlobalRule)(args.allocate(
+			unsafe.Sizeof(PretradePoliciesReviewRuleGlobalRule{}),
+		))
+		*args.global = args.instruments(global.Instruments)
+	}
+	if len(groups) > 0 {
+		args.groups = (*PretradePoliciesReviewRuleAccountGroupRule)(args.allocate(
+			uintptr(len(groups)) * unsafe.Sizeof(PretradePoliciesReviewRuleAccountGroupRule{}),
+		))
+		for i, rule := range groups {
+			filter := args.instruments(rule.Instruments)
+			unsafe.Slice(args.groups, len(groups))[i] = PretradePoliciesReviewRuleAccountGroupRule{
+				account_group_id: rule.AccountGroupID,
+				instruments:      filter.instruments,
+				instruments_len:  filter.instruments_len,
+				has_instruments:  filter.has_instruments,
+			}
+		}
+	}
+	if len(accounts) > 0 {
+		args.accounts = (*PretradePoliciesReviewRuleAccountRule)(args.allocate(
+			uintptr(len(accounts)) * unsafe.Sizeof(PretradePoliciesReviewRuleAccountRule{}),
+		))
+		for i, rule := range accounts {
+			filter := args.instruments(rule.Instruments)
+			unsafe.Slice(args.accounts, len(accounts))[i] = PretradePoliciesReviewRuleAccountRule{
+				account_id:      rule.AccountID,
+				instruments:     filter.instruments,
+				instruments_len: filter.instruments_len,
+				has_instruments: filter.has_instruments,
+			}
+		}
+	}
+	return args
 }
 
 //------------------------------------------------------------------------------

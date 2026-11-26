@@ -185,6 +185,34 @@ class Configurator {
     }
   }
 
+  /// Replaces supplied review-rule levels. Nullopt keeps an array level;
+  /// an empty vector clears it. The global update can keep, clear or set its
+  /// rule. Invalid updates throw ConfigureError and leave all levels intact.
+  void ReviewRule(
+      std::string_view name,
+      ::openpit::pretrade::policies::ReviewRuleGlobalRuleUpdate global = ::
+          openpit::pretrade::policies::ReviewRuleGlobalRuleUpdate::Unchanged(),
+      std::optional<std::vector<
+          ::openpit::pretrade::policies::ReviewRuleAccountGroupRule>>
+          groups = std::nullopt,
+      std::optional<
+          std::vector<::openpit::pretrade::policies::ReviewRuleAccountRule>>
+          accounts = std::nullopt) const {
+    const ::openpit::pretrade::policies::detail::ReviewRuleArguments raw(
+        global.Rule(), groups ? &*groups : nullptr,
+        accounts ? &*accounts : nullptr);
+    OpenPitConfigureError* error = nullptr;
+    if (!openpit_engine_configure_review_rule(
+            m_engine, ::openpit::detail::MakeStringView(name),
+            raw.m_global ? &*raw.m_global : nullptr, global.HasUpdate(),
+            raw.m_groups.data(), raw.m_groups.size(), groups.has_value(),
+            raw.m_accounts.data(), raw.m_accounts.size(), accounts.has_value(),
+            &error)) {
+      ::openpit::detail::ThrowFromConfigureError(
+          error, "openpit_engine_configure_review_rule failed");
+    }
+  }
+
   /// Replaces the supplied barrier lists; nullopt leaves an axis unchanged.
   /// Keys include mode: (asset, mode) for brokers, (account, asset, mode) for
   /// accounts. Reject and review barriers may coexist.

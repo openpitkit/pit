@@ -433,6 +433,136 @@ def test_empty_policy_lifecycle_rate_limit() -> None:
 
 
 @pytest.mark.unit
+def test_review_rule_configure_lifecycle() -> None:
+    policies = openpit.pretrade.policies
+    account = openpit.param.AccountId.from_int(1001)
+    outside = openpit.param.AccountId.from_int(1002)
+    group = openpit.param.AccountGroupId.from_int(7)
+    aapl = openpit.Instrument("AAPL", "USD")
+    msft = openpit.Instrument("MSFT", "USD")
+    group_rule = policies.ReviewRule(account_group_id=group)
+    account_rule = policies.ReviewRule(account_id=account, instruments=[aapl])
+    global_rule = policies.ReviewRule(instruments=[aapl])
+    name = policies.ReviewRuleBuilder.NAME
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(policies.build_rate_limit().account_barriers())
+        .builtin(policies.build_review_rule().account_rules())
+        .build()
+    )
+    engine.accounts().register_group([account], group)
+    configure = engine.configure()
+
+    def check(
+        account_id: openpit.param.AccountId,
+        instrument: openpit.Instrument,
+        rejected: bool,
+    ) -> None:
+        report = engine.execute_pre_trade_dry_run(
+            conftest.make_order(account_id=account_id, instrument=instrument)
+        )
+        expected = (
+            [openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION] if rejected else []
+        )
+        assert [reject.code for reject in report.rejects or []] == expected
+        assert not report.reviews
+
+    check(account, aapl, False)
+    configure.review_rule(name, account_group_rules=[group_rule])
+    check(account, msft, True)
+    check(outside, msft, False)
+    configure.review_rule(name, global_rule=global_rule, account_group_rules=None)
+    configure.review_rule(name, account_rules=[account_rule])
+    check(account, msft, True)
+    check(outside, aapl, True)
+    check(outside, msft, False)
+
+    for options, message in [
+        (
+            {"global_rule": policies.ReviewRule(instruments=[])},
+            "an exact instrument list must not be empty",
+        ),
+        (
+            {"global_rule": policies.ReviewRule(instruments=[aapl, aapl])},
+            "duplicate review rule instrument AAPL/USD",
+        ),
+        (
+            {
+                "clear_global_rule": True,
+                "account_group_rules": [group_rule, group_rule],
+            },
+            "duplicate account group review rule",
+        ),
+        (
+            {
+                "clear_global_rule": True,
+                "account_group_rules": [],
+                "account_rules": [account_rule, account_rule],
+            },
+            "duplicate account review rule",
+        ),
+    ]:
+        with pytest.raises(openpit.PolicyConfigureError, match=message) as caught:
+            configure.review_rule(name, **options)
+        assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
+        check(account, msft, True)
+        check(outside, aapl, True)
+        check(outside, msft, False)
+
+    for options, message in [
+        (
+            {"global_rule": global_rule, "clear_global_rule": True},
+            "global_rule and clear_global_rule cannot both be provided",
+        ),
+        ({"global_rule": account_rule}, "global level"),
+        (
+            {"clear_global_rule": True, "account_group_rules": [account_rule]},
+            "account group level",
+        ),
+        (
+            {
+                "clear_global_rule": True,
+                "account_group_rules": [],
+                "account_rules": [group_rule],
+            },
+            "account level",
+        ),
+        (
+            {
+                "clear_global_rule": True,
+                "account_rules": [
+                    policies.ReviewRule(account_id=account, account_group_id=group)
+                ],
+            },
+            "account level",
+        ),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            configure.review_rule(name, **options)
+        check(account, msft, True)
+        check(outside, aapl, True)
+
+    configure.review_rule(name, clear_global_rule=True, account_group_rules=[])
+    check(account, aapl, True)
+    check(account, msft, False)
+    check(outside, aapl, False)
+    configure.review_rule(name, global_rule=None, account_rules=None)
+    check(account, aapl, True)
+    configure.review_rule(name, account_rules=[])
+    check(account, aapl, False)
+
+    for other, kind in [
+        ("missing", openpit.ConfigureErrorKind.UNKNOWN),
+        (policies.RateLimitBuilder.NAME, openpit.ConfigureErrorKind.TYPE_MISMATCH),
+    ]:
+        with pytest.raises(openpit.PolicyConfigureError) as caught:
+            configure.review_rule(other, global_rule=global_rule)
+        assert caught.value.kind == kind
+    check(outside, aapl, False)
+
+
+@pytest.mark.unit
 def test_empty_policy_lifecycle_order_size_limit() -> None:
     policies = openpit.pretrade.policies
     engine = (

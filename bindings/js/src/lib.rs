@@ -103,6 +103,7 @@ pub use policy::rate_limit::{
     build_rate_limit, JsRateLimit, JsRateLimitAccountAssetBarrier, JsRateLimitAccountBarrier,
     JsRateLimitAssetBarrier, JsRateLimitBrokerBarrier, JsRateLimitBuilder,
 };
+pub use policy::review_rule::{build_review_rule, JsReviewRule, JsReviewRuleBuilder};
 pub use policy::spot_funds::{
     build_spot_funds, build_spot_funds_pnl_bounds_killswitch, JsSpotFundsBuilder,
     JsSpotFundsOverride, JsSpotFundsPnlBoundsAccountBarrier,

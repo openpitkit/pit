@@ -17,7 +17,10 @@
 
 import { type Configurator, Engine } from "@openpit/engine";
 import { AccountGroupId } from "@openpit/engine/param";
-import { PnlHaltReason } from "@openpit/engine/pretrade";
+import {
+  PnlHaltReason,
+  type ReviewRuleConfigureOptions,
+} from "@openpit/engine/pretrade";
 import { RuleMode } from "@openpit/engine/reject";
 import {
   buildRateLimit,
@@ -30,6 +33,7 @@ import {
   RateLimitAccountAssetBarrier,
   RateLimitBrokerBarrier,
   RateLimitBuilder,
+  ReviewRule,
   SpotFundsBuilder,
   SpotFundsLimitMode,
   type SpotFundsPositionLimitEntry,
@@ -50,6 +54,23 @@ const configurator: Configurator = Engine.builder()
 
 configurator.rateLimit(RateLimitBuilder.NAME, {
   brokerBarriers: [new RateLimitBrokerBarrier(new RateLimit(2, 60_000))],
+});
+
+const reviewRuleOptions: ReviewRuleConfigureOptions = {
+  globalRule: new ReviewRule({
+    instruments: [{ underlyingAsset: "MSFT", settlementAsset: "USD" }],
+  }),
+  accountGroupRules: new Set([new ReviewRule({ accountGroupId: 7 })]),
+  accountRules: null,
+};
+configurator.reviewRule("restricted-instruments", reviewRuleOptions);
+configurator.reviewRule("restricted-instruments", {
+  clearGlobalRule: true,
+  accountRules: [],
+});
+configurator.reviewRule("restricted-instruments", {
+  // @ts-expect-error Runtime updates require ReviewRule wrappers.
+  accountRules: [{ accountId: 1001 }],
 });
 
 const rateLimit = new RateLimit(2, 60_000);

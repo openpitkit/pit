@@ -194,6 +194,8 @@ page.
   \- fat-finger caps on quantity and notional.
 - [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
   \- halt an account when realized P&L breaches bounds.
+- [Review Rules](https://wiki.openpit.dev/Review-Rules/) - reject or flag for
+  review every order matching a rule set per account, group, or globally.
 - [Custom Python policies](https://wiki.openpit.dev/Policy-API/#python-interface)
   \- the primary integration model.
 - [Account Blocking](https://wiki.openpit.dev/Account-Blocking/),

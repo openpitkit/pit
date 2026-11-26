@@ -33,6 +33,7 @@ import {
 import {
   AccountGroupId,
   AdjustmentAmount,
+  Instrument,
   Price,
   TradeAmount,
 } from "@openpit/engine/param";
@@ -43,6 +44,7 @@ import {
   buildOrderSizeLimit,
   buildPnlBoundsKillswitch,
   buildRateLimit,
+  buildReviewRule,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
   OrderSizeAccountAssetBarrier,
@@ -60,6 +62,9 @@ import {
   RateLimitAssetBarrier,
   RateLimitBrokerBarrier,
   RateLimitBuilder,
+  ReviewRule,
+  ReviewRuleBuilder,
+  type ReviewRuleConfigureOptions,
   SpotFundsBuilder,
   SpotFundsLimitMode,
   SpotFundsPnlBoundsAccountBarrier,
@@ -140,6 +145,145 @@ function expectConfigureError(
   expect(error).toBeInstanceOf(PolicyConfigureError);
   expect((error as PolicyConfigureError).kind).toBe(kind);
 }
+
+describe("review-rule configuration", () => {
+  it("replaces, keeps, and clears each level atomically", () => {
+    const name = ReviewRuleBuilder.NAME;
+    const builder = Engine.builder().builtin(
+      buildRateLimit().accountBarriers([]),
+    );
+    builder.builtin(buildReviewRule().accountRules([]));
+    const engine = builder.build();
+    engine.accounts().registerGroup([1001], 7);
+    const configurator = engine.configure();
+    const aapl = new Instrument("AAPL", "USD");
+    const group = new ReviewRule({ accountGroupId: 7 });
+    const account = new ReviewRule({ accountId: 1001, instruments: [aapl] });
+    const global = new ReviewRule({ instruments: [aapl] });
+    function check(accountId: bigint, symbol: string, rejected: boolean): void {
+      const order = makeOrder("10", "25", accountId);
+      if (!order.operation) {
+        throw new Error("expected an order operation");
+      }
+      order.operation.underlyingAsset = symbol;
+      const result = engine.executePreTradeDryRun(order);
+      expect(result.rejects.map(({ code }) => code)).toEqual(
+        rejected ? ["ComplianceRestriction"] : [],
+      );
+      expect(result.reviews).toEqual([]);
+    }
+
+    check(1001n, "AAPL", false);
+    configurator.reviewRule(name, { accountGroupRules: new Set([group]) });
+    check(1001n, "MSFT", true);
+    check(1002n, "MSFT", false);
+    configurator.reviewRule(name, {
+      globalRule: global,
+      accountGroupRules: null,
+    });
+    configurator.reviewRule(name, { accountRules: [account] });
+    check(1001n, "MSFT", true);
+    check(1002n, "AAPL", true);
+    check(1002n, "MSFT", false);
+
+    const invalidRules: [ReviewRuleConfigureOptions, string][] = [
+      [
+        { globalRule: new ReviewRule({ instruments: [] }) },
+        "an exact instrument list must not be empty",
+      ],
+      [
+        { globalRule: new ReviewRule({ instruments: [aapl, aapl] }) },
+        "duplicate review rule instrument AAPL/USD",
+      ],
+      [
+        { clearGlobalRule: true, accountGroupRules: [group, group] },
+        "duplicate account group review rule",
+      ],
+      [
+        {
+          clearGlobalRule: true,
+          accountGroupRules: [],
+          accountRules: [account, account],
+        },
+        "duplicate account review rule",
+      ],
+    ];
+    for (const [options, message] of invalidRules) {
+      try {
+        configurator.reviewRule(name, options);
+        throw new Error("expected PolicyConfigureError");
+      } catch (error) {
+        expectConfigureError(error, ConfigureErrorKind.Validation);
+        expect((error as PolicyConfigureError).validationMessage).toBe(message);
+      }
+      check(1001n, "MSFT", true);
+      check(1002n, "AAPL", true);
+      check(1002n, "MSFT", false);
+    }
+
+    const badShapes: [ReviewRuleConfigureOptions, string][] = [
+      [
+        { globalRule: global, clearGlobalRule: true },
+        "globalRule and clearGlobalRule cannot be used together",
+      ],
+      [{ globalRule: account }, "global level"],
+      [
+        { clearGlobalRule: true, accountGroupRules: [account] },
+        "account group level",
+      ],
+      [
+        { clearGlobalRule: true, accountGroupRules: [], accountRules: [group] },
+        "account level",
+      ],
+      [
+        {
+          clearGlobalRule: true,
+          accountRules: [
+            new ReviewRule({ accountId: 1001, accountGroupId: 7 }),
+          ],
+        },
+        "account level",
+      ],
+    ];
+    for (const [options, message] of badShapes) {
+      try {
+        configurator.reviewRule(name, options);
+        throw new Error("expected ParamError");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ParamError);
+        expect((error as ParamError).code).toBe("Other");
+        expect((error as ParamError).message).toContain(message);
+      }
+      check(1001n, "MSFT", true);
+      check(1002n, "AAPL", true);
+    }
+
+    configurator.reviewRule(name, {
+      clearGlobalRule: true,
+      accountGroupRules: [],
+    });
+    check(1001n, "AAPL", true);
+    check(1001n, "MSFT", false);
+    check(1002n, "AAPL", false);
+    configurator.reviewRule(name, { globalRule: null, accountRules: null });
+    check(1001n, "AAPL", true);
+    configurator.reviewRule(name, { accountRules: [] });
+    check(1001n, "AAPL", false);
+
+    for (const [other, kind] of [
+      ["missing", ConfigureErrorKind.Unknown],
+      [RateLimitBuilder.NAME, ConfigureErrorKind.TypeMismatch],
+    ] as const) {
+      try {
+        configurator.reviewRule(other, { globalRule: global });
+        throw new Error("expected PolicyConfigureError");
+      } catch (error) {
+        expectConfigureError(error, kind);
+      }
+    }
+    check(1002n, "AAPL", false);
+  });
+});
 
 describe("P&L-bounds kill switch", () => {
   const name = PnlBoundsKillswitchBuilder.NAME;

@@ -53,6 +53,8 @@ export {
   OrderSizeBrokerBarrier,
   OrderSizeAssetBarrier,
   OrderSizeAccountAssetBarrier,
+  ReviewRule,
+  ReviewRuleBuilder,
   RateLimitBuilder,
   RateLimit,
   RateLimitBrokerBarrier,
@@ -72,6 +74,7 @@ export {
   // Factory functions.
   buildOrderValidation,
   buildOrderSizeLimit,
+  buildReviewRule,
   buildRateLimit,
   buildPnlBoundsKillswitch,
   buildSpotFunds,
@@ -82,6 +85,9 @@ export {
 export type {
   OrderValidationReadyBuilder,
   OrderSizeLimitReadyBuilder,
+  ReviewRuleReadyBuilder,
+  ReviewRuleInit,
+  ReviewRuleConfigureOptions,
   RateLimitReadyBuilder,
   PnlBoundsKillswitchReadyBuilder,
   SpotFundsReadyBuilder,

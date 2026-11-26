@@ -44,6 +44,7 @@ use openpit::{
 // - https://wiki.openpit.dev/Pre-trade-Pipeline/
 // - https://wiki.openpit.dev/Pre-Trade-Lock/
 // - https://wiki.openpit.dev/Review-Mode/
+// - https://wiki.openpit.dev/Review-Rules/
 // - https://wiki.openpit.dev/Spot-Funds/
 // - https://wiki.openpit.dev/Storage/
 // If this file changes, update every linked documentation snippet.
@@ -147,6 +148,106 @@ mod review_mode_example {
         assert_eq!(sent.get(), 1);
         Ok(())
     }
+}
+
+#[test]
+fn example_wiki_review_rules() -> Result<(), Box<dyn std::error::Error>> {
+    // Source: https://wiki.openpit.dev/Review-Rules/#rust
+    // Keep this example in sync with the matching wiki example.
+    use openpit::param::AccountGroupId;
+    use openpit::pretrade::policies::{
+        ReviewRuleAccountGroupRule, ReviewRuleAccountRule, ReviewRuleInstruments, ReviewRulePolicy,
+        ReviewRuleSettings,
+    };
+    use openpit::pretrade::RuleMode;
+    use openpit::{OrderReview, PolicyInstance, WithOrderReview};
+
+    let group = AccountGroupId::from_u32(7)?;
+    let new_client = AccountId::from_u64(1001);
+    let restricted = AccountId::from_u64(1002);
+    let usd = Asset::new("USD")?;
+    let aapl = Instrument::new(Asset::new("AAPL")?, usd.clone());
+    let msft = Instrument::new(Asset::new("MSFT")?, usd.clone());
+    let tsla = Instrument::new(Asset::new("TSLA")?, usd);
+    let client_rules = ReviewRuleSettings::new(
+        None,
+        [ReviewRuleAccountGroupRule {
+            account_group_id: group,
+            instruments: ReviewRuleInstruments::All,
+        }],
+        [],
+    )?;
+    let instrument_rules = ReviewRuleSettings::new(
+        None,
+        [],
+        [ReviewRuleAccountRule {
+            account_id: restricted,
+            instruments: ReviewRuleInstruments::Exact(vec![msft.clone()]),
+        }],
+    )?;
+
+    let engine = Engine::builder::<WithOrderReview<OrderOperation>, (), ()>()
+        .with_order_review()
+        .no_sync()
+        .pre_trade_instance(
+            ReviewRulePolicy::new(client_rules),
+            PolicyInstance {
+                name: Some("new-clients-review".to_owned()),
+                mode: RuleMode::ReviewWithHold,
+            },
+        )
+        .pre_trade_instance(
+            ReviewRulePolicy::new(instrument_rules),
+            PolicyInstance {
+                name: Some("restricted-instruments".to_owned()),
+                mode: RuleMode::Reject,
+            },
+        )
+        .build()?;
+    engine.accounts().register_group(&[new_client], group)?;
+
+    let quantity = Quantity::from_str("10")?;
+    let price = Price::from_str("25")?;
+    let run = |account_id, instrument| {
+        engine.execute_pre_trade_dry_run(WithOrderReview {
+            inner: OrderOperation {
+                account_id,
+                instrument,
+                side: Side::Buy,
+                trade_amount: TradeAmount::Quantity(quantity),
+                price: Some(price),
+            },
+            review: OrderReview {
+                confirmed: false,
+                already_held: false,
+            },
+        })
+    };
+    let review = run(new_client, aapl.clone());
+    assert!(review.is_pass());
+    assert_eq!(review.reviews().len(), 1);
+    assert_eq!(review.reviews()[0].mode, RuleMode::ReviewWithHold);
+
+    let check_rejected = |account, instrument| {
+        let result = run(account, instrument);
+        let rejects = result.rejects().expect("order must be rejected");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].code, RejectCode::ComplianceRestriction);
+        assert!(result.reviews().is_empty());
+    };
+    check_rejected(restricted, msft.clone());
+    let pass = run(restricted, aapl);
+    assert!(pass.is_pass());
+    assert!(pass.reviews().is_empty());
+
+    engine
+        .configure()
+        .review_rule("restricted-instruments", |settings| {
+            settings.set_global(Some(ReviewRuleInstruments::Exact(vec![tsla.clone()])))
+        })?;
+    check_rejected(AccountId::from_u64(1003), tsla);
+    check_rejected(restricted, msft);
+    Ok(())
 }
 
 fn aapl_usd_order(quantity: &str, price: &str) -> OrderOperation {

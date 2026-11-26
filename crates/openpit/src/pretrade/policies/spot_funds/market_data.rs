@@ -38,7 +38,7 @@ use crate::param::{AccountGroupId, AccountId, Asset, Price, Quantity};
 use crate::pretrade::RuleMode;
 use crate::storage::LockingPolicyFactory;
 
-use super::super::pnl_bounds;
+use super::super::{account_scoped::AccountScoped, pnl_bounds};
 use super::market_order_pricer::WithSlippage;
 
 /// Upper bound (inclusive) on any slippage value, in basis points.
@@ -443,8 +443,7 @@ pub struct SpotFundsSettings {
     account_overrides: HashMap<(InstrumentId, AccountId), WithSlippage>,
     account_group_overrides: HashMap<(InstrumentId, AccountGroupId), WithSlippage>,
     instrument_overrides: HashMap<InstrumentId, WithSlippage>,
-    account_limit_modes: HashMap<AccountId, SpotFundsLimitMode>,
-    account_group_limit_modes: HashMap<AccountGroupId, SpotFundsLimitMode>,
+    limit_modes: AccountScoped<SpotFundsLimitMode>,
     position_limits: HashMap<(AccountId, Asset, RuleMode), Quantity>,
     pnl_barriers: SpotFundsPnlBarrierSet,
     pnl_account_unrealized_barriers: SpotFundsPnlBarrierSet,
@@ -453,7 +452,6 @@ pub struct SpotFundsSettings {
     pnl_position_total_barriers: SpotFundsPnlBarrierSet,
     global_pricer: WithSlippage,
     pricing_source: SpotFundsPricingSource,
-    global_limit_mode: SpotFundsLimitMode,
 }
 
 impl SpotFundsSettings {
@@ -461,7 +459,7 @@ impl SpotFundsSettings {
         self.account_overrides
             .keys()
             .any(|(_, account)| *account == account_id)
-            || self.account_limit_modes.contains_key(&account_id)
+            || self.limit_modes.references_account(account_id)
             || self
                 .position_limits
                 .keys()
@@ -535,8 +533,7 @@ impl SpotFundsSettings {
             account_overrides,
             account_group_overrides,
             instrument_overrides,
-            account_limit_modes: HashMap::new(),
-            account_group_limit_modes: HashMap::new(),
+            limit_modes: AccountScoped::new(SpotFundsLimitMode::Enforce),
             position_limits: HashMap::new(),
             pnl_barriers: SpotFundsPnlBarrierSet::default(),
             pnl_account_unrealized_barriers: SpotFundsPnlBarrierSet::default(),
@@ -545,7 +542,6 @@ impl SpotFundsSettings {
             pnl_position_total_barriers: SpotFundsPnlBarrierSet::default(),
             global_pricer,
             pricing_source,
-            global_limit_mode: SpotFundsLimitMode::Enforce,
         })
     }
 
@@ -576,7 +572,7 @@ impl SpotFundsSettings {
     /// Review modes mark a shortfall with or without recording the hold; see
     /// [`SpotFundsLimitMode`].
     pub fn set_global_limit_mode(&mut self, mode: SpotFundsLimitMode) {
-        self.global_limit_mode = mode;
+        self.limit_modes.set_global(mode);
     }
 
     /// Inserts or clears the funds limit-mode override for one account.
@@ -589,7 +585,7 @@ impl SpotFundsSettings {
         account_id: AccountId,
         mode: Option<SpotFundsLimitMode>,
     ) {
-        pnl_bounds::set_or_clear(&mut self.account_limit_modes, account_id, mode);
+        self.limit_modes.set_account(account_id, mode);
     }
 
     /// Inserts or clears the funds limit-mode override for one account group.
@@ -602,7 +598,7 @@ impl SpotFundsSettings {
         account_group_id: AccountGroupId,
         mode: Option<SpotFundsLimitMode>,
     ) {
-        pnl_bounds::set_or_clear(&mut self.account_group_limit_modes, account_group_id, mode);
+        self.limit_modes.set_group(account_group_id, mode);
     }
 
     /// Inserts, replaces, or clears one (account, asset, mode) position limit.
@@ -870,7 +866,7 @@ impl SpotFundsSettings {
     /// Reads the global funds limit mode applied when no override matches.
     #[cfg(test)]
     pub(super) fn global_limit_mode(&self) -> SpotFundsLimitMode {
-        self.global_limit_mode
+        *self.limit_modes.global()
     }
 
     /// Inserts or replaces a slippage override at the given cascade target.
@@ -942,15 +938,7 @@ impl SpotFundsSettings {
         account_id: AccountId,
         account_info: &impl AccountInfo,
     ) -> SpotFundsLimitMode {
-        if let Some(mode) = self.account_limit_modes.get(&account_id) {
-            return *mode;
-        }
-        if let Some(account_group_id) = account_info.group() {
-            if let Some(mode) = self.account_group_limit_modes.get(&account_group_id) {
-                return *mode;
-            }
-        }
-        self.global_limit_mode
+        *self.limit_modes.most_specific(account_id, account_info)
     }
 
     pub(super) fn position_limit_for(

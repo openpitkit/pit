@@ -81,6 +81,7 @@ export type {
   PnlBoundsKillswitchConfigureOptions,
   SetAccountPnlOptions,
   OrderSizeLimitConfigureOptions,
+  ReviewRuleConfigureOptions,
   SpotFundsConfigureOptions,
   SpotFundsLimitModeAccountEntry,
   SpotFundsPositionLimitEntry,

@@ -38,7 +38,7 @@ use crate::pretrade::policies::{
     account_pnl_barrier_change_blocks, account_pnl_membership_change_block,
     pnl_axis_barrier_changes, AccountPnlStorage, ActiveHoldingsMutationStorage,
     OrderSizeLimitSettings, PnlBoundsKillSwitchSettings, RateLimitSettings, RealizedPnlStorage,
-    SpotFundsHoldingsStorage, SpotFundsSettings,
+    ReviewRuleSettings, SpotFundsHoldingsStorage, SpotFundsSettings,
 };
 use crate::pretrade::{
     AccountBlockOutcome, AccountBlockOutcomes, PolicyConfigurationResult,
@@ -82,6 +82,8 @@ pub(crate) enum ConfigEntry<Factory: LockingPolicyFactory> {
     },
     /// Order-size-limit policy settings.
     OrderSizeLimit(Factory::Config<OrderSizeLimitSettings>),
+    /// Review-rule policy settings.
+    ReviewRule(Factory::Config<ReviewRuleSettings>),
 }
 
 /// Settings computed under a serialized transition and not yet published. It
@@ -163,6 +165,7 @@ impl<Factory: LockingPolicyFactory> ConfigEntry<Factory> {
             Self::OrderSizeLimit(_) => {
                 std::any::type_name::<Factory::Config<OrderSizeLimitSettings>>()
             }
+            Self::ReviewRule(_) => std::any::type_name::<Factory::Config<ReviewRuleSettings>>(),
         }
     }
 }
@@ -805,6 +808,30 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                 .update(f)
                 .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),
             entry => Err(ConfigRegistry::<_>::type_mismatch::<OrderSizeLimitSettings>(name, entry)),
+        }
+    }
+
+    /// Retunes the [`ReviewRulePolicy`](crate::pretrade::policies::ReviewRulePolicy)
+    /// registered under `name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same error variants as [`Self::rate_limit`].
+    pub fn review_rule<Error: std::fmt::Display>(
+        &self,
+        name: &str,
+        f: impl FnOnce(&mut ReviewRuleSettings) -> Result<(), Error>,
+    ) -> Result<(), ConfigureError> {
+        #[cfg(debug_assertions)]
+        let _call = self.inner.config_registry.engine_calls.enter();
+        let _quotes = crate::pretrade::start_pre_trade_time::call_quotes();
+        match self.registry().entry(name)?.1 {
+            ConfigEntry::ReviewRule(cell) => cell
+                .update(f)
+                .map_err(|error| ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)),
+            entry => Err(ConfigRegistry::<_>::type_mismatch::<ReviewRuleSettings>(
+                name, entry,
+            )),
         }
     }
 }

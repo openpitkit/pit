@@ -47,6 +47,10 @@ pub(crate) fn parse_asset_view(
         .map_err(|err| format!("invalid {field}: {err}"))
 }
 
+pub(crate) fn import_required_instrument(value: &OpenPitInstrument) -> Result<Instrument, String> {
+    import_instrument(value)?.ok_or_else(|| "instrument is not set".to_owned())
+}
+
 pub(crate) fn import_instrument(value: &OpenPitInstrument) -> Result<Option<Instrument>, String> {
     // `Instrument` owns its asset codes, so decoding a borrowed view
     // necessarily creates owned values here.

@@ -21,6 +21,7 @@
 #include "openpit/error.hpp"
 #include "openpit/marketdata/instrument_id.hpp"
 #include "openpit/marketdata/service.hpp"
+#include "openpit/model/model.hpp"
 #include "openpit/param/param.hpp"
 #include "openpit/pretrade/detail/lists.hpp"
 #include "openpit/reject/reject.hpp"
@@ -76,6 +77,7 @@ enum class SpotFundsLimitMode : std::uint8_t {
 inline constexpr std::string_view RateLimitPolicyName = "RateLimitPolicy";
 inline constexpr std::string_view OrderSizeLimitPolicyName =
     "OrderSizeLimitPolicy";
+inline constexpr std::string_view ReviewRulePolicyName = "ReviewRulePolicy";
 inline constexpr std::string_view PnlBoundsKillSwitchPolicyName =
     "PnlBoundsKillSwitchPolicy";
 inline constexpr std::string_view SpotFundsPolicyName = "SpotFundsPolicy";
@@ -330,6 +332,187 @@ class OrderSizeLimitPolicy {
   std::optional<OrderSizeBrokerBarrier> m_broker;
   std::vector<OrderSizeAssetBarrier> m_assetBarriers;
   std::vector<OrderSizeAccountAssetBarrier> m_accountAssetBarriers;
+  std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
+};
+
+//------------------------------------------------------------------------------
+// ReviewRule
+
+/// Instruments covered by one rule. Exact lists must be nonempty and distinct;
+/// the core validates them when registering or configuring the policy.
+class ReviewRuleInstruments {
+ public:
+  [[nodiscard]] static ReviewRuleInstruments All() {
+    return ReviewRuleInstruments(std::nullopt);
+  }
+
+  [[nodiscard]] static ReviewRuleInstruments Exact(
+      std::vector<::openpit::model::Instrument> instruments) {
+    return ReviewRuleInstruments(std::move(instruments));
+  }
+
+  [[nodiscard]] const std::optional<std::vector<::openpit::model::Instrument>>&
+  Instruments() const noexcept {
+    return m_instruments;
+  }
+
+ private:
+  explicit ReviewRuleInstruments(
+      std::optional<std::vector<::openpit::model::Instrument>> instruments)
+      : m_instruments(std::move(instruments)) {}
+
+  std::optional<std::vector<::openpit::model::Instrument>> m_instruments;
+};
+
+/// One account-group rule. Group keys must be distinct within a policy.
+struct ReviewRuleAccountGroupRule {
+  ::openpit::param::AccountGroupId accountGroupId;
+  ReviewRuleInstruments instruments;
+};
+
+/// One account rule. Account keys must be distinct within a policy.
+struct ReviewRuleAccountRule {
+  ::openpit::param::AccountId accountId;
+  ReviewRuleInstruments instruments;
+};
+
+/// Tri-state runtime update for the global review rule.
+class ReviewRuleGlobalRuleUpdate {
+ public:
+  [[nodiscard]] static ReviewRuleGlobalRuleUpdate Unchanged() {
+    return ReviewRuleGlobalRuleUpdate(false, std::nullopt);
+  }
+
+  [[nodiscard]] static ReviewRuleGlobalRuleUpdate Clear() {
+    return ReviewRuleGlobalRuleUpdate(true, std::nullopt);
+  }
+
+  [[nodiscard]] static ReviewRuleGlobalRuleUpdate Set(
+      ReviewRuleInstruments instruments) {
+    return ReviewRuleGlobalRuleUpdate(true, std::move(instruments));
+  }
+
+  [[nodiscard]] bool HasUpdate() const noexcept { return m_hasUpdate; }
+
+  [[nodiscard]] const std::optional<ReviewRuleInstruments>& Rule()
+      const noexcept {
+    return m_rule;
+  }
+
+ private:
+  ReviewRuleGlobalRuleUpdate(bool hasUpdate,
+                             std::optional<ReviewRuleInstruments> rule)
+      : m_hasUpdate(hasUpdate), m_rule(std::move(rule)) {}
+
+  bool m_hasUpdate;
+  std::optional<ReviewRuleInstruments> m_rule;
+};
+
+namespace detail {
+
+// Owns the raw instrument arrays shared by registration and configuration.
+// Asset bytes are borrowed from the input rules until the ABI call returns.
+class ReviewRuleArguments {
+ private:
+  ReviewRuleArguments(const std::optional<ReviewRuleInstruments>& global,
+                      const std::vector<ReviewRuleAccountGroupRule>* groups,
+                      const std::vector<ReviewRuleAccountRule>* accounts) {
+    m_instruments.reserve(1 + (groups ? groups->size() : 0) +
+                          (accounts ? accounts->size() : 0));
+    if (global) m_global = Instruments(*global);
+    if (groups) {
+      m_groups.reserve(groups->size());
+      for (const auto& rule : *groups) {
+        const auto filter = Instruments(rule.instruments);
+        m_groups.push_back({::openpit::detail::Native(rule.accountGroupId),
+                            filter.instruments, filter.instruments_len,
+                            filter.has_instruments});
+      }
+    }
+    if (accounts) {
+      m_accounts.reserve(accounts->size());
+      for (const auto& rule : *accounts) {
+        const auto filter = Instruments(rule.instruments);
+        m_accounts.push_back({::openpit::detail::Native(rule.accountId),
+                              filter.instruments, filter.instruments_len,
+                              filter.has_instruments});
+      }
+    }
+  }
+
+  [[nodiscard]] OpenPitPretradePoliciesReviewRuleGlobalRule Instruments(
+      const ReviewRuleInstruments& rule) {
+    if (!rule.Instruments()) return {nullptr, 0, false};
+    auto& raw = m_instruments.emplace_back();
+    raw.reserve(rule.Instruments()->size());
+    for (const auto& instrument : *rule.Instruments()) {
+      raw.push_back(::openpit::detail::Native(instrument));
+    }
+    return {raw.data(), raw.size(), true};
+  }
+
+  std::vector<std::vector<OpenPitInstrument>> m_instruments;
+  std::optional<OpenPitPretradePoliciesReviewRuleGlobalRule> m_global;
+  std::vector<OpenPitPretradePoliciesReviewRuleAccountGroupRule> m_groups;
+  std::vector<OpenPitPretradePoliciesReviewRuleAccountRule> m_accounts;
+
+  friend class ::openpit::Configurator;
+  friend class ::openpit::pretrade::policies::ReviewRulePolicy;
+};
+
+}  // namespace detail
+
+/// Matches the union of global, account-group and account rules. Matching
+/// orders get ComplianceRestriction with the registered instance's mode.
+/// An empty policy admits every order and can be configured at runtime.
+class ReviewRulePolicy {
+ public:
+  ReviewRulePolicy& PolicyGroupId(std::uint16_t policyGroupId) {
+    m_policyGroupId = policyGroupId;
+    return *this;
+  }
+
+  ReviewRulePolicy& GlobalRule(ReviewRuleInstruments instruments) {
+    m_global = std::move(instruments);
+    return *this;
+  }
+
+  ReviewRulePolicy& AccountGroupRule(ReviewRuleAccountGroupRule rule) {
+    m_groups.push_back(std::move(rule));
+    return *this;
+  }
+
+  ReviewRulePolicy& AccountRule(ReviewRuleAccountRule rule) {
+    m_accounts.push_back(std::move(rule));
+    return *this;
+  }
+
+  /// Registers this policy; throws openpit::Error on invalid rules or builder.
+  /// Register a policy that keeps its own state (Spot Funds, the rate limit,
+  /// the P&L bounds kill switch, a custom policy that holds funds or counts) in
+  /// `reject::RuleMode::Reject` mode; \ref openpit::PolicyInstance::mode says
+  /// what a review mode discards.
+  void AddTo(::openpit::EngineBuilder& builder,
+             const ::openpit::PolicyInstance& instance = {}) const {
+    const auto rawInstance =
+        ::openpit::detail::PolicyInstanceToNative(instance);
+    const detail::ReviewRuleArguments raw(m_global, &m_groups, &m_accounts);
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_engine_builder_add_builtin_review_rule_policy(
+            ::openpit::detail::Native(builder), m_policyGroupId,
+            raw.m_global ? &*raw.m_global : nullptr, raw.m_groups.data(),
+            raw.m_groups.size(), raw.m_accounts.data(), raw.m_accounts.size(),
+            &rawInstance, &error)) {
+      ::openpit::detail::ThrowFromSharedString(
+          error,
+          "openpit_engine_builder_add_builtin_review_rule_policy failed");
+    }
+  }
+
+ private:
+  std::optional<ReviewRuleInstruments> m_global;
+  std::vector<ReviewRuleAccountGroupRule> m_groups;
+  std::vector<ReviewRuleAccountRule> m_accounts;
   std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
 };
 

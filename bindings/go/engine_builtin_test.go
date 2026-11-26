@@ -2115,6 +2115,227 @@ func TestBuiltinPnlBoundsKillSwitchBrokerBarrierRejectViaCheckPreTradeStart(
 	}
 }
 
+func TestBuiltinReviewRuleAccountVerdicts(t *testing.T) {
+	for _, mode := range []reject.RuleMode{reject.RuleModeReject, reject.RuleModeReviewWithHold} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			account := param.NewAccountIDFromUint64(1001)
+			engine, err := NewEngineBuilder().NoSync().Builtin(
+				policies.BuildReviewRule().PolicyGroupID(3).
+					AccountRules(policies.ReviewRuleAccountRule{
+						AccountID: account, Instruments: policies.ReviewRuleAllInstruments(),
+					}),
+				InstanceName("account-review"), InstanceMode(mode),
+			).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Stop()
+			for _, symbol := range []string{"AAPL", "MSFT"} {
+				checkReviewRuleOrder(t, engine, 1001, symbol, mode, true)
+			}
+			checkReviewRuleOrder(t, engine, 1002, "AAPL", mode, false)
+		})
+	}
+}
+
+func TestBuiltinReviewRuleInvalidRegistration(t *testing.T) {
+	group, err := param.NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The symbols come from the heap, as when parsing a configuration file.
+	aapl := param.NewInstrument(
+		builtinTestAsset(t, strings.Join([]string{"AA", "PL"}, "")),
+		builtinTestAsset(t, strings.Join([]string{"US", "D"}, "")),
+	)
+	groupRule := policies.ReviewRuleAccountGroupRule{
+		AccountGroupID: group, Instruments: policies.ReviewRuleAllInstruments(),
+	}
+	accountRule := policies.ReviewRuleAccountRule{
+		AccountID: param.NewAccountIDFromUint64(1001), Instruments: policies.ReviewRuleAllInstruments(),
+	}
+	for _, test := range []struct {
+		name    string
+		message string
+		builder *policies.ReviewRuleReadyBuilder
+	}{
+		{"empty exact", "an exact instrument list must not be empty",
+			policies.BuildReviewRule().GlobalRule(policies.ReviewRuleGlobalRule{
+				Instruments: policies.ReviewRuleExactInstruments(),
+			})},
+		{"duplicate instrument", "duplicate review rule instrument AAPL/USD",
+			policies.BuildReviewRule().GlobalRule(policies.ReviewRuleGlobalRule{
+				Instruments: policies.ReviewRuleExactInstruments(aapl, aapl),
+			})},
+		{"duplicate group", "duplicate account group review rule",
+			policies.BuildReviewRule().AccountGroupRules(groupRule, groupRule)},
+		{"duplicate account", "duplicate account review rule",
+			policies.BuildReviewRule().AccountRules(accountRule, accountRule)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := NewEngineBuilder().NoSync().Builtin(test.builder).Build()
+			if engine != nil {
+				engine.Stop()
+				t.Fatal("invalid review-rule settings built an engine")
+			}
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("Build() error = %v, want %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestConfigureReviewRuleLifecycle(t *testing.T) {
+	const name = "restricted-instruments"
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildRateLimit().AccountBarriers()).
+		Builtin(policies.BuildReviewRule().AccountRules(), InstanceName(name)).
+		Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Stop()
+
+	group, err := param.NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := param.NewAccountIDFromUint64(1001)
+	if err := engine.Accounts().RegisterGroup([]param.AccountID{account}, group); err != nil {
+		t.Fatal(err)
+	}
+	aapl := param.NewInstrument(
+		builtinTestAsset(t, strings.Join([]string{"AA", "PL"}, "")),
+		builtinTestAsset(t, strings.Join([]string{"US", "D"}, "")),
+	)
+	global := policies.ReviewRuleGlobalRule{Instruments: policies.ReviewRuleExactInstruments(aapl)}
+	groupRule := policies.ReviewRuleAccountGroupRule{
+		AccountGroupID: group, Instruments: policies.ReviewRuleAllInstruments(),
+	}
+	accountRule := policies.ReviewRuleAccountRule{
+		AccountID: account, Instruments: policies.ReviewRuleExactInstruments(aapl),
+	}
+	keep := optional.None[*policies.ReviewRuleGlobalRule]()
+	clearGlobal := optional.Some[*policies.ReviewRuleGlobalRule](nil)
+	cfg := engine.Configure()
+	update := func(global optional.Option[*policies.ReviewRuleGlobalRule],
+		groups []policies.ReviewRuleAccountGroupRule, accounts []policies.ReviewRuleAccountRule,
+	) {
+		t.Helper()
+		if err := cfg.ReviewRule(name, global, groups, accounts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(t *testing.T, accountID uint64, symbol string, rejected bool) {
+		t.Helper()
+		checkReviewRuleOrder(t, engine, accountID, symbol, reject.RuleModeReject, rejected)
+	}
+	check(t, 1001, "AAPL", false)
+	update(keep, []policies.ReviewRuleAccountGroupRule{groupRule}, nil)
+	check(t, 1001, "MSFT", true)
+	check(t, 1002, "MSFT", false)
+	update(optional.Some(&global), nil, nil)
+	update(keep, nil, []policies.ReviewRuleAccountRule{accountRule})
+	check(t, 1001, "MSFT", true)
+	check(t, 1002, "AAPL", true)
+	check(t, 1002, "MSFT", false)
+
+	for _, test := range []struct {
+		name     string
+		message  string
+		global   optional.Option[*policies.ReviewRuleGlobalRule]
+		groups   []policies.ReviewRuleAccountGroupRule
+		accounts []policies.ReviewRuleAccountRule
+	}{
+		{name: "empty exact", message: "an exact instrument list must not be empty",
+			global: optional.Some(&policies.ReviewRuleGlobalRule{Instruments: policies.ReviewRuleExactInstruments()})},
+		{name: "duplicate instrument", message: "duplicate review rule instrument AAPL/USD",
+			global: optional.Some(&policies.ReviewRuleGlobalRule{Instruments: policies.ReviewRuleExactInstruments(aapl, aapl)})},
+		{name: "duplicate group", message: "duplicate account group review rule",
+			global: clearGlobal, groups: []policies.ReviewRuleAccountGroupRule{groupRule, groupRule}},
+		{name: "duplicate account", message: "duplicate account review rule",
+			global: clearGlobal, groups: []policies.ReviewRuleAccountGroupRule{},
+			accounts: []policies.ReviewRuleAccountRule{accountRule, accountRule}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := cfg.ReviewRule(name, test.global, test.groups, test.accounts)
+			var configErr *configure.Error
+			wantMessage := "policy " + name + " rejected the update: " + test.message
+			if !errors.As(err, &configErr) || configErr.Kind != configure.ErrorKindValidation ||
+				configErr.Message != wantMessage {
+				t.Fatalf("ReviewRule() error = %v, want Validation with %q", err, wantMessage)
+			}
+			check(t, 1001, "MSFT", true)
+			check(t, 1002, "AAPL", true)
+			check(t, 1002, "MSFT", false)
+		})
+	}
+
+	update(clearGlobal, []policies.ReviewRuleAccountGroupRule{}, nil)
+	check(t, 1001, "AAPL", true)
+	check(t, 1001, "MSFT", false)
+	check(t, 1002, "AAPL", false)
+	update(keep, nil, nil)
+	check(t, 1001, "AAPL", true)
+	update(keep, nil, []policies.ReviewRuleAccountRule{})
+	check(t, 1001, "AAPL", false)
+
+	for _, test := range []struct {
+		name string
+		kind configure.ErrorKind
+	}{
+		{"missing", configure.ErrorKindUnknown},
+		{policies.RateLimitPolicyName, configure.ErrorKindTypeMismatch},
+	} {
+		var configErr *configure.Error
+		err := cfg.ReviewRule(test.name, optional.Some(&global), nil, nil)
+		if !errors.As(err, &configErr) || configErr.Kind != test.kind {
+			t.Fatalf("ReviewRule(%q) error = %v, want kind %v", test.name, err, test.kind)
+		}
+	}
+	check(t, 1002, "AAPL", false)
+}
+
+func checkReviewRuleOrder(
+	t *testing.T, engine *Engine, account uint64, symbol string, mode reject.RuleMode, matched bool,
+) {
+	t.Helper()
+	order := orderSizeTestOrder(t, account, "USD", "10")
+	op := order.EnsureOperationView()
+	op.SetInstrument(param.NewInstrument(builtinTestAsset(t, symbol), builtinTestAsset(t, "USD")))
+	report, err := engine.ExecutePreTradeDryRun(order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer report.Close()
+	rejects, err := report.Rejects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews, err := report.Reviews()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRejects, wantReviews := 0, 0
+	if matched && mode == reject.RuleModeReject {
+		wantRejects = 1
+	} else if matched {
+		wantReviews = 1
+	}
+	if len(rejects) != wantRejects || len(reviews) != wantReviews {
+		t.Fatalf("order %d %s/USD: rejects = %v, reviews = %v; want %d reject(s) and %d review(s)",
+			account, symbol, rejects, reviews, wantRejects, wantReviews)
+	}
+	for _, records := range [][]reject.Reject{rejects, reviews} {
+		for _, record := range records {
+			if record.Code != reject.CodeComplianceRestriction || record.Mode != mode {
+				t.Fatalf("order %d %s/USD got %v; want ComplianceRestriction in mode %v",
+					account, symbol, record, mode)
+			}
+		}
+	}
+}
+
 func builtinTestAsset(t *testing.T, symbol string) param.Asset {
 	t.Helper()
 	asset, err := param.NewAsset(symbol)

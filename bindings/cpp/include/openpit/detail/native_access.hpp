@@ -170,6 +170,7 @@ class NativeAccess final {
     friend class ::openpit::pretrade::policies::OrderValidationPolicy;
     friend class ::openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
     friend class ::openpit::pretrade::policies::RateLimitPolicy;
+    friend class ::openpit::pretrade::policies::ReviewRulePolicy;
     friend class ::openpit::pretrade::policies::
         SpotFundsPnlBoundsKillSwitchPolicy;
     friend class ::openpit::pretrade::policies::SpotFundsPolicy;
@@ -192,6 +193,7 @@ class NativeAccess final {
     friend struct ::openpit::pretrade::policies::SpotFundsPnlBoundsBarrier;
     friend class ::openpit::pretrade::policies::detail::OrderSizeOptionalAccess;
     friend class ::openpit::pretrade::policies::detail::PnlOptionalAccess;
+    friend class ::openpit::pretrade::policies::detail::ReviewRuleArguments;
 
     friend class ::openpit::accounts::AccountControl;
     friend class ::openpit::accounts::Accounts;

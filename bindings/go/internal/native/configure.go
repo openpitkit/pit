@@ -193,6 +193,35 @@ func EngineConfigureOrderSizeLimit(
 	return nil
 }
 
+// EngineConfigureReviewRule replaces supplied rule levels atomically.
+// hasGlobal=false keeps the global rule; true with nil global clears it.
+// Nil group/account slices keep the level; non-nil empty slices clear it.
+// A non-nil ConfigureError is caller-owned: use DestroyConfigureError.
+func EngineConfigureReviewRule(
+	engine Engine,
+	name string,
+	global *ReviewRuleGlobalRule,
+	hasGlobal bool,
+	groups []ReviewRuleAccountGroupRule,
+	accounts []ReviewRuleAccountRule,
+) ConfigureError {
+	if !hasGlobal {
+		global = nil
+	}
+	args := newReviewRuleArguments(global, groups, accounts)
+	defer args.release()
+	var outError ConfigureError
+	if !C.openpit_engine_configure_review_rule(
+		engine, importString(name), args.global, C.bool(hasGlobal),
+		args.groups, C.size_t(len(groups)), C.bool(groups != nil),
+		args.accounts, C.size_t(len(accounts)), C.bool(accounts != nil),
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return outError
+	}
+	return nil
+}
+
 // EngineConfigureSpotFunds reconfigures the named spot-funds policy at runtime.
 //
 // globalSlippageBps and pricingSource are optional (nil means "do not update").

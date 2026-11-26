@@ -34,7 +34,7 @@ use js_sys::{Object, Reflect};
 use openpit::param::AccountId;
 use openpit::pretrade::policies::{
     OrderSizeLimitPolicy, OrderValidationPolicy, PnlBoundsKillSwitchPolicy, RateLimitPolicy,
-    SpotFundsPolicy,
+    ReviewRulePolicy, SpotFundsPolicy,
 };
 use openpit::pretrade::{
     PolicyAccountAdjustmentResult, PolicyGroupId, PolicyPreTradeResult, PostTradeContext,
@@ -81,6 +81,7 @@ use crate::policy::order_size_limit::JsOrderSizeLimitBuilder;
 use crate::policy::order_validation::JsOrderValidationBuilder;
 use crate::policy::pnl_killswitch::JsPnlBoundsKillswitchBuilder;
 use crate::policy::rate_limit::JsRateLimitBuilder;
+use crate::policy::review_rule::JsReviewRuleBuilder;
 use crate::policy::spot_funds::{JsSpotFundsBuilder, JsSpotFundsPnlBoundsKillswitchBuilder};
 use crate::policy::{
     parse_rule_mode, BuiltinReadyBuilder, CallbackErrorScope, JsPreTradePolicyAdapter, PolicyLike,
@@ -529,6 +530,7 @@ enum BuilderState {
 enum BuiltinPolicy {
     OrderValidation(OrderValidationPolicy),
     OrderSizeLimit(OrderSizeLimitPolicy<StorageFactory>),
+    ReviewRule(ReviewRulePolicy<StorageFactory>),
     RateLimit(RateLimitPolicy<StorageFactory>),
     PnlBoundsKillswitch(PnlBoundsKillSwitchPolicy<StorageFactory>),
     SpotFunds(SpotFundsPolicy<EngineLocking, EngineLocking>),
@@ -561,6 +563,7 @@ impl BuilderState {
         match policy {
             BuiltinPolicy::OrderValidation(policy) => self.pre_trade(policy, instance),
             BuiltinPolicy::OrderSizeLimit(policy) => self.pre_trade(policy, instance),
+            BuiltinPolicy::ReviewRule(policy) => self.pre_trade(policy, instance),
             BuiltinPolicy::RateLimit(policy) => self.pre_trade(policy, instance),
             BuiltinPolicy::PnlBoundsKillswitch(policy) => self.pre_trade(policy, instance),
             BuiltinPolicy::SpotFunds(policy) => self.pre_trade(policy, instance),
@@ -1619,6 +1622,9 @@ fn build_builtin_policy(
     }
     if let Some(builder) = extract_cloned_wrapper::<JsOrderSizeLimitBuilder>(token)? {
         return builder.build_policy().map(BuiltinPolicy::OrderSizeLimit);
+    }
+    if let Some(builder) = extract_cloned_wrapper::<JsReviewRuleBuilder>(token)? {
+        return builder.build_policy().map(BuiltinPolicy::ReviewRule);
     }
     if let Some(builder) = extract_cloned_wrapper::<JsRateLimitBuilder>(token)? {
         return builder

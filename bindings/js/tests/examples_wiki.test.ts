@@ -32,6 +32,7 @@
 // - https://wiki.openpit.dev/Spot-Funds/
 // - https://wiki.openpit.dev/Policy-API/
 // - https://wiki.openpit.dev/Review-Mode/
+// - https://wiki.openpit.dev/Review-Rules/
 //
 // Run `npm run build` first: these tests import the built package.
 // Imports are hoisted because TypeScript forbids in-body imports; everything
@@ -75,6 +76,7 @@ import {
   buildOrderValidation,
   buildPnlBoundsKillswitch,
   buildRateLimit,
+  buildReviewRule,
   buildSpotFunds,
   OrderSizeAssetBarrier,
   OrderSizeBrokerBarrier,
@@ -82,6 +84,7 @@ import {
   PnlBoundsBrokerBarrier,
   RateLimit,
   RateLimitBrokerBarrier,
+  ReviewRule,
 } from "@openpit/engine/pretrade/policies";
 import { Quote, QuoteTtl } from "@openpit/engine/marketdata";
 import { AccountBlock, RuleMode } from "@openpit/engine/reject";
@@ -107,6 +110,68 @@ function sharedOrder(): OrderInit {
 function persistHistoricalOrderMetadata(order: OrderInit): void {
   void order;
 }
+
+describe("Review-Rules.md wiki example", () => {
+  it("routes orders by scope and instance mode", () => {
+    // Source: https://wiki.openpit.dev/Review-Rules/#javascript
+    // Keep this example in sync with the matching wiki example.
+    const aapl = new Instrument("AAPL", "USD");
+    const msft = new Instrument("MSFT", "USD");
+    const tsla = new Instrument("TSLA", "USD");
+    const builder = Engine.builder().builtin(
+      buildReviewRule().accountGroupRules([
+        new ReviewRule({ accountGroupId: 7 }),
+      ]),
+      { name: "new-clients-review", mode: RuleMode.ReviewWithHold },
+    );
+    builder.builtin(
+      buildReviewRule().accountRules([
+        new ReviewRule({ accountId: 1002, instruments: [msft] }),
+      ]),
+      { name: "restricted-instruments", mode: RuleMode.Reject },
+    );
+    const engine = builder.build();
+    engine.accounts().registerGroup([1001], 7);
+
+    const run = (accountId: number, instrument: Instrument) =>
+      engine.executePreTradeDryRun({
+        operation: {
+          accountId,
+          underlyingAsset: instrument.underlyingAsset,
+          settlementAsset: instrument.settlementAsset,
+          side: "BUY",
+          tradeAmount: TradeAmount.quantity("10"),
+          price: "25",
+        },
+      });
+
+    const review = run(1001, aapl);
+    expect(review.isPass).toBe(true);
+    expect(review.rejects).toEqual([]);
+    expect(review.reviews.map((mark) => mark.mode)).toEqual([
+      RuleMode.ReviewWithHold,
+    ]);
+
+    const checkRejected = (accountId: number, instrument: Instrument) => {
+      const result = run(accountId, instrument);
+      expect(result.rejects.map((reject) => reject.code)).toEqual([
+        "ComplianceRestriction",
+      ]);
+      expect(result.reviews).toEqual([]);
+    };
+    checkRejected(1002, msft);
+    const passed = run(1002, aapl);
+    expect(passed.isPass).toBe(true);
+    expect(passed.rejects).toEqual([]);
+    expect(passed.reviews).toEqual([]);
+
+    engine.configure().reviewRule("restricted-instruments", {
+      globalRule: new ReviewRule({ instruments: [tsla] }),
+    });
+    checkRejected(1003, tsla);
+    checkRejected(1002, msft);
+  });
+});
 
 describe("Review-Mode.md wiki example", () => {
   it("sends only after the engine discards review marks on confirmation", () => {

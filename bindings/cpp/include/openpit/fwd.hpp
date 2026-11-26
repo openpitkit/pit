@@ -114,6 +114,7 @@ namespace openpit::pretrade::policies::detail {
 
 class OrderSizeOptionalAccess;
 class PnlOptionalAccess;
+class ReviewRuleArguments;
 
 }  // namespace openpit::pretrade::policies::detail
 
@@ -190,6 +191,7 @@ class OrderSizeLimitPolicy;
 class OrderValidationPolicy;
 class PnlBoundsKillSwitchPolicy;
 class RateLimitPolicy;
+class ReviewRulePolicy;
 class SpotFundsPnlBoundsKillSwitchPolicy;
 class SpotFundsPolicy;
 

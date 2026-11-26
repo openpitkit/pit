@@ -17,6 +17,7 @@
 
 //! Built-in pre-trade policy implementations.
 
+mod account_scoped;
 pub mod order_size_limit;
 pub mod order_validation;
 mod pnl_bounds;
@@ -24,6 +25,7 @@ pub mod pnl_bounds_killswitch;
 #[cfg(test)]
 mod proptest_config;
 pub mod rate_limit;
+pub mod review_rule;
 mod spot_funds;
 
 pub use order_size_limit::{
@@ -39,6 +41,10 @@ pub use pnl_bounds_killswitch::{
 pub use rate_limit::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
+};
+pub use review_rule::{
+    ReviewRuleAccountGroupRule, ReviewRuleAccountRule, ReviewRuleInstruments, ReviewRulePolicy,
+    ReviewRulePolicyError, ReviewRuleSettings,
 };
 pub use spot_funds::SpotFundsPolicy;
 pub(crate) use spot_funds::{

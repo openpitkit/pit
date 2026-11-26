@@ -422,6 +422,51 @@ func (c Configurator) OrderSizeLimitUpdate(
 }
 
 //------------------------------------------------------------------------------
+// ReviewRule
+
+// ReviewRule updates the named review-rule policy atomically.
+//
+// An absent global option keeps the global rule. A present nil clears it, and
+// a present rule sets it. A nil groups or accounts slice keeps that level; an
+// empty non-nil slice clears it. Other slices replace their whole level.
+// Returns a *Error on a domain error.
+func (c Configurator) ReviewRule(
+	name string,
+	global optional.Option[*policies.ReviewRuleGlobalRule],
+	groups []policies.ReviewRuleAccountGroupRule,
+	accounts []policies.ReviewRuleAccountRule,
+) error {
+	var nativeGlobal *native.ReviewRuleGlobalRule
+	if rule, hasGlobal := global.Get(); hasGlobal && rule != nil {
+		nativeGlobal = ptr.New(rule.Handle())
+	}
+	var nativeGroups []native.ReviewRuleAccountGroupRule
+	if groups != nil {
+		nativeGroups = make([]native.ReviewRuleAccountGroupRule, len(groups))
+		for i, rule := range groups {
+			nativeGroups[i] = rule.Handle()
+		}
+	}
+	var nativeAccounts []native.ReviewRuleAccountRule
+	if accounts != nil {
+		nativeAccounts = make([]native.ReviewRuleAccountRule, len(accounts))
+		for i, rule := range accounts {
+			nativeAccounts[i] = rule.Handle()
+		}
+	}
+	configErr := native.EngineConfigureReviewRule(
+		c.engine, name, nativeGlobal, global.IsSet(), nativeGroups, nativeAccounts,
+	)
+	runtime.KeepAlive(global)
+	runtime.KeepAlive(groups)
+	runtime.KeepAlive(accounts)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+//------------------------------------------------------------------------------
 // SpotFunds
 
 // SpotFunds updates the runtime settings of the named spot-funds policy.

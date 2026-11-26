@@ -31,8 +31,10 @@ import type { Policy } from "@openpit/engine/pretrade";
 import { RuleMode } from "@openpit/engine/reject";
 import {
   buildOrderSizeLimit,
+  buildOrderValidation,
   buildPnlBoundsKillswitch,
   buildRateLimit,
+  buildReviewRule,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
   OrderSizeAccountAssetBarrier,
@@ -44,6 +46,7 @@ import {
   PnlBoundsBrokerBarrier,
   RateLimit,
   RateLimitBrokerBarrier,
+  ReviewRule,
   SpotFundsOverride,
   SpotFundsPnlBoundsBarrier,
 } from "@openpit/engine/pretrade/policies";
@@ -77,6 +80,69 @@ function sizedOrder(
     },
   };
 }
+
+describe("review-rule registration validation", () => {
+  const aapl = { underlyingAsset: "AAPL", settlementAsset: "USD" };
+  function group() {
+    return new ReviewRule({ accountGroupId: 7 });
+  }
+
+  function account() {
+    return new ReviewRule({ accountId: 1001 });
+  }
+
+  it.each([
+    [
+      "an exact instrument list must not be empty",
+      () => buildReviewRule().globalRule(new ReviewRule({ instruments: [] })),
+    ],
+    [
+      "duplicate review rule instrument AAPL/USD",
+      () =>
+        buildReviewRule().globalRule(
+          new ReviewRule({ instruments: [aapl, aapl] }),
+        ),
+    ],
+    [
+      "duplicate account group review rule",
+      () => buildReviewRule().accountGroupRules([group(), group()]),
+    ],
+    [
+      "duplicate account review rule",
+      () => buildReviewRule().accountRules([account(), account()]),
+    ],
+    ["global level", () => buildReviewRule().globalRule(account())],
+    [
+      "account group level",
+      () => buildReviewRule().accountGroupRules([account()]),
+    ],
+    ["account level", () => buildReviewRule().accountRules([group()])],
+    [
+      "account level",
+      () =>
+        buildReviewRule().accountRules([
+          new ReviewRule({ accountId: 1001, accountGroupId: 7 }),
+        ]),
+    ],
+  ] as const)("reports %s and registers no policy", (message, rules) => {
+    const builder = Engine.builder().builtin(buildOrderValidation());
+    try {
+      builder.builtin(rules(), { name: "rules" });
+      throw new Error("expected EngineBuildError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EngineBuildError);
+      expect((error as EngineBuildError).kind).toBe(
+        EngineBuildErrorKind.InvalidConfiguration,
+      );
+      expect((error as EngineBuildError).message).toContain(message);
+    }
+    builder.builtin(buildReviewRule().accountRules([]), { name: "rules" });
+    const engine = builder.build();
+    expect(
+      engine.executePreTradeDryRun(sizedOrder("10", "25", 1001n)).isPass,
+    ).toBe(true);
+  });
+});
 
 describe("policy instances", () => {
   const rejecting: Policy = {

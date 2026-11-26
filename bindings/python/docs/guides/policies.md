@@ -158,6 +158,8 @@ blocked individually in place.
   mode, review modes included.
 - `build_order_size_limit()`: enforces optional quantity limits by underlying
   asset and notional limits by settlement asset, with additive broker caps.
+- `build_review_rule()`: rejects or marks matching orders for review by account,
+  account group, or globally.
 - `build_spot_funds()`: enforces available-funds checks by default and tracks
   reservations and settlement state.
   Runtime `SpotFundsLimitMode` values are `ENFORCE`, `TRACK_ONLY`,
@@ -174,6 +176,26 @@ blocked individually in place.
   the insufficient-funds gate, so available funds may go negative instead of
   producing an `InsufficientFunds` reject. Arithmetic overflow is still
   surfaced.
+
+### Review rules
+
+Use `build_review_rule()` to register rules for specific accounts, account
+groups, or all accounts. A `ReviewRule` takes `account_id` for an account rule
+or `account_group_id` for a group rule. Leave both unset for a global rule.
+With `instruments=None`, the rule covers every instrument. A list of
+`Instrument` objects matches exact underlying and settlement pairs.
+
+Add rules with `global_rule(rule)`, `account_group_rules(*rules)`, and
+`account_rules(*rules)`. Give each instance a name and a mode with the engine
+builder's `builtin(..., name=..., mode=...)`. A match produces one
+`COMPLIANCE_RESTRICTION` per instance. The mode makes it a reject or a review
+mark.
+
+Call `engine.configure().review_rule(name, ...)` to update the named
+instance. Pass a list to replace all the rules at a group or account level,
+an empty list to clear that level, or `None` to keep it. Set the global rule
+with `global_rule` or clear it with `clear_global_rule=True`. An invalid
+update raises an exception and leaves the previous rules in force.
 
 ### Spot Funds P&L barriers and currency
 

@@ -54,6 +54,7 @@ import (
 // - https://wiki.openpit.dev/Pre-trade-Pipeline/
 // - https://wiki.openpit.dev/Pre-Trade-Lock/
 // - https://wiki.openpit.dev/Review-Mode/
+// - https://wiki.openpit.dev/Review-Rules/
 // - https://wiki.openpit.dev/Spot-Funds/
 // If this file changes, update every linked documentation snippet.
 
@@ -198,6 +199,114 @@ func TestExampleWikiReviewMode(t *testing.T) {
 	if err := runReviewExample(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Source: https://wiki.openpit.dev/Review-Rules/#go
+// Keep this example in sync with the matching wiki example.
+func TestExampleWikiReviewRules(t *testing.T) {
+	group, err := param.NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newClient := param.NewAccountIDFromUint64(1001)
+	restricted := param.NewAccountIDFromUint64(1002)
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newInstrument := func(base string) param.Instrument {
+		t.Helper()
+		asset, err := param.NewAsset(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return param.NewInstrument(asset, usd)
+	}
+	aapl := newInstrument("AAPL")
+	msft := newInstrument("MSFT")
+	tsla := newInstrument("TSLA")
+
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(
+			policies.BuildReviewRule().AccountGroupRules(policies.ReviewRuleAccountGroupRule{
+				AccountGroupID: group,
+				Instruments:    policies.ReviewRuleAllInstruments(),
+			}),
+			InstanceName("new-clients-review"),
+			InstanceMode(reject.RuleModeReviewWithHold),
+		).
+		Builtin(
+			policies.BuildReviewRule().AccountRules(policies.ReviewRuleAccountRule{
+				AccountID:   restricted,
+				Instruments: policies.ReviewRuleExactInstruments(msft),
+			}),
+			InstanceName("restricted-instruments"),
+			InstanceMode(reject.RuleModeReject),
+		).
+		Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Stop()
+	if err := engine.Accounts().RegisterGroup([]param.AccountID{newClient}, group); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(account param.AccountID, instrument param.Instrument) ([]reject.Reject, []reject.Reject) {
+		t.Helper()
+		order := model.NewOrder()
+		op := order.EnsureOperationView()
+		op.SetAccountID(account)
+		op.SetInstrument(instrument)
+		op.SetSide(param.SideBuy)
+		quantity, err := param.NewQuantityFromString("10")
+		if err != nil {
+			t.Fatal(err)
+		}
+		op.SetTradeAmount(param.NewQuantityTradeAmount(quantity))
+		price, err := param.NewPriceFromString("25")
+		if err != nil {
+			t.Fatal(err)
+		}
+		op.SetPrice(price)
+		report, err := engine.ExecutePreTradeDryRun(order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer report.Close()
+		rejects, err := report.Rejects()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reviews, err := report.Reviews()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rejects, reviews
+	}
+	rejects, reviews := run(newClient, aapl)
+	if len(rejects) != 0 || len(reviews) != 1 || reviews[0].Mode != reject.RuleModeReviewWithHold {
+		t.Fatalf("new client: rejects = %v, reviews = %v", rejects, reviews)
+	}
+	checkRejected := func(account param.AccountID, instrument param.Instrument) {
+		t.Helper()
+		rejects, reviews := run(account, instrument)
+		if len(rejects) != 1 || rejects[0].Code != reject.CodeComplianceRestriction || len(reviews) != 0 {
+			t.Fatalf("restricted order: rejects = %v, reviews = %v", rejects, reviews)
+		}
+	}
+	checkRejected(restricted, msft)
+	if rejects, reviews := run(restricted, aapl); len(rejects) != 0 || len(reviews) != 0 {
+		t.Fatalf("unrestricted order: rejects = %v, reviews = %v", rejects, reviews)
+	}
+
+	if err := engine.Configure().ReviewRule("restricted-instruments",
+		optional.Some(&policies.ReviewRuleGlobalRule{Instruments: policies.ReviewRuleExactInstruments(tsla)}),
+		nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	checkRejected(param.NewAccountIDFromUint64(1003), tsla)
+	checkRejected(restricted, msft)
 }
 
 // --- Policy-API: Custom Order and Execution Report Models ---

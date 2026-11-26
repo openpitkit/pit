@@ -36,6 +36,7 @@ import pytest
 # - https://wiki.openpit.dev/Pre-trade-Pipeline/
 # - https://wiki.openpit.dev/Pre-Trade-Lock/
 # - https://wiki.openpit.dev/Review-Mode/
+# - https://wiki.openpit.dev/Review-Rules/
 # - https://wiki.openpit.dev/Spot-Funds/
 # If this file changes, update every linked documentation snippet.
 
@@ -366,6 +367,78 @@ def test_example_wiki_review_mode() -> None:
     confirmed_reviews = run(confirmed_order)
     assert not confirmed_reviews
     assert len(sent_orders) == 1
+
+
+@pytest.mark.integration
+def test_example_wiki_review_rules() -> None:
+    # Source: https://wiki.openpit.dev/Review-Rules/#python
+    # Keep this example in sync with the matching wiki example.
+    from openpit.pretrade.policies import ReviewRule, build_review_rule
+
+    group = openpit.param.AccountGroupId.from_int(7)
+    new_client = openpit.param.AccountId.from_int(1001)
+    restricted = openpit.param.AccountId.from_int(1002)
+    aapl = openpit.Instrument("AAPL", "USD")
+    msft = openpit.Instrument("MSFT", "USD")
+    tsla = openpit.Instrument("TSLA", "USD")
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            build_review_rule().account_group_rules(ReviewRule(account_group_id=group)),
+            name="new-clients-review",
+            mode=openpit.pretrade.RuleMode.REVIEW_WITH_HOLD,
+        )
+        .builtin(
+            build_review_rule().account_rules(
+                ReviewRule(account_id=restricted, instruments=[msft])
+            ),
+            name="restricted-instruments",
+            mode=openpit.pretrade.RuleMode.REJECT,
+        )
+        .build()
+    )
+    engine.accounts().register_group([new_client], group)
+
+    def run(account: openpit.param.AccountId, instrument: openpit.Instrument):
+        return engine.execute_pre_trade_dry_run(
+            openpit.Order(
+                operation=openpit.OrderOperation(
+                    account_id=account,
+                    instrument=instrument,
+                    side=openpit.param.Side.BUY,
+                    trade_amount=openpit.param.TradeAmount.quantity("10"),
+                    price=openpit.param.Price("25"),
+                )
+            )
+        )
+
+    review = run(new_client, aapl)
+    assert review.is_pass
+    assert not review.rejects
+    assert [mark.mode for mark in review.reviews] == [
+        openpit.pretrade.RuleMode.REVIEW_WITH_HOLD
+    ]
+
+    def check_rejected(
+        account: openpit.param.AccountId, instrument: openpit.Instrument
+    ):
+        result = run(account, instrument)
+        assert result.rejects
+        assert [reject.code for reject in result.rejects] == [
+            openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION
+        ]
+        assert not result.reviews
+
+    check_rejected(restricted, msft)
+    passed = run(restricted, aapl)
+    assert passed.is_pass and not passed.rejects and not passed.reviews
+
+    engine.configure().review_rule(
+        "restricted-instruments", global_rule=ReviewRule(instruments=[tsla])
+    )
+    check_rejected(openpit.param.AccountId.from_int(1003), tsla)
+    check_rejected(restricted, msft)
 
 
 @pytest.mark.integration
