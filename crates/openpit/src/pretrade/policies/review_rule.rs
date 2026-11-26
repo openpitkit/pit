@@ -838,6 +838,39 @@ mod tests {
     }
 
     #[test]
+    fn review_rule_policy_error_displays_fixed_messages() {
+        assert_eq!(
+            ReviewRulePolicyError::DuplicateAccountGroupRule {
+                account_group_id: AccountGroupId::from_u32(7).unwrap(),
+            }
+            .to_string(),
+            "duplicate account group review rule"
+        );
+        assert_eq!(
+            ReviewRulePolicyError::DuplicateAccountRule {
+                account_id: AccountId::from_u64(1001),
+            }
+            .to_string(),
+            "duplicate account review rule"
+        );
+        assert_eq!(
+            ReviewRulePolicyError::EmptyInstruments.to_string(),
+            "an exact instrument list must not be empty"
+        );
+    }
+
+    #[test]
+    fn review_rule_policy_error_displays_the_duplicate_instrument() {
+        assert_eq!(
+            ReviewRulePolicyError::DuplicateInstrument {
+                instrument: instrument("AAPL", "USD"),
+            }
+            .to_string(),
+            "duplicate review rule instrument AAPL/USD"
+        );
+    }
+
+    #[test]
     fn duplicate_scope_keys_are_rejected_and_failed_setters_keep_the_old_rules() {
         let group = group_rule(7, ReviewRuleInstruments::All);
         let account = account_rule(1001, ReviewRuleInstruments::All);
